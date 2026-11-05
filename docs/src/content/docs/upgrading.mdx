@@ -630,14 +630,14 @@ lists what the boot, a log or the wire shows when one is missed.
    | `exp: jwt.expiry()` in a claims literal, `pub exp: u64` on a claims type the app signs | delete both: the signer stamps `exp`, its `expires_in` after `iat`; a token living another time names it with `exp: jwt.expiry_in(secs)`, as a `sign_handshake`'s claims must |
    | `.requires_scope("posts:read")` | `pub const POSTS_READ: Scope = Scope::new("posts:read");` (`nest_rs::guards::Scope`) once, then `.requires_scope(POSTS_READ)` |
    | `<PREFIX>_OAUTH__RESOURCE__SCOPES_SUPPORTED` repeating the scopes your rules gate on | `OAuthResourceModule::for_root([POSTS_READ, …])` (or `([…], config)` beside a pinned config), and delete the variable; a deployment still setting it advertises its list instead |
-   | a social authorize handler building its `302` from `provider.authorize(&jwt, resource)` — `Set-Cookie`, `Location`, a `404` for an unknown provider | `providers.authorize(&provider, &jwt, resource)` returned as is: a `SocialRedirect`, the `302` with the cookie and `Cache-Control: no-store`, or the `404` |
-   | a `nestrs g auth` dev-token handler returning `Json<DevTokenResponseDto>` with two `#[response_header]` lines | `Result<AccessTokenResponse>`, `Ok(AccessTokenResponse::bearer(self.jwt.sign(&claims).opaque()?, self.jwt.ttl_secs()))`, with `oauth-server` among the features crate's `nest-rs` features; delete the DTO — the old one still compiles |
+   | a social authorize handler building its `302` from `provider.authorize(&jwt, resource)` — `Set-Cookie`, `Location`, a `404` for an unknown provider | `Ok(providers.authorize(&provider, &jwt, resource)?)`: a `SocialRedirect`, the `302` with the cookie and `Cache-Control: no-store`, or the `404` |
+   | a `nestrs g auth` dev-token handler returning `Json<DevTokenResponseDto>` with two `#[response_header]` lines | `Result<AccessTokenResponse>`, `Ok(AccessTokenResponse::bearer(self.jwt.sign(&claims)?, self.jwt.ttl_secs()))`, with `oauth-server` among the features crate's `nest-rs` features; delete the DTO — the old one still compiles |
    | `hash_password(p)?` stored or compared as a `String` | a `Secret<String>`: store it as is, and pass `hash.expose_secret()` to `verify_password` |
    | the development-token route's `DevOnlyGuard` and `DevTokenAudit`, written by an earlier `nestrs g auth` | `nest_rs::authn::DevelopmentOnlyGuard`, bound with `#[use_guards]` on the controller and listed in its module's `providers`; delete `authn/http/guard.rs` and `authn/http/audit.rs` |
    | `TokenError::InvalidClient` built or matched | `TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretBasic)` for a client refused over the `Authorization` header, `ClientSecretPost` for credentials in the body, `None` for none; matched as `InvalidClient(_)` |
    | `TokenError::InvalidClient` answered for a rejected resource-owner password | `TokenError::InvalidGrant` (`400 invalid_grant`) |
    | `RegisteredClient { client_id, client_secret, scopes, payload }` / `AuthenticatedClient { payload, scopes }` | `RegisteredClient::new(client_id, client_secret, scopes, resources, payload)` / `AuthenticatedClient::new(client_id, scopes, resources, payload)`: the RFC 8707 resources the client's tokens may be minted for |
-   | `client.client_secret`, `response.access_token`, `tokens.access_token` / `id_token` / `refresh_token`, `JwtKey::Hmac(secret)` or `JwtKey::Pem { private_pem, .. }` read as a string | `.expose_secret()` on each: they are `nest_rs::core::Secret<String>` |
+   | `response.access_token`, `tokens.access_token` / `id_token` / `refresh_token`, `JwtKey::Hmac(secret)` or `JwtKey::Pem { private_pem, .. }` read as a string | `.expose_secret()` on each: they are `nest_rs::core::Secret<String>` |
    | `profile.email.as_deref()`, `profile.name.clone()` on a `SocialProfile` | `profile.email.as_ref().map(\|e\| e.expose_secret().as_str())`: a provider's email and name are `Option<Secret<String>>`, which `Debug` prints as `Some(<redacted>)` |
    | a client registry in configuration, `[{"client_id": …, "scopes": […], "payload": …}]` | each client lists `"resources": [...]`, the URIs of the resource servers it calls; a registry without it fails the boot |
    | `jwt.sign(&claims)` minting an access token another app verifies | `jwt.sign_for(audience, &claims)`, `audience` the resource it is for — at a token endpoint `client.audience_for(&request.resource)?`, which answers RFC 8707's `invalid_target` for a resource the client is not registered for; `sign` stamps this app's own audience, for what it mints for itself |
@@ -646,9 +646,17 @@ lists what the boot, a log or the wire shows when one is missed.
    | `AuthnModule` imported at the root beside `OAuthResourceModule` | delete the line: the module imports the verifier it binds. Keep `AuthnModule::for_root(cfg)` only to pin a configuration in code — not a compile error, the bare line is merely redundant |
    | `AuthenticatedClient::actor_id()` read as `None` | it is the client's `client_id` — not a compile error; code keying "a machine caller" on `None` reads the principal's type |
    | `PrincipalIdentity::actor_id` returning `None` for a machine principal | its subject — the client id when it acts for itself (RFC 9068 §2.2) |
-   | an OAuth authorize handler building its `302` from `authorization.url` and `authorization.transaction` — `Location`, a hand-written `Set-Cookie` | `client.authorize(&jwt, provider, resource).opaque()` returned as is, under `Result<AuthorizationRedirect>`: the `302` with the cookie and `Cache-Control: no-store`, documented by the type; behind a social provider, the `SocialRedirect` `SocialRegistry::authorize` answers |
+   | an OAuth authorize handler building its `302` from `authorization.url` and `authorization.transaction` — `Location`, a hand-written `Set-Cookie` | `Ok(client.authorize(&jwt, provider, resource)?)`, under `Result<AuthorizationRedirect>`: the `302` with the cookie and `Cache-Control: no-store`, documented by the type; behind a social provider, the `SocialRedirect` `SocialRegistry::authorize` answers |
    | the callback's own parsing of the transaction cookie | `OAuthClient::transaction_from(req.headers().get_all(header::COOKIE).iter().filter_map(\|field\| field.to_str().ok()))` |
    | a social callback strategy of your own reading `provider`, `code`, `state` and the cookie | `AuthnGuard<SocialStrategy<S>>` on the callback route, `SocialStrategy<S>` and the guard in the module's `providers`, and `impl SocialSignIn for S` saying who a `SocialProfile` is — the rest, §4.1.2.1's `error` included, is the strategy's |
+   | `jwt.sign(&serde_json::json!({ … }))`, or `sign`/`sign_for` on claims with no `PrincipalIdentity` (`E0277`) | `#[derive(PrincipalIdentity)]` on the claims struct, `#[principal(actor)]` on the field naming the subject: claims with no `sub` field are stamped it. A test forging a token hands it to `app.bearer(&claims)`, which signs what it is given |
+   | `jwt.sign(&claims)?`, `sign_for` or `sign_handshake` in a `Result<_, AuthError>` (`E0277`) | a handler answers `nest_rs::http::Result`, into which `SignError` and `AuthError` each convert on their own status; a service holds `#[from] SignError` in its own error. `TokenError` does already, so `?` needs no `map_err` |
+   | `.map_err(\|e\| TokenError::Sign(e.into()))` over `sign_for` or `authorize`, `TokenError::Sign(anyhow!(…))` built | `?` for the first; `TokenError::Sign(SignError::new("…"))` for the second: the variant holds a `SignError` |
+   | `.opaque()` over `sign`, `sign_for`, `client.authorize` or `providers.authorize` | delete it — not a compile error: `?` answers the same opaque `500` |
+   | `impl SocialProvider` overriding `authorize` to return `Result<AuthorizationRedirect, AuthError>`, or matching `AuthError::Failed { .. }` from `sign`, `authorize` | `Result<AuthorizationRedirect, SignError>`, built with `SignError::new` or `SignError::because`; `nest_rs::core::error_message(&error)` reads what failed |
+   | `redirect.url` read, `redirect.url.push_str(…)` in a provider's override | `redirect.url()`: read-only, and no setter appends to it |
+   | `redirect.transaction`, `redirect.set_cookie()` | delete them: return the redirect, whose answer alone carries the cookie, with `Cache-Control: no-store`. A test reads `Set-Cookie` off `redirect.into_response()` |
+   | a `RegisteredClient`'s `client_secret` read | nothing outside the crate reads it (`E0616`): it is the registry's to compare |
    | `client.authorize(&jwt, provider)`, `provider.authorize(&jwt)` | `client.authorize(&jwt, provider, resource)`, `provider.authorize(&jwt, resource)`: the RFC 8707 resource the sign-in asks for, or `None`, signed into the transaction |
    | `client.exchange(&jwt, provider, transaction, state, code).await?` | `let response = OAuthClient::callback(&jwt, provider, transaction, req.uri().query().unwrap_or_default())?;` then `client.exchange(response).await?` — `callback` reads `state`, `code` and §4.1.2.1's `error` off the query itself; `response.resource()` reads the resource back |
    | a `SocialProvider::exchange` override taking the transaction, `state` and `code` | the same override taking the matched `AuthorizationResponse`, and building its answer with `TokenSet::new(access_token)`, `.with_id_token(…)`, `.with_refresh_token(…)` |
@@ -2076,9 +2084,22 @@ lists what the boot, a log or the wire shows when one is missed.
   line; the module provides it.
 - **`JwtService::expiry()`** no longer resolves (`E0599`), nor does a claims
   literal once its type loses `exp` (`E0560`): the signer stamps it.
-- **`sign_handshake` with claims carrying no `exp`** answers
-  `AuthError::Failed`, naming `expiry_in`, where such a token used to fail at
+- **`sign_handshake` with claims carrying no `exp`** answers a `SignError`,
+  naming `expiry_in`, where such a token used to fail at
   `verify_handshake`: a handshake never inherits the access-token lifetime.
+- **`sign` or `sign_for` on claims naming no subject**, their `actor_id()` `None` or
+  empty and no `sub` of their own, answers a `SignError`, where it minted an access
+  token with no `sub` no verifier could attribute.
+- **A signing failure** answers the opaque `500`, where it answered `401` with a
+  `Bearer` challenge: a client retrying with another credential now stops, and the
+  chain is on `nest_rs::http` at `error`.
+- **A token carrying `cnf`** is refused, `401 invalid_token`, reason
+  `sender_constrained`, where it passed as a bearer with no proof of the key it is
+  bound to. An external issuer minting bound tokens mints this audience plain ones.
+- **`<PREFIX>_OAUTH__SERVER__CLIENTS` with a scope outside RFC 6749 §3.3's grammar**
+  — a space, a `"`, an empty string — fails the boot on `clients[<id>].scopes`, where
+  `"a b"` was granted whole when no scope was asked and refused when asked by name.
+  List the two scopes.
 - **`requires_scope("…")`** no longer compiles (`E0308`, expected `Scope`,
   found `&str`): declare the scope as a `Scope` constant.
 - **`cannot(..).requires_scope(..)` or `cannot(..).fields(..)`** no longer

@@ -74,8 +74,8 @@ impl SiteTail for EndpointTail {
 }
 
 /// Write the headers a typed answer carries until the path the caller
-/// addressed is at hand — a [`Created`](crate::Created)'s `Location`, a
-/// [`Paginated`](crate::Paginated)'s `Link` — whoever answered it: every tail
+/// addressed is at hand — a `Created`'s `Location`, a
+/// `Paginated`'s `Link` — whoever answered it: every tail
 /// running a developer's code calls it on its answer. `caller_path` is read
 /// only for an answer carrying one.
 pub(crate) fn stamp_answer<'a>(caller_path: impl Fn() -> &'a str, response: &mut Response) {

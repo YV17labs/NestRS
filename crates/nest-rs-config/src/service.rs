@@ -239,7 +239,7 @@ impl ConfigService {
     /// Narrow this reader to the tiers that outrank a **code-pinned** value: the
     /// deployment still wins, the `.env` cascade defers to the pin — and each
     /// variable the cascade sets that the pin thereby shadows is reported,
-    /// once, by name ([`SHADOWED_CONFIG_VARIABLE`](crate::unclaimed::SHADOWED_CONFIG_VARIABLE)).
+    /// once, by name (`SHADOWED_CONFIG_VARIABLE`).
     pub fn over_pinned(mut self) -> Self {
         self.precedence = Precedence::OverPinned;
         self.pinned_by = PINNED_BY.with(|cell| cell.borrow().clone());

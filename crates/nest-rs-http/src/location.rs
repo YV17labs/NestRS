@@ -3,7 +3,7 @@
 //! RFC 9110 §15.3.2 asks a `201` to name what it created. The value is composed
 //! with [`join_path`](crate::transport::join_path), as the transport mounts the route, on
 //! the path the caller addressed, read off the edge by whichever tail answered
-//! the [`Created`](crate::Created).
+//! the `Created`.
 
 use http::{HeaderValue, Uri, header::LOCATION};
 

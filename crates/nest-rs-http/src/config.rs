@@ -319,7 +319,7 @@ pub struct HttpConfig {
     /// and `/mcp`, where a trusted proxy's `Forwarded` (`proto=`, `host=`) or
     /// `X-Forwarded-Proto` / `X-Forwarded-Host` set the request's own origin;
     /// an unparseable entry aborts the boot. See
-    /// [`ClientOrigin`](crate::ClientOrigin) for the resolution rule.
+    /// `ClientOrigin` for the resolution rule.
     pub trusted_proxies: Vec<IpAddr>,
     /// Maximum lifetime of a single `#[sse]` stream: when it elapses the stream
     /// ends, so the client's `EventSource` reconnects through the guard chain.

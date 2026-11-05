@@ -42,7 +42,7 @@ pub struct AccessGraphError {
 }
 
 /// A layer required a value no earlier layer attached to its unit
-/// ([`UnitContext::require`](crate::UnitContext::require)): a wiring defect —
+/// (`UnitContext::require`): a wiring defect —
 /// the guard that attaches it is not bound, or runs after the one requiring
 /// it — never the caller's doing, but for the principal a guard declares
 /// expecting, which the boot proves attached. A guard's `?` answers it as a `500`
@@ -63,7 +63,7 @@ pub struct MissingAmbientError {
 
 impl MissingAmbientError {
     /// A `T` was required and is not ambient — what
-    /// [`UnitContext::require`](crate::UnitContext::require) answers, for a
+    /// `UnitContext::require` answers, for a
     /// layer that reads `T` another way first.
     pub fn of<T: 'static>() -> Self {
         Self {
@@ -433,7 +433,7 @@ pub struct BootInterruptedError {
     pub step: crate::BootStep,
 }
 
-/// A transport states a stop past [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND) —
+/// A transport states a stop past `MAX_STOP_BOUND` —
 /// [`Duration::MAX`](std::time::Duration::MAX) among them —, refused at the
 /// boot before any init hook runs: the kernel holds every transport to its
 /// bound.
@@ -786,7 +786,7 @@ fn and_list<S: AsRef<str>>(names: &[S]) -> String {
     }
 }
 
-/// A resource's [`Budget`](crate::Budget) at or past the [`Net`](crate::Net) of
+/// A resource's [`Budget`](crate::Budget) at or past the `Net` of
 /// a port that waits on it: the port would cut a call the resource was still
 /// answering, replacing its cause with a bare timeout.
 #[derive(Debug, Error)]

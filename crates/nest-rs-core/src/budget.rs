@@ -1,5 +1,5 @@
 //! [`Budget`] — what a resource waits, at most, for one answer, declared by the
-//! module that opens it and held below every [`Net`](crate::Net) reaching it.
+//! module that opens it and held below every `Net` reaching it.
 
 use std::any::{Any, TypeId};
 use std::time::Duration;

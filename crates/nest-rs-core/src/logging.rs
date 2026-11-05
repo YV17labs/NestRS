@@ -327,7 +327,7 @@ pub const CONSOLE_QUEUE_LINES: usize = 16_384;
 
 /// How long the console's last lines may hold an exit `#[nest_rs::main]`
 /// controls — the last bounded step of the way down, which
-/// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT) tabulates.
+/// `SHUTDOWN_HOOKS_TIMEOUT` tabulates.
 ///
 /// What a stdout that stopped taking lines still holds past it is lost, and
 /// said in one line on stderr.

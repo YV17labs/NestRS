@@ -11,7 +11,7 @@ use crate::request::{FromRequest, Request, RequestBody};
 
 /// An HTML form, decoded into `T`: the body of a request whose
 /// `Content-Type` is `application/x-www-form-urlencoded`, read under the
-/// transport's cap ([`current_body_limit`](crate::current_body_limit)); on
+/// transport's cap (`current_body_limit`); on
 /// `GET`, which has no body, the query string.
 ///
 /// A body without a form's `Content-Type` answers `415`, a body past the cap

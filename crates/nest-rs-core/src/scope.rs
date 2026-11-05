@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::ResolvesProvider;
 
 /// A handler's parameter resolving a provider of type `T` from the running
-/// unit's [`RequestScope`](crate::RequestScope) — above all an
+/// unit's `RequestScope` — above all an
 /// `#[injectable(scope = request)]` one, a singleton falling through to the
 /// container.
 ///

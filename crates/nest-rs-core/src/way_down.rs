@@ -4,7 +4,7 @@
 //! The kernel owns the signals from `main`'s first line: `#[nest_rs::main]`
 //! installs the `SIGINT` / `SIGTERM` handlers before it polls `main`, so the
 //! operating system's default action never runs. The first signal turns every
-//! app the process booted [`Draining`](crate::AppState::Draining), with the
+//! app the process booted `Draining`, with the
 //! signal as its [`StopCause`]: a boot stops at its next await, naming the step
 //! it waited on, and a serving app winds down. A signal before any app began
 //! its boot exits at once (130 / 143) after one `error` line, on stderr while
@@ -16,7 +16,7 @@
 //!
 //! Dropping a tokio runtime waits for every blocking task still running, so
 //! [`main`] tears it down within what the shutdown hooks left of
-//! [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT), whether `main`
+//! `SHUTDOWN_HOOKS_TIMEOUT`, whether `main`
 //! returns or panics. Every exit it controls — that end, the unwind, a signal
 //! exiting at once — then writes what the console still queues, within its own
 //! bound.

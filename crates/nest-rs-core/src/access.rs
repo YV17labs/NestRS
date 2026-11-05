@@ -64,7 +64,7 @@ pub(crate) mod __private {
         pub inject_names: fn() -> Vec<&'static str>,
         /// `TypeId` of each `#[inject] Option<Arc<…>>` field, checked like
         /// [`injects`](Self::injects) but for one no reached module provides,
-        /// which is simply absent; a [`Net`](crate::Net) around the provider
+        /// which is simply absent; a `Net` around the provider
         /// follows it too.
         pub injects_optional: fn() -> Vec<TypeId>,
         /// Label for each [`injects_optional`](Self::injects_optional) entry, in

@@ -145,7 +145,7 @@ fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> 
 /// `..Default::default()` filled included: a committed file never undoes what
 /// the code chose, and each key a cascade file sets there is reported at boot,
 /// by name and the import that pinned it
-/// ([`SHADOWED_CONFIG_VARIABLE`](crate::unclaimed::SHADOWED_CONFIG_VARIABLE)).
+/// (`SHADOWED_CONFIG_VARIABLE`).
 ///
 /// The one hard pin is seeding the value on the builder
 /// (`App::builder().provide(cfg)`), for hermetic tests. A seed pins the value,

@@ -13,7 +13,7 @@ use crate::request::{FromRequest, Request, RequestBody};
 use crate::response::{IntoResponse, Response};
 
 /// A JSON body: as a parameter, the request's body read under the
-/// transport's cap ([`current_body_limit`](crate::current_body_limit)) and
+/// transport's cap (`current_body_limit`) and
 /// decoded into `T`; as an answer, `T` serialized with
 /// `Content-Type: application/json; charset=utf-8`.
 ///
@@ -46,7 +46,7 @@ use crate::response::{IntoResponse, Response};
 /// ```
 ///
 /// A route answering one documents `T` off its return type, bare, inside a
-/// [`Created`](crate::Created) or a [`Paginated`](crate::Paginated), inside a
+/// `Created` or a `Paginated`, inside a
 /// `Result`, an alias included — so `T` has a schema, which `#[output]` derives:
 ///
 /// ```compile_fail,E0277

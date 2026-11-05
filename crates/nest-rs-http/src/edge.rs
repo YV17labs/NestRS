@@ -117,7 +117,7 @@ pub(crate) struct EdgeEndpoint<E> {
     scopes: RequestScopes,
     timeout: Option<Duration>,
     /// The cap a body is held to, and what its readers read
-    /// ([`current_body_limit`](crate::current_body_limit)).
+    /// (`current_body_limit`).
     body_limit: usize,
     /// The gap a body may leave between two frames once something reads it.
     body_read_timeout: Duration,

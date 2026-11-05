@@ -55,8 +55,8 @@ pub(crate) mod __private {
 ///
 /// A hand-written module imports its modules with [`ContainerBuilder::import`]
 /// in both phases: `register` alone fails the boot with
-/// [`LateFactoryError`](crate::LateFactoryError), `collect` alone with
-/// [`UnregisteredModuleError`](crate::UnregisteredModuleError).
+/// `LateFactoryError`, `collect` alone with
+/// `UnregisteredModuleError`.
 pub trait Module: 'static {
     /// Build this module's providers, after every async factory has produced its value.
     fn register(builder: ContainerBuilder, registering: Registering<Self>) -> ContainerBuilder;
@@ -161,7 +161,7 @@ pub trait Module: 'static {
 ///
 /// A setup that wires the module it declares imports it in **both** phases
 /// ([`ContainerBuilder::import`]); in `register` alone the boot fails with
-/// [`LateFactoryError`](crate::LateFactoryError).
+/// `LateFactoryError`.
 ///
 /// # The import expression is evaluated exactly once
 ///

@@ -24,9 +24,9 @@ pub const MAX_STOP_BOUND: Duration = Duration::from_secs(86_400);
 /// [`ContainerBuilder::provide_transport`](crate::ContainerBuilder::provide_transport),
 /// and [`crate::App::run`] drives every transport through the same steps: each
 /// one's `configure`, in registration order; the init hooks; each one's
-/// `listen`; then, the app [`Ready`](crate::AppState::Ready), every `serve`
+/// `listen`; then, the app `Ready`, every `serve`
 /// at once under the app's stop token, whose [`CancellationToken`] fires the
-/// instant the app turns [`Draining`](crate::AppState::Draining) — at
+/// instant the app turns `Draining` — at
 /// `SIGINT` / `SIGTERM`, or when another transport fails. Nothing serves until
 /// every transport listens, so a port taken or TLS material that cannot serve
 /// fails the boot before any transport has run anything.
@@ -46,7 +46,7 @@ pub trait Transport: Send + Sync + 'static {
     /// up, before any request is accepted.
     async fn configure(&mut self, container: &Container) -> Result<()>;
     /// Take what serving needs — bind a socket, check TLS material, subscribe —
-    /// after the init hooks; the app turns [`Ready`](crate::AppState::Ready)
+    /// after the init hooks; the app turns `Ready`
     /// once every transport has listened.
     ///
     /// A transport that takes something here takes it here, never in
@@ -61,9 +61,9 @@ pub trait Transport: Send + Sync + 'static {
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()>;
     /// The longest [`serve`](Self::serve) takes to return once `cancel` fires —
     /// its drain window, then
-    /// [`SHUTDOWN_SETTLE_TIMEOUT`](crate::SHUTDOWN_SETTLE_TIMEOUT). Finite, and
+    /// `SHUTDOWN_SETTLE_TIMEOUT`. Finite, and
     /// at most [`MAX_STOP_BOUND`]: the boot refuses more
-    /// ([`UnboundedTransportError`](crate::UnboundedTransportError)), and
+    /// (`UnboundedTransportError`), and
     /// [`App::run`](crate::App::run) abandons a transport still serving at its
     /// bound plus the settle.
     fn stop_bound(&self) -> Duration;
@@ -96,7 +96,7 @@ type Build = Box<dyn Fn(&Container) -> Result<Box<dyn Transport>> + Send + Sync>
 /// A transport a module attached with
 /// [`ContainerBuilder::provide_transport`](crate::ContainerBuilder::provide_transport)
 /// — readable through
-/// [`Discovery::meta`](crate::Discovery::meta), built only by the kernel; its
+/// `Discovery::meta`, built only by the kernel; its
 /// name is the transport's own ([`Transport::name`]).
 ///
 /// ```compile_fail

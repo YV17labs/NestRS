@@ -106,14 +106,16 @@ mod test
 # rustdoc over the private items, then as docs.rs builds it: each pass refuses
 # a broken link the other cannot see. rustdoc renders a link into a hidden
 # `__private` module dead and without a warning, as the bare path
-# (`href="crate::__private::…"`), so the public pass renders alone and no page
-# of it may link there.
+# (`href="crate::__private::…"`), and a trait method's `crate::` link the same on
+# an implementor in another crate, so the public pass renders alone and no page
+# of it may link there. A third party's trait on a blanket impl renders its own
+# (tracing's `Span`, itertools', tokio's `io`), which is not ours to write.
 doc:
     RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --keep-going --document-private-items
     rm -rf "${CARGO_TARGET_DIR:-target}/doc"
     RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps --keep-going
     test -f "${CARGO_TARGET_DIR:-target}/doc/nest_rs/index.html"
-    ! grep -rlE 'href="[^"]*__private' "${CARGO_TARGET_DIR:-target}/doc" --include='*.html'
+    ! grep -rhoE 'href="([^"]*__private[^"]*|crate::[^"]*)"' "${CARGO_TARGET_DIR:-target}/doc" --include='*.html' | grep -vE '"crate::(Span|Itertools::[a-z_]+|io::[A-Za-z]+)"'
 
 # Every check CI runs: lint, docs and tests
 ci: lint doc test::all

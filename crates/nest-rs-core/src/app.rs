@@ -251,12 +251,12 @@ impl App {
     /// and after an init that failed, was interrupted, or was dropped before it
     /// finished, both return [`InitFailedError`] without running a hook. A stop
     /// asked while a hook waits drops it there and returns
-    /// [`BootInterruptedError`](crate::BootInterruptedError).
+    /// `BootInterruptedError`.
     ///
     /// An init that fails, panics or is interrupted tears the app down before
-    /// it returns: the app turns [`Draining`](crate::AppState::Draining), every
+    /// it returns: the app turns `Draining`, every
     /// shutdown hook runs, in reverse, then the resources close — within
-    /// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT) — and the init's
+    /// `SHUTDOWN_HOOKS_TIMEOUT` — and the init's
     /// error is still what it returns.
     pub async fn init(&self) -> Result<()> {
         self.init_tearing_down_after(std::future::ready(())).await
@@ -325,10 +325,10 @@ impl App {
     }
 
     /// Stop an app that is not serving: it turns
-    /// [`Draining`](crate::AppState::Draining) with
+    /// `Draining` with
     /// [`StopCause::Closed`], runs the shutdown phases in reverse when its init
     /// ran, closes the resources its modules opened, then drops its container —
-    /// all within [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT).
+    /// all within `SHUTDOWN_HOOKS_TIMEOUT`.
     ///
     /// It is how a program that runs work rather than serving ends — a
     /// migration, a one-shot command, a test. A failure on the way is filed by
@@ -375,9 +375,9 @@ impl App {
     /// Configure each transport against the container, run the init lifecycle
     /// hooks unless [`init`](Self::init) already did, have each transport
     /// [`listen`](Transport::listen), then run all transports concurrently
-    /// under the app's stop token. The app is [`Ready`](crate::AppState::Ready)
+    /// under the app's stop token. The app is `Ready`
     /// once every transport listens — the `app ready` line names them and the
-    /// addresses they bound — and turns [`Draining`](crate::AppState::Draining)
+    /// addresses they bound — and turns `Draining`
     /// at `SIGINT` / `SIGTERM` or when a transport fails, which stops the
     /// others. A transport whose `serve` returns before a stop was asked, `Ok`
     /// included, has failed.
@@ -385,7 +385,7 @@ impl App {
     /// A deployment setting an OTLP endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`, or a
     /// signal's own) for a signal it leaves on, while the process logs
     /// through the kernel's console alone, is refused first, before any
-    /// transport is built ([`UnservedExportError`](crate::UnservedExportError)):
+    /// transport is built (`UnservedExportError`):
     /// `main` never called `OpenTelemetry::init()`, so nothing would export. A
     /// subscriber of the app's own is its own to judge, and
     /// [`AppBuilder::build`], which a suite boots through, never refuses.
@@ -394,17 +394,17 @@ impl App {
     /// could not compose (a layer it declares resolves to no provider, a
     /// misordered guard chain) fails the boot here, before any hook runs, as
     /// does a transport stating a stop past
-    /// [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND)
-    /// ([`UnboundedTransportError`](crate::UnboundedTransportError)); a
+    /// `MAX_STOP_BOUND`
+    /// (`UnboundedTransportError`); a
     /// `listen` that fails fails it with the error carrying
     /// [`BootStep::Listen`], before any transport serves; a transport that
     /// panics as it is built, configures or listens fails it as one that
     /// returns an error does, the panic filed once at `error`. A stop
     /// asked while a transport configures or listens, or an init hook waits,
-    /// stops the boot there ([`BootInterruptedError`](crate::BootInterruptedError)).
+    /// stops the boot there (`BootInterruptedError`).
     /// Once the transports have stopped, the shutdown hooks run, then the
     /// resources the modules opened close and the container drops, all within
-    /// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT); a hook that
+    /// `SHUTDOWN_HOOKS_TIMEOUT`; a hook that
     /// fails or panics is reported and the rest still run. A boot that fails
     /// gets the same teardown — the shutdown hooks only when an init hook ran —
     /// and its error is still what `run` returns.
@@ -412,7 +412,7 @@ impl App {
     /// Each transport bounds its own stop ([`Transport::stop_bound`]); the
     /// `way down bounded` boot line files the longest beside the hooks' budget,
     /// and the kernel holds it: a transport still serving at the longest bound
-    /// plus [`SHUTDOWN_SETTLE_TIMEOUT`](crate::SHUTDOWN_SETTLE_TIMEOUT) after
+    /// plus `SHUTDOWN_SETTLE_TIMEOUT` after
     /// the stop is abandoned, named at `error`, and is the app's error. A
     /// signal received once the way down has begun exits at once (130 / 143).
     ///
@@ -420,7 +420,7 @@ impl App {
     /// one it runs on to the module listing it. A run with no transport at all
     /// says so at `warn`, runs its init hooks and stops for
     /// [`StopCause::NoTransport`], never turning
-    /// [`Ready`](crate::AppState::Ready).
+    /// `Ready`.
     pub async fn run(self) -> Result<()> {
         let served = self.boot_and_serve().await;
         if served.is_err() {
@@ -908,9 +908,9 @@ impl AppBuilder {
     /// wiring step, and return the assembled [`App`]. Propagates the first
     /// factory error, named
     /// ([`FactoryFailedError`]), and the first wiring's
-    /// ([`WiringFailedError`](crate::WiringFailedError)); a stop asked while a
+    /// (`WiringFailedError`); a stop asked while a
     /// factory waits drops it there and returns
-    /// [`BootInterruptedError`](crate::BootInterruptedError). A boot that
+    /// `BootInterruptedError`. A boot that
     /// fails closes what the factories already opened
     /// ([`ContainerBuilder::provide_close`]) before it returns.
     pub async fn build(self) -> Result<App> {
@@ -1173,7 +1173,7 @@ pub(crate) mod __private {
     }
 
     /// Refuse a transport whose stop the kernel cannot hold: past
-    /// [`MAX_STOP_BOUND`](crate::MAX_STOP_BOUND), `Duration::MAX` among them — the
+    /// `MAX_STOP_BOUND`, `Duration::MAX` among them — the
     /// check [`App::run`] makes at the boot, for a harness that runs transports
     /// itself.
     pub fn check_stop_bound(

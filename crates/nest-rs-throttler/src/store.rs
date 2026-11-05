@@ -104,7 +104,7 @@ pub trait ThrottlerStore: Send + Sync + 'static {
 
     /// Whether this store's counters live in this process's memory alone. One
     /// whose counters leave it is handed each bucket's subject as an HMAC under
-    /// [`pseudonym_key`](crate::ThrottlerConfig::pseudonym_key), and the boot
+    /// `ThrottlerConfig::pseudonym_key`, and the boot
     /// refuses it without that key. `false` unless a store says otherwise.
     fn in_process(&self) -> bool {
         false

@@ -311,7 +311,7 @@ impl Container {
     /// Resolve a provider by type. Returns `None` if no provider was registered.
     ///
     /// Bypasses the build-time access contract
-    /// ([`AccessGraphError`](crate::AccessGraphError)) — prefer declarative
+    /// (`AccessGraphError`) — prefer declarative
     /// `#[inject]`. A transient provider is rebuilt on every call.
     ///
     /// # Panics
@@ -427,7 +427,7 @@ pub struct ContainerBuilder {
     /// declaration names the first.
     declared_factories: HashMap<TypeId, Declaration>,
     /// Two declarations for one type, a transport type attached twice among
-    /// them ([`ContestedDeclarationError`](crate::ContestedDeclarationError)).
+    /// them (`ContestedDeclarationError`).
     contested: Vec<crate::ContestedDeclarationError>,
     /// Each transport type attached, with the import that attached it: an app
     /// runs one transport of each type.
@@ -585,7 +585,7 @@ impl ContainerBuilder {
     ///
     /// A type has one provider whatever its scope: a second registration of
     /// `T` is a duplicate the boot refuses
-    /// ([`DuplicateProviderError`](crate::DuplicateProviderError)), naming
+    /// (`DuplicateProviderError`), naming
     /// both.
     pub fn provide<T: Any + Send + Sync>(self, value: T) -> Self {
         self.provide_arc(Arc::new(value))
@@ -809,7 +809,7 @@ impl ContainerBuilder {
     /// `Arc` is sized.
     ///
     /// A second binding of `T` is a duplicate the boot refuses
-    /// ([`DuplicateProviderError`](crate::DuplicateProviderError)); a test swaps
+    /// (`DuplicateProviderError`); a test swaps
     /// one with [`AppBuilder::override_dyn`](crate::AppBuilder::override_dyn).
     pub fn provide_dyn<T: ?Sized + Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
         self.record::<Arc<T>>(ProviderScope::Singleton);
@@ -835,7 +835,7 @@ impl ContainerBuilder {
     }
 
     /// Metadata of type `M` attached **so far**, in attach order — the mid-build
-    /// read of what [`Discovery::meta`](crate::Discovery::meta) exposes once the
+    /// read of what `Discovery::meta` exposes once the
     /// container is frozen.
     pub fn attached_meta<M: Any + Send + Sync>(&self) -> impl Iterator<Item = &M> {
         self.metadata
@@ -865,7 +865,7 @@ impl ContainerBuilder {
     ///
     /// An app runs one transport of each type: a second `T`, attached by any
     /// module, fails the boot naming both imports
-    /// ([`ContestedDeclarationError`](crate::ContestedDeclarationError)) — the
+    /// (`ContestedDeclarationError`) — the
     /// module that attaches it is imported by type, so a second import of it
     /// attaches nothing. A transport generic over a marker (`Consumer<Orders>`)
     /// is one type per marker.
@@ -959,7 +959,7 @@ impl ContainerBuilder {
     ///
     /// `name` is the registry as a boot failure names it
     /// (`"nest_rs::events::listeners"`); the first `wire` that fails ends the
-    /// boot with [`WiringFailedError`](crate::WiringFailedError). Wirings run in
+    /// boot with `WiringFailedError`. Wirings run in
     /// registration order, and `wire` is synchronous, so none waits on I/O.
     ///
     /// ```
@@ -991,7 +991,7 @@ impl ContainerBuilder {
     /// hook, the `T` installed last closing first — a client a factory opened
     /// over a pool closes before the pool, whatever the import order — within
     /// what the hooks left of their budget
-    /// ([`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT)).
+    /// (`SHUTDOWN_HOOKS_TIMEOUT`).
     ///
     /// The kernel resolves `T` from the final container; a `T` nothing
     /// provides, or one the app was handed (a seed, a test's override), is not
@@ -1094,7 +1094,7 @@ impl ContainerBuilder {
     /// module first imported in the register phase is collected too late for a
     /// factory, so a hand-written module imports in both of its phases: one
     /// whose late `collect` queued a factory nothing will drain is refused
-    /// ([`LateFactoryError`](crate::LateFactoryError)) and never registers.
+    /// (`LateFactoryError`) and never registers.
     ///
     /// A builder made outside a boot ([`Container::builder`]) is in the
     /// register phase and drains no factory, so a module whose `collect`
@@ -1155,7 +1155,7 @@ impl ContainerBuilder {
     ///
     /// `T` is a default; the `Arc<D>` is a **declaration**: another type's
     /// binding of it fails the boot
-    /// ([`ContestedDeclarationError`](crate::ContestedDeclarationError)), and a
+    /// (`ContestedDeclarationError`), and a
     /// port's default of it is superseded. A seeded `Arc<D>` keeps its binding.
     pub fn provide_factory_dyn<T, D, F, Fut>(self, factory: F, bind: fn(T) -> Arc<D>) -> Self
     where
@@ -1181,7 +1181,7 @@ impl ContainerBuilder {
     /// first-queued-wins, right for a default several modules declare but wrong
     /// for a value an import site *chose* (`StorageModule::for_root(cfg)`), which
     /// takes the slot instead. Two declarations for one type fail the build
-    /// ([`ContestedDeclarationError`](crate::ContestedDeclarationError)), which
+    /// (`ContestedDeclarationError`), which
     /// appends `remedy`.
     pub fn provide_declared_factory<T, F, Fut>(self, remedy: &'static str, factory: F) -> Self
     where
@@ -1548,7 +1548,7 @@ impl ContainerBuilder {
     /// # Errors
     ///
     /// The first refusal the builder holds, in the boot's order
-    /// ([`ContainerError`](crate::ContainerError)): a declaration contested, a
+    /// (`ContainerError`): a declaration contested, a
     /// seed the check its queued factory declares refuses, what a `register`
     /// filed with [`refuse`](Self::refuse), a factory
     /// nothing drains — a module whose `collect` queued one is left out by

@@ -330,7 +330,7 @@ pub fn install_pending<F: Future>(pending: Pending, fut: F) -> impl Future<Outpu
 }
 
 /// A handler's parameter reading the `T` a guard attached to its unit with
-/// [`UnitContext::attach`](crate::UnitContext::attach) — the principal an
+/// `UnitContext::attach` — the principal an
 /// authentication guard verified, or what a guard after it derived from it.
 ///
 /// One parameter on every edge: an HTTP route, a GraphQL operation or field
@@ -344,7 +344,7 @@ pub fn install_pending<F: Future>(pending: Pending, fut: F) -> impl Future<Outpu
 ///
 /// `T` is cloned out of the ambient context, so attach a value that is cheap to
 /// clone. A guard reads what an earlier one attached with
-/// [`UnitContext::require`](crate::UnitContext::require), and code a handler
+/// `UnitContext::require`, and code a handler
 /// calls with [`ambient`].
 pub struct Ambient<T>(pub T);
 

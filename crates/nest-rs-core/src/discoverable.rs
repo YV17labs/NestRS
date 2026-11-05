@@ -42,7 +42,7 @@ pub trait Discoverable {
     /// `TypeId` of each `#[inject] Option<Arc<…>>` dependency, whatever the
     /// build timing: checked by the access graph like
     /// [`injected`](Discoverable::injected) — though one no reached module
-    /// provides is simply absent — and followed by a [`Net`](crate::Net) around
+    /// provides is simply absent — and followed by a `Net` around
     /// the provider.
     fn injected_optional() -> Vec<TypeId> {
         Vec::new()
@@ -55,7 +55,7 @@ pub trait Discoverable {
     }
 
     /// Each provider a handler of this host resolves through a parameter whose
-    /// type implements [`ResolvesProvider`](crate::ResolvesProvider), with its
+    /// type implements `ResolvesProvider`, with its
     /// label: checked by the access graph like
     /// [`injected`](Discoverable::injected), never for scope — its consumer is
     /// a request.

@@ -232,8 +232,8 @@ impl HeadlessApp {
     ///
     /// # Panics
     ///
-    /// As [`unit`](Self::unit) does: when the app binds no unit of work, and
-    /// when the binding cannot honour the unit.
+    /// As `unit` does: when the app binds no unit of work, and when the binding
+    /// cannot honour the unit.
     pub async fn system_unit<T, E, F, Fut>(&self, body: F) -> Result<T, E>
     where
         T: Send,

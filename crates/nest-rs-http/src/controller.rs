@@ -202,8 +202,8 @@ impl HttpRouteMeta {
     }
 
     /// Schema builder for the response payload — read off the return type,
-    /// a `Json<T>` bare, inside a [`Created`](crate::Created) or a
-    /// [`Paginated`](crate::Paginated) or inside a `Result`, an alias
+    /// a `Json<T>` bare, inside a `Created` or a
+    /// `Paginated` or inside a `Result`, an alias
     /// included, or declared with `#[api(response = T)]` when the handler
     /// builds its own [`Response`](crate::Response).
     pub fn response(&self) -> Option<SchemaFn> {
@@ -258,13 +258,13 @@ impl HttpRouteMeta {
     }
 
     /// The route's success response carries a `Location` header that the
-    /// framework emits (a [`Created`](crate::Created) answer, `#[redirect]`);
+    /// framework emits (a `Created` answer, `#[redirect]`);
     /// a handler setting it itself reads `false`.
     pub fn sets_location(&self) -> bool {
         self.parts.sets_location
     }
 
-    /// A [`Paginated`](crate::Paginated) answer: the success response carries
+    /// A `Paginated` answer: the success response carries
     /// a `Link` with `rel="next"` whenever another page follows.
     pub fn sets_next_link(&self) -> bool {
         self.parts.sets_next_link
@@ -278,7 +278,7 @@ impl HttpRouteMeta {
 
     /// The effective **success** HTTP status this route emits — `200` unless a
     /// `#[http_code(N)]` or `#[redirect(_, code)]` overrides it, or the return
-    /// type answers its own (a [`Created`](crate::Created) answer's `201`).
+    /// type answers its own (a `Created` answer's `201`).
     pub fn success_status(&self) -> u16 {
         self.parts.success_status
     }

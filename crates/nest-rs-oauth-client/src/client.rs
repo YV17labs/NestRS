@@ -19,39 +19,9 @@ use serde::{Deserialize, Serialize};
 use validator::{Validate, ValidationErrors};
 
 use crate::config::OAuthClientConfig;
+use crate::redirect::AuthorizationRedirect;
 use nest_rs_authn::AuthError;
 use nest_rs_authn::JwtService;
-
-/// The redirect leg of the flow, produced by [`OAuthClient::authorize`].
-#[non_exhaustive]
-pub struct AuthorizationRedirect {
-    /// The provider authorization URL to redirect the user agent to.
-    pub url: String,
-    /// Signed, short-lived token binding the CSRF state to the PKCE verifier.
-    /// Set as a cookie on the redirect through [`set_cookie`](Self::set_cookie);
-    /// read back with [`OAuthClient::transaction_from`] and passed to
-    /// [`callback`](OAuthClient::callback).
-    pub transaction: String,
-}
-
-impl AuthorizationRedirect {
-    /// The `Set-Cookie` value carrying [`transaction`](Self::transaction) on the
-    /// redirect: `__Host-oauth_tx=<token>; Path=/; Max-Age=600; HttpOnly; Secure;
-    /// SameSite=Lax`.
-    ///
-    /// `SameSite=Lax`, not `Strict`: the callback is a top-level cross-site
-    /// navigation from the provider, which `Strict` would strip (RFC 6265bis
-    /// §5.6.7.1). `Max-Age` is the signed token's own lifetime,
-    /// [`OAuthClient::TRANSACTION_TTL_SECS`].
-    pub fn set_cookie(&self) -> String {
-        format!(
-            "{}={}; Path=/; Max-Age={}; HttpOnly; Secure; SameSite=Lax",
-            OAuthClient::TRANSACTION_COOKIE,
-            self.transaction,
-            OAuthClient::TRANSACTION_TTL_SECS,
-        )
-    }
-}
 
 /// Outcome of the Authorization-Code exchange: three bearer credentials, so
 /// each is a [`Secret`].
@@ -686,8 +656,8 @@ impl OAuthClient {
             .filter(|value| !value.is_empty())
     }
 
-    /// Begin the flow: the provider redirect URL and the signed transaction token to
-    /// set as a cookie, bound to `provider` and carrying `resource`, the one
+    /// Begin the flow: the [`AuthorizationRedirect`] a handler returns, its
+    /// signed transaction bound to `provider` and carrying `resource`, the one
     /// (RFC 8707) the flow's own access token is asked for —
     /// [`AuthorizationResponse::resource`] reads it back at the callback.
     pub fn authorize(
@@ -1417,38 +1387,6 @@ mod tests {
             )),
             "{detail}"
         );
-    }
-
-    fn redirect() -> AuthorizationRedirect {
-        AuthorizationRedirect {
-            url: "https://provider.example/authorize".into(),
-            transaction: "tok".into(),
-        }
-    }
-
-    #[test]
-    fn the_transaction_cookie_is_host_prefixed_secure_and_lives_as_long_as_its_token() {
-        let cookie = redirect().set_cookie();
-        assert!(
-            cookie.starts_with(&format!("{}=tok;", OAuthClient::TRANSACTION_COOKIE)),
-            "{cookie}"
-        );
-        let attributes: Vec<&str> = cookie.split(';').skip(1).map(str::trim).collect();
-        for expected in [
-            "Path=/",
-            "HttpOnly",
-            "Secure",
-            "SameSite=Lax",
-            &format!("Max-Age={}", OAuthClient::TRANSACTION_TTL_SECS),
-        ] {
-            assert!(attributes.contains(&expected), "{expected}: {cookie}");
-        }
-        assert!(
-            !cookie.to_ascii_lowercase().contains("domain"),
-            "a __Host- cookie carries no Domain: {cookie}"
-        );
-        assert_eq!(OAuthClient::TRANSACTION_COOKIE, "__Host-oauth_tx");
-        assert_eq!(OAuthClient::TRANSACTION_TTL_SECS, 600);
     }
 
     #[test]

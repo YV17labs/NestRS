@@ -24,8 +24,8 @@ pub struct AnswerDoc {
 
 /// A return type that answers a status or a header of its own: [`Created`],
 /// [`Paginated`] and a `Result` holding one, here, and a framework crate's
-/// own answer type — `nest-rs-social`'s redirect to a provider — whose
-/// `Result` the blanket impl covers.
+/// own answer type — `nest-rs-oauth-client`'s redirect to a provider, and
+/// `nest-rs-social`'s around it — whose `Result` the blanket impl covers.
 pub trait DocumentedAnswer {
     /// What it answers beside its body.
     const ANSWER: AnswerDoc;

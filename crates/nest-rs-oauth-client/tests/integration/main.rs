@@ -11,6 +11,7 @@
 mod client;
 mod config;
 mod module;
+mod redirect;
 
 use nest_rs_authn::{JwtOptions, JwtService};
 

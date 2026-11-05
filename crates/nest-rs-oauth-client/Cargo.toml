@@ -25,6 +25,9 @@ validator.workspace = true
 # transaction is a `JwtService`-signed cookie — both belong to the crate that
 # answers *who*, so this crate reads them rather than declaring a second pair.
 nest-rs-authn.workspace = true
+# `AuthorizationRedirect` answers the authorization request itself, a response
+# and the route's document.
+nest-rs-http.workspace = true
 # OAuth2 Authorization Code flow, without its bundled reqwest 0.12: that one can
 # only speak TLS through ring, so the exchange runs on the workspace's reqwest
 # through `oauth2::AsyncHttpClient`, and every TLS client shares one provider.
@@ -44,8 +47,12 @@ tracing.workspace = true
 
 [dev-dependencies]
 # `LogCapture` asserts the callback-refusal `warn` carries its `reason`;
-# `TestAuthority` issues the certificate each provider double presents over TLS.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+# `TestAuthority` issues the certificate each provider double presents over TLS;
+# `TestApp` serves a handler returning the redirect.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls"] }
+# The route `#[routes]` expands into, and the document that route is read into.
+nest-rs-guards = { path = "../nest-rs-guards" }
+nest-rs-openapi = { path = "../nest-rs-openapi" }
 # Forging an expired transaction cookie, to prove `exchange` refuses it. The
 # crate hides `jsonwebtoken` from consumers; only the test that has to mint a
 # malformed token names it.

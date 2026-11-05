@@ -224,7 +224,7 @@ impl SocialRegistry {
         resource: Option<&str>,
     ) -> Result<SocialRedirect, AuthError> {
         match self.get(key) {
-            Some(provider) => SocialRedirect::to(provider.authorize(jwt, resource)?),
+            Some(provider) => provider.authorize(jwt, resource).map(SocialRedirect::to),
             None => Ok(SocialRedirect::unknown()),
         }
     }

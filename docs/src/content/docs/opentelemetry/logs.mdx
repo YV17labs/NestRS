@@ -25,7 +25,7 @@ request.
 | Layer composition (per-route guard/pipe/… chains) | `nest_rs::layers` | `trace` for the per-route effective-chain dump; `debug` for the redundant multi-scope lint (HTTP deduped once, WS per gateway); `warn` for actionable posture smells (reversed authn/authz order, the denials of a guard declaring no target, **a gated endpoint denying every request for want of a guard**) |
 | A guard's denials | the guard's own (`Guard::target`) | `warn`, `error` for a `500`: one `guard denied the …` per denial, filed by the edge, with the `reason` the denial names |
 | Authn / Authz | `nest_rs::authn` / `nest_rs::authz` | `info` (denials `warn`) |
-| OAuth client | `nest_rs::oauth::client` | `info` (callback refusals `warn`) |
+| OAuth client | `nest_rs::oauth::client` | `info` (callback refusals `warn`, a redirect no header can carry `error`) |
 | OAuth authorization server (token endpoint) | `nest_rs::oauth::server` | `warn` for each client `ClientAuthenticationGuard` refuses, its reason the strategy's and its cause naming the method; the cause a `server_error` withholds is filed on `nest_rs::http` |
 | RFC 9728 discovery | `nest_rs::oauth::resource` | `info` (boot misconfiguration `warn`) |
 | WebSocket events | `nest_rs::ws` | `info` |

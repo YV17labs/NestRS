@@ -1,8 +1,9 @@
 //! OAuth 2.0 **client** for nestrs — this app acting as the party that obtains
 //! a token from somebody else's authorization server.
 //!
-//! It holds the Authorization Code flow with PKCE ([`OAuthClient`]) and the
-//! module that wires one configured client ([`OAuthClientModule`]).
+//! It holds the Authorization Code flow with PKCE ([`OAuthClient`]), the answer
+//! a handler returns for its authorization request ([`AuthorizationRedirect`])
+//! and the module that wires one configured client ([`OAuthClientModule`]).
 //! Authenticating a client at *our* token endpoint lives in
 //! `nest-rs-oauth-server`; social login (GitHub, Google, custom providers) in
 //! `nest-rs-social`, built on this client.
@@ -21,7 +22,9 @@ pub const TARGET: &str = "nest_rs::oauth::client";
 mod client;
 mod config;
 mod module;
+mod redirect;
 
-pub use client::{AuthorizationRedirect, AuthorizationResponse, OAuthClient, TokenSet};
+pub use client::{AuthorizationResponse, OAuthClient, TokenSet};
 pub use config::{OAuthClientConfig, refuse_plaintext_redirect};
 pub use module::{OAuthClientModule, OAuthClientSetup};
+pub use redirect::AuthorizationRedirect;

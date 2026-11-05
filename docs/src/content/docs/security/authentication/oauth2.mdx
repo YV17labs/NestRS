@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 `OAuthClient` runs the authorization-code flow against any provider
 that speaks RFC 6749. The flow uses PKCE end-to-end and keeps the
 CSRF state in a signed cookie — no server-side session, no Redis
-lookup, no in-memory map. The redirect leg returns a URL the browser
+lookup, no in-memory map. The redirect leg answers the `302` the browser
 follows; the callback leg validates the `state`, exchanges the code
 for an access token, and hands you the provider's user info.
 
@@ -31,6 +31,15 @@ cargo add nest-rs --features oauth-client
 
 Enabling `social` brings it along: every social provider composes this client
 as its shared flow.
+
+An app issuing tokens of its own also plays §1.1's *authorization server*, a
+capability of its own: `/callback` below answers with its `AccessTokenResponse`,
+and [Token endpoint errors](#token-endpoint-errors) is that endpoint whole, so
+`nest_rs::oauth::server` needs its feature beside this one.
+
+```bash frame="terminal"
+cargo add nest-rs --features oauth-server
+```
 
 ## Wire it in
 
@@ -54,27 +63,30 @@ the exemplar in `crates/features/src/sign_in/`); over a client of your own it
 looks like this:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
+use std::sync::Arc;
+
+use nest_rs::authn::JwtService;
+use nest_rs::core::Ambient;
+use nest_rs::http::{Opaque, Result, controller, routes};
+use nest_rs::oauth::client::{AuthorizationRedirect, OAuthClient};
+use nest_rs::oauth::server::AccessTokenResponse;
+
 #[controller(path = "/")]
 pub struct OAuthController {
+    #[inject]
+    client: Arc<OAuthClient>,
+    #[inject]
+    jwt: Arc<JwtService>,
     #[inject]
     issuer: Arc<TokenIssuer>,
 }
 
 #[routes]
 impl OAuthController {
-    // The redirect leg is a plain handler: a `Strategy` maps a request to a
-    // principal and never issues a transport response, so the 302 and the
-    // cookie are built here. `#[public]` because there is no credential yet.
     #[get("/authorize")]
     #[public]
-    async fn authorize(&self) -> Result<Response> {
-        let auth = self.client.authorize(&self.jwt, "github", None)?;
-        Ok(Response::builder()
-            .status(StatusCode::FOUND)
-            .header(header::SET_COOKIE, auth.set_cookie())
-            .header(header::LOCATION, auth.url)
-            .header(header::CACHE_CONTROL, "no-store")
-            .finish())
+    async fn authorize(&self) -> Result<AuthorizationRedirect> {
+        self.client.authorize(&self.jwt, "github", None).opaque()
     }
 
     // NOT `#[public]`: `OAuthGuard` authenticates *from* `code`/`state`, so it
@@ -98,6 +110,11 @@ opposite — `code` and `state` *are* the credential, and `OAuthGuard` (your app
 tells `AuthnGuard` to admit a rejected credential as anonymous, which turns a
 forged-callback `401` into a failure on the missing principal — invisible to any
 alert, WAF rule or rate limit keyed on `401`.
+
+`/authorize` returns what the client answers, an `AuthorizationRedirect`: the
+`302` to the provider, the transaction cookie and `Cache-Control: no-store` are
+the framework's, and the OpenAPI document names the `302` and its `Location` off
+the return type.
 
 `/callback` returns `AccessTokenResponse` bare. The type renders its own JSON
 with the `Cache-Control: no-store` and `Pragma: no-cache` RFC 6749 §5.1 requires
@@ -161,13 +178,13 @@ plaintext.
 
 ## The redirect leg
 
-`authorize` produces the URL the browser follows and the signed
-transaction cookie that ties the round-trip together:
+`authorize` produces the answer a handler returns: the URL the browser
+follows and the signed transaction cookie that ties the round-trip together.
 
 ```rust title="crates/features/src/authn/http/controller.rs"
-let auth = self.client.authorize(&self.jwt, "github", Some("https://api.example.com"))?;
-// auth.url        — the provider redirect URL
-// auth.transaction — short-lived JWT cookie: CSRF state + PKCE verifier + resource
+self.client
+    .authorize(&self.jwt, "github", Some("https://api.example.com"))
+    .opaque()
 ```
 
 The `provider` argument is the registry key of the provider this flow is for.
@@ -180,10 +197,10 @@ token is asked for once the flow ends, signed into the transaction so the
 callback reads back what the redirect leg asked (`None` when it named none).
 
 The transaction is a JSON Web Token signed by your app's
-`JwtService`, carrying the random CSRF `state`, the PKCE verifier,
-and `exp`. The browser stores it as a cookie the framework names and
-writes — `auth.set_cookie()` is the whole `Set-Cookie` value — and the
-callback leg verifies the signature before trusting any of it.
+`JwtService`, carrying the random CSRF `state`, the PKCE verifier, the
+`resource` and `exp`. The browser stores it as a cookie the framework names
+and writes, and the callback leg verifies the signature before trusting any
+of it.
 
 The framework generates a fresh PKCE pair per flow
 (`PkceCodeChallenge::new_random_sha256`) and a fresh CSRF token
@@ -317,13 +334,24 @@ pub struct AuthorizationRedirect {
 }
 ```
 
-- `url` — set `Location: <url>` and return `302`, with `Cache-Control:
-  no-store` so no cache keeps the response setting the cookie.
-- `transaction` — set as a cookie through `set_cookie()`:
-  `__Host-oauth_tx=<token>; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax`.
+A handler returns it, bare or inside a `Result`, and RFC 6749 §4.1.1's redirect
+is written for it:
 
-Behind a social provider, `SocialRegistry::authorize` answers all of it as a
-`SocialRedirect` the handler returns
+```http
+HTTP/1.1 302 Found
+location: <url>
+set-cookie: __Host-oauth_tx=<token>; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax
+cache-control: no-store
+```
+
+`no-store` means no cache keeps the response that set the cookie, and
+`set_cookie()` is that whole `Set-Cookie` value. A `url` no header can carry, one
+a provider's override appended to, answers the opaque `500` and files
+`OAuth redirect rejected` at `error` on `nest_rs::oauth::client`, quoting neither
+field.
+
+Behind a social provider, `SocialRegistry::authorize` answers a `SocialRedirect`
+wrapping this one, or the `404` for a provider no imported module registers
 ([Social login](/security/authentication/social-login/#the-request-flow)).
 
 The cookie's name is `OAuthClient::TRANSACTION_COOKIE`, the framework's

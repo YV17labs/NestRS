@@ -2,7 +2,7 @@
 //! its null to the nearest nullable field above it — to `data` itself from a
 //! root field: GraphQL (October 2021) §6.4.4, *Handling Field Errors*.
 //!
-//! async-graphql (`=7.2.1`, `do_resolve_container`) files a failed field's
+//! async-graphql (`7.2.1`, `do_resolve_container`) files a failed field's
 //! error and inserts no key for it, and answers `null` for an object whose
 //! every field failed. The nulls are placed once the operation answered, read
 //! off the schema's types and the operation's selections, and only in an
@@ -261,7 +261,7 @@ impl FieldTypes {
 /// The document a request executes, kept for the nulls its answer may need.
 struct Kept {
     /// The request's text, taken once its parse is cached: async-graphql
-    /// (`=7.2.1`) executes that parse and never reads the text again, so only
+    /// (`7.2.1`) executes that parse and never reads the text again, so only
     /// an answer carrying a field error pays for parsing it twice.
     text: String,
     /// The name the document declares the selected operation under.
@@ -340,7 +340,7 @@ const ROOT: usize = 0;
 struct Position<'a> {
     /// The type the first of those fields declares, when the schema says.
     ty: Option<&'a Type>,
-    /// How many selections answer here: async-graphql (`=7.2.1`,
+    /// How many selections answer here: async-graphql (`7.2.1`,
     /// `insert_value`) resolves each apart, and where one answers `null` and
     /// another an object, keeps whichever finished first.
     selections: usize,
@@ -904,7 +904,7 @@ mod tests {
         }
     }
 
-    /// async-graphql (`=7.2.1`, `insert_value`) keeps the first of a field's
+    /// async-graphql (`7.2.1`, `insert_value`) keeps the first of a field's
     /// selections to finish: when that one's every field failed, its `null`
     /// hides the others' answers, so it stays a `null` — climbing past a
     /// Non-Null position — never an object missing what they answered.
@@ -1025,7 +1025,7 @@ mod tests {
         }
     }
 
-    /// async-graphql (`=7.2.1`)'s `Interface` derive files the error of a field
+    /// async-graphql (`7.2.1`)'s `Interface` derive files the error of a field
     /// resolved through the interface without its path, so no null is placed
     /// for it: when this fails, a release gave it one.
     #[tokio::test]

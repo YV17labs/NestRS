@@ -28,7 +28,7 @@ until it stabilises.
 
 | Library | Decision |
 |---|---|
-| async-graphql 7 (`=7.2.1`) | **Public**: its derives and `Context` are what a resolver is written in. Its 8.0 carries RUSTSEC-2026-0253's fix, so if 8.0 is released final before 7.0 is published, 7.0 takes it — a public dependency's major is free until the first publish; after that, 8.0 waits for nestrs 8. Its poem integration, `async-graphql-poem`, left with `nest_rs::graphql::async_graphql_poem` on 2026-10-19: `/graphql` is served on the transport's own types. |
+| async-graphql 7 (`=7.2`; `=7.2.1` until 2026-11-05, three segments against the requirement form every other third-party pin takes) | **Public**: its derives and `Context` are what a resolver is written in. Its 8.0 carries RUSTSEC-2026-0253's fix, so if 8.0 is released final before 7.0 is published, 7.0 takes it — a public dependency's major is free until the first publish; after that, 8.0 waits for nestrs 8. Its poem integration, `async-graphql-poem`, left with `nest_rs::graphql::async_graphql_poem` on 2026-10-19: `/graphql` is served on the transport's own types. |
 | rmcp 3 | **Public**: the MCP SDK under the protocol's own organisation; its model types are the MCP schema. |
 | sea-orm 2 (`=2.0`), sea-orm-migration 2 | **Public**: `Repo`'s API by design, and `nest_rs::testing::EphemeralDatabase` takes a `MigratorTrait`. |
 | validator 0.21 | **Public**: `#[validate(…)]` is the app's. A `0.x`, so its next minor is a nestrs major. |

@@ -260,14 +260,14 @@ impl Stream for InScope {
     }
 }
 
-/// The type of the operation `request` selects, as async-graphql (`=7.2.1`)
+/// The type of the operation `request` selects, as async-graphql (`7.2.1`)
 /// selects it; `None` when it selects none and nothing runs.
 pub(crate) fn selected_type(request: &mut Request) -> Option<OperationType> {
     Selected::of(request).ty
 }
 
 /// The operation `document` runs for a request naming `wanted`, as
-/// async-graphql (`=7.2.1`) selects it, and the name the document declares it
+/// async-graphql (`7.2.1`) selects it, and the name the document declares it
 /// under; `None` when it selects none and nothing runs.
 pub(crate) fn selected_operation<'d>(
     document: &'d ExecutableDocument,
@@ -409,7 +409,7 @@ where
 
 /// The refusal of a mutation whose root selections, through its fragments,
 /// name one response key or spread one fragment more than once, pointing at
-/// the repeated selection: async-graphql (`=7.2.1`) runs a root field once per
+/// the repeated selection: async-graphql (`7.2.1`) runs a root field once per
 /// selection — its writes twice — where GraphQL §6.3.2 runs one key once, and
 /// answers only one of the two.
 fn repeated_root_selection(
@@ -562,7 +562,7 @@ fn answered(
 }
 
 /// How many errors the operation's response carries so far, a nested nullable
-/// field's included: read where async-graphql (`=7.2.1`) adds them.
+/// field's included: read where async-graphql (`7.2.1`) adds them.
 fn errors_reported(ctx: &Context<'_>) -> usize {
     ctx.query_env
         .errors

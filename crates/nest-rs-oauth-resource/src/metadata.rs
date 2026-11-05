@@ -2,7 +2,7 @@
 //! serves, and the `WWW-Authenticate` challenge that points at it.
 
 use nest_rs_guards::__private::is_scope_token;
-use nest_rs_http::__private::{AnswerDoc, DocumentedAnswer};
+use nest_rs_http::__private::DocumentedAnswer;
 use nest_rs_http::challenge::BEARER;
 use nest_rs_http::{HeaderValue, IntoResponse, Response, StatusCode};
 use serde::Serialize;
@@ -183,15 +183,13 @@ fn build_challenge(metadata_url: &str, scopes: &[String], error: Option<&str>) -
 }
 
 /// RFC 9728 §3.2 answers `200`.
-impl DocumentedAnswer for ProtectedResourceMetadata {
-    const ANSWER: AnswerDoc = AnswerDoc::OK;
-}
+impl DocumentedAnswer for &ProtectedResourceMetadata {}
 
-impl IntoResponse for ProtectedResourceMetadata {
+impl IntoResponse for &ProtectedResourceMetadata {
     fn into_response(self) -> Response {
         // Never an empty 200: a client would read it as a resource with no
         // authorization server and abandon the flow.
-        match serde_json::to_vec(&self) {
+        match serde_json::to_vec(self) {
             Ok(body) => Response::builder()
                 .status(StatusCode::OK)
                 .content_type(HeaderValue::from_static("application/json"))
@@ -214,6 +212,16 @@ impl IntoResponse for ProtectedResourceMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The route returns it borrowed, so the frozen document is not copied per
+    /// request: the probe still reads the `200` off the reference.
+    #[test]
+    fn a_route_returning_the_document_states_its_200() {
+        assert_eq!(
+            nest_rs_http::__answer_of!(&ProtectedResourceMetadata),
+            nest_rs_http::__private::AnswerDoc::OK,
+        );
+    }
 
     fn meta(resource: &str, scopes: &[&str]) -> ProtectedResourceMetadata {
         ProtectedResourceMetadata::new(

@@ -824,8 +824,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         } else {
             quote! { __nestrs_answer.status }
         };
-        let sets_location = quote! { #redirects || __nestrs_answer.location };
-        let sets_next_link = quote! { __nestrs_answer.next_link };
         route_metas.push(quote! {
             #(#cfgs)*
             {
@@ -847,8 +845,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 query_params: #query_params,
                 header_params: #header_params,
                 may_conflict: #may_conflict,
-                sets_location: #sets_location,
-                sets_next_link: #sets_next_link,
+                sets_location: #redirects || __nestrs_answer.location,
+                sets_next_link: __nestrs_answer.next_link,
                 response_headers: #response_headers,
                 success_status: #success_status,
                 public: #is_public,

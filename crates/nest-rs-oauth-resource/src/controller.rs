@@ -20,8 +20,8 @@ pub(crate) struct OAuthResourceController {
 impl OAuthResourceController {
     #[get("/oauth-protected-resource")]
     #[public]
-    async fn metadata(&self) -> ProtectedResourceMetadata {
-        (*self.metadata).clone()
+    async fn metadata(&self) -> &ProtectedResourceMetadata {
+        &self.metadata
     }
 
     /// The path-aware form (RFC 9728 §3.1); the tail must be *this* resource's
@@ -32,6 +32,6 @@ impl OAuthResourceController {
         if resource_path.trim_end_matches('/') != self.metadata.resource_path() {
             return StatusCode::NOT_FOUND.into_response();
         }
-        (*self.metadata).clone().into_response()
+        self.metadata.as_ref().into_response()
     }
 }

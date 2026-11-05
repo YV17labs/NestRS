@@ -502,17 +502,17 @@ fn operation_object(
     }
 
     if let Some(body) = route.request_body() {
-        let schema = match (body.schema(), body) {
-            (Some(schema_fn), _) => schema_fn(generator).to_value(),
-            (None, RequestBodyMeta::Raw) => stream_schema(body.media_type()),
-            // A bare `Multipart`: the media type is known, the parts are not.
-            (None, _) => json!({ "type": "object", "additionalProperties": true }),
-        };
         // A raw reader alone takes what it is sent, nothing included.
-        let required = !matches!(body, RequestBodyMeta::Raw);
+        let raw = matches!(body, RequestBodyMeta::Raw);
+        let schema = match body.schema() {
+            Some(schema_fn) => schema_fn(generator).to_value(),
+            None if raw => stream_schema(body.media_type()),
+            // A bare `Multipart`: the media type is known, the parts are not.
+            None => json!({ "type": "object", "additionalProperties": true }),
+        };
         op.insert(
             "requestBody".into(),
-            json!({ "required": required, "content": media_content(body.media_type(), schema) }),
+            json!({ "required": !raw, "content": media_content(body.media_type(), schema) }),
         );
     }
 
@@ -723,16 +723,16 @@ fn add_json_body(response: &mut Value, schema: Value) {
 /// What `other` documents for a status, beside what `response` does: its media
 /// types and its headers.
 fn add_beside(response: &mut Value, other: Value) {
-    let (Value::Object(response), Value::Object(other)) = (response, other) else {
+    let (Value::Object(response), Value::Object(mut other)) = (response, other) else {
         return;
     };
     for key in ["content", "headers"] {
-        if let Some(Value::Object(added)) = other.get(key)
+        if let Some(Value::Object(added)) = other.remove(key)
             && let Value::Object(listed) = response
                 .entry(key)
                 .or_insert_with(|| Value::Object(Map::new()))
         {
-            listed.extend(added.clone());
+            listed.extend(added);
         }
     }
 }
@@ -1350,22 +1350,6 @@ mod tests {
         }
     }
 
-    fn token_operation(
-        meta: &HttpRouteMeta,
-        g: &mut SchemaGenerator,
-        version_parameter: Option<Value>,
-    ) -> Value {
-        operation_object(
-            meta,
-            &template("/token"),
-            "token",
-            g,
-            &[],
-            version_parameter,
-            EdgeAnswers::default(),
-        )
-    }
-
     /// A body refusing in its protocol's own words documents them on its `400`,
     /// alone unless the edge can answer that status for another reason. The
     /// transport's cap stays the edge's.
@@ -1374,10 +1358,9 @@ mod tests {
         let mut parts = route("token", "/token");
         parts.request_body = Some(RequestBodyMeta::Form(schema_for_dummy));
         parts.request_refusal = Some(own_words);
-        let meta = http_route_meta(parts);
 
         let mut g = generator();
-        let op = token_operation(&meta, &mut g, None);
+        let op = operation(&parts, "/token", &mut g, &[], None);
         let refused = &op["responses"]["400"]["content"];
         assert!(refused.get(JSON_MEDIA_TYPE).is_some(), "{refused}");
         assert!(
@@ -1393,7 +1376,7 @@ mod tests {
 
         let parameter = Some(json!({ "name": "v", "in": "header", "required": true }));
         let mut g = generator();
-        let op = token_operation(&meta, &mut g, parameter);
+        let op = operation(&parts, "/token", &mut g, &[], parameter);
         let both = &op["responses"]["400"]["content"];
         assert!(both.get(JSON_MEDIA_TYPE).is_some(), "{both}");
         assert!(both.get("application/problem+json").is_some(), "{both}");

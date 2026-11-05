@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use nest_rs_core::{Container, Module};
-use nest_rs_http::__private::{AnswerDoc, DocumentedAnswer, DocumentedPayload};
+use nest_rs_http::__private::{DocumentedAnswer, DocumentedPayload};
 use nest_rs_http::schemars::JsonSchema;
 use nest_rs_http::{HeaderValue, IntoResponse, Response, StatusCode};
 use serde::Serialize;
@@ -116,9 +116,7 @@ impl ProbeReport {
 
 /// A route returning it answers `200` up and `503` down, and documents the
 /// report under each.
-impl DocumentedAnswer for ProbeReport {
-    const ANSWER: AnswerDoc = AnswerDoc::OK;
-}
+impl DocumentedAnswer for ProbeReport {}
 
 impl DocumentedPayload for ProbeReport {
     type Payload = Self;

@@ -50,8 +50,9 @@ impl AnswerDoc {
 /// crate's own answer type — `nest-rs-oauth-client`'s redirect to a provider,
 /// and `nest-rs-social`'s around it — whose `Result` the blanket impl covers.
 pub trait DocumentedAnswer {
-    /// What it answers beside its body.
-    const ANSWER: AnswerDoc;
+    /// What it answers beside its body: `200` and no header of its own, unless
+    /// it says otherwise.
+    const ANSWER: AnswerDoc = AnswerDoc::OK;
 }
 
 const CREATED: AnswerDoc = AnswerDoc {
@@ -73,49 +74,27 @@ impl<T> DocumentedAnswer for Paginated<T> {
     const ANSWER: AnswerDoc = PAGINATED;
 }
 
-/// A status the handler computes, over what a [`Created`] sends beside it.
-impl<T> DocumentedAnswer for (StatusCode, Created<T>) {
+/// A status the handler computes, over what the answer it wraps sends beside it.
+impl<B: DocumentedAnswer> DocumentedAnswer for (StatusCode, B) {
     const ANSWER: AnswerDoc = AnswerDoc {
-        location: true,
-        ..AnswerDoc::COMPUTED
+        status: None,
+        ..B::ANSWER
     };
 }
 
-/// A status the handler computes, over what a [`Paginated`] sends beside it.
-impl<T> DocumentedAnswer for (StatusCode, Paginated<T>) {
-    const ANSWER: AnswerDoc = AnswerDoc {
-        next_link: true,
-        ..AnswerDoc::COMPUTED
-    };
-}
+impl<T> DocumentedAnswer for Json<T> {}
 
-impl<T> DocumentedAnswer for Json<T> {
-    const ANSWER: AnswerDoc = AnswerDoc::OK;
-}
+impl DocumentedAnswer for String {}
 
-impl DocumentedAnswer for String {
-    const ANSWER: AnswerDoc = AnswerDoc::OK;
-}
+impl DocumentedAnswer for &'static str {}
 
-impl DocumentedAnswer for &'static str {
-    const ANSWER: AnswerDoc = AnswerDoc::OK;
-}
+impl DocumentedAnswer for Bytes {}
 
-impl DocumentedAnswer for Bytes {
-    const ANSWER: AnswerDoc = AnswerDoc::OK;
-}
+impl DocumentedAnswer for Vec<u8> {}
 
-impl DocumentedAnswer for Vec<u8> {
-    const ANSWER: AnswerDoc = AnswerDoc::OK;
-}
+impl DocumentedAnswer for Body {}
 
-impl DocumentedAnswer for Body {
-    const ANSWER: AnswerDoc = AnswerDoc::OK;
-}
-
-impl DocumentedAnswer for () {
-    const ANSWER: AnswerDoc = AnswerDoc::OK;
-}
+impl DocumentedAnswer for () {}
 
 impl<R: DocumentedAnswer, E> DocumentedAnswer for Result<R, E> {
     const ANSWER: AnswerDoc = R::ANSWER;
@@ -246,5 +225,9 @@ mod tests {
             AnswerDoc::COMPUTED
         );
         assert_eq!(crate::__answer_of!(OwnAnswer), AnswerDoc::COMPUTED);
+        assert_eq!(
+            crate::__answer_of!((StatusCode, OwnAnswer)),
+            AnswerDoc::COMPUTED
+        );
     }
 }

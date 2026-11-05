@@ -20,7 +20,7 @@ back on you.
 | [`AuthnGuard` + `JwtStrategy`](/security/authentication/jwt/) | Missing, malformed, expired, unsigned-incorrectly tokens; against a JWK Set, a token naming an algorithm its key was not published for (`HS*`, `none`, another key type) | Stolen-but-unexpired tokens, replay before expiry, key compromise; a key an issuer withdrew from its JWK Set, until the set is refreshed — within about an hour while the issuer answers, an hour more while it does not |
 | [`OAuthClient`](/security/authentication/oauth2/) | CSRF (state cookie), a cookie planted from a sibling subdomain (`__Host-`), code-interception (PKCE), SSRF on token exchange (no redirects) | Phishing the provider, malicious provider, callback URL takeover |
 | [`hash_password` + `burn_verify`](/security/authentication/password/) | Timing-based account enumeration via login | Slow GPU farms cracking dumped hashes, weak passwords, password reuse |
-| [`AbilityGuard`](/security/authorization/) | Missing or malformed `Ability` (500), unauthenticated GraphQL/WS (403) | Logic bugs in your `AbilityFactory` itself |
+| [`AbilityGuard`](/security/authorization/) | Missing or malformed `Ability` (500), unauthenticated GraphQL/WS (`UNAUTHENTICATED`, the `401` class) | Logic bugs in your `AbilityFactory` itself |
 | [`Repo::scoped`](/security/authorization/row-level-filtering/) | Scope leakage on every read — handler cannot forget the filter, and no service holds a connection to forget it on | A named escape (`Repo::unscoped`, `insert_unscoped`, `with_tombstones`) used past the bar its rustdoc states; a select's statement rewritten through `query()`; a job unit a feature opens on a task of its own |
 | [`#[authorize(A, bind = S)]`](/security/authorization/by-id-binding/) | Cross-tenant by-id reads (403) and missing rows (404) | Handlers that fetch by id without binding the subject and skip `access` |
 | [`Authorize` shaper](/security/authorization/response-masking/) | Leak of unexposed columns, field-restricted grants | A handler returning a hand-built `serde_json::Value` shape that does not match `Model` (500) |
@@ -41,7 +41,7 @@ call site cannot open a door the configuration kept shut.
 |--------|--------------------------|-----------|
 | Postgres pool and `EphemeralDatabase` | `<PREFIX>_SEAORM__URL` | only with `sslmode=disable` written in the URL; any other mode short of `verify-full` is refused |
 | Redis, all three topologies | `<PREFIX>_REDIS__URL` | only a `redis://` URL; a `#insecure` fragment is refused |
-| Storage | `<PREFIX>_STORAGE__ENDPOINT` | only with `<PREFIX>_STORAGE__ALLOW_HTTP=true`, which a declared development or test profile alone turns on |
+| Storage | `<PREFIX>_STORAGE__ENDPOINT` | only with `<PREFIX>_STORAGE__ALLOW_HTTP` open: a declared development or test profile opens it by default, and `true` in any other is honoured and said at `warn` |
 | JWK Set | `<PREFIX>_AUTHN__JWKS_URI` | refused when the module is built, and by the client on every fetch |
 | OAuth token and userinfo endpoints | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL`, `USERINFO_URL` | refused when the client is built (RFC 6749 §3.2), and by the client on every call |
 | `OAuthClient::fetch` | a provider's code, at run time | refused before the call (RFC 6750 §5.3), and by the client whatever path reaches it |

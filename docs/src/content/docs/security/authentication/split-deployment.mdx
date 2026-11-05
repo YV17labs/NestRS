@@ -54,9 +54,10 @@ would never reach.
 cargo add nest-rs --features oauth-resource
 ```
 
-So `apps/auth` enables `authn`; `apps/api` enables `authn` **and**
-`oauth-resource`; a queue worker that only verifies a JWT enables `authn` alone
-and compiles no controller, no interceptor and no outbound HTTP client.
+So an issuer enables `oauth-server`, which brings `authn`; a discoverable resource
+server enables `oauth-resource`, which brings it too; and a queue worker that only
+verifies a JWT enables `authn` alone, and compiles no token endpoint and no discovery
+document. The demo enables them all at once, on its workspace's `nest-rs` line.
 
 ## The split
 
@@ -65,12 +66,12 @@ and compiles no controller, no interceptor and no outbound HTTP client.
 | JWT private key | Holds it | **Never sees it** |
 | JWT public key | Holds it | Holds it |
 | Token endpoints | `/token`, `/login`, OAuth callback | None |
-| Protected routes | None | `/users`, `/orgs`, `/graphql`, `/ws`, … |
+| Protected routes | None | `/users`, `/orgs`, `/posts`, `/graphql`, … |
 | Database | Yes (shared) | Yes (shared) |
 | Cross-app calls | None | None |
 
-The two binaries see the same `Claims` type via the shared
-`crates/features::authn` crate. The verifier deserializes a token
+The two binaries see the same `Claims` type through the shared
+`features::authn` module. The verifier deserializes a token
 the issuer signed; both speak the same struct, no schema drift
 possible.
 
@@ -102,17 +103,17 @@ Each key also reads from a file: `<PREFIX>_AUTHN__PUBLIC_KEY_FILE=/run/secrets/j
 names the path instead of carrying the PEM, which is the form a mounted secret
 takes.
 
-`AuthnConfig::into_options` walks the three key env vars and chooses
+`AuthnConfig::into_options` walks the four key fields and chooses
 verify-only mode when only the public key is set. `JwtService::sign`
 on a verify-only service returns `AuthError::Failed`, whose detail
 reads `this JwtService is verify-only — no signing key configured` — even a buggy resource
 server cannot mint a token.
 
 A misconfiguration (`PRIVATE_KEY` set, `PUBLIC_KEY` missing) fails the
-boot loudly with `"<PREFIX>_AUTHN__PRIVATE_KEY (or <PREFIX>_AUTHN__PRIVATE_KEY_FILE),
-or private_key in an AuthnConfig or JwtOptions built in code, is set without
-<PREFIX>_AUTHN__PUBLIC_KEY (or <PREFIX>_AUTHN__PUBLIC_KEY_FILE), or public_key in an
-AuthnConfig or JwtOptions built in code"`,
+boot loudly with ``<PREFIX>_AUTHN__PRIVATE_KEY (or <PREFIX>_AUTHN__PRIVATE_KEY_FILE),
+or `private_key` in an AuthnConfig or JwtOptions built in code, is set without
+<PREFIX>_AUTHN__PUBLIC_KEY (or <PREFIX>_AUTHN__PUBLIC_KEY_FILE), or `public_key` in an
+AuthnConfig or JwtOptions built in code``,
 and so does a private key beside the public key of another pair. A
 `<PREFIX>_AUTHN__SECRET` left beside either key fails the boot as well, naming
 both — whether both come from the environment, from a `.env` file or from code,
@@ -207,7 +208,7 @@ A round-trip:
 ```bash
 TOKEN=$(curl -sX POST http://localhost:3001/login \
     -H 'Content-Type: application/json' \
-    -d '{"email":"ada@example.com","password":"hunter2"}' \
+    -d '{"email":"admin@acme.test","password":"publish-demo"}' \
     | jq -r .access_token)
 
 curl -s http://localhost:3002/users \
@@ -247,7 +248,7 @@ sign-in naming none is minted for the first resource the issuer serves:
 ```bash
 TOKEN=$(curl -sX POST http://localhost:3001/login \
     -H 'Content-Type: application/json' \
-    -d '{"email":"ada@example.com","password":"hunter2","resource":"http://localhost:3003"}' \
+    -d '{"email":"admin@acme.test","password":"publish-demo","resource":"http://localhost:3003"}' \
     | jq -r .access_token)
 ```
 
@@ -294,9 +295,9 @@ declared development or test profile (`<PREFIX>_ENV`) alone, so a local loop
 runs without a certificate while staging and production speak `https`,
 loopback included.
 
-Three optional members of the RFC 9728 document round out the deployment's
-description of itself. Each is omitted from the served JSON when unset, as
-§3.2 requires:
+Five more members of the RFC 9728 document round out the deployment's
+description of itself. The four naming the resource are omitted from the served JSON
+when unset, as §3.2 requires, and `bearer_methods_supported` is served as `["header"]`:
 
 | Env var | Document member | What it says |
 |---|---|---|
@@ -309,12 +310,10 @@ description of itself. Each is omitted from the served JSON when unset, as
 The documentation, policy and terms URLs are published as they are set, so
 one carrying userinfo fails the boot as the resource does.
 
-§2 defines fourteen members and the framework serves eight. The other six are refused in writing on `ProtectedResourceMetadata`, each
-naming the fact that makes it impossible here: nothing signs a response, so
-no `jwks_uri`; no `cnf`-claim handling, so no DPoP binding; a `Strategy`
-never sees the TLS handshake, so no mTLS binding. `signed_metadata` is
-recorded as an owner question rather than a refusal — publishing one is
-possible, and only the validating half is missing.
+§2 defines fourteen members and the framework serves eight. The rest are not advertised, because nothing here implements them: nothing signs a
+response, so no `jwks_uri`; no `cnf`-claim handling, so no DPoP binding; a `Strategy`
+never sees the TLS handshake, so no mTLS binding. `signed_metadata` is not advertised
+either.
 
 The discovery walk, from a client that knows only one URL:
 

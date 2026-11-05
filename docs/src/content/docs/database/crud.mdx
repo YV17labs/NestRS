@@ -29,7 +29,7 @@ cargo add nest-rs --features seaorm
 the edge it serves — `nest_rs::http::crud`, on by default, or
 `nest_rs::graphql::crud`.
 
-## A full REST CRUD, 16 lines
+## A full REST CRUD, 17 lines
 
 ```rust title="crates/features/src/orgs/http/controller.rs (from the demo)"
 use std::sync::Arc;
@@ -125,7 +125,7 @@ impl OrgsController {}
   answer is the entity's `#[expose]`d wire type (`Org`), never the SeaORM
   `Model`, and the shaper masks it; the create and update bodies are the
   service's `Creatable::Create` and `Updatable::Update`, the
-  `#[expose(input(create), input(update))]` types (bare `CreateOrg` /
+  `#[expose(input(create, update))]` types (bare `CreateOrg` /
   `UpdateOrg`, not `…Dto`).
 - `ops` lists the operations a resource has (`ops = [list, get]`); omit it for
   all five. Each write op reads its trait, so one the service does not offer —
@@ -187,6 +187,7 @@ if let Some(author) = actor.sub.user_id() {
             ])
         })
         .requires_scope(constants::POSTS_WRITE);
+    // …
 }
 ```
 
@@ -229,7 +230,8 @@ resolver's resource — its name without `Resolver`, made singular.
 `UsersResolver` ⇒ `users`, `user`, `create_user`, `update_user`,
 `delete_user`:
 
-```rust title="crates/features/src/users/graphql/resolver.rs (from the demo)"
+```rust title="crates/features/src/users/graphql/resolver.rs (from the demo, abridged)"
+// …
 #[resolver]
 #[use_guards(AuthzGuard)]
 pub struct UsersResolver {
@@ -291,9 +293,9 @@ a grant pins, beside the slug the client sent, names `slug`), nor is a column an
 app booted, answers the bare `409`. An input you write by hand names its fields
 through `CreateModel::field_for` and `UpdateModel::field_for`.
 
-A field goes by the name serde reads it under, which the `errors` of a validation
-failure share: on GraphQL a two-word field is named `org_id`, where the input
-spells it `orgId`.
+A field goes by the name serde reads it under on HTTP, which the `errors` of a validation
+failure share; GraphQL spells the same key as its schema does, so a two-word field is
+named `orgId`.
 
 On GraphQL every mutation root field runs in a savepoint of its operation's
 transaction, so a refused statement rolls back that field alone: the field

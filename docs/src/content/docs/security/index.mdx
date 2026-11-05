@@ -29,7 +29,7 @@ framework's own ability-based engine, with row-level filtering bridged into
 
 | Concern | Layer | Who answers it |
 |---------|-------|----------------|
-| Who is calling? | Authentication | A [`Strategy`](/security/authentication/) turns the request into a principal (or returns a 401 / OAuth redirect) |
+| Who is calling? | Authentication | A [`Strategy`](/security/authentication/) turns the request into a principal, or says why it could not; the guard answers the 401 |
 | What may they do? | Authorization | An [`Ability`](/security/authorization/) declares allowed actions; the framework applies it to queries, by-id loads, and response bodies |
 
 Each layer ships its own guard. Bind them in order — the authn guard
@@ -58,7 +58,7 @@ ability they attached — see [Endpoint guards](/security/authorization/endpoint
   the SQL — a member querying `Users::find()` gets
   `WHERE org_id = $caller_org_id` appended.
 - **Every by-id write checks access.** `#[authorize(A, bind = S)]` calls
-  `Service::access(id)`; missing rows return `404`, denied rows return
+  `Service::access(action, id)`; missing rows return `404`, denied rows return
   `403` — see [By-id binding](/security/authorization/by-id-binding/).
 - **Every response is masked.** The
   [`Authorize` shaper](/security/authorization/response-masking/) runs

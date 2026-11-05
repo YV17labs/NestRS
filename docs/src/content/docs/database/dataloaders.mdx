@@ -19,7 +19,7 @@ A naïve resolver loop runs one query per parent; a dataloader collapses the `N`
 to `1`:
 
 ```text
-GET /graphql { orgs { name users { name } } }
+POST /graphql { orgs { name users { name } } }
   └─ select * from org                                       # 1
   └─ select * from "user" where org_id = ?   (per org)       # N   ← naïve
   └─ select * from "user" where org_id in ($1, … $n)         # 1   ← dataloader
@@ -31,7 +31,7 @@ A `belongs_to` or `has_many` whose relation field carries `#[expose]` becomes a
 GraphQL field auto-resolved through a dataloader. The macro emits:
 
 - a **PK loader** on the owner's service (`<Service>ById`) for every entity
-  with `#[expose(name = ..., service = ...)]` — used by every inverse side
+  with `#[expose(name = ..., service = ..., graphql)]` — used by every inverse side
   to reach the parent;
 - an **FK loader** (`<Service>By<FkCol>`) per `belongs_to` on the
   FK-owning side, keyed on the parent id **and the page window**, so it

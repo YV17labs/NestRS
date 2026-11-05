@@ -77,8 +77,8 @@ request's guards verified the same way.
 ```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::core::Ambient;
 
-async fn me(&self, auth: Ambient<Claims>) -> Json<User> {
-    Json(self.svc.lookup(auth.sub).await?)
+async fn me(&self, auth: Ambient<Claims>) -> Result<Json<User>> {
+    Ok(Json(self.svc.lookup(&auth.sub).await?))
 }
 ```
 
@@ -270,7 +270,7 @@ when there is one; the demo's password login does it when its user store
 does not answer:
 
 ```rust title="crates/features/src/users/service.rs (from the demo, abridged)"
-fn store_unavailable(email: &str, err: DbErr) -> AuthError {
+fn store_unavailable(err: DbErr) -> AuthError {
     // …
     AuthError::unavailable_because("the credential store is unreachable", None, err)
 }
@@ -318,8 +318,11 @@ A rejected credential also names *why* on the challenge, per RFC 6750
 §3.1:
 
 ```text
-WWW-Authenticate: Bearer error="invalid_token", error_description="invalid token"
+WWW-Authenticate: Bearer error="invalid_token"
 ```
+
+A handler answering an `AuthError` itself with `?` adds `error_description`, the
+sentence the caller reads.
 
 A request that carried **no** credentials is told no reason — §3 says a
 server "SHOULD NOT include an error code or other error information"

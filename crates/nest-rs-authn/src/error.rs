@@ -88,8 +88,9 @@ const FAILED: &str = "authentication failed";
 /// Opaque "wrong credentials" failure for any password-login path.
 ///
 /// Returned by services that verify a password against a stored hash: missing
-/// user, missing hash, wrong password, and DB unreachable all collapse into
-/// this single variant so timing and wire string never distinguish them.
+/// user, missing hash and wrong password all collapse into this single variant,
+/// so timing and wire string never distinguish them; a store that does not answer
+/// is [`AuthError::Unavailable`].
 /// `Display` is the fixed `"invalid credentials"`.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("invalid credentials")]
@@ -164,9 +165,8 @@ pub enum AuthError {
     /// An identity store or an identity provider could not be reached, or did
     /// not answer — an infrastructure failure, **not** a credential signal: the
     /// caller did nothing wrong. Rendered as **503**, with a `Retry-After` when
-    /// `retry_after` is known (RFC 9110 §15.6.4); the guard meeting it files
-    /// it at `error`, and the HTTP edge files one a handler answers at `warn`,
-    /// as every `503`. It displays `"authentication unavailable"`, the body
+    /// `retry_after` is known (RFC 9110 §15.6.4); the guard meeting it, and the
+    /// HTTP edge for one a handler answers, file it at `warn`, as every `503`. It displays `"authentication unavailable"`, the body
     /// every caller reads.
     /// Built by [`unavailable`](Self::unavailable) or, with what failed,
     /// [`unavailable_because`](Self::unavailable_because).

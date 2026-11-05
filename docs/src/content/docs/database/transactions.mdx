@@ -266,9 +266,9 @@ statement issued from inside the block on the unit's own transaction is
 refused, whether or not the block has opened yet, rather than left to wait for
 the block that holds it.
 
-A transaction you opened and installed yourself (`SeaOrmExecutor::Txn`) is not
-held back that way: a statement you issue on it beside an open block lands
-inside the block and rolls back with it. Await the block before writing on.
+A transaction a caller installed through the port's plumbing (`SeaOrmExecutor::Txn`, a
+framework suite's, since no public function installs one) is not held back that way: a
+statement issued on it beside an open block lands inside the block and rolls back with it. Await the block before writing on.
 
 <Aside type="caution">
 A block dropped before it settles — cancelled by a timeout or a `select!` —
@@ -383,8 +383,8 @@ before jitter, however many attempts have failed, and no call makes more than
 
 <Aside type="caution">
 **This is a service primitive.** It lives in `nest_rs::seaorm::retry` and
-takes an `Arc<DatabaseConnection>` because the closure re-opens the
-transaction from scratch. A handler can't use it against the ambient
+takes a closure that re-opens the transaction from scratch, on a connection the
+service holds. A handler can't use it against the ambient
 transaction — that handle is already aborted past the first attempt's
 failure.
 </Aside>
@@ -412,8 +412,9 @@ The failure modes a retry cannot fix:
   same failure. The classifier rejects these.
 - **A row that doesn't exist.** `RecordNotFound` is terminal — no amount
   of retries materialize the row.
-- **Application-side validation.** `ServiceError::Validation` is not a
-  conflict; the closure re-runs from scratch but the input is the same.
+- **Application-side validation.** The closure answers a `DbErr`, so a
+  `ServiceError::Validation` never reaches the classifier: validate before the retry,
+  since the same input fails the same way.
 - **A handler-time conflict on the auto-commit transaction.** The
   request's unit cannot retry the body; the conflict surfaces as a
   `DbErr` from the service, which gets mapped to the appropriate HTTP

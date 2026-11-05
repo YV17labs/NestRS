@@ -23,12 +23,14 @@ and returns how many landed. Organizations use fixed UUIDs so other factories
 nibble `7`, variant `8`): the bound (`bind = Service`) and `#[crud]` by-id routes reject any
 non-v7 path id, so a seeded row has to be v7 to be reachable by id.
 
-```rust title="crates/seed/src/factories/org.rs (from the demo)"
+```rust title="crates/seed/src/factories/org.rs (from the demo, abridged)"
+// …
 pub const ACME: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 pub const GLOBEX: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_61b3);
 
 const DEMO_ORGS: [(Uuid, &str); 2] = [(ACME, "Acme"), (GLOBEX, "Globex")];
 
+// …
 pub async fn seed(db: &DatabaseConnection) -> Result<u64> {
     let mut inserted = 0;
     for (id, name) in DEMO_ORGS {
@@ -76,7 +78,8 @@ const DEMO: [DemoUser; 7] = [
 ```
 
 The tuple is `(id, org, name, email, role, password_hash)` — an admin plus
-members per org — and the insert is `ON CONFLICT (email) DO NOTHING`.
+members per org — and the insert is `ON CONFLICT (email) WHERE deleted_at IS NULL DO NOTHING`,
+the predicate of the partial index the column is unique under.
 
 The password hash is a **pre-computed** argon2id PHC constant, not a fresh hash
 per run — re-hashing would emit a new salt each time and break idempotency.
@@ -107,7 +110,8 @@ Each row is inserted `ON CONFLICT (id) DO NOTHING`.
 `seed::run` calls each factory in dependency order and sums the inserts —
 parents before children, so foreign keys resolve:
 
-```rust title="crates/seed/src/runner.rs (from the demo)"
+```rust title="crates/seed/src/runner.rs (from the demo, abridged)"
+// …
 pub async fn run(db: &DatabaseConnection) -> Result<u64> {
     let mut inserted = 0;
     inserted += factories::org::seed(db).await?;

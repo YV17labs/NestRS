@@ -153,7 +153,7 @@ with `WWW-Authenticate: Bearer error="invalid_token"`:
   before anything is fetched.
 
 An unreachable provider is not a `401`: the request answers `503` with
-`Retry-After`, the line is an `error` naming the endpoint, and a `#[public]`
+`Retry-After`, the line is a `warn` naming the endpoint in its `error` chain, and a `#[public]`
 route answers the same rather than serving the caller as anonymous. The last
 set fetched keeps verifying for an hour past its freshness while the provider
 is down; see [the bounds](/security/authentication/jwt/#verifying-another-issuers-tokens).

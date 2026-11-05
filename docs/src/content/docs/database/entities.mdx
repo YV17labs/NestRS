@@ -29,7 +29,8 @@ recommend on every entity.
 
 ## Anatomy
 
-The reference entity lives at `crates/features/src/posts/entity.rs`.
+The demo's reference entity lives at `crates/features/src/posts/entities/post.rs`,
+whose folder holds a second entity; a feature with one keeps it in `entity.rs`, as below.
 Copy it before inventing a second shape.
 
 ```rust title="crates/features/src/posts/entity.rs"
@@ -152,7 +153,7 @@ default, and a column a future migration adds never leaks until someone
 deliberately exposes it.
 
 The wire is not the only place a secret prints: the `Model` and the
-`ActiveModel` derive `Debug`, and a reply or a log line can serialize a row.
+`ActiveModel` derive `Debug`, so a log line can print a row.
 Type a secret column as `nest_rs::core::Secret` — its `Debug` and its
 serialization both say `<redacted>`, and the column stores and reads its
 value's own type:
@@ -197,6 +198,7 @@ of them — `Serialize`, `Deserialize`, `JsonSchema`, and under `graphql`
 ```rust title="crates/features/src/posts/entities/post.rs"
 use nest_rs::core::wire_enum;
 use nest_rs::seaorm::expose;
+use sea_orm::entity::prelude::*;
 
 #[wire_enum(graphql)]
 #[derive(EnumIter, DeriveActiveEnum)]
@@ -410,6 +412,8 @@ See [Migrations](/database/migrations/) for writing and running them
 | `#[expose(input(create, update))]` | scalar column | Adds to wire + the named input(s). |
 | `#[expose(validate(…))]` | input column | Attaches a `validator` rule to the input field. |
 | `#[expose(complexity = …)]` | exposed field / relation | Overrides the GraphQL complexity cost (literal or expression string). |
+| `#[expose(default = …)]` | a column the create input does not carry | The value every insert through `Repo` leaving the column unset stores. |
+| `#[wire_default]` / `#[wire_default(expr)]` | a hidden column | The placeholder a masked reply rebuilds it with: its type's `Default`, or `expr`. |
 | `#[expose]` on `HasOne`/`HasMany` | relation | Auto-resolved GraphQL field (needs header `graphql` + `service`). |
 | `#[expose(via = "…")]` | `HasMany` | Names which of the child's foreign keys the relation follows — required when it has two to this parent. |
 | `#[wire_enum]` / `#[wire_enum(graphql)]` | a column's enum type | Emits the wire derives (serde, schemars, async-graphql `Enum`) routed through the framework. |

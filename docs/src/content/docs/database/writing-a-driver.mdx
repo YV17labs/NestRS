@@ -19,8 +19,8 @@ excerpt is its code, compiled and tested in its suite.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs --no-default-features --features database
-cargo add nest-rs --dev --no-default-features --features database,http,testing
+cargo add nest-rs --no-default-features --features database,config
+cargo add nest-rs --dev --no-default-features --features database,config,http,testing
 ```
 
 A driver implements the port rather than consuming it, so it takes `database`
@@ -149,7 +149,7 @@ What your binding owes:
 - **Settle on the outcome you are handed.** `ok` is the edge's verdict — a
   2xx or 3xx, a reply that is not an error frame, a tool answer without
   `isError`, a job's `Ok`. `Settlement::Unhonoured` turns a success you could
-  not keep into the edge's failure; a failure stands whatever you answer.
+  not keep into the edge's failure; a failure stands unless you answer it `Unhonoured::IN_DOUBT`.
 - **Answer within your settle net.** Past `settle_net` without your store's
   answer to a commit, answer `Unhonoured::IN_DOUBT`: the commit may have
   landed, so the unit is never retried. Wait for the held work until the
@@ -440,7 +440,7 @@ type, so an app importing `HealthModule` checks it with no import of its own,
 once however many modules open the connection:
 
 ```rust title="from nest-rs-seaorm's module.rs and health/indicator.rs"
-impl Module for SeaOrmOpening {
+impl Module for SeaOrmModule {
     // …
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {

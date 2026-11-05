@@ -39,7 +39,7 @@ yours to fill. A name registered already is refused, and so is a
 a table takes a name of its own, `add_status_to_posts`.
 The demo's `org` table, filled in:
 
-```rust title="crates/migrations/src/m20260526_000000_create_org.rs (from the demo)"
+```rust title="crates/migrations/src/m20260526_000000_create_org.rs (from the demo, abridged)"
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -55,6 +55,7 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(ColumnDef::new(Org::Id).uuid().not_null().primary_key())
                     .col(ColumnDef::new(Org::Name).string().not_null().unique_key())
+                    // …
                     .to_owned(),
             )
             .await
@@ -72,19 +73,21 @@ enum Org {
     Table,
     Id,
     Name,
+    // …
 }
 ```
 
-`down` is the inverse of `up` — it's what `nestrs run db down` and `nestrs run db fresh`
-replay to roll back cleanly.
+`down` is the inverse of `up`: it's what `nestrs run db down` replays to roll back
+cleanly. `nestrs run db fresh` reads no `down`: it drops every table, then applies every `up`.
 
 ### Foreign keys
 
 A later migration references an earlier table by adding a foreign key — the
 `user` table hangs off `org`:
 
-```rust title="crates/migrations/src/m20260526_000001_create_user.rs (from the demo)"
+```rust title="crates/migrations/src/m20260526_000001_create_user.rs (from the demo, abridged)"
 .col(ColumnDef::new(User::OrgId).uuid().not_null())
+// …
 .foreign_key(
     ForeignKey::create()
         .name("fk_user_org_id")
@@ -101,9 +104,10 @@ Two registrations, both written by `g migration`: the `mod` line in `lib.rs`,
 and the ordered vec in `migrator.rs`. Migrations run top to bottom, so a table
 must appear after anything it references.
 
-```rust title="crates/migrations/src/lib.rs (from the demo)"
+```rust title="crates/migrations/src/lib.rs (from the demo, abridged)"
 mod m20260526_000000_create_org;
 mod m20260526_000001_create_user;
+// …
 mod migrator;
 
 pub use migrator::{Migrator, migrate};

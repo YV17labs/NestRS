@@ -57,10 +57,11 @@ reason, and each is a place a reviewer must look.
 ### 1. The named `Repo` escapes and injected `Arc<DatabaseConnection>`
 
 `Repo` hands out no connection, so a service cannot run a query of its own on
-the unit's executor. A read that drops the ability goes through a method named
-for it — `Repo::unscoped`, `unscoped_by_id`, `insert_unscoped` (and its
-on-conflict form, `insert_unscoped_or_existing`), `with_tombstones` — whose
-rustdoc states the bar its caller must clear. The
+the unit's executor. A step around the scope goes through a method named
+for it, whose rustdoc states the bar its caller must clear: `Repo::unscoped` and
+`unscoped_by_id` read with no ability, `insert_unscoped` (and its on-conflict form,
+`insert_unscoped_or_existing`) writes with none, and `with_tombstones` keeps the
+ability and reads past soft deletion. The
 credential lookup before sign-in is one, and it reads **across every tenant**:
 
 ```rust title="crates/features/src/users/service.rs (from the demo)"

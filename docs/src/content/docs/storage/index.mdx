@@ -310,8 +310,8 @@ of reaching a default.
 | `OPERATION_TIMEOUT_SECS` | `15` | the most a call, and the boot's proof, wait for the store, retries included |
 | `READ_TIMEOUT_SECS` | `30` | the most a download waits for its next bytes while it is read |
 
-So every profile sets three keys at minimum — `URL`, `ACCESS_KEY` and
-`SECRET_KEY` — and `ENDPOINT` unless it is AWS.
+So an `s3://` store sets three keys at minimum — `URL`, `ACCESS_KEY` and
+`SECRET_KEY` — and `ENDPOINT` unless it is AWS; `memory:///` sets `URL` alone.
 
 <Aside type="caution">
 `ALLOW_HTTP` closed — `false`, or unset outside a declared development or test

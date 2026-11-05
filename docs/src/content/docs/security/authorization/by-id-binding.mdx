@@ -30,7 +30,7 @@ there".
 ## What it looks like
 
 ```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
-use nest_rs::authz::{Create, Update};
+use nest_rs::authz::Update;
 // …
 use nest_rs::seaorm::Authorized;
 // …
@@ -39,7 +39,7 @@ use nest_rs::seaorm::Authorized;
     #[authorize(Update, bind = PostsService)]
     #[use_guards(PostAuthorGuard)]
     // …
-    async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>> {
+    async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>, PostError> {
         Ok(Json(self.svc.publish(post.into_inner()).await?))
     }
 ```
@@ -99,13 +99,13 @@ boots: a route no guard covers says `#[public]` or refuses the boot.
 The load calls `S::access(action, id)` on the service. The
 default `CrudService::access` is (simplified):
 
-```rust title="(expanded by #[crud] — you don't write this)"
+```rust title="the default CrudService::access, simplified"
 async fn access(&self, action: Action, id: Uuid)
     -> Result<Access<Model>, DbErr>
 {
     // Scoped load: the caller's own grant for `action`, in one lookup.
     if let Some(model) = Repo::<E>::unscoped_by_id(id)
-        .filter(scope_for::<E>(action))
+        .filter(ability_scope::<E>(action))
         .one().await?
     {
         return Ok(Access::Found(model));
@@ -120,7 +120,7 @@ A soft-deleted row is `Missing` for every action: both lookups hide it, as
 every `Repo` read does. Two things to notice:
 
 1. **The authorization is decided in SQL.** The scoped lookup filters the
-   primary key by `scope_for(action)` — the exact `condition_for` the list
+   primary key by the ability's `condition_for(action)` — the exact condition the list
    path joins, evaluated by the same database. One source of truth: the row
    a list query returns and the row `access` grants cannot diverge. It is
    also what makes
@@ -152,8 +152,8 @@ and maps it to a wire shape:
 ```rust title="crates/features/src/users/http/controller.rs"
 match self.svc.access(Action::Read, id).await.map_err(ServiceError::from)? {
     Access::Found(user) => Ok(Json(User::from(&user))),
-    Access::Denied => Err(Forbidden),
-    Access::Missing => Err(NotFound),
+    Access::Denied => Err(HttpError::from_status(StatusCode::FORBIDDEN)),
+    Access::Missing => Err(HttpError::from_status(StatusCode::NOT_FOUND)),
 }
 ```
 
@@ -170,20 +170,19 @@ says no:
 #[http_code(204)]
 #[authorize(Delete, bind = UsersService)]
 async fn delete(&self, user: Authorized<Delete, UserEntity>) -> Result<()> {
-    self.svc.delete_by_id(user.id).await?;
+    self.svc.delete(user.into_inner()).await.map_err(ServiceError::from)?;
     Ok(())
 }
 ```
 
 The combination of the load (`Action::Delete` checked against the
-loaded row) and the `Repo::scoped(Delete)` filter inside
-`delete_by_id` is **defense in depth**:
+loaded row) and the `scope_for(Delete)` filter inside
+`Deletable::delete` is **defense in depth**:
 
 - The bound load refuses the route if the policy denies.
-- Even if the handler were called anyway, `Repo::scoped(Delete)`
-  appends the ability's `condition_for(Delete)` to the `DELETE`
-  statement so a denied row deletes zero rows. The handler gets back
-  `RowsAffected::default()` and the row stands.
+- Even if the handler were called anyway, `Repo::delete` appends the ability's
+  `condition_for(Delete)` to the `DELETE` statement so a denied row deletes zero rows.
+  The service answers `DbErr::RecordNotFound` and the row stands.
 
 Two layers, same predicate, the second catches what the first
 missed.
@@ -202,10 +201,10 @@ handler:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 #[get("/{id}")]
-async fn get(&self, id: Path<Uuid>) -> Result<Json<Post>, Error> {
+async fn get(&self, id: Path<Uuid>) -> Result<Json<Post>> {
     match self.svc.access(Action::Read, id.0).await.map_err(ServiceError::from)? {
         Access::Found(post) => Ok(Json(Post::from(&post))),
-        Access::Denied | Access::Missing => Err(Error::from_status(NOT_FOUND)),
+        Access::Denied | Access::Missing => Err(HttpError::from_status(StatusCode::NOT_FOUND)),
     }
 }
 ```

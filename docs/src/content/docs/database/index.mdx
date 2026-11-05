@@ -32,7 +32,9 @@ PostgreSQL 18, the one engine the suites run, over verified TLS
 `#[expose]` generates the wire model, the create/update inputs and the
 ActiveModel plumbing — and carries their derives, each pointed back at the
 framework's own copy. The ORM, `uuid` and `chrono` come through the same route:
-an entity crate declares none of them. `nestrs g resource` writes the file.
+`nest_rs::seaorm::sea_orm` is the framework's own pin, so an entity file importing it, as
+the one below does, needs no manifest line of its own. `nestrs g resource` writes the
+file, and adds a `sea-orm` line to the features crate, which its `use sea_orm::…` reads.
 
 ## The entity
 
@@ -61,10 +63,10 @@ impl ActiveModelBehavior for ActiveModel {}
 
 From this one declaration, `#[expose]` generates the wire DTO returned by
 handlers (`Post`), the `CreatePost` and `UpdatePost` inputs filtered by
-`input(create)` / `input(update)`, the GraphQL `SimpleObject`, the OpenAPI
-schema, the PK dataloader (`PostsServiceById`) for relations, and the
-`From<&Model>` / `IntoActiveModel` plumbing every handler needs, and the
-column defaults every insert through `Repo` fills, a v7 key first. The
+`input(create)` / `input(update)`, the OpenAPI schema, the `From<&Model>` /
+`IntoActiveModel` plumbing every handler needs, and the column defaults every insert
+through `Repo` fills, a v7 key first. The `graphql` flag adds the GraphQL
+`SimpleObject` and the PK dataloader (`PostsServiceById`) for relations. The
 entity-derived inputs are **bare** (`CreatePost`, not `CreatePostDto`) — one
 struct is at once the service's create type, the REST body, and the GraphQL
 input, so no boundary suffix fits.
@@ -121,7 +123,7 @@ unexposed (no `#[expose]`).
 use nest_rs::authz::Action;
 use nest_rs::core::injectable;
 use nest_rs::seaorm::{Creatable, CrudService, Deletable, Repo, ServiceError, Updatable};
-use sea_orm::{ColumnTrait, QueryFilter};
+use nest_rs::seaorm::sea_orm::{ColumnTrait, QueryFilter};
 
 use super::entity::{self, CreatePost, Entity as Posts, Post, UpdatePost};
 
@@ -246,8 +248,8 @@ slice inherits, without writing any of them:
 - **Transparent transactions.** Mutating routes run inside a transaction
   committed on 2xx/3xx, rolled back otherwise; a GraphQL mutation is one
   transaction whose root fields each roll back on their own answer.
-- **Same code path for safe routes and workers.** Pool executor under the
-  hood, no method change.
+- **Same code path for requests and workers.** A job calls the same `Repo`, in one
+  transaction per attempt unless it says `transactional = false`, with no method change.
 - **Audited choke point.** Controllers, resolvers, dataloader code call
   the service; the service touches the DB only through `Repo`.
 

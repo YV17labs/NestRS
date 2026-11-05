@@ -181,9 +181,9 @@ all, no grant or a `cannot` with no `when` — deliberately carries no
 challenge, even beside a grant the token's scopes withhold: advertising
 a recovery that cannot succeed is worse than a plain refusal.
 
-A scope your rule names outside RFC 6749 §3.3's grammar — a space, a
-quote — cannot ride the quoted attribute: the challenge goes out without
-`scope`, and a `warn` names the rule's scopes, `a required scope is not a
+A rule cannot name a scope outside RFC 6749 §3.3's grammar. A guard's own
+`Denial::insufficient_scope` can — a space, a quote — and that cannot ride the quoted
+attribute: the challenge goes out without `scope`, and a `warn` names the scopes, `a required scope is not a
 scope-token; the challenge is sent without its scope attribute`.
 
 On GraphQL there is no `403` to enrich, so the same facts ride the error
@@ -231,7 +231,7 @@ advertises that list instead, and an app declaring two sets fails the boot
 naming both imports. A scope a rule requires but the metadata document
 omits is a dead end — the client is told to request something discovery
 never names. The framework reports it at `warn`
-(`reason="scope_not_advertised"`) the first time such a refusal is emitted;
+(`reason="scope_not_advertised"`) on each such refusal;
 declaring the set once and handing it to both sides is what stops it
 happening.
 

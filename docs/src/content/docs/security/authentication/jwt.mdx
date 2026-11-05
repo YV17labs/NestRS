@@ -201,9 +201,9 @@ refuses a blank resource, and claims carrying an `aud` of their own.
 ## Verifying outside the guard
 
 Most code reaches the claims through `Ambient<C>`. A path that needs to
-verify a token manually — say, the OAuth transaction cookie, or a
-queue job carrying a signed envelope — injects `Arc<JwtService>` and
-calls `verify`:
+verify an access token manually — say, a queue job carrying a signed envelope —
+injects `Arc<JwtService>` and calls `verify`, which refuses a handshake token such as
+the OAuth transaction cookie; that one takes `verify_handshake`:
 
 ```rust title="crates/features/src/authn/service.rs"
 let claims: Claims = self.jwt.verify(token).await?;

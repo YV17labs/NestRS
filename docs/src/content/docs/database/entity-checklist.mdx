@@ -36,6 +36,7 @@ from [Entities](/database/entities/).
 | `#[expose]` | Does this column cross the wire at all? Silence means hidden | [Entities](/database/entities/) |
 | `input(create, update)` | May a client *write* it, and on which operation? | [CRUD](/database/crud/) |
 | `validate(…)` | What makes a value of it invalid at the edge? | [Pipes](/fundamentals/pipes/) |
+| `default = …` | Is it a constant the server decides, stored when an insert leaves it unset? | [Entities](/database/entities/#write-side--inputs-and-validation) |
 | `via = "…"` | On a `has_many`, which of the child's foreign keys does it follow? | [Entities](/database/entities/) |
 | `complexity = …` | Does resolving it cost more than a column read? | [Query limits](/graphql/query-limits/) |
 

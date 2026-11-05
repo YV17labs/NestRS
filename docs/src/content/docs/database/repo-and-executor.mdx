@@ -46,7 +46,7 @@ A by-id write (`update`, `delete`) ANDs `condition_for(Update|Delete)` with
 the primary key, so a caller cannot mutate a row outside its scope even
 with a leaked id. `can` asks the same question without writing: one
 query on the primary key under the action's condition, which decides a
-relational rule the model alone cannot show. The macro-generated
+relational rule the model alone cannot show.
 `CrudService::access(action, id)` loads unscoped so a denied-but-existing
 row surfaces as `Access::Denied` (distinct from `Access::Missing`) — the
 gateway route-model binding goes through.
@@ -82,10 +82,10 @@ cannot be sealed: a statement replaced, cleared or `union`ed with another
 `SELECT` through it runs past the filter, so a `.query()` on a `Repo` select
 is reviewed as an escape.
 
-`Repo` hands out no connection. A read that drops the ability goes through a
-method named for it — `unscoped`, `unscoped_by_id`, `insert_unscoped`,
-`insert_unscoped_or_existing`, `with_tombstones` — whose rustdoc states the
-bar its caller must clear, so auditing the escapes is one search per name,
+`Repo` hands out no connection. What sets part of the filter aside goes through a
+method named for it — `unscoped`, `unscoped_by_id`, `insert_unscoped` and
+`insert_unscoped_or_existing` drop the ability, `with_tombstones` keeps the deleted
+rows — whose rustdoc states the bar its caller must clear, so auditing the escapes is one search per name,
 `.query()` among them. Outside a unit of work, every `Repo` call returns an
 error naming the bindings that install one — a service called with no ambient
 executor is a wiring bug, not a silent miss.
@@ -280,12 +280,11 @@ default would hold a pooled connection across the middle. Such a job owns
 its own consistency, and an **idempotency key** is what makes its retry
 safe — the transaction never was.
 
-A job that wants a *narrower* unit than the attempt has one sanctioned
-answer today: `transactional = false`, plus its own idempotency. The ambient
-executor is not a `TransactionTrait`, so there is no supported way to nest a
-second unit inside the attempt — and `retry_on_conflict` around the ambient
-executor would replay into the transaction the conflict already aborted.
-Both are for a *programmatic* boundary in a service, not for a job body (see
+A job that wants a *narrower* unit than the attempt has two answers: an
+[atomic block](/database/transactions/#atomic-blocks), a savepoint of the attempt's
+transaction that rolls back alone, or `transactional = false`, plus its own idempotency,
+when nothing may be held across the work. `retry_on_conflict` around the ambient
+executor would replay into the transaction the conflict already aborted: it is for a *programmatic* boundary in a service, not for a job body (see
 [Transactions](/database/transactions/)).
 
 ## The contextless-path exception
@@ -296,8 +295,9 @@ hook](/fundamentals/lifecycle/#a-hook-is-a-unit-of-work), which reaches `Repo`
 through its service like any handler. A truly contextless path has none: a
 one-shot command run between `init()` and `close()`
 ([running without serving](/fundamentals/lifecycle/#running-without-serving)),
-which calls a provider outside every unit. That is the one documented `Repo`
-bypass: inject an `Arc<DatabaseConnection>` and call SeaORM directly —
+which calls a provider outside every unit. That and the programmatic transaction
+[`retry_on_conflict`](/database/transactions/#the-working-retry-primitive) re-opens are the
+documented `Repo` bypasses: inject an `Arc<DatabaseConnection>` and call SeaORM directly —
 unscoped, with no ability filter and no transaction. If you find yourself
 reaching for it in a request handler or a hook, something else is wrong.
 

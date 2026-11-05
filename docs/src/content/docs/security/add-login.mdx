@@ -33,7 +33,8 @@ production.** The route arms only when the variable positively reads `developmen
 `test` — not "unless it reads `production`". The variable is unset in a
 fresh scaffold, in a container, and in most CI, so a default of
 "development" would leave a token minter serving wherever nobody thought to
-set it. `just dev` sets it; nothing else does. The check is the framework's
+set it. `nestrs run dev` and `nestrs run db` declare `development`, the test harness
+defaults it to `test`, and nothing else sets it. The check is the framework's
 `nest_rs::authn::DevelopmentOnlyGuard`, bound on the controller and listed in
 its module, and it runs twice: in any process that does not declare
 `development` or `test`, wherever it is listed, it refuses the boot, so a
@@ -105,6 +106,8 @@ The two guards are project-local aliases written **once**:
 ```rust title="crates/features/src/authn/strategy.rs (from the demo)"
 use nest_rs::authn::JwtStrategy;
 
+use super::Claims;
+
 pub type AuthnStrategy = JwtStrategy<Claims>;
 
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
@@ -163,10 +166,10 @@ curl -si http://localhost:3002/users | head -1
 # Log in, keep the bearer
 TOKEN=$(curl -sX POST http://localhost:3001/login \
     -H 'Content-Type: application/json' \
-    -d '{"email":"ada@example.com","password":"hunter2"}' \
+    -d '{"email":"admin@acme.test","password":"publish-demo"}' \
     | jq -r .access_token)
 
-# 200 — and every row is already filtered to Ada's org
+# 200 — and every row is already filtered to Acme's org
 curl -s http://localhost:3002/users \
     -H "Authorization: Bearer $TOKEN" | jq '.[].name'
 ```
@@ -181,16 +184,17 @@ response body — see
 Each of these is a boot refusal, not a silent hole — the point of the design is
 that a half-wired login never serves an unprotected route.
 
-- **No signing key.** With neither a secret nor a key pair set, the boot stops
+- **No signing key.** With no secret, no key and no JWK Set set, the boot stops
   on `no JWT key configured: set <PREFIX>_AUTHN__SECRET (or
-  <PREFIX>_AUTHN__SECRET_FILE) for HS256, or <PREFIX>_AUTHN__PUBLIC_KEY (or
-  <PREFIX>_AUTHN__PUBLIC_KEY_FILE) for EdDSA — or the same field in an AuthnConfig or
-  JwtOptions built in code`.
+  <PREFIX>_AUTHN__SECRET_FILE) for HS256, <PREFIX>_AUTHN__PUBLIC_KEY (or
+  <PREFIX>_AUTHN__PUBLIC_KEY_FILE) for EdDSA, or <PREFIX>_AUTHN__JWKS_URI (or
+  <PREFIX>_AUTHN__JWKS_URI_FILE) for an external issuer's keys — or the same field in an
+  AuthnConfig or JwtOptions built in code`.
 - **A secret under 32 bytes.** HS256 draws its security from the secret's
   entropy, so a short one is refused at boot rather than used to mint forgeable
-  tokens: `<PREFIX>_AUTHN__SECRET (or <PREFIX>_AUTHN__SECRET_FILE), or secret in an
+  tokens: ``<PREFIX>_AUTHN__SECRET (or <PREFIX>_AUTHN__SECRET_FILE), or `secret` in an
   AuthnConfig or JwtOptions built in code, must be at least 32 bytes (256 bits) for
-  HS256`. HS384 and HS512 take 48 and 64 bytes, their hash's size (RFC 7518 §3.2).
+  HS256; got <n>``. HS384 and HS512 take 48 and 64 bytes, their hash's size (RFC 7518 §3.2).
 - **The feature's HTTP module does not import `AuthzModule`.** The guard bound
   on the controller is then unreachable through the access graph, and the boot
   names it. The route is never served unprotected.

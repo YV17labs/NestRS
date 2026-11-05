@@ -238,9 +238,9 @@ let resource = response.resource().map(str::to_owned);
 let tokens = self.client.exchange(response).await?;
 ```
 
-`TokenSet` carries the `access_token` (and a `refresh_token` /
-`id_token` when the provider returns one), so an OIDC provider can read
-identity from the id_token rather than a userinfo call.
+`TokenSet` carries the `access_token`, and a `refresh_token` when the provider returns
+one. `id_token` stays `None` here: an OIDC provider overrides `SocialProvider::exchange`
+to fill it, so it can read identity from the id_token rather than a userinfo call.
 
 The CSRF check runs **before** the exchange — never the other way
 around: no exchange takes a response nobody matched. A mismatched state returns `AuthError::Failed`, its detail

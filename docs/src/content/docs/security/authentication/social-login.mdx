@@ -20,7 +20,7 @@ through the same seam — no fork, no framework change.
 cargo add nest-rs --features social
 ```
 
-The `social` feature implies `authn`: the authorization-code machinery
+The `social` feature implies `oauth-client`, which implies `authn`: the authorization-code machinery
 `SocialModule` drives (`OAuthClient`, `TokenSet`) arrives with it.
 
 ```rust title="apps/auth/src/module.rs"
@@ -68,7 +68,7 @@ Three outcomes per imported provider, and no fourth:
 | Config for `<PREFIX>_SOCIAL__<PROVIDER>__*` | Outcome |
 |---|---|
 | Complete | active |
-| Absent entirely | inert — one boot `warn` naming the provider and its `<PREFIX>_SOCIAL__<PROVIDER>__*` namespace; the registry does not know the key, so your `:provider` route answers `404` |
+| Absent entirely | inert — one boot `warn` naming the provider and its `<PREFIX>_SOCIAL__<PROVIDER>__*` namespace; the registry does not know the key, so `/social/{provider}/authorize` answers `404` and its callback `401` |
 | Partial, or invalid | **boot fails**, naming the provider |
 
 Real credentials are a deployment's explicit intent, so a provider never
@@ -346,7 +346,7 @@ nest_rs::core::inventory::submit! {
 }
 ```
 
-An app then imports `AcmeSocialModule` beside `SocialModule` and sets
+An app then imports `AcmeSocialModule` and sets
 `<PREFIX>_SOCIAL__ACME__*`. Published as a package of its own, say
 `nestrs-social-acme`, the provider reads its crate's namespace,
 `<PREFIX>_SOCIAL_ACME__*`, and opens the same way: the app's import names

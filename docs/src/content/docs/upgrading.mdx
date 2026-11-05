@@ -666,7 +666,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | `masked_item_for::<A, E, _>(ctx, item)` | `masked_item_for::<A, E, _>(ctx, &nest_rs::authz::graphql::ability()?, item)` |
    | `model_attrs(derive(PartialEq, Serialize, Deserialize))` — or a `Serialize` or `Deserialize` in the entity's `#[derive]` — and `use serde::{Deserialize, Serialize}` on an `#[expose]`d entity | refused at the derive: delete both, and the features crate's `serde` line if nothing else names serde. `#[expose]` writes the round trip a mask reads a row through, so the `Model` derives no serde. Keep `model_attrs(derive(PartialEq))` only where your code compares rows |
    | `Json(model)`, `WsReply::reply(&model)` answering a row | its exposed type, `Json(User::from(&model))`: once the derive goes, a raw `Model` answers nowhere, and its hidden columns with it |
-   | a `Serialize` or `Deserialize` written by hand on an `#[expose]`d `Model` or `ModelEx`, or derived above `#[expose]`; `#[output]` or `#[input]` on one; a `JsonSchema` on one; a `SimpleObject`, `InputObject` or `#[Object]` on one | refused, each writing or reading columns no mask shapes: answer the exposed type, `User::from(&model)`, and take the inputs `#[expose(input(..))]` declares. A row kept in a cache or a queue payload is its exposed type too, or a DTO of its own that lists what it holds |
+   | a `Serialize` or `Deserialize` written by hand on an `#[expose]`d `Model` or `ModelEx`, or derived above `#[expose]`; `#[output]` or `#[input]` on one; a `JsonSchema` on one; with the `graphql` feature, a `SimpleObject`, `InputObject` or `#[Object]` on one | refused, each writing or reading columns no mask shapes: answer the exposed type, `User::from(&model)`, and take the inputs `#[expose(input(..))]` declares. A row kept in a cache or a queue payload is its exposed type too, or a DTO of its own that lists what it holds |
+   | a blanket of your own over one of those traits, `impl<T: Serialize> Audited for T`, beside a specific impl on an `#[expose]`d `Model` or `ModelEx`, `impl Audited for Model` | `E0119`, since rustc reads what `#[expose]` emits on the row as an impl upstream could make hold. Delete the row's impl: the exposed type already meets the blanket, `User::from(&model).audit()`, and an impl on it would overlap the same way. A row that keeps its own bounds the blanket on a trait of yours, implemented on the exposed types |
    | a hidden column of a type with no placeholder — a `Uuid`, a timestamp, a `Decimal`, a custom enum, a `Secret<Vec<u8>>` — with no `#[wire_default]` | refused at the field, where a masked reply carrying its row answered `500`: `#[wire_default]` (its type's `Default`), `#[wire_default(expr)]`, or `#[expose]` it |
    | a primary key with no `#[expose]` | `#[expose]` it: a masked reply reads a row's identity off the wire and never invents one |
    | `#[derive(Default)]` and `#[wire_enum]` on an enum a hidden column alone holds, there for the mask | optional: drop both and write `#[wire_default(Role::User)]` on the column — a hidden column's type needs no serde |
@@ -2125,9 +2126,11 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A serde impl written by hand on an `#[expose]`d row, or a derive above the
   decorator**, fails with `E0119`, `conflicting implementations of trait
   Serialize for type Model`, its note naming `AModelCrossesNoWire`: the same goes
-  for `Deserialize`, `JsonSchema`, `#[output]`, `#[input]`, and for async-graphql's
-  `SimpleObject`, `InputObject` and `#[Object]`, which write or read columns no
-  mask shapes. Delete it and answer the exposed type (step 9).
+  for `Deserialize`, `JsonSchema`, `#[output]`, `#[input]`, and with the `graphql`
+  feature for async-graphql's `SimpleObject`, `InputObject` and `#[Object]`, which
+  write or read columns no mask shapes. Delete it and answer the exposed type
+  (step 9). A blanket of your own over one of those traits reports the same beside
+  a specific impl on the row: the row's impl goes (step 9).
 - **A hidden column of a type with no placeholder** — a tenant `Uuid`, a
   timestamp, a custom enum — fails to compile at the field, where 6.x answered
   every masked reply carrying its row `500`: ``#[expose]: `org_id: Uuid` is not

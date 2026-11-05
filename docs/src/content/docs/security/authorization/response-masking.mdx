@@ -225,14 +225,18 @@ Each step has a defined failure mode:
 
 ### The round trip `#[expose]` writes
 
-A `Model` crosses no wire. `#[expose]` refuses a `Serialize`,
+A `Model` under `#[expose]` crosses no wire. The decorator refuses a `Serialize`,
 `Deserialize`, `JsonSchema`, `SimpleObject` or `InputObject` derived on it,
 and an impl written by hand or a derive above the decorator does not compile
-(`E0119`) beside what it emits there. So `Json(model)` and
+(`E0119`) beside what it emits there: serde's and `JsonSchema`'s in every build,
+async-graphql's with the `graphql` feature. So `Json(model)` and
 `serde_json::to_string(&model)` tell you what to answer instead: a route answers
 its exposed type, and a hidden column has no way onto a wire. What stays yours is
-a struct your body fills from a row's columns: no type tells `row.email` from
-`initials(row.name)`. To judge a
+a struct your body fills from a row's columns, since no type tells `row.email` from
+`initials(row.name)`; a GraphQL object on a row in a build with the feature off,
+where the decorator emits nothing of a crate it does not link, so an app naming
+`async-graphql` itself turns `graphql` on; and an entity no `#[expose]` decorates,
+which derives what you write. To judge a
 row, the mask reads it back through what `#[expose]` declares — each
 exposed column through its own `Deserialize`, each hidden one from its
 placeholder — and the decorator names exactly the columns it invents, so

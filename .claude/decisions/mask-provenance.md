@@ -240,7 +240,7 @@ the row, so a GraphQL object was the same opening, on no list.
 
 - **`#[expose]` emits on the row the impl of every trait that carries it**: serde's
   `Serialize` and `Deserialize`, `JsonSchema`, which publishes each hidden column's name
-  and type, and, in a build with async-graphql, `OutputType` and `InputType`; on the
+  and type, and, under `nest-rs-seaorm`'s `graphql` feature, `OutputType` and `InputType`; on the
   `Model`, and on the `ModelEx` `#[sea_orm::model]` writes beside it, which holds every
   column too. Each is bounded on `for<'a> HiddenColumns<'a>: AModelCrossesNoWire<fn(Model)
   -> Wire>`, which has no impl and can have none.
@@ -276,8 +276,28 @@ the row, so a GraphQL object was the same opening, on no list.
   never implemented reports serde's own missing-impl error" held for the form tried then.
   A foreign trait under a higher-ranked bound reports the trait's own sentence.
 
-**The limit named:** a struct a body fills from a row's columns, `json!({ "hash":
-row.hash })`, and a `#[serde(remote)]` mirror are the body's own lines, which no type tells
-from `initials(row.name)`. `Debug` of a row in a log stays review. A `ModelEx` is read off
-the attribute's name, so a `#[sea_orm::model]` renamed on import leaves its `ModelEx` out:
-closing it takes sea-orm naming the type where a decorator can read it.
+**A blanket of the app's own moves.** `impl<T: Serialize> Audited for T` beside `impl Audited
+for Model` compiled, and is now `E0119`: coherence reads the bounded impl as one upstream could
+make hold. The specific impl cannot move to the exposed type, which meets the blanket and
+overlaps it too (compiled). The row's impl goes, the blanket answering for the exposed type,
+or the blanket takes a bound of the app's own. Named as a break in the guide's table.
+
+**The limit named:**
+
+- A struct a body fills from a row's columns, `json!({ "hash": row.hash })`, and a
+  `#[serde(remote)]` mirror are the body's own lines, which no type tells from
+  `initials(row.name)`. `Debug` of a row in a log stays review.
+- A `ModelEx` is read off the attribute's name, so a `#[sea_orm::model]` renamed on import
+  leaves its `ModelEx` out: closing it takes sea-orm naming the type where a decorator can
+  read it.
+- **GraphQL holds with the `graphql` feature, no other way.** With `seaorm` alone and
+  `async-graphql` declared by the app, `#[derive(SimpleObject)]` above `#[expose]` or
+  `#[Object]` on the row compiles and answers a hidden column from a field (compiled and
+  built into a `Schema`; the same derive with the feature on is `E0119`). Only the derive the
+  decorator reads stays refused there. Closing it takes linking async-graphql into every
+  `seaorm` build, which the third value refuses: a build with no GraphQL pays for nothing.
+- **A row with no `#[expose]` is held by no rung.** A `Model` deriving `Serialize` and
+  `JsonSchema`, with a `password_hash`, answers `Json<secret::Model>` under `#[routes]`
+  (compiled): the project's hard "no" on exposure outside `#[expose]` is review there.
+  Closing it takes a probe per edge refusing a payload that is a `ModelTrait`, a branch of
+  its own.

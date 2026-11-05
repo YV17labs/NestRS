@@ -167,7 +167,7 @@ pub mod __private {
 /// column by its own serde impls. A `Model` crosses no wire but as that type: a
 /// wire derive written on it is refused, and one above the decorator or an impl
 /// written by hand does not compile beside what the decorator emits on it, so it
-/// serializes nowhere and answers no GraphQL field.
+/// serializes nowhere and, with the `graphql` feature, answers no GraphQL field.
 ///
 /// **Exposure is opt-in:** a column reaches the wire only when its field
 /// carries `#[expose]` (or `#[expose(input(...))]`, which implies read). A field

@@ -239,7 +239,7 @@ Error: the `#[on_module_init]` hook `MigrationGuard::check` in `api::migrations`
 Each hook runs as one `lifecycle.hook` unit of work, the way a request or a
 scheduled tick does. It gets a trace of its own — a hook has no caller — and
 files one line on `nest_rs::operation` when it ends, with its `phase`,
-`provider`, `method`, `origin` and `outcome`. A shutdown hook abandoned at the
+`host`, `method`, `origin` and `outcome`. A shutdown hook abandoned at the
 budget, or an init hook a signal stopped, files `outcome="cancelled"`.
 
 It also gets the data context a tick gets. With `SeaOrmDatabaseModule`

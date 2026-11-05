@@ -233,7 +233,7 @@ fn report_inert_hook(container: &Container, hook: &LifecycleHook, phase: Lifecyc
         host: (hook.provider_type_id)(),
         container: container,
         phase = ::tracing::field::debug(phase),
-        provider = hook.provider,
+        host = hook.provider,
         method = hook.method,
     );
 }
@@ -266,7 +266,7 @@ impl HookUnit {
             crate::unit::HOOK,
             &correlation,
             phase = ?phase,
-            provider = hook.provider,
+            host = hook.provider,
             method = hook.method,
             origin = hook.origin,
         );
@@ -341,7 +341,7 @@ impl HookLine<'_> {
                 outcome: outcome,
                 started: self.started,
                 phase = ?phase,
-                provider = hook.provider,
+                host = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
             );
@@ -391,7 +391,7 @@ pub(crate) async fn run_phase(
                         payload.as_ref(),
                         "lifecycle hook panicked; the boot is aborted",
                         ?phase,
-                        provider = hook.provider,
+                        host = hook.provider,
                         method = hook.method,
                         origin = hook.origin,
                     );
@@ -433,7 +433,7 @@ pub(crate) async fn run_phase_lenient(
             Ok(Ok(Err(err))) => tracing::error!(
                 target: crate::target::LIFECYCLE,
                 ?phase,
-                provider = hook.provider,
+                host = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
                 error = %crate::error_message(&*err),
@@ -444,14 +444,14 @@ pub(crate) async fn run_phase_lenient(
                 payload.as_ref(),
                 "shutdown hook panicked, and the hooks after it still run",
                 ?phase,
-                provider = hook.provider,
+                host = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
             ),
             Err(_) => tracing::warn!(
                 target: crate::target::LIFECYCLE,
                 ?phase,
-                provider = hook.provider,
+                host = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
                 waited_ms = millis(started.elapsed()),

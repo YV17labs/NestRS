@@ -396,12 +396,16 @@ async fn listeners_with_no_event_bus_are_reported_at_boot() {
     );
     let named: Vec<_> = reported
         .iter()
-        .filter_map(|event| event.field("listener"))
+        .filter_map(|event| event.field("method"))
         .collect();
     assert!(
-        named.iter().any(|name| name.contains("on_awarded"))
-            && named.iter().any(|name| name.contains("on_redeemed")),
+        named.iter().any(|method| method == "on_awarded")
+            && named.iter().any(|method| method == "on_redeemed"),
         "each line names the listener a developer can find, got {named:?}",
+    );
+    assert!(
+        reported.iter().all(|event| event.field("host").is_some()),
+        "{reported:#?}"
     );
 }
 
@@ -721,7 +725,11 @@ fn dispatch_outcomes(logs: &nest_rs_testing::LogCapture) -> Vec<(String, String)
     .into_iter()
     .map(|line| {
         (
-            line.field("listener").unwrap_or_default(),
+            format!(
+                "{}::{}",
+                line.field("host").unwrap_or_default(),
+                line.field("method").unwrap_or_default(),
+            ),
             line.field("outcome").unwrap_or_default(),
         )
     })
@@ -784,10 +792,8 @@ async fn a_listener_answering_an_error_is_filed_with_its_chain_and_the_next_one_
     );
     let failed = logs.expect_one(nest_rs_events::TARGET, LISTENER_FAILED);
     assert_eq!(failed.level, "error");
-    assert_eq!(
-        failed.field("listener").as_deref(),
-        Some("FallibleListeners::refuses")
-    );
+    assert_eq!(failed.field("host").as_deref(), Some("FallibleListeners"));
+    assert_eq!(failed.field("method").as_deref(), Some("refuses"));
     assert!(
         failed
             .field("event")
@@ -856,10 +862,8 @@ async fn a_listener_running_past_its_timeout_is_cut_there_and_the_next_one_runs(
         ],
     );
     let cut = logs.expect_one(nest_rs_events::TARGET, LISTENER_FAILED);
-    assert_eq!(
-        cut.field("listener").as_deref(),
-        Some("StallingListeners::stalls")
-    );
+    assert_eq!(cut.field("host").as_deref(), Some("StallingListeners"));
+    assert_eq!(cut.field("method").as_deref(), Some("stalls"));
     assert_eq!(
         cut.field("error").as_deref(),
         Some(

@@ -163,7 +163,7 @@ const SKIPPED_AT_SHUTDOWN: &str =
 /// Whether `event` was filed by one of the jobs `providers` name.
 fn filed_by(event: &CapturedEvent, providers: &[&str]) -> bool {
     event
-        .field("provider")
+        .field("host")
         .is_some_and(|provider| providers.contains(&provider.as_str()))
 }
 

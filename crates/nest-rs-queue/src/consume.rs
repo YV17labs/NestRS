@@ -14,7 +14,7 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::panic::panic_message;
 use nest_rs_core::{
-    Container, Correlation, Failure, Outcome, Problem, ReachableProviders, RequestScope,
+    Container, Correlation, Failure, Handler, Outcome, Problem, ReachableProviders, RequestScope,
     UngatedDiscoveryError, UnitContext, with_request_scope,
 };
 use nest_rs_database::__private::run_unit_bounded;
@@ -102,7 +102,8 @@ pub(crate) fn reachable(
                 origin: entry.origin(),
                 host: entry.provider_type_id(),
                 container: container,
-                processor = entry.name(),
+                host = entry.site().handler().host_name(),
+                method = entry.site().handler().method(),
                 queue = entry.queue(),
             );
             continue;
@@ -508,13 +509,14 @@ pub(crate) async fn attempt_in(
         messaging.destination.name = queue,
         messaging.message.id = %delivery.id,
         backend_id = delivery.backend_id.as_deref(),
-        processor = method.name(),
+        host = method.site().handler().host_name(),
+        method = method.site().handler().method(),
         attempt,
         continued_trace,
     );
     let identity = JobIdentity {
         queue: delivery.queue.clone(),
-        processor: method.name(),
+        handler: method.site().handler(),
         job_id: delivery.id.clone(),
         backend_id: delivery.backend_id.clone(),
         attempt,
@@ -706,7 +708,7 @@ enum Unrun {
 /// read a span's fields back, and a log line renders none of them.
 struct JobIdentity {
     queue: QueueName,
-    processor: &'static str,
+    handler: &'static Handler,
     job_id: JobId,
     backend_id: Option<Arc<str>>,
     attempt: u32,
@@ -747,7 +749,8 @@ impl JobLine {
             outcome: outcome,
             started: self.started,
             queue = %identity.queue,
-            processor = identity.processor,
+            host = identity.handler.host_name(),
+            method = identity.handler.method(),
             job_id = %identity.job_id,
             backend_id = identity.backend_id.as_deref(),
             attempt = identity.attempt,
@@ -1109,7 +1112,7 @@ mod tests {
     fn identity(attempt: u32) -> JobIdentity {
         JobIdentity {
             queue: QueueName::new("audio").expect("a valid name"),
-            processor: "AudioProcessor",
+            handler: SITE.handler(),
             job_id: JobId::mint(),
             backend_id: None,
             attempt,

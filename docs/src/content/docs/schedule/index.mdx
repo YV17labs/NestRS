@@ -183,7 +183,7 @@ is rolled back, and the next occurrence fires as usual. The run is reported
 failed, naming the deadline:
 
 ```text frame="terminal"
-ERROR nest_rs::schedule: scheduled job failed provider="AudioTasks" method="heartbeat" error=the attempt did not end within its 600s timeout, and was cut — the `timeout` key on its job decorator sets it retryable=true trace_id=… span_id=…
+ERROR nest_rs::schedule: scheduled job failed host="AudioTasks" method="heartbeat" error=the attempt did not end within its 600s timeout, and was cut — the `timeout` key on its job decorator sets it retryable=true trace_id=… span_id=…
 ```
 
 A run whose body returned in time is never cut while it commits. One whose
@@ -307,16 +307,16 @@ $ nestrs run dev api
  INFO nest_rs::schedule: mounted host="AudioTasks" method="warmup_on_boot" trigger="after" delay_ms=3000 replicas="each"
  INFO nest_rs::schedule: mounted host="AudioTasks" method="heartbeat" trigger="cron" timezone="UTC" replicas="each"
  INFO features::audio: audio pipeline ready to enqueue phase="warmup" trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
- INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
+ INFO nest_rs::operation: schedule.tick host="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
 DEBUG features::audio: enqueued transcode job queue="audio" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
- INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" replicas="one" occurrence=1787069800000 outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+ INFO nest_rs::operation: schedule.tick host="AudioTasks" method="enqueue_transcode" replicas="one" occurrence=1787069800000 outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
 ```
 
 The scheduler logs one `mounted` line per job at boot, its `trigger` the
 decorator that declared it (`every`, `after` or `cron`), then one
 `schedule.tick` line at
 `info` on `nest_rs::operation` for every tick it fires, whatever the tick came
-to — its `provider`, `method`, `replicas`, `outcome` and `duration_ms`, and the
+to — its `host`, `method`, `replicas`, `outcome` and `duration_ms`, and the
 `occurrence` a job firing once claimed. It is the same operation line every edge
 files once per unit of work, so `nest_rs::operation=off` in the log filter
 silences it with the others. A failed run adds one `scheduled job failed` line
@@ -483,7 +483,7 @@ replica — the thing the declaration exists to prevent. So:
   refused command, a claim that fails at the connection's budget
   (`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`) — each one is a `warn` on
   `nest_rs::schedule`, `occurrence skipped: its lock could not be claimed`,
-  carrying the job's `provider` and `method`, the `occurrence` and Redis's
+  carrying the job's `host` and `method`, the `occurrence` and Redis's
   `error`. Every occurrence of the outage is said, and when Redis answers again
   the next one is claimed and fired — no restart, nothing to replay. A claim
   Redis ran whose answer was lost costs that occurrence, which nobody fires, and
@@ -625,6 +625,6 @@ Just importing `SeaOrmDatabaseModule` is enough — no manual connection plumbin
 - [Queue](/queue/) — pair a scheduled producer with a durable consumer
   for distributed work.
 - [OpenTelemetry](/opentelemetry/) — every schedule event is targeted on
-  `nest_rs::schedule`, carrying `provider` and `method` fields (plus
+  `nest_rs::schedule`, carrying `host` and `method` fields (plus
   `interval_ms` / `delay_ms` / `timezone` / `tzdb` on the boot lines, and the `key` a job
   firing once claims under).

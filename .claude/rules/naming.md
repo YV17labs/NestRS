@@ -55,13 +55,16 @@ owner or the commit body:
 | CLI command, flag | everything `--help` prints | `--help`, completion |
 | error variant | every outcome a caller matches | the `match`, the error docs |
 
-**One fact, one sentence; one unit, one field set.** A line says a fact in one
-message on one target with its edge a field, whichever edge it arose on. A line
-about a dispatched unit names it by the fields of its `mounted` line: `host` and
-`method`, then the edge's coordinates (`verb`+`path`, `kind`+`field`, `event`,
-`tool`, `prompt` or `resource`). A type reads as an app writes it, and a value in
-the word an operator sets or a standard names, never its `Debug`. Held by each
-edge's line tests.
+**One fact, one sentence; one unit, one field set.** A fact every edge states in
+the same words is one message, its edge a field or its target (`mounted`, `no
+guard at the request`); a guard's denial says what it refused and an edge's
+failure line what failed, each with a message per edge. A line naming a dispatched
+unit names it by the fields of its `mounted` line: `host` and `method`, then the
+edge's coordinates (`verb`+`path`, `kind`+`field`, `event`, `tool`, `prompt` or
+`resource`); an edge's operation line alone speaks its protocol (`http.request`'s
+`method` and `route`). A guard reads as an app writes it, and a value an operator
+sets or a standard names reads in that word (`http`, `text`, `sigterm`), never its
+`Debug`. Held by each edge's line tests.
 
 Two attempts yielding two schemes mean a fact about the domain is missing, not
 a better word: find the fact. A new crate, crate family or edge is proposed

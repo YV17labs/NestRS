@@ -280,7 +280,7 @@ impl App {
         tracing::warn!(
             target: crate::target::LIFECYCLE,
             phase = ?failed.hook.phase,
-            provider = failed.hook.provider,
+            host = failed.hook.provider,
             method = failed.hook.method,
             origin = failed.hook.origin,
             "the boot failed after init hooks ran: running the shutdown hooks",

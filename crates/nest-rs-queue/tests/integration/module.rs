@@ -125,4 +125,17 @@ async fn a_process_method_the_worker_serves_is_mounted_naming_its_host_and_metho
         mounted.field("queue").as_deref(),
         Some("nestrs-module-reindex")
     );
+
+    // Every other `#[processor]` this suite links is one this app does not reach.
+    let skipped: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|line| line.message.starts_with("skipped #[process] method"))
+        .collect();
+    assert!(!skipped.is_empty(), "the suite links other processors");
+    for line in skipped {
+        assert!(line.field("host").is_some(), "{:?}", line.fields);
+        assert!(line.field("method").is_some(), "{:?}", line.fields);
+        assert_eq!(line.field("processor"), None, "{:?}", line.fields);
+    }
 }

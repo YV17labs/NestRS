@@ -252,12 +252,13 @@ async fn dispatch_one(
         crate::unit::DISPATCH,
         &correlation,
         event = event,
-        listener = listener.name,
+        host = listener.handler.host_name(),
+        method = listener.handler.method(),
     );
     let continuation = nest_rs_core::RequestContinuation::new(None, correlation.clone());
     let line = DispatchLine {
         event,
-        listener: listener.name,
+        handler: listener.handler,
         continuation: &continuation,
         span: span.clone(),
         started: std::time::Instant::now(),
@@ -280,7 +281,8 @@ async fn dispatch_one(
                     tracing::debug!(
                         target: crate::TARGET,
                         event = event,
-                        listener = listener.name,
+                        host = listener.handler.host_name(),
+                        method = listener.handler.method(),
                         "event listener skipped by a layer",
                     );
                 });
@@ -297,7 +299,8 @@ async fn dispatch_one(
                 tracing::warn!(
                     target: crate::TARGET,
                     event = event,
-                    listener = listener.name,
+                    host = listener.handler.host_name(),
+                    method = listener.handler.method(),
                     error = %nest_rs_core::error_message(failure.error()),
                     "event listener failed; a layer answered it — dispatch continues with the \
                      next listener",
@@ -310,7 +313,8 @@ async fn dispatch_one(
                 tracing::error!(
                     target: crate::TARGET,
                     event = event,
-                    listener = listener.name,
+                    host = listener.handler.host_name(),
+                    method = listener.handler.method(),
                     error = %nest_rs_core::error_message(failure.error()),
                     "event listener failed — dispatch continues with the next listener",
                 );
@@ -324,7 +328,8 @@ async fn dispatch_one(
                     payload.as_ref(),
                     "event listener panicked — dispatch continues with the next listener",
                     event = event,
-                    listener = listener.name,
+                    host = listener.handler.host_name(),
+                    method = listener.handler.method(),
                 );
             });
         }
@@ -378,7 +383,7 @@ impl Tail for ListenerTail {
 /// otherwise carries no ids.
 struct DispatchLine<'a> {
     event: &'static str,
-    listener: &'static str,
+    handler: &'static Handler,
     continuation: &'a nest_rs_core::RequestContinuation,
     span: tracing::Span,
     started: std::time::Instant,
@@ -399,7 +404,8 @@ impl DispatchLine<'_> {
                 outcome: outcome,
                 started: self.started,
                 event = self.event,
-                listener = self.listener,
+                host = self.handler.host_name(),
+                method = self.handler.method(),
             );
         });
     }
@@ -433,6 +439,14 @@ where
     Fut::Output: ListenerAnswer,
 {
     let chains = site.chains(container)?;
+    let handler = site.handler();
+    tracing::info!(
+        target: crate::TARGET,
+        host = handler.host_name(),
+        method = handler.method(),
+        event = std::any::type_name::<E>(),
+        "mounted",
+    );
     let run: ListenerFn = Arc::new(move |boxed: BoxedEvent| {
         #[expect(
             clippy::expect_used,
@@ -448,7 +462,7 @@ where
         name,
         policy,
         timeout,
-        handler: site.handler(),
+        handler,
         chains,
         run,
     });
@@ -836,8 +850,11 @@ mod panic_containment {
         );
         assert_eq!(line.level, "info");
         assert_eq!(
-            line.field("listener").as_deref(),
-            Some("Notifier::on_notify_requested"),
+            (
+                line.field("host").as_deref(),
+                line.field("method").as_deref()
+            ),
+            (Some("Notifier"), Some("on_event")),
             "the line names which listener ran, not merely that one did: {:#?}",
             line.fields,
         );
@@ -929,7 +946,7 @@ mod panic_containment {
             line.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::PANIC),
         );
-        assert_eq!(line.field("listener").as_deref(), Some("Notifier::boom"));
+        assert_eq!(line.field("host").as_deref(), Some("Notifier"));
     }
 
     #[tokio::test]
@@ -960,7 +977,7 @@ mod panic_containment {
             line.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::CANCELLED),
         );
-        assert_eq!(line.field("listener").as_deref(), Some("Notifier::waits"));
+        assert_eq!(line.field("host").as_deref(), Some("Notifier"));
         assert!(
             line.trace_id.is_some(),
             "in the listener's trace: {line:#?}"

@@ -61,7 +61,8 @@ fn report_missing_bus(
             for entry in reachable_listeners(&reachable) {
                 tracing::warn!(
                     target: crate::TARGET,
-                    listener = entry.name(),
+                    host = entry.host(),
+                    method = entry.method(),
                     origin = entry.origin(),
                     "{NO_BUS_REPORT}",
                 );
@@ -104,16 +105,12 @@ fn wire_listeners(container: &Container) -> anyhow::Result<()> {
                 origin: entry.origin(),
                 host: entry.provider_type_id(),
                 container: container,
-                listener = entry.name(),
+                host = entry.host(),
+                method = entry.method(),
             );
             continue;
         }
         entry.wire(container, &bus)?;
-        tracing::debug!(
-            target: crate::TARGET,
-            listener = entry.name(),
-            "wired event listener",
-        );
     }
     bus.mark_wired();
     Ok(())

@@ -1036,8 +1036,14 @@ async fn an_attempt_its_driver_drops_files_its_line_cancelled_in_the_jobs_trace(
     );
     assert_eq!(line.field("attempt").as_deref(), Some("1"));
     assert_eq!(line.field("queue").as_deref(), Some("transcode"));
+    assert_eq!(line.field("host").as_deref(), Some("StuckProcessor"));
+    assert_eq!(line.field("method").as_deref(), Some("stuck"));
+    assert_eq!(line.field("processor"), None, "{line:#?}");
     assert!(line.field("duration_ms").is_some(), "{line:#?}");
     let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
+    assert_eq!(span.field("host").as_deref(), Some("StuckProcessor"));
+    assert_eq!(span.field("method").as_deref(), Some("stuck"));
+    assert_eq!(span.field("processor"), None, "{:?}", span.fields);
     assert!(
         line.trace_id.is_some(),
         "the line carries the job's trace: {line:#?}"

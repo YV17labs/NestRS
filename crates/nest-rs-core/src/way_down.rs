@@ -131,7 +131,7 @@ fn exit_at_once(signal: Received) -> ! {
                 provider,
                 method,
                 origin,
-            })) => abandoning!(step = "boot", ?phase, provider, method, origin),
+            })) => abandoning!(step = "boot", ?phase, host = provider, method, origin),
             Step::Transports(running) => {
                 abandoning!(
                     step = "transports",
@@ -143,7 +143,13 @@ fn exit_at_once(signal: Received) -> ! {
                 provider,
                 method,
                 origin,
-            } => abandoning!(step = "shutdown hooks", ?phase, provider, method, origin),
+            } => abandoning!(
+                step = "shutdown hooks",
+                ?phase,
+                host = provider,
+                method,
+                origin
+            ),
             Step::Close(close) => abandoning!(step = "resource closes", close = close.as_str()),
             Step::Exit => abandoning!(step = "exit"),
         }

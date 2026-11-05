@@ -528,7 +528,7 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
         .next()
         .expect("a contained panic is reported at error");
     assert_eq!(event.level, "error");
-    assert_eq!(event.field("provider").as_deref(), Some("NamedPanicHost"));
+    assert_eq!(event.field("host").as_deref(), Some("NamedPanicHost"));
     assert_eq!(
         event.field(nest_rs_core::panic::FIELD).as_deref(),
         Some("boom from a job that names its own failure"),
@@ -549,7 +549,7 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
         Some(nest_rs_core::operation_log::PANIC),
         "a panicking tick is not reported as a plain error: {ran:?}",
     );
-    assert_eq!(ran.field("provider").as_deref(), Some("NamedPanicHost"));
+    assert_eq!(ran.field("host").as_deref(), Some("NamedPanicHost"));
     assert!(ran.field("duration_ms").is_some());
 }
 
@@ -598,7 +598,7 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
     let event = logs
         .find("nest_rs::schedule", "scheduled job failed")
         .into_iter()
-        .find(|event| event.field("provider").as_deref() == Some("WrappedFailureHost"))
+        .find(|event| event.field("host").as_deref() == Some("WrappedFailureHost"))
         .expect("a failed tick is reported at error");
     assert_eq!(
         event.field("error").as_deref(),
@@ -663,7 +663,7 @@ async fn a_failed_tick_says_a_decode_failure_without_its_value() {
     let event = logs
         .find("nest_rs::schedule", "scheduled job failed")
         .into_iter()
-        .find(|event| event.field("provider").as_deref() == Some("DecodingHost"))
+        .find(|event| event.field("host").as_deref() == Some("DecodingHost"))
         .expect("a failed tick is reported at error");
     assert_eq!(
         event.field("error").as_deref(),
@@ -721,7 +721,7 @@ async fn a_tick_its_unit_could_not_settle_is_reported_as_failed() {
         .next()
         .expect("a tick whose transaction could not be settled is reported at error");
     assert_eq!(event.level, "error");
-    assert_eq!(event.field("provider").as_deref(), Some("UnsettleableHost"));
+    assert_eq!(event.field("host").as_deref(), Some("UnsettleableHost"));
     assert!(
         event
             .field("error")
@@ -793,7 +793,7 @@ async fn a_tick_past_its_timeout_is_cut_reported_and_the_schedule_goes_on() {
     let event = logs
         .find("nest_rs::schedule", "scheduled job failed")
         .into_iter()
-        .find(|event| event.field("provider").as_deref() == Some("HungHost"))
+        .find(|event| event.field("host").as_deref() == Some("HungHost"))
         .expect("a tick cut at its timeout is reported at error");
     assert!(
         event
@@ -863,7 +863,7 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
         "cron job has no future occurrence; it will not run again",
     );
     assert_eq!(event.level, "warn");
-    assert_eq!(event.field("provider").as_deref(), Some("NeverHost"));
+    assert_eq!(event.field("host").as_deref(), Some("NeverHost"));
     assert_eq!(event.field("method").as_deref(), Some("never"));
 }
 
@@ -1079,14 +1079,14 @@ async fn a_run_outlasting_its_period_leaves_the_next_occurrences_to_its_peers() 
             "occurrences overrun on this replica, each claimed by another",
         )
         .into_iter()
-        .filter(|event| event.field("provider").as_deref() == Some("OverlapHost"))
+        .filter(|event| event.field("host").as_deref() == Some("OverlapHost"))
         .chain(
             logs.find(
                 nest_rs_schedule::TARGET,
                 "occurrences skipped: they fell due while the previous one was claimed or run",
             )
             .into_iter()
-            .filter(|event| event.field("provider").as_deref() == Some("OverlapHost")),
+            .filter(|event| event.field("host").as_deref() == Some("OverlapHost")),
         )
         .filter_map(|event| {
             event
@@ -1364,7 +1364,7 @@ async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
         .first()
         .unwrap_or_else(|| panic!("the skip is reported: {:#?}", logs.events()));
     assert_eq!(event.level, "warn");
-    assert_eq!(event.field("provider").as_deref(), Some("UnclaimedHost"));
+    assert_eq!(event.field("host").as_deref(), Some("UnclaimedHost"));
     assert_eq!(event.field("method").as_deref(), Some("once"));
     let occurrence: u64 = event
         .field("occurrence")
@@ -1476,7 +1476,7 @@ async fn occurrences_overrun_by_a_slow_claim_are_skipped_and_counted_aloud() {
     );
     let event = skipped
         .iter()
-        .find(|event| event.field("provider").as_deref() == Some("OverrunHost"))
+        .find(|event| event.field("host").as_deref() == Some("OverrunHost"))
         .unwrap_or_else(|| panic!("the skipped stretch is reported: {:#?}", logs.events()));
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("method").as_deref(), Some("sweep"));
@@ -1500,7 +1500,7 @@ async fn occurrences_overrun_by_a_slow_claim_are_skipped_and_counted_aloud() {
     let tick = logs
         .find("nest_rs::operation", "schedule.tick")
         .into_iter()
-        .find(|line| line.field("provider").as_deref() == Some("OverrunHost"))
+        .find(|line| line.field("host").as_deref() == Some("OverrunHost"))
         .unwrap_or_else(|| panic!("the fire files its line: {:#?}", logs.events()));
     assert!(
         tick.field("occurrence")
@@ -1801,7 +1801,7 @@ async fn occurrences_a_peer_claimed_while_this_replica_overran_are_not_reported_
     let for_host = |message: &str| {
         logs.find("nest_rs::schedule", message)
             .into_iter()
-            .filter(|event| event.field("provider").as_deref() == Some("PeerFiredHost"))
+            .filter(|event| event.field("host").as_deref() == Some("PeerFiredHost"))
             .collect::<Vec<_>>()
     };
     assert!(
@@ -1870,7 +1870,7 @@ async fn an_occurrence_a_run_overran_by_less_than_a_period_fires_late_rather_tha
     let fired: Vec<u64> = logs
         .find("nest_rs::operation", "schedule.tick")
         .into_iter()
-        .filter(|line| line.field("provider").as_deref() == Some("BackToBackHost"))
+        .filter(|line| line.field("host").as_deref() == Some("BackToBackHost"))
         .map(|line| {
             line.field("occurrence")
                 .and_then(|instant| instant.parse().ok())
@@ -1992,7 +1992,7 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
         let occurrences: Vec<u64> = logs
             .find("nest_rs::operation", "schedule.tick")
             .into_iter()
-            .filter(|line| line.field("provider").as_deref() == Some(host))
+            .filter(|line| line.field("host").as_deref() == Some(host))
             .map(|line| {
                 line.field("occurrence")
                     .and_then(|instant| instant.parse().ok())
@@ -2063,7 +2063,7 @@ async fn ticks_a_long_run_overran_on_every_replica_are_skipped_and_counted_aloud
             "occurrences skipped: they fell due while the previous one was claimed or run",
         )
         .into_iter()
-        .filter(|event| event.field("provider").as_deref() == Some("LongRunHost"))
+        .filter(|event| event.field("host").as_deref() == Some("LongRunHost"))
         .collect();
     let event = skipped
         .first()
@@ -2135,7 +2135,7 @@ async fn a_run_just_over_its_period_is_late_on_every_tick_and_skips_none() {
             "occurrences skipped: they fell due while the previous one was claimed or run",
         )
         .into_iter()
-        .filter(|event| event.field("provider").as_deref() == Some("SlightlyLongHost"))
+        .filter(|event| event.field("host").as_deref() == Some("SlightlyLongHost"))
         .collect();
     assert!(skips.is_empty(), "no tick was skipped: {skips:#?}");
 }
@@ -2298,7 +2298,7 @@ async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
             "occurrences skipped: they fell due while the previous one was claimed or run",
         )
         .into_iter()
-        .filter(|event| event.field("provider").as_deref() == Some("StalledHost"))
+        .filter(|event| event.field("host").as_deref() == Some("StalledHost"))
         .map(|event| {
             let number = |field: &str| {
                 event
@@ -2391,7 +2391,7 @@ async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unche
             "occurrences skipped: they fell due while the previous one was claimed or run",
         )
         .into_iter()
-        .filter(|event| event.field("provider").as_deref() == Some("UnanswerableHost"))
+        .filter(|event| event.field("host").as_deref() == Some("UnanswerableHost"))
         .collect::<Vec<_>>();
     let event = reports
         .first()
@@ -2420,7 +2420,7 @@ async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unche
             "occurrence lock could not answer whether an overrun occurrence was claimed",
         )
         .into_iter()
-        .find(|event| event.field("provider").as_deref() == Some("UnanswerableHost"))
+        .find(|event| event.field("host").as_deref() == Some("UnanswerableHost"))
         .unwrap_or_else(|| panic!("the report says why it could not ask: {:#?}", logs.events()));
     assert_eq!(why.level, "warn");
     assert_eq!(
@@ -2796,7 +2796,7 @@ fn assert_abandoned_once_at_shutdown(logs: &LogCapture, method: &str) {
         "occurrence skipped: shutdown was asked for before its lock answered the claim",
     );
     assert_eq!(abandoned.level, "warn");
-    assert_eq!(abandoned.field("provider").as_deref(), Some("HungHost"));
+    assert_eq!(abandoned.field("host").as_deref(), Some("HungHost"));
     assert_eq!(abandoned.field("method").as_deref(), Some(method));
     assert!(
         abandoned

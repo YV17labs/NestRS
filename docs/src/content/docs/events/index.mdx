@@ -251,15 +251,16 @@ pub struct ApiModule;
 
 ## Run it
 
-As the boot ends, each wired listener logs one line at `debug`, target
-`nest_rs::events`:
+As the boot ends, each wired listener files one `mounted` line, target
+`nest_rs::events`, as every edge's unit does:
 
 ```text frame="terminal"
-DEBUG nest_rs::events: wired event listener listener="PostsListener::on_post_published"
+INFO nest_rs::events: mounted host="PostsListener" method="on_post_published" event="features::posts::event::PostPublishedEvent"
 ```
 
 Each listener call then runs as a unit of work of its own, `events.dispatch`,
-and files one operation line naming the event and the listener.
+and files one operation line naming the listener and the event, by the same
+value.
 [Event dispatch](/events/dispatch/) covers that unit — its transaction, its
 deadline, the order the bus keeps and what a failure changes.
 

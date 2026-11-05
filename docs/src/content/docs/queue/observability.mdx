@@ -40,7 +40,7 @@ the attempt. Its attributes speak the messaging conventions:
 | `messaging.destination.name` | The queue, e.g. `audio`. |
 | `messaging.message.id` | The job's id — the one its push returned, the same across its attempts and redeliveries. |
 | `backend_id` | The backend's own id for what it delivered — on Redis, the stream entry the attempt was read from, such as `1767225600000-0`. A retry is filed anew, so each attempt can carry its own. |
-| `processor` | The method, e.g. `AudioProcessor::transcode`. |
+| `host`, `method` | The processor and its method, e.g. `AudioProcessor` and `transcode`, as its `mounted` line says them. |
 | `attempt` | Which attempt this is, from `1`, counted by the queue port across retries. |
 | `continued_trace` | `true` when the attempt continues the producer's `traceparent`, `false` when this job started a trace of its own — on every attempt of it, however the backend files retries. |
 | `trace_id`, `span_id`, `parent_span_id` | This attempt's [W3C trace context](/fundamentals/correlation/). The parent is the span that enqueued the job; for a job that started a trace of its own, the first attempt has none and every later attempt's is the first attempt's span. |
@@ -61,7 +61,7 @@ a unit of work, carrying the job's identity, its `outcome` and its
 ```text frame="terminal"
 DEBUG nest_rs::queue: job started attempt=1 trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
 DEBUG features::audio: transcoded file=01a015a9-2520-7f30-8c45-9e1a7b3d5f62 derived_key="transcoded/01a015a9-2520-7f30-8c45-9e1a7b3d5f62" trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
- INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf87-732d-9226-abd166aa514c backend_id="1790442131336-0" attempt=1 outcome="ok" duration_ms=32.129 trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
+ INFO nest_rs::operation: queue.job queue=audio host="AudioProcessor" method="transcode" job_id=01a0deaa-cf87-732d-9226-abd166aa514c backend_id="1790442131336-0" attempt=1 outcome="ok" duration_ms=32.129 trace_id=01a0deaacf87732d9226abd2af0d5896 span_id=0da7f0208abbae0b
 ```
 
 A failure adds one event on `nest_rs::queue` saying **why** — at `warn`
@@ -76,8 +76,8 @@ new `span_id`:
 
 ```text frame="terminal"
  WARN nest_rs::queue: job failed; will retry within the budget error=transcode failed retry_after_ms=1143 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a83a4d58c89c3d5d
- INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf96-70f8-a924-efd8fbbe3d38 backend_id="1790442131351-0" attempt=1 outcome="error" duration_ms=33.525 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a83a4d58c89c3d5d
- INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0deaa-cf96-70f8-a924-efd8fbbe3d38 backend_id="1790442132894-0" attempt=2 outcome="error" duration_ms=31.659 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=734f481aeb53cb7e
+ INFO nest_rs::operation: queue.job queue=audio host="AudioProcessor" method="transcode" job_id=01a0deaa-cf96-70f8-a924-efd8fbbe3d38 backend_id="1790442131351-0" attempt=1 outcome="error" duration_ms=33.525 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a83a4d58c89c3d5d
+ INFO nest_rs::operation: queue.job queue=audio host="AudioProcessor" method="transcode" job_id=01a0deaa-cf96-70f8-a924-efd8fbbe3d38 backend_id="1790442132894-0" attempt=2 outcome="error" duration_ms=31.659 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=734f481aeb53cb7e
 ERROR nest_rs::queue: job dead-lettered: retry budget spent error=transcode failed attempts=4 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a506bd5f6e799390
 ```
 
@@ -154,7 +154,7 @@ skipped, and said once, at the level its cause earns. Your app's own code is a
  INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
  INFO nest_rs::queue: mounted host="AudioProcessor" method="transcode" queue="audio" retries=3 concurrency=4
  WARN nest_rs::queue: skipped #[process] method: no instance of the provider in
-      this app's container processor=ReportJobs::weekly queue=reports
+      this app's container host="ReportJobs" method="weekly" queue=reports
       origin="worker::reports::queue::processor" cause="module_not_imported"
       hint="its module `ReportsQueueModule` is not imported by this app: import it,
       or delete the methods"

@@ -219,3 +219,46 @@ async fn two_values_of_one_hidden_type_on_a_listener_host_fail_the_boot_naming_i
          {chain}",
     );
 }
+
+/// A listener's boot line is the one every edge files for a unit it serves.
+#[tokio::test]
+async fn a_wired_listener_files_its_mounted_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let _app = App::builder()
+        .module::<SeedingModule>()
+        .build()
+        .await
+        .expect("boots");
+
+    let mounted = logs.expect_one(nest_rs_events::TARGET, "mounted");
+    assert_eq!(mounted.level, "info");
+    assert_eq!(mounted.field("host").as_deref(), Some("SeedListener"));
+    assert_eq!(mounted.field("method").as_deref(), Some("on_seeded"));
+    assert_eq!(
+        mounted.field("event").as_deref(),
+        Some(std::any::type_name::<Seeded>())
+    );
+}
+
+/// `event` holds one value for one event, on its mount and each dispatch: a
+/// filter on what the boot said finds the unit's every line.
+#[tokio::test]
+async fn a_listeners_mount_and_its_dispatch_say_one_event() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = App::builder()
+        .module::<SeedingModule>()
+        .build()
+        .await
+        .expect("boots");
+
+    let bus = app.container().get::<EventBus>().expect("the bus");
+    bus.emit(Seeded { rows: 2 }).await;
+
+    let mounted = logs.expect_one(nest_rs_events::TARGET, "mounted");
+    let dispatched = logs
+        .events()
+        .into_iter()
+        .find(|event| event.message.contains("events.dispatch"))
+        .expect("the listener ran");
+    assert_eq!(dispatched.field("event"), mounted.field("event"));
+}

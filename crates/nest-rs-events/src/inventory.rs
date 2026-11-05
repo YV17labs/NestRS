@@ -22,9 +22,22 @@ impl ListenerMethod {
         self.origin
     }
 
-    /// `Provider::method`, as the boot lines name the listener.
+    /// `Provider::method`, as a boot refusal names the listener; a line says
+    /// the host and the method apart.
     pub const fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// The host provider, as a line names it.
+    pub(crate) fn host(&self) -> &'static str {
+        self.name
+            .split_once("::")
+            .map_or(self.name, |(host, _)| host)
+    }
+
+    /// The method, as a line names it.
+    pub(crate) fn method(&self) -> &'static str {
+        self.name.split_once("::").map_or("", |(_, method)| method)
     }
 
     /// `TypeId` of the host provider, which a reader gates on

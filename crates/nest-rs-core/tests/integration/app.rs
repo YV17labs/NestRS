@@ -637,12 +637,12 @@ async fn a_host_overridden_through_its_trait_object_runs_no_hook_and_says_so_at_
             )
         });
     assert_eq!(inert.level, "debug");
-    assert_eq!(inert.field("provider").as_deref(), Some("Sundial"));
+    assert_eq!(inert.field("host").as_deref(), Some("Sundial"));
     assert!(
         logs.events()
             .iter()
             .all(|event| event.level != "warn"
-                || event.field("provider").as_deref() != Some("Sundial")),
+                || event.field("host").as_deref() != Some("Sundial")),
         "{:#?}",
         logs.events()
     );

@@ -105,7 +105,7 @@ static ATTACHED_SITE: Site = declare_site(
     },
 );
 
-/// A job, kept split so logs filter on the provider or the method alone, and
+/// A job, kept split so logs filter on the host or the method alone, and
 /// the `key` that pins what it claims under.
 #[derive(Clone, Copy)]
 pub(crate) struct JobId {
@@ -174,7 +174,7 @@ impl JobId {
         if let Some(key) = self.key {
             return (!is_key(key)).then(|| format!("{key:?} is not a job key: {KEY_RULE}"));
         }
-        [("provider", self.provider), ("method", self.method)]
+        [("host", self.provider), ("method", self.method)]
             .into_iter()
             .find(|(_, level)| broken(level))
             .map(|(part, level)| {
@@ -357,7 +357,7 @@ impl Transport for Scheduler {
                     origin: entry.origin(),
                     host: entry.provider_type_id(),
                     container: container,
-                    provider = entry.provider(),
+                    host = entry.provider(),
                     method = entry.method(),
                 );
                 continue;
@@ -535,7 +535,7 @@ fn loop_ended(
                 target: crate::TARGET,
                 payload.as_ref(),
                 "scheduled job stopped: its schedule panicked, and the job will not run again",
-                provider = id.map(|id| id.provider),
+                host = id.map(|id| id.provider),
                 method = id.map(|id| id.method),
             );
         }
@@ -544,7 +544,7 @@ fn loop_ended(
             if !stopping {
                 tracing::debug!(
                     target: crate::TARGET,
-                    provider = id.map(|id| id.provider),
+                    host = id.map(|id| id.provider),
                     method = id.map(|id| id.method),
                     error = %nest_rs_core::error_message(&cancelled),
                     "scheduled job cancelled with its runtime",
@@ -727,7 +727,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                 let Some(target) = next_occurrence(&schedule, &zone, last) else {
                     tracing::warn!(
                         target: crate::TARGET,
-                        provider = id.provider,
+                        host = id.provider,
                         method = id.method,
                         "cron job has no future occurrence; it will not run again",
                     );
@@ -1020,7 +1020,7 @@ async fn bounded<T>(
 fn report_skipped(id: JobId, from_ms: u64, now_ms: u64, overrun: &Overrun) {
     tracing::warn!(
         target: crate::TARGET,
-        provider = id.provider,
+        host = id.provider,
         method = id.method,
         occurrence = from_ms,
         skipped = overrun.count,
@@ -1065,9 +1065,9 @@ fn refuse_shared_names(ids: &[JobId]) -> Result<()> {
         return Ok(());
     }
     anyhow::bail!(
-        "scheduled jobs share one name: {}. `provider` and `method` are what a job's lines carry \
+        "scheduled jobs share one name: {}. `host` and `method` are what a job's lines carry \
          and are filtered by, so two jobs under one name cannot be told apart in them: rename \
-         one provider, or fold the two methods into one",
+         one host, or fold the two methods into one",
         shared.join(", "),
     )
 }
@@ -1140,7 +1140,7 @@ impl TickLine {
             span: &self.span,
             outcome: outcome,
             started: self.started,
-            provider = self.id.provider,
+            host = self.id.provider,
             method = self.id.method,
             replicas = self.replicas.as_str(),
             occurrence = self.occurrence,
@@ -1182,7 +1182,7 @@ impl Runner {
         if let Some(late_ms) = reached_after_hold(epoch_millis(wall_clock()), instant_ms, hold_ms) {
             tracing::warn!(
                 target: crate::TARGET,
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 occurrence = instant_ms,
                 late_ms,
@@ -1210,7 +1210,7 @@ impl Runner {
                     Bounded::Stale => {
                         tracing::warn!(
                             target: crate::TARGET,
-                            provider = id.provider,
+                            host = id.provider,
                             method = id.method,
                             occurrence = instant_ms,
                             waited_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
@@ -1223,7 +1223,7 @@ impl Runner {
                     Bounded::Cancelled => {
                         tracing::warn!(
                             target: crate::TARGET,
-                            provider = id.provider,
+                            host = id.provider,
                             method = id.method,
                             occurrence = instant_ms,
                             waited_ms =
@@ -1238,7 +1238,7 @@ impl Runner {
                             target: crate::TARGET,
                             &*payload,
                             "occurrence skipped: its lock panicked while claiming it",
-                            provider = id.provider,
+                            host = id.provider,
                             method = id.method,
                             occurrence = instant_ms,
                         );
@@ -1259,7 +1259,7 @@ impl Runner {
                 {
                     tracing::warn!(
                         target: crate::TARGET,
-                        provider = id.provider,
+                        host = id.provider,
                         method = id.method,
                         occurrence = instant_ms,
                         late_ms,
@@ -1274,14 +1274,14 @@ impl Runner {
             }
             Ok(OccurrenceClaim::ClaimedElsewhere) => tracing::debug!(
                 target: crate::TARGET,
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 occurrence = instant_ms,
                 "occurrence claimed by another replica",
             ),
             Err(error) => tracing::warn!(
                 target: crate::TARGET,
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 occurrence = instant_ms,
                 error = %nest_rs_core::error_message(&error),
@@ -1326,7 +1326,7 @@ impl Runner {
         if abandoned > 0 {
             tracing::warn!(
                 target: crate::TARGET,
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 occurrence = from_ms,
                 abandoned,
@@ -1344,7 +1344,7 @@ impl Runner {
         if abandoned > 0 {
             tracing::warn!(
                 target: crate::TARGET,
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 occurrence = from_ms,
                 abandoned,
@@ -1361,7 +1361,7 @@ impl Runner {
                 target: crate::TARGET,
                 &**payload,
                 "occurrence lock panicked answering whether an overrun occurrence was claimed",
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 occurrence = from_ms,
             );
@@ -1373,7 +1373,7 @@ impl Runner {
         }) {
             tracing::warn!(
                 target: crate::TARGET,
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 occurrence = from_ms,
                 error = %nest_rs_core::error_message(error),
@@ -1394,7 +1394,7 @@ impl Runner {
         if skipped == 0 && unanswered == 0 && unchecked == 0 {
             tracing::debug!(
                 target: crate::TARGET,
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 occurrence = from_ms,
                 overrun = overrun.count,
@@ -1405,7 +1405,7 @@ impl Runner {
         }
         tracing::warn!(
             target: crate::TARGET,
-            provider = id.provider,
+            host = id.provider,
             method = id.method,
             occurrence = from_ms,
             skipped,
@@ -1424,7 +1424,7 @@ impl Runner {
         let span = nest_rs_core::operation_span!(
             crate::unit::TICK,
             &correlation,
-            provider = id.provider,
+            host = id.provider,
             method = id.method,
             occurrence,
         );
@@ -1448,7 +1448,7 @@ impl Runner {
                 line.file(nest_rs_core::operation_log::ERROR);
                 tracing::error!(
                     target: crate::TARGET,
-                    provider = id.provider,
+                    host = id.provider,
                     method = id.method,
                     error = %refused,
                     "scheduled job failed",
@@ -1492,7 +1492,7 @@ impl Runner {
         match outcome {
             Ok(Ok(_)) if !tail.ran => tracing::debug!(
                 target: crate::TARGET,
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 "scheduled job skipped by a layer",
             ),
@@ -1506,7 +1506,7 @@ impl Runner {
             {
                 tracing::warn!(
                     target: crate::TARGET,
-                    provider = id.provider,
+                    host = id.provider,
                     method = id.method,
                     error = %nest_rs_core::error_message(failure.error()),
                     "scheduled job failed; a layer answered it",
@@ -1514,7 +1514,7 @@ impl Runner {
             }
             Ok(Err(failure)) => tracing::error!(
                 target: crate::TARGET,
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 error = %nest_rs_core::error_message(failure.error()),
                 retryable = failure
@@ -1527,7 +1527,7 @@ impl Runner {
                 target: crate::TARGET,
                 panic.as_ref(),
                 "scheduled job panicked; the schedule continues",
-                provider = id.provider,
+                host = id.provider,
                 method = id.method,
                 // `panic.as_ref()`, never `&panic`: the box is itself `Any`, so every
                 // downcast inside `panic_message` would miss.
@@ -1800,7 +1800,7 @@ mod tests {
              already be forgotten, so firing it could fire it twice",
         );
         assert_eq!(skipped.level, "warn");
-        assert_eq!(skipped.field("provider").as_deref(), Some("StalledTasks"));
+        assert_eq!(skipped.field("host").as_deref(), Some("StalledTasks"));
         assert_eq!(
             skipped.field("occurrence").as_deref(),
             Some(instant_ms.to_string().as_str())
@@ -2174,7 +2174,7 @@ mod tests {
              stale",
         );
         assert_eq!(skipped.level, "warn");
-        assert_eq!(skipped.field("provider").as_deref(), Some("HungTasks"));
+        assert_eq!(skipped.field("host").as_deref(), Some("HungTasks"));
         assert_eq!(skipped.field("method").as_deref(), Some("sweep"));
         assert_eq!(
             skipped.field("occurrence").as_deref(),
@@ -2224,7 +2224,7 @@ mod tests {
              occurrence reached went stale",
         );
         assert_eq!(abandoned.level, "warn");
-        assert_eq!(abandoned.field("provider").as_deref(), Some("HungTasks"));
+        assert_eq!(abandoned.field("host").as_deref(), Some("HungTasks"));
         assert_eq!(abandoned.field("occurrence").as_deref(), Some("0"));
         assert_eq!(abandoned.field("abandoned").as_deref(), Some("3"));
         let skipped = logs.expect_one(
@@ -2361,7 +2361,7 @@ mod tests {
             "occurrence skipped: shutdown was asked for before its lock answered the claim",
         );
         assert_eq!(abandoned.level, "warn");
-        assert_eq!(abandoned.field("provider").as_deref(), Some("LeavingTasks"));
+        assert_eq!(abandoned.field("host").as_deref(), Some("LeavingTasks"));
         assert_eq!(abandoned.field("method").as_deref(), Some("sweep"));
         assert_eq!(
             abandoned.field("occurrence").as_deref(),
@@ -2409,7 +2409,7 @@ mod tests {
              shutdown was asked for",
         );
         assert_eq!(abandoned.level, "warn");
-        assert_eq!(abandoned.field("provider").as_deref(), Some("HungTasks"));
+        assert_eq!(abandoned.field("host").as_deref(), Some("HungTasks"));
         assert_eq!(abandoned.field("occurrence").as_deref(), Some("0"));
         assert_eq!(abandoned.field("abandoned").as_deref(), Some("3"));
         assert_eq!(abandoned.field("waited_ms").as_deref(), Some("1000"));

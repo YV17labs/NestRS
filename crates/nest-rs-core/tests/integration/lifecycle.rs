@@ -102,7 +102,7 @@ async fn a_failing_shutdown_hook_is_named_at_error_and_does_not_abort_the_rest()
     assert_eq!(event.level, "error");
     assert!(
         event
-            .field("provider")
+            .field("host")
             .is_some_and(|p| p.contains("BrokenOnDestroy")),
         "{:?}",
         event.fields,
@@ -307,7 +307,7 @@ async fn a_shutdown_hook_that_never_returns_is_abandoned_at_the_budget_and_the_r
     assert_eq!(event.level, "warn");
     assert!(
         event
-            .field("provider")
+            .field("host")
             .is_some_and(|p| p.contains("StuckOnDestroy")),
         "{:?}",
         event.fields,
@@ -401,7 +401,7 @@ async fn four_stuck_shutdown_hooks_share_one_budget_and_each_is_named() {
         .into_iter()
         .filter(|event| {
             event
-                .field("provider")
+                .field("host")
                 .is_some_and(|p| p.contains("StuckEverywhere"))
         })
         .map(|event| {
@@ -492,7 +492,7 @@ async fn a_panicking_shutdown_hook_is_named_at_error_and_the_rest_still_run() {
     assert_eq!(event.level, "error");
     assert!(
         event
-            .field("provider")
+            .field("host")
             .is_some_and(|p| p.contains("PanicsOnDestroy")),
         "{:?}",
         event.fields,
@@ -836,10 +836,7 @@ async fn a_failed_boot_tears_down_within_the_budget_and_returns_the_init_error()
     );
     assert_eq!(opening.level, "warn");
     assert_eq!(opening.field("phase").as_deref(), Some("OnModuleInit"));
-    assert_eq!(
-        opening.field("provider").as_deref(),
-        Some("RegistersThenHangs")
-    );
+    assert_eq!(opening.field("host").as_deref(), Some("RegistersThenHangs"));
     assert_eq!(opening.field("method").as_deref(), Some("register"));
     assert!(
         opening
@@ -1118,7 +1115,7 @@ async fn each_shutdown_hook_files_its_unit_line_in_reverse_host_order() {
                 "{:?}",
                 event.fields,
             );
-            (event.field("provider"), event.field("method"))
+            (event.field("host"), event.field("method"))
         })
         .collect();
     assert_eq!(
@@ -1174,11 +1171,7 @@ async fn each_hook_files_one_unit_line_naming_it_and_how_it_ended() {
         assert_eq!(line.level, "info", "{method}");
         assert_eq!(line.field("outcome").as_deref(), Some(outcome), "{method}");
         assert_eq!(line.field("phase").as_deref(), Some(phase), "{method}");
-        assert_eq!(
-            line.field("provider").as_deref(),
-            Some("Audited"),
-            "{method}"
-        );
+        assert_eq!(line.field("host").as_deref(), Some("Audited"), "{method}");
         assert!(
             line.field("origin")
                 .is_some_and(|origin| origin.ends_with("::lifecycle")),
@@ -1219,7 +1212,7 @@ async fn each_hook_files_one_unit_line_naming_it_and_how_it_ended() {
         .collect();
     assert_eq!(spans.len(), 1, "one span for the hook: {spans:#?}");
     assert_eq!(spans[0].field("otel.kind").as_deref(), Some("internal"));
-    assert_eq!(spans[0].field("provider").as_deref(), Some("Audited"));
+    assert_eq!(spans[0].field("host").as_deref(), Some("Audited"));
     assert_eq!(
         spans[0].field("span_id"),
         reconcile.span_id,

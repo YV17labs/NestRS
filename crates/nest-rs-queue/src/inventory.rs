@@ -66,7 +66,9 @@ impl ProcessMethod {
         self.origin
     }
 
-    /// `Provider::method`, as boot lines and job spans report it.
+    /// `Provider::method`, as a boot refusal names the method and a layer reads
+    /// it ([`QueueView::processor`](crate::QueueView::processor)); a line says
+    /// `host` and `method` apart.
     pub const fn name(&self) -> &'static str {
         self.name
     }

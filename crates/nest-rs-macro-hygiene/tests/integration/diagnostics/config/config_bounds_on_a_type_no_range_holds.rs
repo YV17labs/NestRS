@@ -1,6 +1,6 @@
-//! A range holds a `Duration`, an `Option<Duration>` or a `usize`: bounds on
-//! any other type is a compile error naming the three, never a value read with
-//! its unit lost.
+//! A range holds a `Duration`, a `usize`, a `u32` or the `Option` of a `Duration`
+//! or a `usize`: bounds on any other type is a compile error naming the five,
+//! never a value read with its unit lost.
 
 use nest_rs::config::{Bound, DurationBounds, Floor, config};
 

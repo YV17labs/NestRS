@@ -164,7 +164,7 @@ each field:
 | Variable | Default | What it bounds |
 |---|---|---|
 | `<PREFIX>_WS__MAX_CONNECTION_SECS` | `14400` (4 h) | a socket's lifetime, so a credential checked at the upgrade expires with it; whole seconds from `1` to `86400`, `0` ⇒ unlimited |
-| `<PREFIX>_WS__MAX_MESSAGE_BYTES` | `65536` (64 KiB) | one inbound frame, refused before it is buffered |
+| `<PREFIX>_WS__MAX_MESSAGE_BYTES` | `65536` (64 KiB) | one inbound frame, refused before it is buffered; from `1` to `1073741824` (a gibibyte) |
 | `<PREFIX>_WS__MESSAGE_TIMEOUT_SECS` | `20` | one message — its guards, pipes and handler — counted once its envelope is decoded; whole seconds from `1` to `3600`, `0` ⇒ none |
 | `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` | `20` | the `#[on_connect]` hook, on the message timeout's range |
 | `<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS` | `20` | the `#[on_disconnect]` hook, on the message timeout's range |

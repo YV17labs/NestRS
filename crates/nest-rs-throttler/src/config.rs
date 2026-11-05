@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, ConfigError, ConfigService, DurationBounds, Field, Floor, Result, config,
+    Bound, ConfigError, ConfigService, CountBounds, DurationBounds, Field, Floor, Result, config,
 };
 use nest_rs_core::Secret;
 
@@ -24,14 +24,29 @@ const WINDOW: DurationBounds = DurationBounds::secs(
     ),
 );
 
+const LIMIT: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "a limit of none denies every request, which a guard says rather than a rate",
+    ),
+    Bound::new(
+        1_000_000_000,
+        "a client past a billion requests in a window, over eleven thousand a second for the \
+         longest window there is, is no client a limit holds, so a number that large is a slip \
+         that turns the limiter off in all but name",
+    ),
+);
+
 /// Rate-limit settings, read by [`ThrottlerModule`](crate::ThrottlerModule)
 /// from `<PREFIX>_THROTTLER__*` over a base
 /// [`ThrottlerModule::for_root`](crate::ThrottlerModule::for_root) may pin.
 #[config(namespace = "throttler")]
 #[derive(Clone, Debug)]
 pub struct ThrottlerConfig {
-    /// Requests allowed per window, `<PREFIX>_THROTTLER__LIMIT`; defaults to 60,
-    /// [`DEFAULT_THROTTLE`]'s.
+    /// Requests allowed per window, `<PREFIX>_THROTTLER__LIMIT`, from 1 to a
+    /// billion — refused outside, from the environment and from the pinned
+    /// struct alike; defaults to 60, [`DEFAULT_THROTTLE`]'s.
+    #[config(bounds = LIMIT)]
     pub limit: u32,
     /// The window a bucket counts over, `<PREFIX>_THROTTLER__WINDOW_SECS` in
     /// whole seconds, from 1 to 86400 (a day); defaults to a minute,
@@ -123,6 +138,49 @@ mod tests {
             Duration::from_secs(5),
             "the untouched pin survives"
         );
+    }
+
+    /// One request to a billion in a window, from the environment and from a
+    /// pin, naming the variable and its range and never the value it was given.
+    #[test]
+    fn the_limit_is_held_to_its_range_from_either_side() {
+        let var = nest_rs_config::var_name("throttler", "LIMIT");
+        for (raw, said) in [
+            ("0", "must be at least 1 — "),
+            ("1000000001", "must be at most 1000000000 — "),
+        ] {
+            let refused = ThrottlerConfig::from_env(
+                &ConfigService::with_vars("throttler", [("LIMIT", raw)]),
+                ThrottlerConfig::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var) && refused.contains(said),
+                "{refused}"
+            );
+            assert!(!refused.contains("1000000001"), "{refused}");
+        }
+        for (pinned, said) in [
+            (0, "below the 1 it must be at least"),
+            (1_000_000_001, "above the 1000000000 it must be at most"),
+        ] {
+            let refused = ThrottlerConfig::from_env(
+                &ConfigService::with_vars("throttler", []),
+                ThrottlerConfig {
+                    limit: pinned,
+                    ..ThrottlerConfig::default()
+                },
+            )
+            .expect_err("a pin outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var)
+                    && refused.contains("`ThrottlerConfig::limit` set in code")
+                    && refused.contains(said),
+                "{refused}"
+            );
+        }
     }
 
     /// A zero window would turn the limiter off on both stores.

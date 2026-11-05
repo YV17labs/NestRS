@@ -78,11 +78,11 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 /// The namespace is the stem of the file's path below `src/`, read and never
 /// chosen (`redis/src/queue/config.rs` reads `"redis__queue"`). A field says
 /// how it is read when its type cannot: `bounds = RANGE` names the range — a
-/// [`DurationBounds`] for a `Duration` or an `Option<Duration>` whose `None`
-/// is off, a [`CountBounds`] for a `usize` — and binds it to the field as the
-/// associated [`BoundedSetting`] named for it (`ReportsConfig::WINDOW`), its
-/// key the field's name with a duration's unit after it; `json` decodes a
-/// structured value; `count` reads `0` as unlimited, `None`; `with = path`
+/// [`DurationBounds`] for a `Duration` or an `Option<Duration>`, a
+/// [`CountBounds`] for a `usize`, a `u32` or an `Option<usize>`, an `Option`'s
+/// `None` off — and binds it to the field as the associated [`BoundedSetting`]
+/// named for it (`ReportsConfig::WINDOW`), its key the field's name with a
+/// duration's unit after it; `json` decodes a structured value; `with = path`
 /// names a `fn(&ConfigService, Field, T) -> Result<T>`, handed the field's key
 /// and path as the associated [`Field`] named for it, which a check of a value
 /// set in code reads too. On the struct, `validate = "manual"` leaves the
@@ -92,18 +92,26 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 /// ```
 /// use std::time::Duration;
 /// # use validator::Validate as _;
-/// use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Namespaced, config};
+/// use nest_rs_config::{
+///     Bound, Config, ConfigService, CountBounds, DurationBounds, Floor, Namespaced, config,
+/// };
 ///
 /// const WINDOW: DurationBounds = DurationBounds::secs(
 ///     Floor::Units(Bound::new(1, "a shorter window counts nothing")),
 ///     Bound::new(3600, "past an hour the report is stale before it is read"),
 /// );
 ///
+/// const PAGE_SIZE: CountBounds = CountBounds::new(
+///     Bound::new(1, "an empty page reports nothing"),
+///     Bound::new(500, "past it a page outgrows the mail that carries it"),
+/// );
+///
 /// #[config(namespace = "reports")]
 /// #[derive(Clone, Debug)]
 /// pub struct ReportsConfig {
-///     #[validate(range(min = 1, max = 500))]
+///     #[config(bounds = PAGE_SIZE)]
 ///     pub page_size: u32,
+///     #[validate(length(min = 1))]
 ///     pub recipients: Vec<String>,
 ///     #[config(bounds = WINDOW)]
 ///     pub window: Duration,
@@ -111,7 +119,7 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 ///
 /// impl Default for ReportsConfig {
 ///     fn default() -> Self {
-///         Self { page_size: 50, recipients: Vec::new(), window: Duration::from_secs(60) }
+///         Self { page_size: 50, recipients: vec!["ops@example.com".into()], window: Duration::from_secs(60) }
 ///     }
 /// }
 ///
@@ -124,7 +132,7 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 /// let read = ReportsConfig::from_env(&env, ReportsConfig::default())?;
 /// assert_eq!((read.page_size, read.window), (20, Duration::from_secs(300)));
 /// assert_eq!(read.recipients, ["ops@example.com"]);
-/// assert!(ReportsConfig { page_size: 0, ..read }.validate().is_err());
+/// assert!(ReportsConfig { recipients: Vec::new(), ..read }.validate().is_err());
 /// # Ok::<(), nest_rs_config::ConfigError>(())
 /// ```
 pub use nest_rs_config_macros::config;

@@ -7,11 +7,12 @@
 //! ceiling never above what the library or kernel the value reaches accepts. A
 //! range names neither its variable nor its field: `#[config(bounds = …)]`
 //! reads both off the field it bounds, so one range serves every field it fits.
-//! `0` is off only for an `Option<Duration>` field — `None` in code — and held
-//! to the floor everywhere else.
+//! `0` is off only for an `Option` field — `None` in code — and held to the
+//! floor everywhere else.
 
 use std::borrow::Cow;
 use std::fmt;
+use std::str::FromStr;
 use std::time::Duration;
 
 use crate::error::ConfigError;
@@ -193,7 +194,9 @@ impl DurationBounds {
 }
 
 /// The range one count setting accepts — how many of a thing the deployment
-/// allows — each end with its reason. Its variable's key is its field's name.
+/// allows — each end with its reason. Its variable's key is its field's name,
+/// and its field a `usize`, a `u32`, or an `Option<usize>` whose `None` is no
+/// limit, `0` from the environment.
 ///
 /// A floor above the ceiling does not compile in a `const`.
 ///
@@ -221,6 +224,37 @@ impl DurationBounds {
 /// let refused = FixtureConfig::from_env(&env, FixtureConfig::default()).unwrap_err();
 /// assert!(refused.to_string().contains("must be at most 256 — past it the pool"));
 /// ```
+///
+/// A count that may go without a limit is an `Option<usize>` on the same range:
+///
+/// ```
+/// use nest_rs_config::{Bound, Config, ConfigService, CountBounds, config};
+///
+/// const BACKLOG: CountBounds = CountBounds::new(
+///     Bound::new(1, "a backlog of none refuses what it exists to hold"),
+///     Bound::new(4096, "past it a stalled consumer holds more than a replica has"),
+/// );
+///
+/// #[config(namespace = "fixture")]
+/// #[derive(Clone, Debug)]
+/// pub struct FixtureConfig {
+///     #[config(bounds = BACKLOG)]
+///     pub backlog: Option<usize>,
+/// }
+/// # impl Default for FixtureConfig {
+/// #     fn default() -> Self {
+/// #         Self { backlog: Some(64) }
+/// #     }
+/// # }
+///
+/// let off = ConfigService::with_vars("fixture", [("BACKLOG", "0")]);
+/// assert_eq!(FixtureConfig::from_env(&off, FixtureConfig::default())?.backlog, None);
+///
+/// let zero = ConfigService::with_vars("fixture", []);
+/// let pinned = FixtureConfig { backlog: Some(0) };
+/// assert!(FixtureConfig::from_env(&zero, pinned).is_err(), "off in code is `None`");
+/// # Ok::<(), nest_rs_config::ConfigError>(())
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct CountBounds {
     least: Bound,
@@ -247,13 +281,14 @@ impl CountBounds {
         self.most
     }
 
-    /// Which end `count` falls past, if either.
-    fn outside(&self, count: usize) -> Option<Past> {
-        outside(
-            self.least,
-            self.most,
-            u64::try_from(count).unwrap_or(u64::MAX),
-        )
+    /// Which end `count` falls past, if either: past `off`, the floor is at
+    /// least one, since `0` is what turns the field off, never a limit it holds.
+    fn outside<T: TryInto<u64>>(&self, count: T, off: Off) -> Option<Past> {
+        let least = match off {
+            Off::AtZero => Bound::new(self.least.count.max(1), self.least.why),
+            Off::Absent => self.least,
+        };
+        outside(least, self.most, count.try_into().unwrap_or(u64::MAX))
     }
 }
 
@@ -344,7 +379,7 @@ impl<T: BoundedField> BoundedSetting<T> {
     /// code or the default — is refused under the variable that would override
     /// it, naming the field's path. A value that does not parse as a whole
     /// number is refused as [`Setting::parse`](crate::Setting::parse) refuses
-    /// it. For an `Option<Duration>`, `0` from the environment is `None`, and
+    /// it. For an `Option` field, `0` from the environment is `None`, and
     /// `None` in code stays `None`.
     pub fn read(&self, env: &ConfigService, base: T) -> Result<T, ConfigError> {
         T::read(self, env, base)
@@ -364,17 +399,20 @@ mod sealed {
     impl Sealed for std::time::Duration {}
     impl Sealed for Option<std::time::Duration> {}
     impl Sealed for usize {}
+    impl Sealed for u32 {}
+    impl Sealed for Option<usize> {}
 }
 
 /// A field type a range holds, and the range that holds it: a `Duration` and
-/// an `Option<Duration>` — `None` off, `0` from the environment — through
-/// [`DurationBounds`], a `usize` through [`CountBounds`]. Sealed.
+/// an `Option<Duration>` through [`DurationBounds`], a `usize`, a `u32` and an
+/// `Option<usize>` through [`CountBounds`]; an `Option`'s `None` is off, `0`
+/// from the environment. Sealed.
 #[diagnostic::on_unimplemented(
-    message = "`#[config(bounds = …)]` reads a `Duration`, an `Option<Duration>` or a `usize`, \
-               not `{Self}`",
+    message = "`#[config(bounds = …)]` reads a `Duration`, an `Option<Duration>`, a `usize`, a \
+               `u32` or an `Option<usize>`, not `{Self}`",
     label = "a field its bounds read",
     note = "a duration is a `Duration`, or an `Option<Duration>` where `None` turns it off; a \
-            count is a `usize`, and one whose `None` is unlimited reads `#[config(count)]`"
+            count is a `usize` or a `u32`, or an `Option<usize>` where `None` is no limit"
 )]
 pub trait BoundedField: Sized + sealed::Sealed {
     /// The range a field of this type is held to.
@@ -403,6 +441,7 @@ pub trait BoundedField: Sized + sealed::Sealed {
     ) -> Result<Self, ConfigError>;
 }
 
+#[diagnostic::do_not_recommend]
 impl BoundedField for Duration {
     type Bounds = DurationBounds;
     type Setting = BoundedSetting<Self>;
@@ -439,6 +478,7 @@ impl BoundedField for Duration {
     }
 }
 
+#[diagnostic::do_not_recommend]
 impl BoundedField for Option<Duration> {
     type Bounds = DurationBounds;
     type Setting = BoundedSetting<Self>;
@@ -480,7 +520,51 @@ impl BoundedField for Option<Duration> {
     }
 }
 
-impl BoundedField for usize {
+macro_rules! count_fields {
+    ($($count:ty),* $(,)?) => {
+        $(
+            #[diagnostic::do_not_recommend]
+            impl BoundedField for $count {
+                type Bounds = CountBounds;
+                type Setting = BoundedSetting<Self>;
+
+                fn key(_: &CountBounds, stem: &'static str) -> Cow<'static, str> {
+                    Cow::Borrowed(stem)
+                }
+
+                fn read(
+                    setting: &BoundedSetting<Self>,
+                    env: &ConfigService,
+                    base: Self,
+                ) -> Result<Self, ConfigError> {
+                    match read_count::<Self, Self>(setting, env, Off::Absent)? {
+                        Some(read) => Ok(read),
+                        None => pinned_count(
+                            setting,
+                            env.var_name(setting.field.key()),
+                            base,
+                            "is not set, and ",
+                            Off::Absent,
+                        ),
+                    }
+                }
+
+                fn check(
+                    setting: &BoundedSetting<Self>,
+                    namespace: &str,
+                    value: Self,
+                ) -> Result<Self, ConfigError> {
+                    pinned_count(setting, setting.var(namespace), value, "", Off::Absent)
+                }
+            }
+        )*
+    };
+}
+
+count_fields!(usize, u32);
+
+#[diagnostic::do_not_recommend]
+impl BoundedField for Option<usize> {
     type Bounds = CountBounds;
     type Setting = BoundedSetting<Self>;
 
@@ -493,21 +577,20 @@ impl BoundedField for usize {
         env: &ConfigService,
         base: Self,
     ) -> Result<Self, ConfigError> {
-        let Some(read) = env.setting(setting.field.key())? else {
-            return pinned_count(
-                setting,
-                env.var_name(setting.field.key()),
-                base,
-                "is not set, and ",
-            );
-        };
-        let count: Self = read.parse()?;
-        match setting.bounds.outside(count) {
-            None => Ok(count),
-            Some(Past { must, bound, .. }) => Err(read.refuse(format_args!(
-                "must be {must} {} — {}",
-                bound.count, bound.why
-            ))),
+        match read_count::<Self, usize>(setting, env, Off::AtZero)? {
+            Some(0) => Ok(None),
+            Some(read) => Ok(Some(read)),
+            None => base
+                .map(|base| {
+                    pinned_count(
+                        setting,
+                        env.var_name(setting.field.key()),
+                        base,
+                        "is not set, and ",
+                        Off::AtZero,
+                    )
+                })
+                .transpose(),
         }
     }
 
@@ -516,18 +599,38 @@ impl BoundedField for usize {
         namespace: &str,
         value: Self,
     ) -> Result<Self, ConfigError> {
-        pinned_count(setting, setting.var(namespace), value, "")
+        value
+            .map(|value| pinned_count(setting, setting.var(namespace), value, "", Off::AtZero))
+            .transpose()
     }
 }
 
-/// Whether the field a duration is read into has an off: `None`, `0` from the
+/// Whether the field a value is read into has an off: `None`, `0` from the
 /// environment.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Off {
-    /// A `Duration`: `0` is held to the floor.
+    /// A `Duration` or a count: `0` is held to the floor.
     Absent,
-    /// An `Option<Duration>`: `0` is `None`.
+    /// An `Option`: `0` is `None`.
     AtZero,
+}
+
+impl Off {
+    /// What the environment is told beside a range.
+    const fn said_to_the_variable(self) -> &'static str {
+        match self {
+            Self::AtZero => ", or 0 to turn it off",
+            Self::Absent => "",
+        }
+    }
+
+    /// What a value set in code is told after a range.
+    const fn said_in_code(self) -> &'static str {
+        match self {
+            Self::AtZero => "; `None` turns it off",
+            Self::Absent => "",
+        }
+    }
 }
 
 /// The variable under `key`, held to `bounds`: `None` when it is unset, and
@@ -546,13 +649,10 @@ fn read_duration(
         return Ok(Some(None));
     }
     if let Some(Past { must, bound, .. }) = outside(bounds.least.bound(), bounds.most, count) {
-        let or_off = match off {
-            Off::AtZero => ", or 0 to turn it off",
-            Off::Absent => "",
-        };
         return Err(setting.refuse(format_args!(
-            "must be {must} {}{or_off} — {}",
+            "must be {must} {}{} — {}",
             Count(bounds.unit, bound.count),
+            off.said_to_the_variable(),
             bound.why,
         )));
     }
@@ -571,10 +671,7 @@ fn pinned_duration<T: BoundedField<Bounds = DurationBounds>>(
 ) -> Result<Duration, ConfigError> {
     let bounds = setting.bounds;
     let path = setting.field.path();
-    let or_off = match off {
-        Off::AtZero => "; `None` turns it off",
-        Off::Absent => "",
-    };
+    let or_off = off.said_in_code();
     let refuse = |side: &str, limit: Duration, must: &str, why: &str| {
         ConfigError::parse(
             var.clone(),
@@ -609,24 +706,59 @@ fn pinned_duration<T: BoundedField<Bounds = DurationBounds>>(
     Ok(value)
 }
 
+/// The variable under `setting`'s key as a count held to its range, `None` when
+/// it is unset; where the field has an off, `0` comes back as it was written.
+fn read_count<T, C>(
+    setting: &BoundedSetting<T>,
+    env: &ConfigService,
+    off: Off,
+) -> Result<Option<C>, ConfigError>
+where
+    T: BoundedField<Bounds = CountBounds>,
+    C: FromStr + Copy + TryInto<u64> + Default + PartialEq,
+{
+    let Some(read) = env.setting(setting.field.key())? else {
+        return Ok(None);
+    };
+    let count: C = read.parse()?;
+    if off == Off::AtZero && count == C::default() {
+        return Ok(Some(count));
+    }
+    match setting.bounds.outside(count, off) {
+        None => Ok(Some(count)),
+        Some(Past { must, bound, .. }) => Err(read.refuse(format_args!(
+            "must be {must} {}{} — {}",
+            bound.count,
+            off.said_to_the_variable(),
+            bound.why,
+        ))),
+    }
+}
+
 /// `count`, set in code through `setting`'s field, refused under `var` when it
 /// is outside the range; `lead` opens the sentence with what is known of the
 /// variable.
-fn pinned_count(
-    setting: &BoundedSetting<usize>,
+fn pinned_count<T, C>(
+    setting: &BoundedSetting<T>,
     var: String,
-    count: usize,
+    count: C,
     lead: &str,
-) -> Result<usize, ConfigError> {
-    match setting.bounds.outside(count) {
+    off: Off,
+) -> Result<C, ConfigError>
+where
+    T: BoundedField<Bounds = CountBounds>,
+    C: Copy + fmt::Display + TryInto<u64>,
+{
+    match setting.bounds.outside(count, off) {
         None => Ok(count),
         Some(Past { side, must, bound }) => Err(ConfigError::parse(
             var,
             format!(
-                "{lead}`{}` set in code is {count}, {side} the {} it must be {must} — {}",
+                "{lead}`{}` set in code is {count}, {side} the {} it must be {must} — {}{}",
                 setting.field.path(),
                 bound.count,
                 bound.why,
+                off.said_in_code(),
             ),
         )),
     }
@@ -807,7 +939,7 @@ mod tests {
     /// the range, and refuses a pinned zero — off in code is `None`, never a
     /// zero that would cut every connection. Unset, its `None` stays `None`.
     #[test]
-    fn an_off_switch_is_zero_from_the_environment_and_none_in_code() {
+    fn an_off_switch_is_zero_said_to_the_variable_and_none_in_code() {
         assert!(
             CEILING
                 .read(
@@ -892,6 +1024,115 @@ mod tests {
         ),
         Field::new("SESSIONS", "FixtureConfig::sessions"),
     );
+
+    const LIMIT: BoundedSetting<u32> = BoundedSetting::new(
+        CountBounds::new(
+            Bound::new(1, "the floor's reason"),
+            Bound::new(1024, "the ceiling's reason"),
+        ),
+        Field::new("LIMIT", "FixtureConfig::limit"),
+    );
+
+    /// A `u32` holds what its library takes, over the same range: a value past
+    /// what the type holds is refused as one that does not parse.
+    #[test]
+    fn a_u32_count_is_held_to_its_range_from_either_side() {
+        assert_eq!(LIMIT.key(), "LIMIT");
+        assert_eq!(
+            LIMIT
+                .read(&env(&[("LIMIT", "1024")]), 3)
+                .expect("the ceiling"),
+            1024
+        );
+        assert_eq!(LIMIT.read(&env(&[]), 3).expect("the base"), 3);
+        let above = refused(LIMIT.read(&env(&[("LIMIT", "1025")]), 3));
+        assert!(
+            above.contains("must be at most 1024 — the ceiling's reason"),
+            "{above}"
+        );
+        let top = refused(LIMIT.read(&env(&[("LIMIT", "4294967296")]), 3));
+        assert!(top.contains("does not parse as u32"), "{top}");
+        let pinned = refused(LIMIT.read(&env(&[]), 0));
+        assert!(
+            pinned.contains(
+                "is not set, and `FixtureConfig::limit` set in code is 0, below the 1 it must \
+                 be at least — the floor's reason"
+            ),
+            "{pinned}"
+        );
+        assert!(refused(LIMIT.check("fixture", u32::MAX)).contains("above the 1024"));
+    }
+
+    const BACKLOG: BoundedSetting<Option<usize>> = BoundedSetting::new(
+        CountBounds::new(
+            Bound::new(10, "the floor's reason"),
+            Bound::new(1024, "the ceiling's reason"),
+        ),
+        Field::new("BACKLOG", "FixtureConfig::backlog"),
+    );
+
+    /// An `Option<usize>` reads `0` as `None`, holds every other value to the
+    /// range, and refuses a pinned zero — no limit in code is `None`. Unset, its
+    /// `None` stays `None`.
+    #[test]
+    fn an_optional_count_is_off_at_zero_said_to_the_variable_and_none_in_code() {
+        assert_eq!(BACKLOG.key(), "BACKLOG");
+        assert_eq!(
+            BACKLOG
+                .read(&env(&[("BACKLOG", "0")]), Some(30))
+                .expect("off"),
+            None,
+            "`0` is off, over a pinned value too"
+        );
+        assert_eq!(BACKLOG.read(&env(&[]), None).expect("off"), None);
+        assert_eq!(BACKLOG.read(&env(&[]), Some(30)).expect("kept"), Some(30));
+        assert_eq!(
+            BACKLOG
+                .read(&env(&[("BACKLOG", "20")]), None)
+                .expect("inside"),
+            Some(20)
+        );
+        let below = refused(BACKLOG.read(&env(&[("BACKLOG", "3")]), None));
+        assert!(
+            below.contains("must be at least 10, or 0 to turn it off — the floor's reason"),
+            "{below}"
+        );
+        let above = refused(BACKLOG.read(&env(&[("BACKLOG", "1025")]), None));
+        assert!(
+            above.contains("must be at most 1024, or 0 to turn it off — the ceiling's reason"),
+            "{above}"
+        );
+        let pinned = refused(BACKLOG.read(&env(&[]), Some(0)));
+        assert!(
+            pinned.contains("set in code is 0, below the 10 it must be at least")
+                && pinned.contains("`None` turns it off"),
+            "{pinned}"
+        );
+        assert_eq!(
+            BACKLOG
+                .read(&env(&[("BACKLOG", "20")]), Some(0))
+                .expect("the variable outranks the pin"),
+            Some(20)
+        );
+        let held = refused(BACKLOG.check("fixture", Some(0)));
+        assert!(
+            held.contains("`None` turns it off") && !held.contains("is not set"),
+            "{held}"
+        );
+        assert_eq!(BACKLOG.check("fixture", None).expect("off"), None);
+    }
+
+    /// A floor of zero on a count with an off reads no differently: `0` from
+    /// the environment is off, so a pinned `Some(0)` is no limit to hold.
+    #[test]
+    fn a_pinned_zero_is_refused_whatever_the_floor_of_an_optional_count() {
+        const OPEN: BoundedSetting<Option<usize>> = BoundedSetting::new(
+            CountBounds::new(Bound::new(0, "why"), Bound::new(8, "why")),
+            Field::new("OPEN", "FixtureConfig::open"),
+        );
+        let pinned = refused(OPEN.check("fixture", Some(0)));
+        assert!(pinned.contains("`None` turns it off"), "{pinned}");
+    }
 
     #[test]
     fn a_count_reads_its_key_and_is_held_to_its_range_from_either_side() {

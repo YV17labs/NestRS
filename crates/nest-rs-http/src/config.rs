@@ -106,6 +106,32 @@ pub const UNIT_TIMEOUT_BOUNDS: DurationBounds = DurationBounds::secs(
     ),
 );
 
+/// The range a socket's message cap is held to — a gateway's in the WebSocket
+/// crate, a graphql-ws subscription's in its own: from a byte to a gibibyte, past
+/// any message a socket's protocol carries, and held at the protocol layer.
+pub const MAX_MESSAGE_BYTES_BOUNDS: CountBounds = CountBounds::new(
+    Bound::new(1, "a cap of no bytes closes the socket on every message"),
+    Bound::new(
+        1 << 30,
+        "a socket buffers a whole message before its handler runs, so every open socket can \
+         hold this much of the replica's memory; past a gibibyte a transfer belongs on the \
+         object store, and tungstenite's own default is 64 MiB",
+    ),
+);
+
+const MAX_BODY_BYTES: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "a cap of no bytes refuses every request that carries a body",
+    ),
+    Bound::new(
+        1 << 40,
+        "a body past a tebibyte takes hours over a gigabit link, longer than the hour \
+         `REQUEST_TIMEOUT_SECS` may hold, and a reader that buffers it holds it in memory; a \
+         transfer that large goes straight to the store on a presigned URL",
+    ),
+);
+
 /// hyper's own head default, and Kestrel's `RequestHeadersTimeout`.
 pub(crate) const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -247,8 +273,10 @@ pub struct HttpConfig {
     /// declared `Content-Length` past it. A per-route
     /// [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit) can
     /// pin a tighter one. Defaults to 2 MiB ([`RawBody::DEFAULT_LIMIT`]); there
-    /// is no off. Read from `<PREFIX>_HTTP__MAX_BODY_BYTES`; `0` fails the boot.
-    #[validate(range(min = 1, message = "must be at least 1 byte"))]
+    /// is no off. Read from `<PREFIX>_HTTP__MAX_BODY_BYTES`, from 1 to a
+    /// tebibyte — refused outside, from the environment and from the pinned
+    /// struct alike.
+    #[config(bounds = MAX_BODY_BYTES)]
     pub max_body_bytes: usize,
     /// Wall-clock budget for a single request, counted from its arrival, so the
     /// reading of its body counts against it; a request still running past it
@@ -434,6 +462,12 @@ impl HttpConfig {
     /// the range the variable is, for a config that never met the environment.
     pub(crate) fn connection_cap(&self) -> Result<usize> {
         Self::MAX_CONCURRENT_CONNECTIONS.check(Self::NAMESPACE, self.max_concurrent_connections)
+    }
+
+    /// [`max_body_bytes`](Self::max_body_bytes), held to the range its variable
+    /// is, for a config that never met the environment.
+    pub(crate) fn body_cap(&self) -> Result<usize> {
+        Self::MAX_BODY_BYTES.check(Self::NAMESPACE, self.max_body_bytes)
     }
 
     /// [`request_timeout`](Self::request_timeout), held to the range its
@@ -1082,13 +1116,63 @@ mod tests {
 
     #[test]
     fn a_zero_body_cap_fails_the_boot_rather_than_rejecting_every_request() {
+        let var = nest_rs_config::var_name("http", "MAX_BODY_BYTES");
         figment::Jail::expect_with(|jail| {
-            jail.set_env(nest_rs_config::var_name("http", "MAX_BODY_BYTES"), "0");
+            jail.set_env(&var, "0");
             let err = HttpConfig::resolve(None).expect_err("a zero-byte cap must abort the boot");
             let msg = err.to_string();
-            assert!(msg.contains("max_body_bytes"), "{msg}");
+            assert!(msg.contains(&var), "{msg}");
             Ok(())
         });
+    }
+
+    /// One byte to a tebibyte, from the environment and from a pin, naming the
+    /// variable and its range and never the value it was given.
+    #[test]
+    fn the_body_cap_is_held_to_its_range_from_either_side() {
+        let var = nest_rs_config::var_name("http", "MAX_BODY_BYTES");
+        for (raw, said) in [
+            ("0", "must be at least 1 — "),
+            ("1099511627777", "must be at most 1099511627776 — "),
+        ] {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("MAX_BODY_BYTES", raw)]),
+                HttpConfig::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var) && refused.contains(said),
+                "{refused}"
+            );
+            assert!(!refused.contains("1099511627777"), "{refused}");
+        }
+        let top = HttpConfig::from_env(
+            &ConfigService::with_vars("http", [("MAX_BODY_BYTES", "1099511627776")]),
+            HttpConfig::default(),
+        )
+        .expect("the ceiling itself is accepted");
+        assert_eq!(top.max_body_bytes, 1 << 40);
+        for (pinned, said) in [
+            (0, "below the 1 it must be at least"),
+            ((1 << 40) + 1, "above the 1099511627776 it must be at most"),
+        ] {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", []),
+                HttpConfig {
+                    max_body_bytes: pinned,
+                    ..HttpConfig::default()
+                },
+            )
+            .expect_err("a pin outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var)
+                    && refused.contains("`HttpConfig::max_body_bytes` set in code")
+                    && refused.contains(said),
+                "{refused}"
+            );
+        }
     }
 
     #[test]

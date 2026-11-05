@@ -51,9 +51,12 @@ pub struct MacroHygieneConfig {
     /// Read as JSON.
     #[config(json)]
     pub tags: Vec<String>,
-    /// Read as a count, `0` unlimited.
-    #[config(count)]
+    /// A count read through its bounds, `0` off.
+    #[config(bounds = KILNS)]
     pub batches: Option<usize>,
+    /// A count in its library's type, read through its bounds.
+    #[config(bounds = KILNS)]
+    pub racks: u32,
     /// Read through a function of its own.
     #[config(with = doubled)]
     pub heat: u32,
@@ -67,6 +70,7 @@ impl Default for MacroHygieneConfig {
             kilns: 2,
             tags: Vec::new(),
             batches: None,
+            racks: 1,
             heat: 1,
         }
     }

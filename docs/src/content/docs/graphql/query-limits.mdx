@@ -31,7 +31,10 @@ its wait for `connection_init` and the operations it runs at once — on
 | Depth | Recursive | `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` |
 | Complexity | Wide + fanout (with per-field annotations) | `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` |
 
-Both are on by default (`max_depth = 15`, `max_complexity = 2000`).
+Both are on by default (`max_depth = 15`, `max_complexity = 2000`). Each holds
+to a range, refused at boot outside it: `max_depth` from `1` to `33`, past which
+async-graphql's own recursion bound refuses a document whatever the limit says,
+and `max_complexity` from `1` to ten million.
 Keep both — depth alone misses wide queries, complexity alone misses
 queries that depth-bomb the parser before the visitor even runs.
 

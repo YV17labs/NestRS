@@ -478,25 +478,6 @@ impl ConfigService {
         bool::overlay(self, key, default)
     }
 
-    /// A whole count, where **`0` means unlimited**: unset keeps `base`, and
-    /// set-but-unparseable is boot-fatal naming the variable. Unlimited in code
-    /// is `None`, so a `base` of `Some(0)` is refused under the variable that
-    /// would override it, as a pinned zero duration is.
-    pub fn count(&self, key: &str, base: Option<usize>) -> Result<Option<usize>, ConfigError> {
-        Ok(match self.parse::<usize>(key)? {
-            None if base == Some(0) => {
-                return Err(ConfigError::parse(
-                    self.var_name(key),
-                    "is not set, and the count set in code is `Some(0)` — a count is at least \
-                     1, and unlimited is `None`",
-                ));
-            }
-            None => base,
-            Some(0) => None,
-            Some(count) => Some(count),
-        })
-    }
-
     /// Comma-separated, trimmed, empties dropped; `default` is kept when unset.
     pub fn list(&self, key: &str, default: Vec<String>) -> Result<Vec<String>, ConfigError> {
         Vec::overlay(self, key, default)
@@ -1221,50 +1202,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn count_reads_zero_as_the_unlimited_sentinel() {
-        let base_count = Some(5usize);
-
-        let unset = ConfigService::with_vars("probe", []);
-        assert_eq!(unset.count("N", base_count).expect("unset"), base_count);
-
-        let zero = ConfigService::with_vars("probe", [("N", "0")]);
-        assert_eq!(
-            zero.count("N", base_count).expect("zero"),
-            None,
-            "`0` is the unlimited sentinel, never a ceiling of zero",
-        );
-
-        let set = ConfigService::with_vars("probe", [("N", "7")]);
-        assert_eq!(set.count("N", base_count).expect("set"), Some(7));
-
-        let refused = unset
-            .count("N", Some(0))
-            .expect_err("unlimited in code is `None`, never `Some(0)`");
-        assert!(
-            matches!(&refused, ConfigError::Parse { var, .. } if *var == var_name("probe", "N")),
-            "{refused}"
-        );
-        assert!(refused.to_string().contains("`Some(0)`"), "{refused}");
-        assert_eq!(
-            set.count("N", Some(0))
-                .expect("the variable outranks the pin"),
-            Some(7)
-        );
-        assert_eq!(unset.count("N", None).expect("unlimited"), None);
-
-        for bad in ["-1", " 7 ", "abc", "3.0"] {
-            let service = ConfigService::with_vars("probe", [("N", bad)]);
-            let err = service
-                .count("N", base_count)
-                .expect_err("a set-but-unparseable ceiling is boot-fatal");
-            assert!(
-                err.to_string().contains("N"),
-                "and it names the variable: {err}",
-            );
-        }
-    }
-
     /// A duration is read through `DurationBounds` and nowhere else: every
     /// public reader refuses a `_SECS` or `_MS` key — set or not, in either
     /// case — naming `DurationBounds`, while the bounds themselves read it.
@@ -1279,7 +1216,6 @@ mod tests {
                 env.parse::<u64>(key).map(drop),
                 env.json::<u64>(key).map(drop),
                 env.flag(key, false).map(drop),
-                env.count(key, None).map(drop),
                 env.list(key, Vec::new()).map(drop),
             ];
             for refused in refusals {

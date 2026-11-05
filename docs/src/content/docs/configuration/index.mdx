@@ -32,24 +32,30 @@ rule names its error through `nest_rs::pipes::validator`.
 
 ## A typed config — by example
 
-The common case is three short blocks: a duration's range, the `#[config]`
-struct and its `Default`.
+The common case is three short blocks: a range for what is bounded, the
+`#[config]` struct and its `Default`.
 
 ```rust title="crates/features/src/posts/config.rs"
 use std::time::Duration;
 
-use nest_rs::config::{Bound, DurationBounds, Floor, config};
+use nest_rs::config::{Bound, CountBounds, DurationBounds, Floor, config};
 
 const CACHE_TTL: DurationBounds = DurationBounds::secs(
     Floor::Units(Bound::new(1, "a shorter lifetime caches nothing")),
     Bound::new(3600, "past an hour a post edited meanwhile is served stale"),
 );
 
+const PAGE_SIZE: CountBounds = CountBounds::new(
+    Bound::new(1, "an empty page lists nothing"),
+    Bound::new(500, "past it one request reads more than a page is for"),
+);
+
 #[config(namespace = "posts")]
 #[derive(Clone)]
 pub struct PostsConfig {
-    #[validate(range(min = 1, max = 500))]
+    #[config(bounds = PAGE_SIZE)]
     pub page_size: u32,
+    #[validate(length(max = 20))]
     pub featured_tags: Vec<String>,
     #[config(bounds = CACHE_TTL)]
     pub cache_ttl: Option<Duration>,
@@ -99,9 +105,8 @@ three lines saying what a refused value was expected to be.
 
 | Key | Reads |
 |---|---|
-| `bounds = RANGE` | A `Duration`, or an `Option<Duration>` whose `None` turns it off, held to the `DurationBounds` named — its variable the field's name with the unit after it (`CACHE_TTL_SECS`) — or a `usize` held to a `CountBounds`; bound to the field as `PostsConfig::CACHE_TTL`, the one place a sentence or a check reads its key and path |
+| `bounds = RANGE` | A `Duration`, or an `Option<Duration>` whose `None` turns it off, held to the `DurationBounds` named — its variable the field's name with the unit after it (`CACHE_TTL_SECS`) — or a `usize`, a `u32` or an `Option<usize>` whose `None` is no limit, held to a `CountBounds`; bound to the field as `PostsConfig::CACHE_TTL`, the one place a sentence or a check reads its key and path |
 | `json` | A structured value — a list of records, a map — written as JSON |
-| `count` | An `Option<usize>` where `0` from the environment is `None`, unlimited, and a pinned `Some(0)` is refused |
 | `with = path` | Through a function of yours, `fn(&ConfigService, Field, T) -> Result<T>`, handed the field — its key and the path code pins it through, bound to the struct the way a range is — and its base |
 
 **A duration is a `Duration`; `None` is off and nothing else.** A field never
@@ -111,8 +116,9 @@ field named `ttl_secs`, or a `Duration` with no bounds, is a compile error
 saying so. Whether `0` turns it off is the field's type alone: an
 `Option<Duration>` reads `0` as `None` and refuses a pinned zero, a `Duration`
 holds `0` to the floor, so one range serves both. A count follows the same
-rule: a plain number with its default in `Default`, or an `Option` whose
-`None` is unlimited, a pinned `Some(0)` refused.
+rule, on a `CountBounds`: a plain number with its default in `Default`, or an
+`Option<usize>` whose `None` is no limit, `0` from the environment and a pinned
+`Some(0)` refused.
 
 ## The dual-path rule
 
@@ -267,7 +273,6 @@ a `Result`, because reading can fail before parsing does.
 | `env.flag("KEY", default)?` → `bool`           | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
 | `env.list("KEY", default)?` → `Vec<String>`    | Comma-separated, trimmed, empties dropped   |
 | `env.json::<T>("KEY")?` → `Option<T>`          | A structured value — a list of records, a map — written as JSON |
-| `env.count("KEY", base)?` → `Option<usize>`    | A whole count; `0` means unlimited, and a `base` of `Some(0)` is refused |
 | `env.setting("KEY")?` → `Option<Setting>`      | The raw string and the spelling that supplied it — for a value your own code refuses |
 | `env.material("KEY")?` → `Option<Setting<Material>>` | The bytes as given, and the file they came from — for certificates and keys |
 | `env.var_name("KEY")` → `String`               | The full env-var **name** (for error messages) |
@@ -285,8 +290,8 @@ field's name with the unit `secs` or `millis` chose after it
 `PostsConfig::CACHE_TTL`, a `BoundedSetting`: its `key()`, `var(namespace)`
 and `check(namespace, value)` serve every sentence that names the variable
 and every value built in code, so no line types the key — and one range
-serves every field it fits. A count takes a `CountBounds`, on a `usize`, the
-same way. Every `env.*` reader above refuses a `_SECS` or `_MS` key at boot,
+serves every field it fits. A count takes a `CountBounds` the same way, on a
+`usize`, a `u32` or an `Option<usize>`. Every `env.*` reader above refuses a `_SECS` or `_MS` key at boot,
 naming `DurationBounds`. A hand-written overlay binds its own once and reads
 through it:
 

@@ -186,18 +186,26 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
     /// What a seeded value goes through, before anything reads it.
     ///
     /// ```
-    /// # use nest_rs_config::{Config, config};
+    /// # use nest_rs_config::{Bound, Config, CountBounds, config};
+    /// const WORKERS: CountBounds = CountBounds::new(
+    ///     Bound::new(1, "no worker fires nothing"),
+    ///     Bound::new(64, "a controller drives no more"),
+    /// );
+    ///
     /// #[config(namespace = "kiln")]
     /// #[derive(Clone, Debug)]
     /// pub struct KilnConfig {
-    ///     #[validate(range(min = 1))]
+    ///     #[config(bounds = WORKERS)]
     ///     pub workers: u32,
+    ///     #[validate(length(min = 1))]
+    ///     pub label: String,
     /// }
     /// # impl Default for KilnConfig {
-    /// #     fn default() -> Self { Self { workers: 4 } }
+    /// #     fn default() -> Self { Self { workers: 4, label: "east".into() } }
     /// # }
-    /// assert!(KilnConfig { workers: 4 }.check().is_ok());
-    /// assert!(KilnConfig { workers: 0 }.check().is_err());
+    /// assert!(KilnConfig::default().check().is_ok());
+    /// assert!(KilnConfig { workers: 0, ..KilnConfig::default() }.check().is_err());
+    /// assert!(KilnConfig { label: String::new(), ..KilnConfig::default() }.check().is_err());
     /// ```
     fn check(&self) -> Result<()> {
         check_under(Self::NAMESPACE, self)

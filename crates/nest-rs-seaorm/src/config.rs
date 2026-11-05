@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use std::str::FromStr;
 
-use nest_rs_config::{Bound, ConfigError, DurationBounds, Floor, Namespaced, Result, config};
+use nest_rs_config::{
+    Bound, ConfigError, CountBounds, DurationBounds, Floor, Namespaced, Result, config,
+};
 use nest_rs_core::Secret;
 use sea_orm::ConnectOptions;
 use sea_orm::sqlx::postgres::{PgConnectOptions, PgSslMode};
@@ -59,6 +61,35 @@ pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// sqlx's own pool ceiling, which SeaORM keeps when it is handed none.
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
 
+/// What a Postgres server's own `max_connections` goes up to (`MAX_BACKENDS`), so
+/// no pool can hold more of its connections.
+const MOST_CONNECTIONS: u64 = 262_143;
+
+const MAX_CONNECTIONS: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "a pool of none hands out nothing, so every query waits out its connect budget against \
+         a database that answers",
+    ),
+    Bound::new(
+        MOST_CONNECTIONS,
+        "a Postgres server admits no more connections than this whatever it is told, so a \
+         larger pool is a slip the server would answer with `too many clients`",
+    ),
+);
+
+const MIN_CONNECTIONS: CountBounds = CountBounds::new(
+    Bound::new(
+        0,
+        "a pool keeping none idle opens each connection on demand",
+    ),
+    Bound::new(
+        MOST_CONNECTIONS,
+        "a Postgres server admits no more connections than this whatever it is told, and a \
+         pool keeps at most its maximum idle",
+    ),
+);
+
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
 /// settable via a `<PREFIX>_SEAORM__*` env var, its name in SCREAMING_SNAKE,
 /// which the bare import reads, or pinned through
@@ -69,9 +100,14 @@ pub struct SeaOrmConfig {
     /// e.g. `postgres://user:pass@host/db`, a [`Secret`] since it may carry the
     /// password. Empty aborts the build.
     pub url: Secret<String>,
-    /// Upper bound on pooled connections; defaults to 10, sqlx's.
+    /// Upper bound on pooled connections, from 1 to 262143, Postgres's own
+    /// ceiling; defaults to 10, sqlx's.
+    #[config(bounds = MAX_CONNECTIONS)]
     pub max_connections: u32,
-    /// Lower bound on idle pooled connections; defaults to 0, sqlx's.
+    /// Lower bound on idle pooled connections, from 0 to
+    /// [`max_connections`](Self::max_connections), above which the boot refuses
+    /// it; defaults to 0, sqlx's.
+    #[config(bounds = MIN_CONNECTIONS)]
     pub min_connections: u32,
     /// How long to wait for a connection before failing, in whole seconds, from
     /// 1 to 3600; defaults to 10 s. The boot refuses a budget at or past the
@@ -223,9 +259,9 @@ impl SeaOrmConfig {
     /// [`connect_from_env`](crate::connect_from_env), a tool or a test
     /// opening a connection of its own — so each refuses what the boot does:
     /// an empty URL, a mode that encrypts without verifying, and a connect
-    /// budget outside its range, which a config built in code never had
-    /// checked. A refusal names its variable, and never quotes the URL, which
-    /// carries the password.
+    /// budget or a pool bound outside its range, or a minimum above the maximum,
+    /// which a config built in code never had checked. A refusal names its
+    /// variable, and never quotes the URL, which carries the password.
     pub fn connect_options(&self) -> Result<ConnectOptions> {
         if self.url.expose_secret().is_empty() {
             return Err(ConfigError::unset(
@@ -237,13 +273,32 @@ impl SeaOrmConfig {
         }
         let tls = self.tls()?;
         let budget = Self::CONNECT_TIMEOUT.check(Self::NAMESPACE, self.connect_timeout)?;
+        let (most, least) = self.pool_bounds()?;
         let mut opts = ConnectOptions::new(self.url.expose_secret().clone());
         opts.map_sqlx_postgres_opts(tls);
-        opts.max_connections(self.max_connections);
-        opts.min_connections(self.min_connections);
+        opts.max_connections(most);
+        opts.min_connections(least);
         opts.connect_timeout(budget);
         opts.sqlx_logging(self.sqlx_logging);
         Ok(opts)
+    }
+
+    /// The pool's maximum and minimum, each held to its range and the minimum
+    /// to the maximum, where sqlx would clamp it in silence.
+    fn pool_bounds(&self) -> Result<(u32, u32)> {
+        let most = Self::MAX_CONNECTIONS.check(Self::NAMESPACE, self.max_connections)?;
+        let least = Self::MIN_CONNECTIONS.check(Self::NAMESPACE, self.min_connections)?;
+        if least > most {
+            return Err(ConfigError::parse(
+                Self::MIN_CONNECTIONS.var(Self::NAMESPACE),
+                format!(
+                    "must be at most {}: a pool keeps no more connections idle than it may hold, \
+                     so sqlx would clamp the minimum in silence and keep fewer than asked for",
+                    Self::MAX_CONNECTIONS.var(Self::NAMESPACE),
+                ),
+            ));
+        }
+        Ok((most, least))
     }
 }
 
@@ -499,6 +554,133 @@ mod tests {
         assert_eq!(cfg.connect_timeout, Duration::from_secs(12));
         assert!(cfg.sqlx_logging);
         assert!(cfg.observe_serialization_conflicts);
+    }
+
+    /// A pool holds at least one connection and at most what a Postgres server
+    /// admits, and keeps none to that many idle, from the environment and from
+    /// a pin, naming the variable and its range and never the value it was given.
+    #[test]
+    fn the_pool_bounds_are_held_to_their_ranges_from_either_side() {
+        for (key, raw, said) in [
+            ("MAX_CONNECTIONS", "0", "must be at least 1 — "),
+            ("MAX_CONNECTIONS", "262144", "must be at most 262143 — "),
+            ("MIN_CONNECTIONS", "262144", "must be at most 262143 — "),
+        ] {
+            let var = nest_rs_config::var_name("seaorm", key);
+            let refused = SeaOrmConfig::from_env(
+                &ConfigService::with_vars("seaorm", [(key, raw)]),
+                SeaOrmConfig::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var) && refused.contains(said),
+                "{refused}"
+            );
+            assert!(!refused.contains("262144"), "{refused}");
+        }
+        let pinned = |max_connections, min_connections| SeaOrmConfig {
+            max_connections,
+            min_connections,
+            ..SeaOrmConfig::default()
+        };
+        for (config, field, said) in [
+            (
+                pinned(0, 0),
+                "max_connections",
+                "below the 1 it must be at least",
+            ),
+            (
+                pinned(262_144, 0),
+                "max_connections",
+                "above the 262143 it must be at most",
+            ),
+            (
+                pinned(10, 262_144),
+                "min_connections",
+                "above the 262143 it must be at most",
+            ),
+        ] {
+            let refused = SeaOrmConfig::from_env(&ConfigService::with_vars("seaorm", []), config)
+                .expect_err("a pin outside the range")
+                .to_string();
+            assert!(
+                refused.contains(&format!("`SeaOrmConfig::{field}` set in code"))
+                    && refused.contains(said),
+                "{refused}"
+            );
+        }
+        let zero = SeaOrmConfig::from_env(
+            &ConfigService::with_vars("seaorm", [("MIN_CONNECTIONS", "0")]),
+            SeaOrmConfig::default(),
+        )
+        .expect("no idle connection is a pool that opens on demand");
+        assert_eq!(zero.min_connections, 0);
+    }
+
+    /// sqlx clamps a minimum past the maximum in silence, so the pool would keep
+    /// fewer idle than the deployment asked for: every path opening it refuses
+    /// the pair, naming both variables and never their values.
+    #[test]
+    fn a_minimum_above_the_maximum_is_refused_where_every_path_opens_the_pool() {
+        let config = SeaOrmConfig {
+            max_connections: 4,
+            min_connections: 7,
+            ..pinned("postgres://localhost/app")
+        };
+        for refused in [
+            config.connect_options().expect_err("the tools' path"),
+            config.app_connect_options().expect_err("the app's pool"),
+        ] {
+            let refused = refused.to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("seaorm", "MIN_CONNECTIONS"))
+                    && refused.contains(&nest_rs_config::var_name("seaorm", "MAX_CONNECTIONS")),
+                "{refused}"
+            );
+            assert!(
+                !refused.contains('7') && !refused.contains('4'),
+                "{refused}"
+            );
+        }
+        assert!(
+            SeaOrmConfig {
+                max_connections: 7,
+                min_connections: 7,
+                ..pinned("postgres://localhost/app")
+            }
+            .connect_options()
+            .is_ok(),
+            "a pool kept full is a pool"
+        );
+    }
+
+    /// `connect_options` is the one constructor a config built in code reaches.
+    #[test]
+    fn pool_bounds_built_in_code_outside_their_ranges_are_refused_before_the_pool_opens() {
+        for (config, var) in [
+            (
+                SeaOrmConfig {
+                    max_connections: 0,
+                    ..pinned("postgres://localhost/app")
+                },
+                "MAX_CONNECTIONS",
+            ),
+            (
+                SeaOrmConfig {
+                    max_connections: 262_144,
+                    min_connections: 262_144,
+                    ..pinned("postgres://localhost/app")
+                },
+                "MAX_CONNECTIONS",
+            ),
+        ] {
+            let refused = config.connect_options().expect_err(var).to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("seaorm", var)),
+                "{refused}"
+            );
+        }
     }
 
     #[test]

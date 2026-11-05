@@ -98,7 +98,9 @@ defaults (`60` requests per `60s` window), which apply when nothing is set.
 `ThrottlerModule::for_root(ThrottlerConfig { .. })`, at the root, pins the limit
 in code, superseding the adapters' bare imports —
 the pinned value is the base `<PREFIX>_THROTTLER__*` overlays, field by field,
-on the same dual-path rule the rest of the framework follows.
+on the same dual-path rule the rest of the framework follows. The limit runs from
+`1` to a billion requests per window and the window from a second to a day, and a
+value outside either range fails the boot naming its variable.
 
 ```bash frame="terminal"
 NESTRS_THROTTLER__LIMIT=120

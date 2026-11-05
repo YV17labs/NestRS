@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use nest_rs_config::{Bound, DurationBounds, Environment, Floor, Surface, config};
+use nest_rs_config::{Bound, CountBounds, DurationBounds, Environment, Floor, Surface, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
@@ -33,6 +33,67 @@ const DEFAULT_MAX_SOCKET_OPERATIONS: usize = 100;
 
 /// A hundred entity references per `_entities` call — a page of parents.
 const DEFAULT_MAX_REPRESENTATIONS: usize = 100;
+
+const MAX_DEPTH: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "async-graphql checks `depth > limit` strictly and every field has depth 1 or more, so \
+         a limit under one refuses every query",
+    ),
+    Bound::new(
+        33,
+        "async-graphql refuses a document nested past 33 fields by its own recursion bound \
+         whatever this says, so a limit above it limits nothing",
+    ),
+);
+
+const MAX_COMPLEXITY: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "every field scores at least one, so a limit under one refuses every query",
+    ),
+    Bound::new(
+        10_000_000,
+        "past ten million resolved fields one query is a denial of service rather than a read; \
+         a deployment that means no ceiling turns it off",
+    ),
+);
+
+const MAX_BATCH_SIZE: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "a batch of none refuses every batch, a batch of one included",
+    ),
+    Bound::new(
+        1024,
+        "a batch runs every operation for one request's price, past the rate limiter and the \
+         limits that see one document, and no client assembles more than a few dozen, so past \
+         a thousand it is an amplification rather than a batch",
+    ),
+);
+
+const MAX_SOCKET_OPERATIONS: CountBounds = CountBounds::new(
+    Bound::new(1, "a cap of none refuses every `subscribe` on the socket"),
+    Bound::new(
+        10_000,
+        "each operation holds a running stream on one socket, whose client a page of hundreds \
+         already serves, so past ten thousand one peer holds what a replica's worth of \
+         clients would; a deployment that means no ceiling turns it off",
+    ),
+);
+
+const MAX_REPRESENTATIONS: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "a cap of none refuses every `_entities` call a router sends",
+    ),
+    Bound::new(
+        100_000,
+        "each reference is a full resolution run concurrently, and a router sends a page's \
+         worth, so past a hundred thousand one call is a fan-out no pool answers; a deployment \
+         that means no ceiling turns it off",
+    ),
+);
 
 /// What the boot says when a deployment serves the playground.
 const PLAYGROUND_OPEN: &str = "GraphQL playground is enabled and public outside a dev profile";
@@ -76,21 +137,21 @@ pub struct GraphqlConfig {
     pub emit_path: PathBuf,
     /// Maximum nesting depth of an incoming query AST. Defaults to `Some(15)`;
     /// `None` disables the check, as `0` does from
-    /// `<PREFIX>_GRAPHQL__MAX_DEPTH`.
+    /// `<PREFIX>_GRAPHQL__MAX_DEPTH`, from 1 to 33. async-graphql's own recursion
+    /// bound refuses a document nested past 33 fields whatever this says, `None`
+    /// included.
     ///
     /// A pinned `Some(0)` is rejected at boot: async-graphql checks
     /// `depth > limit` strictly and every field has depth ≥ 1, so `0` would
     /// refuse every query.
-    #[validate(range(min = 1))]
-    #[config(count)]
+    #[config(bounds = MAX_DEPTH)]
     pub max_depth: Option<usize>,
     /// Maximum complexity score of an incoming query AST: 1 per field, plus
     /// the multiplier `#[expose]` sets on list relations. Defaults to
-    /// `Some(2000)`; `None` disables the check, as `0` does from the
-    /// environment, and a pinned `Some(0)` is rejected at boot, as for
-    /// `max_depth`.
-    #[validate(range(min = 1))]
-    #[config(count)]
+    /// `Some(2000)`, from 1 to ten million; `None` disables the check, as `0`
+    /// does from the environment, and a pinned `Some(0)` is rejected at boot,
+    /// as for `max_depth`.
+    #[config(bounds = MAX_COMPLEXITY)]
     pub max_complexity: Option<usize>,
     /// Answer introspection queries. The schema is the API's documentation, so
     /// `Default` leaves this to the profile: answered under a declared
@@ -98,9 +159,9 @@ pub struct GraphqlConfig {
     /// [`Surface::Open`] or `true` from the environment, is honoured and logged
     /// at `warn`.
     pub introspection: Surface,
-    /// Maximum number of operations in a single HTTP batch request.
-    /// Default `10`.
-    #[validate(range(min = 1))]
+    /// Maximum number of operations in a single HTTP batch request. Default
+    /// `10`, from 1 to 1024; there is no off.
+    #[config(bounds = MAX_BATCH_SIZE)]
     pub max_batch_size: usize,
     /// Maximum lifetime of one graphql-ws subscription socket; it then closes
     /// with `1001 Going Away`, so the peer must re-upgrade. A **security**
@@ -115,9 +176,10 @@ pub struct GraphqlConfig {
     /// protocol layer so a larger frame is refused before it is buffered, and
     /// the socket closed.
     ///
-    /// Read from `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES`; defaults to 64 KiB, as
+    /// Read from `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES`, from 1 to a gibibyte
+    /// ([`nest_rs_http::MAX_MESSAGE_BYTES_BOUNDS`]); defaults to 64 KiB, as
     /// `<PREFIX>_WS__MAX_MESSAGE_BYTES` does.
-    #[validate(range(min = 1, message = "must be at least 1 byte"))]
+    #[config(bounds = nest_rs_http::MAX_MESSAGE_BYTES_BOUNDS)]
     pub max_message_bytes: usize,
     /// How long an upgraded graphql-ws socket may wait for `connection_init`
     /// before it is closed `4408 Connection initialisation timeout`.
@@ -129,11 +191,10 @@ pub struct GraphqlConfig {
     /// Operations one graphql-ws socket may run at once; a `subscribe` past it
     /// is answered with an `error` message for its id, and the socket stays.
     ///
-    /// Read from `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS`; defaults to 100.
-    /// `None` is unlimited, as `0` is from the environment; a pinned `Some(0)`
-    /// fails the boot, as for every count here.
-    #[validate(range(min = 1))]
-    #[config(count)]
+    /// Read from `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS`, from 1 to ten
+    /// thousand; defaults to 100. `None` is unlimited, as `0` is from the
+    /// environment; a pinned `Some(0)` fails the boot, as for every count here.
+    #[config(bounds = MAX_SOCKET_OPERATIONS)]
     pub max_socket_operations: Option<usize>,
     /// Serve this schema as an Apollo **subgraph**: the federation directives
     /// are declared, and the emitted SDL is the subgraph form.
@@ -153,11 +214,10 @@ pub struct GraphqlConfig {
     /// though each reference is a full resolution run concurrently. Over the
     /// ceiling is a GraphQL error naming it, never a truncation.
     ///
-    /// Read from `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS`; defaults to 100.
-    /// `None` is unlimited, as `0` is from the environment; a pinned `Some(0)`
-    /// fails the boot, as for every count here.
-    #[validate(range(min = 1))]
-    #[config(count)]
+    /// Read from `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS`, from 1 to a hundred
+    /// thousand; defaults to 100. `None` is unlimited, as `0` is from the
+    /// environment; a pinned `Some(0)` fails the boot, as for every count here.
+    #[config(bounds = MAX_REPRESENTATIONS)]
     pub max_representations: Option<usize>,
     /// Promote the default `warn` on a linked `#[resolver]` no module lists in
     /// `providers` — filtered out of the schema — into a boot failure.
@@ -219,7 +279,6 @@ mod tests {
     use nest_rs_config::{Config, ConfigService};
 
     use super::*;
-    use validator::Validate;
 
     /// A subscription socket's ceiling defaults to the value the HTTP transport
     /// exports for every long-lived connection, never a copy of it.
@@ -390,27 +449,29 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_zero_limits_so_some_zero_does_not_brick_the_endpoint() {
-        let zero_depth = GraphqlConfig {
-            max_depth: Some(0),
-            ..GraphqlConfig::default()
-        };
-        assert!(
-            zero_depth.validate().is_err(),
-            "Some(0) must fail validation — none of the documented `disable` opts is `0`"
-        );
-        let zero_complexity = GraphqlConfig {
-            max_complexity: Some(0),
-            ..GraphqlConfig::default()
-        };
-        assert!(zero_complexity.validate().is_err());
+    fn a_pinned_zero_is_refused_so_some_zero_does_not_brick_the_endpoint() {
+        for zero in [
+            GraphqlConfig {
+                max_depth: Some(0),
+                ..GraphqlConfig::default()
+            },
+            GraphqlConfig {
+                max_complexity: Some(0),
+                ..GraphqlConfig::default()
+            },
+        ] {
+            assert!(
+                zero.check().is_err(),
+                "Some(0) must fail the check — off in code is `None`"
+            );
+        }
         let tight = GraphqlConfig {
             max_depth: Some(1),
             max_complexity: Some(1),
             ..GraphqlConfig::default()
         };
-        assert!(tight.validate().is_ok());
-        assert!(GraphqlConfig::default().validate().is_ok());
+        assert!(tight.check().is_ok());
+        assert!(GraphqlConfig::default().check().is_ok());
     }
 
     /// One rule for every count: `None` is unlimited and nothing else, `0`
@@ -447,7 +508,125 @@ mod tests {
                 ..GraphqlConfig::default()
             },
         ] {
-            assert!(pinned.validate().is_err(), "off in code is `None`");
+            let refused = pinned
+                .check()
+                .expect_err("off in code is `None`")
+                .to_string();
+            assert!(refused.contains("`None` turns it off"), "{refused}");
+        }
+    }
+
+    /// Each count, its key, what is past its ceiling and that ceiling: refused
+    /// past it from the environment and in code, naming the variable and the
+    /// range and never the value it was given.
+    #[test]
+    fn every_count_is_held_to_its_range_from_either_side() {
+        type Pin = fn(usize) -> GraphqlConfig;
+        let cases: [(&str, &str, &str, Pin); 6] = [
+            ("MAX_DEPTH", "34", "33", |count| GraphqlConfig {
+                max_depth: Some(count),
+                ..GraphqlConfig::default()
+            }),
+            ("MAX_COMPLEXITY", "10000001", "10000000", |count| {
+                GraphqlConfig {
+                    max_complexity: Some(count),
+                    ..GraphqlConfig::default()
+                }
+            }),
+            ("MAX_SOCKET_OPERATIONS", "10001", "10000", |count| {
+                GraphqlConfig {
+                    max_socket_operations: Some(count),
+                    ..GraphqlConfig::default()
+                }
+            }),
+            ("MAX_REPRESENTATIONS", "100001", "100000", |count| {
+                GraphqlConfig {
+                    max_representations: Some(count),
+                    ..GraphqlConfig::default()
+                }
+            }),
+            ("MAX_BATCH_SIZE", "1025", "1024", |count| GraphqlConfig {
+                max_batch_size: count,
+                ..GraphqlConfig::default()
+            }),
+            ("MAX_MESSAGE_BYTES", "1073741825", "1073741824", |count| {
+                GraphqlConfig {
+                    max_message_bytes: count,
+                    ..GraphqlConfig::default()
+                }
+            }),
+        ];
+        for (key, past, ceiling, pin) in cases {
+            let var = nest_rs_config::var_name("graphql", key);
+            let refused = GraphqlConfig::from_env(
+                &ConfigService::with_vars("graphql", [(key, past)]),
+                GraphqlConfig::default(),
+            )
+            .expect_err("past the ceiling")
+            .to_string();
+            assert!(
+                refused.contains(&var) && refused.contains(&format!("must be at most {ceiling}")),
+                "{refused}"
+            );
+            assert!(!refused.contains(past), "{refused}");
+            let top = GraphqlConfig::from_env(
+                &ConfigService::with_vars("graphql", [(key, ceiling)]),
+                GraphqlConfig::default(),
+            );
+            assert!(top.is_ok(), "{key}: the ceiling itself is accepted");
+            let pinned = pin(past.parse().expect("a count"))
+                .check()
+                .expect_err("a pin past the ceiling")
+                .to_string();
+            assert!(
+                pinned.contains(&var)
+                    && pinned.contains("set in code")
+                    && pinned.contains(&format!("above the {ceiling} it must be at most")),
+                "{pinned}"
+            );
+        }
+    }
+
+    /// The two with no off: `0` is below the floor, where the other four read
+    /// it as off.
+    #[test]
+    fn a_count_with_no_off_refuses_zero_from_either_side() {
+        let pins = [
+            (
+                "MAX_BATCH_SIZE",
+                GraphqlConfig {
+                    max_batch_size: 0,
+                    ..Default::default()
+                },
+            ),
+            (
+                "MAX_MESSAGE_BYTES",
+                GraphqlConfig {
+                    max_message_bytes: 0,
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (key, pin) in pins {
+            let read = GraphqlConfig::from_env(
+                &ConfigService::with_vars("graphql", [(key, "0")]),
+                GraphqlConfig::default(),
+            )
+            .expect_err("read below the floor")
+            .to_string();
+            assert!(read.contains("must be at least 1 — "), "{read}");
+            let pinned = pin.check().expect_err("pinned below the floor").to_string();
+            assert!(
+                pinned.contains("below the 1 it must be at least — "),
+                "{pinned}"
+            );
+            for refused in [read, pinned] {
+                assert!(
+                    refused.contains(&nest_rs_config::var_name("graphql", key)),
+                    "{refused}"
+                );
+                assert!(!refused.contains("turn it off"), "{refused}");
+            }
         }
     }
 
@@ -483,7 +662,7 @@ mod tests {
             "graphql-ws's reference wait"
         );
         assert_eq!(d.max_socket_operations, Some(100));
-        assert!(d.validate().is_ok());
+        assert!(d.check().is_ok());
     }
 
     #[test]
@@ -528,10 +707,7 @@ mod tests {
             max_message_bytes: 0,
             ..GraphqlConfig::default()
         };
-        assert!(
-            zero.validate().is_err(),
-            "a zero cap would refuse every frame"
-        );
+        assert!(zero.check().is_err(), "a zero cap would refuse every frame");
     }
 
     #[test]

@@ -19,8 +19,8 @@ mod overlay;
 /// hand, and `from_env = "manual"` the `impl Config` for one writing its overlay
 /// by hand. A field's own `#[config(…)]` names its reader: `bounds = RANGE` for a
 /// duration or a count, which binds the range to the field as the associated
-/// `BoundedSetting` named for it, `json`, `count` or `with = path`, handed the
-/// field's key and path as the associated `Field` named for it.
+/// `BoundedSetting` named for it, `json`, or `with = path`, handed the field's
+/// key and path as the associated `Field` named for it.
 #[proc_macro_attribute]
 pub fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(config::config(args, input).into()).into()

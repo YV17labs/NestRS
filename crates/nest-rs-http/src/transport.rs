@@ -389,7 +389,7 @@ impl HttpTransport {
                 .global_prefix
                 .as_deref()
                 .and_then(normalize_global_prefix),
-            max_body_bytes: cfg.max_body_bytes,
+            max_body_bytes: cfg.body_cap()?,
             request_timeout: cfg.request_budget()?,
             shutdown_timeout: cfg.shutdown_window()?,
             max_concurrent_connections: cfg.connection_cap()?,
@@ -1037,6 +1037,29 @@ mod tests {
                     "http",
                     "MAX_CONCURRENT_CONNECTIONS"
                 )),
+                "{cap}: {refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_built_config_takes_its_body_cap_and_is_held_to_its_range() {
+        let capped = HttpTransport::from_config(&crate::HttpConfig {
+            max_body_bytes: 1024,
+            ..Default::default()
+        })
+        .expect("a cap inside the range");
+        assert_eq!(capped.max_body_bytes, 1024);
+        for cap in [0, (1 << 40) + 1] {
+            let refused = HttpTransport::from_config(&crate::HttpConfig {
+                max_body_bytes: cap,
+                ..Default::default()
+            })
+            .err()
+            .expect("a cap outside the range never reaches the transport")
+            .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("http", "MAX_BODY_BYTES")),
                 "{cap}: {refused}"
             );
         }

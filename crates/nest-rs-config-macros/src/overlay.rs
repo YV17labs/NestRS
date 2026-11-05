@@ -11,10 +11,19 @@ use syn::{Expr, Ident, ItemStruct, LitStr, Path, Type, Visibility};
 
 /// Every key `#[config]` takes on a field, in the order its refusals list them.
 pub(crate) const FIELD: Grammar =
-    Grammar::new("config", &["bounds", "json", "count", "with"]).elsewhere(the_structs_key);
+    Grammar::new("config", &["bounds", "json", "with"]).elsewhere(known_elsewhere);
 
-/// A struct's key written on a field is not misspelled: it is told whose it is.
-fn the_structs_key(key: &str) -> Option<String> {
+/// A struct's key written on a field is not misspelled: it is told whose it is,
+/// and a count's former key what reads a count now.
+fn known_elsewhere(key: &str) -> Option<String> {
+    if key == "count" {
+        return Some(
+            "#[config] `count` is gone: a count is read through its range, \
+             `#[config(bounds = RANGE)]` with a `CountBounds`, on an `Option<usize>` where \
+             `None` is no limit, `0` from the environment"
+                .to_owned(),
+        );
+    }
     crate::config::CONFIG
         .keys()
         .contains(&key)
@@ -26,13 +35,10 @@ enum Reader {
     /// By its type, through `ConfigField`.
     Typed,
     /// Through the range named, bound to the field: a `Duration` or an
-    /// `Option<Duration>` held to a `DurationBounds`, a `usize` to a
-    /// `CountBounds`.
+    /// `Option<Duration>` held to a `DurationBounds`, a count to a `CountBounds`.
     Bounds(Expr),
     /// A structured value, as JSON.
     Json,
-    /// An `Option<usize>` whose `0` is unlimited.
-    Count,
     /// Through the function named, `fn(&ConfigService, Field, T) -> Result<T>`.
     With(Path),
 }
@@ -160,7 +166,6 @@ fn take_reader(attrs: &mut Vec<syn::Attribute>) -> syn::Result<Reader> {
             reader = match arg.key() {
                 "bounds" => Reader::Bounds(arg.expr()?),
                 "json" => Reader::Json,
-                "count" => Reader::Count,
                 "with" => match arg.expr()? {
                     Expr::Path(path) => Reader::With(path.path),
                     other => {
@@ -224,9 +229,6 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields) -> TokenStream2 {
             Reader::Json => quote! {
                 ::nest_rs_config::__private::overlay_json::<#ty>(#env, #key, #base.#ident)
             },
-            Reader::Count => quote_spanned! {ty.span()=>
-                ::nest_rs_config::ConfigService::count(#env, #key, #base.#ident)
-            },
             Reader::With(path) => {
                 let binding = Ident::new(key, path.span());
                 quote_spanned! {path.span()=>
@@ -274,7 +276,7 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields) -> TokenStream2 {
                         #vis const #binding: ::nest_rs_config::Field = #field;
                     })
                 }
-                Reader::Typed | Reader::Json | Reader::Count => None,
+                Reader::Typed | Reader::Json => None,
             }
         })
         .collect();

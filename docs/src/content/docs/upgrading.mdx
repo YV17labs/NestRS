@@ -531,7 +531,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `ConfigModule::for_root()` first in a root's `imports` | delete it: the cascade needs no import, and the first config the boot loads registers `Environment` and says an undeclared one at `info` |
    | `HttpConfig::default().with_global_prefix(p)` (and every config `with_*`) | the field in a struct literal over `..Default::default()` |
    | `HealthConfig::default().with_probe_deadline(Duration::from_millis(400))` | `HealthConfig { probe_deadline: Duration::from_millis(400), ..Default::default() }` |
-   | `impl Config for MyConfig { fn from_env(…) }` beside `#[config(namespace = "…")]` | delete it: `#[config]` writes it, each field reading `<PREFIX>_<NAMESPACE>__<FIELD>`, its name in SCREAMING_SNAKE, through the reader its type chooses. A field your `from_env` read under another key is renamed, or its key is renamed in the deployment; a field it read with `env.json` takes `#[config(json)]`, one with `env.count` `#[config(count)]`, one it judged itself `#[config(with = your_fn)]` (`fn(&ConfigService, Field, T) -> Result<T>`); a `fn defaults()` goes: what it set moves to `Default`, what it opened by profile to a `Surface` field, and a value that differs by profile to `.env.development` and `.env.test`. Fields that depend on each other keep the impl under `#[config(namespace = "…", from_env = "manual")]` |
+   | `impl Config for MyConfig { fn from_env(…) }` beside `#[config(namespace = "…")]` | delete it: `#[config]` writes it, each field reading `<PREFIX>_<NAMESPACE>__<FIELD>`, its name in SCREAMING_SNAKE, through the reader its type chooses. A field your `from_env` read under another key is renamed, or its key is renamed in the deployment; a field it read with `env.json` takes `#[config(json)]`, one with `env.count` `#[config(bounds = RANGE)]` on an `Option<usize>`, its range a `CountBounds`, one it judged itself `#[config(with = your_fn)]` (`fn(&ConfigService, Field, T) -> Result<T>`); a `fn defaults()` goes: what it set moves to `Default`, what it opened by profile to a `Surface` field, and a value that differs by profile to `.env.development` and `.env.test`. Fields that depend on each other keep the impl under `#[config(namespace = "…", from_env = "manual")]` |
    | a duration field `window_secs: u64` or `timeout_ms: Option<u64>` read through `DURATION.read(env, …)` | `window: Duration` with `#[config(bounds = WINDOW)]`, its default in `Default`; `Option<Duration>` only where `None` turns it off. The field's key takes the range's unit after it (`WINDOW_SECS`), so no variable moves |
    | `DurationBounds::secs("WINDOW_SECS", "MyConfig::window", floor, ceiling)` (or `millis`) | `DurationBounds::secs(floor, ceiling)`: the key and the path are the field's, which `#[config(bounds = …)]` binds the range to as `MyConfig::WINDOW` |
    | `Floor::UnitsOrOff(bound)` | `Floor::Units(bound)` on an `Option<Duration>` field: `0` from the environment and `None` in code are off because the field is an `Option` |
@@ -1473,14 +1473,34 @@ lists what the boot, a log or the wire shows when one is missed.
   needs (`Duration` is read through its bounds, `#[config(bounds = …)]`), a
   field named for a unit (`window_secs`) names the field it should be, a
   `DurationBounds::secs` given a key and a path fails to compile (two
-  arguments, not four), a range on a type no range holds names the three that
-  are (`Duration`, `Option<Duration>`, `usize`), and a range of the other kind
-  is refused at its name in the attribute, `expected CountBounds, found
-  DurationBounds`. A `#[config(count)]` pinned at `Some(0)` with its variable
-  unset fails the boot: unlimited in code is `None`.
-- **A deployment setting `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` past
-  1048576** fails its boot naming the variable — a million idle sessions hold
-  over 100 GiB — and so does a cap pinned past it in code.
+  arguments, not four), a range on a type no range holds names the five that
+  are (`Duration`, `Option<Duration>`, `usize`, `u32`, `Option<usize>`), and a
+  range of the other kind is refused at its name in the attribute, `expected
+  CountBounds, found DurationBounds`. A `#[config(count)]` of a 6.x-style config
+  fails to compile naming what replaced it, `#[config(bounds = RANGE)]` with a
+  `CountBounds` on the `Option<usize>`; `ConfigService::count` is gone with it,
+  and an `Option<usize>` pinned at `Some(0)` with its variable unset fails the
+  boot: unlimited in code is `None`.
+- **A count past its ceiling fails the boot naming the variable and the range**,
+  from the environment or pinned in code, never quoting the value: a deployment
+  setting one past it has to move, or turn the limit off where `0` does that.
+  `<PREFIX>_HTTP__MAX_BODY_BYTES` runs to a tebibyte;
+  `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES`, `<PREFIX>_WS__MAX_MESSAGE_BYTES` and
+  `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` to a gibibyte;
+  `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` to 1048576, a million idle sessions
+  holding over 100 GiB; `<PREFIX>_GRAPHQL__MAX_DEPTH` to 33, past which
+  async-graphql's own recursion bound refuses the document anyway;
+  `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` to ten million;
+  `<PREFIX>_GRAPHQL__MAX_BATCH_SIZE` to 1024;
+  `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS` to ten thousand;
+  `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS` to a hundred thousand;
+  `<PREFIX>_THROTTLER__LIMIT` to a billion, and at least `1`, where `0` used to
+  boot and deny every request; `<PREFIX>_SEAORM__MAX_CONNECTIONS` and
+  `MIN_CONNECTIONS` to 262143, Postgres's own ceiling, `MAX_CONNECTIONS` at
+  least `1`.
+- **`<PREFIX>_SEAORM__MIN_CONNECTIONS` above `MAX_CONNECTIONS`** fails the boot
+  naming both, where sqlx clamped it in silence and kept fewer idle than asked
+  for.
 - **A deployment still setting `<PREFIX>_HTTP__CORS_MAX_AGE`** sends no
   `Access-Control-Max-Age`: the boot says it at `warn` as retired (`variable
   read by nothing since 7.0`), `read_as` naming `CORS_MAX_AGE_SECS`.

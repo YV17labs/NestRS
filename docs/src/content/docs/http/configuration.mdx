@@ -344,7 +344,8 @@ after routing and the guards, so a refused request is answered before a byte of
 its body is taken, and a refused client that sent `Expect: 100-continue` is
 never told to go ahead. Only a declared `Content-Length` past the cap is
 refused up front, unread. Past the cap a read fails and the request is answered
-`413`, whatever the reader made of the failure. Raise or lower it globally:
+`413`, whatever the reader made of the failure. Raise or lower it globally, from
+one byte to a tebibyte; a value outside that fails the boot naming the variable:
 
 ```bash title=".env.production" frame="terminal"
 NESTRS_HTTP__MAX_BODY_BYTES=4194304   # 4 MiB

@@ -44,7 +44,7 @@ McpModule::for_root((
 | `<PREFIX>_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
 | `<PREFIX>_MCP__SSE_KEEP_ALIVE_SECS` | `15` | Keep-alive interval on an event stream; `0` ⇒ none |
 | `<PREFIX>_MCP__SSE_RETRY_SECS` | `3` | `retry:` advertised on an event stream's priming event, a session's streams included; `0` ⇒ none |
-| `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
+| `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming; from `1` to `1073741824` (a gibibyte) |
 | `<PREFIX>_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
 | `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS` | `20` | How long one operation may run; whole seconds from `1` to `3600`, `0` ⇒ none |
 | `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` | `1024` | Live sessions one endpoint holds; from `1` to `1048576` |

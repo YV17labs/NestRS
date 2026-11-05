@@ -27,6 +27,16 @@ use rmcp::transport::streamable_http_server::session::local::SessionConfig;
 /// rmcp's own default POST body ceiling.
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 
+const MAX_REQUEST_BODY_BYTES: CountBounds = CountBounds::new(
+    Bound::new(1, "a cap of no bytes refuses every request a client posts"),
+    Bound::new(
+        1 << 30,
+        "a POST is buffered whole and decoded as JSON in memory, so past a gibibyte one request \
+         is what a replica holds rather than a message; a file that large goes to the object \
+         store, and the tool takes its key",
+    ),
+);
+
 /// Live sessions one mount holds by default.
 const DEFAULT_MAX_CONCURRENT_SESSIONS: usize = 1024;
 
@@ -114,8 +124,10 @@ pub struct McpConfig {
     pub sse_retry: Option<Duration>,
     /// Cap on a single POST body, enforced while streaming (independent of
     /// `Content-Length`); over it the client gets `413`. Read from
-    /// `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES`; defaults to 4 MiB.
-    #[validate(range(min = 1, message = "must be at least 1 byte"))]
+    /// `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES`, from 1 to a gibibyte — refused
+    /// outside, from the environment and from the pinned struct alike; defaults
+    /// to 4 MiB.
+    #[config(bounds = MAX_REQUEST_BODY_BYTES)]
     pub max_request_body_bytes: usize,
     /// Require per-request protocol metadata (`MCP-Protocol-Version` and
     /// `_meta.io.modelcontextprotocol/protocolVersion`) on stateless request
@@ -247,6 +259,49 @@ mod tests {
             d.operation_timeout,
             Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT)
         );
+    }
+
+    /// One byte to a gibibyte, from the environment and from a pin, naming the
+    /// variable and its range and never the value it was given.
+    #[test]
+    fn the_request_body_cap_is_held_to_its_range_from_either_side() {
+        let var = nest_rs_config::var_name("mcp", "MAX_REQUEST_BODY_BYTES");
+        for (raw, said) in [
+            ("0", "must be at least 1 — "),
+            ("1073741825", "must be at most 1073741824 — "),
+        ] {
+            let refused = McpConfig::from_env(
+                &ConfigService::with_vars("mcp", [("MAX_REQUEST_BODY_BYTES", raw)]),
+                McpConfig::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var) && refused.contains(said),
+                "{refused}"
+            );
+            assert!(!refused.contains("1073741825"), "{refused}");
+        }
+        for (pinned, said) in [
+            (0, "below the 1 it must be at least"),
+            ((1 << 30) + 1, "above the 1073741824 it must be at most"),
+        ] {
+            let refused = McpConfig::from_env(
+                &ConfigService::with_vars("mcp", []),
+                McpConfig {
+                    max_request_body_bytes: pinned,
+                    ..McpConfig::default()
+                },
+            )
+            .expect_err("a pin outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var)
+                    && refused.contains("`McpConfig::max_request_body_bytes` set in code")
+                    && refused.contains(said),
+                "{refused}"
+            );
+        }
     }
 
     #[test]

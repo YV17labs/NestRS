@@ -6,7 +6,7 @@ use nest_rs::config::config;
 #[config(namespace = "kiln")]
 #[derive(Clone, Default)]
 struct KilnConfig {
-    #[config(json, count)]
+    #[config(json, with = doubled)]
     batches: Option<usize>,
 }
 

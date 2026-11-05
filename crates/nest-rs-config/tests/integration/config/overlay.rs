@@ -26,6 +26,11 @@ const KILNS: CountBounds = CountBounds::new(
     Bound::new(64, "a controller drives no more"),
 );
 
+const BATCHES: CountBounds = CountBounds::new(
+    Bound::new(1, "a firing holds at least one batch"),
+    Bound::new(1000, "a kiln fires no more"),
+);
+
 /// A value a test type of its own reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Glaze {
@@ -84,8 +89,10 @@ struct KilnConfig {
     kilns: usize,
     #[config(json)]
     shelves: Vec<Shelf>,
-    #[config(count)]
+    #[config(bounds = BATCHES)]
     batches: Option<usize>,
+    #[config(bounds = BATCHES)]
+    racks: u32,
     #[config(with = doubled)]
     heat: u32,
 }
@@ -107,6 +114,7 @@ impl Default for KilnConfig {
             kilns: 2,
             shelves: Vec::new(),
             batches: Some(8),
+            racks: 3,
             heat: 900,
         }
     }
@@ -137,6 +145,7 @@ fn every_field_reads_the_variable_its_name_spells() {
             ("KILNS", "4"),
             ("SHELVES", r#"[{"name":"top","slots":4}]"#),
             ("BATCHES", "0"),
+            ("RACKS", "6"),
             ("HEAT", "500"),
         ],
         KilnConfig::default(),
@@ -166,6 +175,7 @@ fn every_field_reads_the_variable_its_name_spells() {
         }]
     );
     assert_eq!(read.batches, None, "`0` is unlimited");
+    assert_eq!(read.racks, 6);
     assert_eq!(read.heat, 1000, "the field's own reader ran");
 }
 
@@ -367,6 +377,52 @@ fn a_count_pinned_at_zero_is_refused_and_none_is_unlimited() {
         ..KilnConfig::default()
     };
     assert_eq!(read(&[], unlimited).expect("unlimited").batches, None);
+}
+
+/// A count's two other shapes read the range a `usize` does, naming their key.
+#[test]
+fn an_optional_count_and_a_u32_are_held_to_their_range_from_either_side() {
+    for (key, value, expected) in [
+        (
+            "BATCHES",
+            "1001",
+            "must be at most 1000, or 0 to turn it off — a kiln fires no more",
+        ),
+        (
+            "RACKS",
+            "1001",
+            "must be at most 1000 — a kiln fires no more",
+        ),
+        (
+            "RACKS",
+            "0",
+            "must be at least 1 — a firing holds at least one batch",
+        ),
+    ] {
+        let refused = read(&[(key, value)], KilnConfig::default())
+            .expect_err("outside the range")
+            .to_string();
+        assert!(
+            refused.contains(&var_name("overlay_kiln", key)) && refused.contains(expected),
+            "{refused}"
+        );
+    }
+    assert_eq!(KilnConfig::BATCHES.key(), "BATCHES");
+    assert_eq!(KilnConfig::BATCHES.field().path(), "KilnConfig::batches");
+    assert_eq!(KilnConfig::RACKS.key(), "RACKS");
+    let pinned = read(
+        &[],
+        KilnConfig {
+            racks: 0,
+            ..KilnConfig::default()
+        },
+    )
+    .expect_err("a pin is held to the range the variable is")
+    .to_string();
+    assert!(
+        pinned.contains("`KilnConfig::racks` set in code is 0, below the 1 it must be at least"),
+        "{pinned}"
+    );
 }
 
 #[test]

@@ -155,3 +155,35 @@ Refused:
 - **A range per field.** A range shared by several fields (an edge's unit
   timeout, a connection's lifetime ceiling, a stream's keep-alive) is one
   value, named on each field, since it names no key.
+
+## 2026-11-05 — every count reads through its bounds
+
+The 2026-10-31 entry bounded three counts and left the rest on
+`#[validate(range(min = 1))]` and `#[config(count)]`: a count had two ways to be
+bounded, a floor without a ceiling, and three (`ThrottlerConfig::limit`,
+`SeaOrmConfig::{max_connections, min_connections}`) no bound at all. Under the
+owner's "Tout faire (Recommandé)" (2026-10-31, the identity audit's second pass,
+its item 9, agreeing the public API break), every count reads a `CountBounds`:
+`BoundedField` gains `u32` and `Option<usize>`, whose `0` from the environment is
+`None`, which absorbs `#[config(count)]` and `ConfigService::count`, both gone.
+
+A `u32` member rather than the fields moved to `usize`: the field then holds what
+its library takes (`PoolOptions::max_connections`, `Throttle::new`), so no site
+casts, and no cast can fail or truncate past a ceiling. A `usize` would have been
+a public type change for one `try_from` per use.
+
+Each ceiling is decided by its values, not by a guess at the product: a ceiling
+exists to catch a typo or an unbounded wait, never to refuse a real deployment.
+`MAX_DEPTH` stops at 33 because async-graphql's recursion bound refuses a document
+past it whatever the limit says; `MAX_CONNECTIONS` at 262143 because a Postgres
+server's own `max_connections` does (`MAX_BACKENDS`); the body caps at a tebibyte
+(a transport-wide cap a streamed upload reads under) and a gibibyte (what a socket
+or an MCP POST buffers whole), memory being what they guard. No count here has
+needed a floor alone: each has a real upper end.
+
+Refused:
+
+- **`u32` fields moved to `usize`**, above.
+- **`SeaOrmConfig`'s pair judged in the overlay.** A combination is the consumer's
+  (`container.md`), refused in `connect_options`, the one constructor every path
+  reaches, where sqlx would clamp a minimum above the maximum in silence.

@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use nest_rs_config::config;
-use nest_rs_http::{MAX_CONNECTION_BOUNDS, UNIT_TIMEOUT_BOUNDS};
+use nest_rs_http::{MAX_CONNECTION_BOUNDS, MAX_MESSAGE_BYTES_BOUNDS, UNIT_TIMEOUT_BOUNDS};
 
 /// Default per-message byte cap: 64 KiB, against tungstenite's own 64 MiB.
 pub(crate) const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
@@ -32,8 +32,10 @@ pub struct WsConfig {
     pub max_connection: Option<Duration>,
     /// Maximum bytes accepted for a single inbound message, enforced at the
     /// protocol layer so a giant frame is refused before it is buffered. Read
-    /// from `<PREFIX>_WS__MAX_MESSAGE_BYTES`; defaults to 64 KiB.
-    #[validate(range(min = 1, message = "must be at least 1 byte"))]
+    /// from `<PREFIX>_WS__MAX_MESSAGE_BYTES`, from 1 to a gibibyte
+    /// ([`MAX_MESSAGE_BYTES_BOUNDS`]) — refused outside, from the environment
+    /// and from the pinned struct alike; defaults to 64 KiB.
+    #[config(bounds = MAX_MESSAGE_BYTES_BOUNDS)]
     pub max_message_bytes: usize,
     /// Wall-clock deadline for one message — its guards, pipes and handler —
     /// counted once its envelope is decoded; past it the message's work is
@@ -287,6 +289,49 @@ mod tests {
         )
         .expect("ok");
         assert_eq!(cfg.max_message_bytes, 1_048_576);
+    }
+
+    /// One byte to a gibibyte, from the environment and from a pin, naming the
+    /// variable and its range and never the value it was given.
+    #[test]
+    fn the_message_cap_is_held_to_its_range_from_either_side() {
+        let var = nest_rs_config::var_name("ws", "MAX_MESSAGE_BYTES");
+        for (raw, said) in [
+            ("0", "must be at least 1 — "),
+            ("1073741825", "must be at most 1073741824 — "),
+        ] {
+            let refused = WsConfig::from_env(
+                &ConfigService::with_vars("ws", [("MAX_MESSAGE_BYTES", raw)]),
+                WsConfig::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var) && refused.contains(said),
+                "{refused}"
+            );
+            assert!(!refused.contains("1073741825"), "{refused}");
+        }
+        for (pinned, said) in [
+            (0, "below the 1 it must be at least"),
+            ((1 << 30) + 1, "above the 1073741824 it must be at most"),
+        ] {
+            let refused = WsConfig::from_env(
+                &ConfigService::with_vars("ws", []),
+                WsConfig {
+                    max_message_bytes: pinned,
+                    ..WsConfig::default()
+                },
+            )
+            .expect_err("a pin outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var)
+                    && refused.contains("`WsConfig::max_message_bytes` set in code")
+                    && refused.contains(said),
+                "{refused}"
+            );
+        }
     }
 
     #[test]

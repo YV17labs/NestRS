@@ -278,19 +278,21 @@ arbitrates between variables or tiers.
   only where an off exists; a count the same, `0` from the environment its
   `None`; a default sits in `Default`, never behind a `None`, and no field
   names a unit. Held by the derive's compile errors and its reads, which read
-  off from the field's type and refuse a count pinned at `Some(0)`.
-- **A duration a deployment sets has a floor and a ceiling, and so does a count
-  read through `CountBounds`**, refused naming the variable whether pinned or
-  read, never clamped. The floor is where the thing stops working; the ceiling
-  is where a value becomes a slip, **and never above what the library or kernel
-  it reaches accepts** — no value the boot accepts may panic or be refused
-  below it. A range names
+  off from the field's type and refuse a pinned zero.
+- **A duration or a count a deployment sets has a floor and a ceiling** — a
+  `DurationBounds` or a `CountBounds`, the one way either is bounded — refused
+  naming the variable whether pinned or read, never clamped. The floor is where
+  the thing stops working; the ceiling is where a value becomes a slip or an
+  unbounded wait, chosen from the setting's real upper end and generous where
+  nothing guards memory or a connection budget, so it never refuses a real
+  deployment, **and never above what the library or kernel it reaches accepts**
+  — no value the boot accepts may panic or be refused below it. A range names
   nothing but its ends and their reasons: the derive binds it to the field it
   bounds, whose name is its variable's key — a duration's unit after it — and
-  whose type says whether `0` is off (an `Option<Duration>`; a pinned
-  `Some(Duration::ZERO)` is refused, since off in code is `None`), so no site
-  types the key. Held by the `BoundedSetting` the derive binds, whose rustdoc
-  has the mechanics, including a hand-written overlay's own binding.
+  whose type says whether `0` is off (an `Option`; a pinned zero is refused,
+  since off in code is `None`), so no site types the key. Held by the
+  `BoundedSetting` the derive binds, whose rustdoc has the mechanics, including
+  a hand-written overlay's own binding.
 - **A variable no config claims is reported, never ignored** — at `warn`, once,
   by name and never by value: a key under a namespace this binary read that no
   config read, a near miss of such a namespace, and a cascade key in a

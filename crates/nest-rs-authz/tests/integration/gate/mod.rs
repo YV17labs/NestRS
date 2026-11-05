@@ -568,3 +568,81 @@ async fn a_tool_gate_no_ability_guard_reaches_refuses_the_boot() {
         "read_unreached",
     );
 }
+
+#[resolver]
+struct UnreachedPublicResolver;
+
+#[operations]
+impl UnreachedPublicResolver {
+    #[query]
+    #[public(Read, widget::Entity, unmasked)]
+    async fn unreached_public(&self) -> GqlResult<i32> {
+        Ok(0)
+    }
+}
+
+#[module(imports = [GraphqlModule], providers = [UnreachedPublicResolver])]
+struct UnreachedPublicOperationModule;
+
+#[tokio::test]
+async fn a_public_operation_no_ability_guard_reaches_refuses_the_boot() {
+    assert_refused_naming(
+        TestApp::for_module::<UnreachedPublicOperationModule>().await,
+        "query unreached_public",
+    );
+}
+
+#[gateway(path = "/ws/unreached-public")]
+#[derive(Default)]
+struct UnreachedPublicGateway;
+
+#[messages]
+impl UnreachedPublicGateway {
+    #[subscribe_message("read")]
+    #[public(Read, widget::Entity)]
+    async fn read(&self) -> Result<String, WsError> {
+        Ok("widgets".to_owned())
+    }
+}
+
+#[module(providers = [UnreachedPublicGateway])]
+struct UnreachedPublicMessageModule;
+
+#[tokio::test]
+async fn a_public_message_no_ability_guard_reaches_refuses_the_boot() {
+    assert_refused_naming(
+        TestApp::builder()
+            .module::<UnreachedPublicMessageModule>()
+            .build_ws()
+            .await,
+        "UnreachedPublicGateway::read",
+    );
+}
+
+#[mcp(path = "/mcp/unreached-public")]
+#[derive(Clone, Default)]
+struct UnreachedPublicTool;
+
+#[tools]
+impl UnreachedPublicTool {
+    /// List the widgets.
+    #[tool]
+    #[public(Read, widget::Entity)]
+    async fn read_unreached_public(&self) -> Result<String, McpError> {
+        Ok("widgets".to_owned())
+    }
+}
+
+#[module(
+    imports = [nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpAccess::Public)],
+    providers = [UnreachedPublicTool],
+)]
+struct UnreachedPublicToolModule;
+
+#[tokio::test]
+async fn a_public_tool_no_ability_guard_reaches_refuses_the_boot() {
+    assert_refused_naming(
+        TestApp::for_module::<UnreachedPublicToolModule>().await,
+        "read_unreached_public",
+    );
+}

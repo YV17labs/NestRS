@@ -190,7 +190,11 @@ The rest of the rule:
 
 - A forwarding header from a peer that is **not** a listed proxy is
   **ignored** — a direct client cannot bypass its own bucket by setting one.
-- An unparseable hop in the chain is skipped, never used as a key.
+- A chain over several field lines is one list, in order: a proxy may add its
+  own line after the caller's (RFC 7239 §4), and that line stays the rightmost.
+  `X-Real-IP` names one hop, so its last line is the one read.
+- An unparseable hop in the chain is skipped, never used as a key, and hides no
+  hop to its right: neither bytes no text holds nor a quote no value closes.
 - An entry of `TRUSTED_PROXIES` that is no address or CIDR range, a `/0`, or a
   range with address bits set past its prefix (`10.0.0.1/8`), **aborts the boot**
   naming the variable and the entry's place in the list, never its value — never

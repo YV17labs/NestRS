@@ -144,6 +144,48 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
     );
 }
 
+/// A listed proxy adds its own line after the caller's: what the caller rotates
+/// on the first line mints no bucket, the same as on one line.
+#[tokio::test]
+async fn a_caller_rotating_its_own_forwarding_line_mints_no_bucket() {
+    #[module(
+        imports = [
+            RatedModule,
+            HttpModule::for_root(HttpConfig {
+                trusted_proxies: vec!["10.0.0.1".parse().expect("an address")],
+                ..HttpConfig::default()
+            }),
+        ],
+        providers = [GlobalGuards<(ThrottlerGuard,)>],
+    )]
+    struct BehindAProxy;
+
+    let app = TestApp::builder()
+        .module::<BehindAProxy>()
+        .build()
+        .await
+        .expect("the app boots");
+    for (forged, expected) in [
+        StatusCode::OK,
+        StatusCode::OK,
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::TOO_MANY_REQUESTS,
+        StatusCode::TOO_MANY_REQUESTS,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        app.http()
+            .get("/rated/strict")
+            .peer_addr("10.0.0.1:40000".parse().unwrap())
+            .header("x-forwarded-for", format!("198.51.100.{forged}"))
+            .header("x-forwarded-for", "203.0.113.7")
+            .send()
+            .await
+            .assert_status(expected);
+    }
+}
+
 #[tokio::test]
 async fn the_bucket_key_is_the_declared_template() {
     let logs = nest_rs_testing::LogCapture::install();

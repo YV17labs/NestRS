@@ -232,7 +232,9 @@ range. A listener on `[::]` reports an IPv4 peer as `::ffff:10.0.0.1`: that is
 **Rightmost, not leftmost.** A proxy appends the address it received the request
 from to the right of the chain, so the genuine client is the last hop your
 infrastructure wrote; a caller can only prepend, and a prepended entry lands to
-the left of it. Keying on the leftmost hop is the spoofable rule.
+the left of it. Keying on the leftmost hop is the spoofable rule. A chain over
+several field lines is one list, in order, since a proxy may add its own line
+after the caller's; `X-Real-IP`, one hop, is read from its last line.
 
 <Aside type="caution">
 Treat the result as **observational** (geolocation hints, sampling keys),

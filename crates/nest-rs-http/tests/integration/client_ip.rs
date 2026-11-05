@@ -66,6 +66,24 @@ async fn a_dual_stack_listener_attributes_an_ipv4_client_to_its_ipv4_address() {
     );
 }
 
+/// A proxy adding its own `X-Forwarded-For` line after the caller's: the lines
+/// reach the app as sent, and the client is the rightmost hop of both.
+#[tokio::test]
+async fn a_listed_proxy_s_own_field_line_outranks_the_caller_s() {
+    let config = HttpConfig {
+        trusted_proxies: vec!["127.0.0.1".parse().unwrap()],
+        ..HttpConfig::default()
+    };
+    assert_eq!(
+        asked_over_ipv4(
+            config,
+            "X-Forwarded-For: 198.51.100.99\r\nX-Forwarded-For: 203.0.113.7\r\n",
+        )
+        .await,
+        "203.0.113.7 forwarded=true"
+    );
+}
+
 /// The list as a composition root pins it, where no `?` reaches a `Result`.
 #[module(
     imports = [HttpModule::for_root(HttpConfig {

@@ -11,7 +11,7 @@
 //! 3. a trusted peer ⇒ `Forwarded` (RFC 7239), `X-Forwarded-For`, then
 //!    `X-Real-IP` are read, and the client is the **rightmost** hop that is not
 //!    itself a trusted proxy ([`ClientOrigin::Forwarded`]): a proxy appends, a
-//!    caller can only prepend.
+//!    caller can only prepend, on one field line or over several.
 //!
 //! An IPv4-mapped address, what a dual-stack listener reports an IPv4 peer as,
 //! is the IPv4 address it carries, in the peer, in a hop and in the answer.
@@ -20,8 +20,10 @@
 //! [`ClientOrigin::of`]. Treat the result as observational, never as an authn
 //! or authz input; the address is personal data, so no line or span carries it.
 
+use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use http::header::AsHeaderName;
 use http::{HeaderMap, header};
 use nest_rs_core::current_request_scope;
 
@@ -91,13 +93,19 @@ impl ClientOrigin {
         peer: Option<IpAddr>,
         trusted_proxies: &[TrustedProxy],
     ) -> Self {
-        // Nothing trusted: no header can be believed, so none is read.
-        let trusted = !trusted_proxies.is_empty();
-        let believed = |name: &str| trusted.then(|| headers.get(name)?.to_str().ok()).flatten();
+        // A peer off the list could have forged them all, so none is read.
+        if !peer.is_some_and(|peer| lists(trusted_proxies, peer)) {
+            return Self::resolve(None, None, None, peer, trusted_proxies);
+        }
         Self::resolve(
-            believed(header::FORWARDED.as_str()),
-            believed(X_FORWARDED_FOR),
-            believed(X_REAL_IP),
+            field_list(headers, header::FORWARDED).as_deref(),
+            field_list(headers, X_FORWARDED_FOR).as_deref(),
+            // One hop, no list: the line a proxy adds is the last.
+            headers
+                .get_all(X_REAL_IP)
+                .iter()
+                .next_back()
+                .and_then(|line| line.to_str().ok()),
             peer,
             trusted_proxies,
         )
@@ -120,7 +128,8 @@ impl ClientOrigin {
     }
 
     /// The resolution itself, over plain values. `forwarded` is the RFC 7239
-    /// field value, `forwarded_for` and `real_ip` the de-facto pair.
+    /// field value, `forwarded_for` and `real_ip` the de-facto pair; a list sent
+    /// over several field lines is passed as one, in order (RFC 9110 §5.3).
     pub fn resolve(
         forwarded: Option<&str>,
         forwarded_for: Option<&str>,
@@ -220,6 +229,24 @@ impl From<ClientOrigin> for ClientIp {
     }
 }
 
+/// Every field line of the list `name`, in order, as one field value (RFC 9110
+/// §5.3): a proxy may add its own line after the caller's, so the first alone
+/// is the caller's to choose. Bytes no text holds are replaced line by line and
+/// then parse as no hop, so they hide no other.
+fn field_list(headers: &HeaderMap, name: impl AsHeaderName) -> Option<Cow<'_, str>> {
+    let mut lines = headers
+        .get_all(name)
+        .into_iter()
+        .map(|line| String::from_utf8_lossy(line.as_bytes()));
+    let mut list = lines.next()?;
+    for line in lines {
+        let list = list.to_mut();
+        list.push_str(", ");
+        list.push_str(&line);
+    }
+    Some(list)
+}
+
 /// What one forwarding chain says: the rightmost hop that is not ours (the
 /// client), and the outermost recorded hop (the degenerate answer, kept for
 /// when every hop is infrastructure), both from a single forward pass.
@@ -259,10 +286,8 @@ pub(crate) fn forwarded_param<'a>(raw: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// One `token "=" ( token / quoted-string )` pair of a `Forwarded` value, with
-/// the value's surrounding quotes removed (RFC 7239 §4).
-///
-/// `,` and `;` are legal inside a quoted string, so the scan tracks quoting. A
-/// quoted-pair is left escaped: no `node` form admits a backslash.
+/// the value's surrounding quotes removed (RFC 7239 §4). A quoted-pair is left
+/// escaped: no `node` form admits a backslash.
 struct ForwardedPairs<'a> {
     rest: &'a str,
 }
@@ -271,29 +296,8 @@ impl<'a> Iterator for ForwardedPairs<'a> {
     type Item = (&'a str, &'a str);
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.rest.is_empty() {
-                return None;
-            }
-            let mut in_quotes = false;
-            let mut escaped = false;
-            let mut end = self.rest.len();
-            for (index, ch) in self.rest.char_indices() {
-                if escaped {
-                    escaped = false;
-                    continue;
-                }
-                match ch {
-                    '\\' if in_quotes => escaped = true,
-                    '"' => in_quotes = !in_quotes,
-                    ',' | ';' if !in_quotes => {
-                        end = index;
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            let (pair, rest) = self.rest.split_at(end);
+        while !self.rest.is_empty() {
+            let (pair, rest) = self.rest.split_at(pair_end(self.rest));
             // Past the separator, or the empty tail when this was the last pair.
             self.rest = rest.get(1..).unwrap_or_default();
             // An empty element (`for=a,,for=b`) is legal and carries nothing.
@@ -301,7 +305,43 @@ impl<'a> Iterator for ForwardedPairs<'a> {
                 return Some((name.trim(), unquote(value.trim())));
             }
         }
+        None
     }
+}
+
+/// Where the pair `text` starts with ends: past its value when that is a
+/// `quoted-string`, in which `,` and `;` are legal, and otherwise at its first
+/// separator.
+///
+/// A quote that closes no value opens none: taken for a string, the `x="` of a
+/// caller's line would swallow the hop a proxy appended after it, and the
+/// caller's own hop would read as the rightmost.
+fn pair_end(text: &str) -> usize {
+    let separator = text.find([',', ';']).unwrap_or(text.len());
+    text[..separator]
+        .find('=')
+        .and_then(|equals| Some(equals + 1 + quoted_value_len(&text[equals + 1..])?))
+        .unwrap_or(separator)
+}
+
+/// How long the `quoted-string` `text` starts with is, when one is, closed, and
+/// followed by a separator or the end of the value.
+fn quoted_value_len(text: &str) -> Option<usize> {
+    let quoted = text.trim_start().strip_prefix('"')?;
+    let mut escaped = false;
+    for (index, ch) in quoted.char_indices() {
+        match ch {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => {
+                let after = quoted[index + 1..].trim_start();
+                return (after.is_empty() || after.starts_with([',', ';']))
+                    .then(|| text.len() - after.len());
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Strip the quotes of a `quoted-string`, leaving a `token` alone.
@@ -725,6 +765,21 @@ mod tests {
         );
     }
 
+    /// A quoted-pair closes nothing: a value a proxy quoted holds what follows
+    /// it, a forged `for` included.
+    #[test]
+    fn an_escaped_quote_closes_no_value() {
+        let proxy = ip("10.0.0.1");
+        assert_eq!(
+            resolve_forwarded(
+                "for=203.0.113.7;host=\"\\\",for=198.51.100.98,\"",
+                Some(proxy),
+                &[proxy],
+            ),
+            ClientOrigin::Forwarded(ip("203.0.113.7")),
+        );
+    }
+
     #[test]
     fn a_malformed_forwarded_value_yields_no_hop() {
         let proxy = ip("10.0.0.1");
@@ -742,6 +797,149 @@ mod tests {
                 "Forwarded: {raw:?}",
             );
         }
+    }
+
+    /// What a listed peer's head resolves to, its field lines in the order sent.
+    fn from_the_proxy(lines: &[(&str, &[u8])]) -> ClientOrigin {
+        let proxy = ip("10.0.0.1");
+        let mut headers = HeaderMap::new();
+        for (name, value) in lines {
+            headers.append(
+                http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                http::HeaderValue::from_bytes(value).expect("header value"),
+            );
+        }
+        ClientOrigin::of_head(&headers, Some(proxy), &listed(&[proxy]))
+    }
+
+    /// A proxy may add its own line after the caller's (RFC 7239 §4), and the
+    /// lines of one name are one list (RFC 9110 §5.3): the rightmost hop is the
+    /// proxy's on either spelling, so the caller's first line decides nothing.
+    #[test]
+    fn a_chain_over_several_field_lines_is_one_list() {
+        for name in ["x-forwarded-for", "forwarded"] {
+            let hop = |address: &str| {
+                if name == "forwarded" {
+                    format!("for={address}").into_bytes()
+                } else {
+                    address.as_bytes().to_vec()
+                }
+            };
+            let (forged, client, inner) =
+                (hop("198.51.100.99"), hop("203.0.113.7"), hop("10.0.0.1"));
+            assert_eq!(
+                from_the_proxy(&[(name, &forged), (name, &client)]),
+                ClientOrigin::Forwarded(ip("203.0.113.7")),
+                "{name}: the proxy's line follows the caller's",
+            );
+            assert_eq!(
+                from_the_proxy(&[(name, &forged), (name, &client), (name, &inner)]),
+                ClientOrigin::Forwarded(ip("203.0.113.7")),
+                "{name}: an inner proxy's line follows that",
+            );
+        }
+    }
+
+    /// A proxy on one line, the shape nearly every request has, costs no copy.
+    #[test]
+    fn a_list_on_one_field_line_is_read_in_place() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            X_FORWARDED_FOR,
+            http::HeaderValue::from_static("203.0.113.7"),
+        );
+        assert!(matches!(
+            field_list(&headers, X_FORWARDED_FOR),
+            Some(Cow::Borrowed("203.0.113.7")),
+        ));
+        assert_eq!(field_list(&headers, header::FORWARDED), None);
+    }
+
+    /// One line a caller filled with bytes no text holds leaves the other lines
+    /// and the other hops of its own line standing.
+    #[test]
+    fn a_line_or_a_hop_no_text_holds_hides_no_other_hop() {
+        for (name, forged, own, same_line) in [
+            (
+                "x-forwarded-for",
+                &b"\xFF"[..],
+                &b"203.0.113.7"[..],
+                &b"\xFF, 203.0.113.7"[..],
+            ),
+            (
+                "forwarded",
+                &b"for=\xFF"[..],
+                &b"for=203.0.113.7"[..],
+                &b"for=\xFF, for=203.0.113.7"[..],
+            ),
+        ] {
+            for lines in [&[(name, forged), (name, own)][..], &[(name, same_line)]] {
+                assert_eq!(
+                    from_the_proxy(lines),
+                    ClientOrigin::Forwarded(ip("203.0.113.7")),
+                    "{lines:?}",
+                );
+            }
+        }
+    }
+
+    /// A quote no quote closes opens no string: the caller's own line swallows
+    /// no line after it.
+    #[test]
+    fn a_caller_s_unclosed_quote_swallows_no_later_line() {
+        for own in [&b"for=203.0.113.7"[..], &b"for=\"203.0.113.7:4711\""[..]] {
+            assert_eq!(
+                from_the_proxy(&[("forwarded", b"for=198.51.100.99;x=\""), ("forwarded", own)]),
+                ClientOrigin::Forwarded(ip("203.0.113.7")),
+            );
+        }
+    }
+
+    /// Nor does it swallow the hop a proxy appended to the caller's own line,
+    /// its own quoted value or not: `x`'s quote is closed by no quote that ends
+    /// a value.
+    #[test]
+    fn a_caller_s_unclosed_quote_swallows_no_hop_appended_to_its_line() {
+        for raw in [
+            "for=198.51.100.99;x=\", for=203.0.113.7",
+            "for=198.51.100.99;x=\"a\\\", for=203.0.113.7",
+            "for=198.51.100.99;x=\", for=\"203.0.113.7:4711\"",
+            "for=198.51.100.99;x=\", for=203.0.113.7;host=\"a,for=198.51.100.98\"",
+        ] {
+            assert_eq!(
+                from_the_proxy(&[("forwarded", raw.as_bytes())]),
+                ClientOrigin::Forwarded(ip("203.0.113.7")),
+                "{raw}",
+            );
+        }
+    }
+
+    /// `X-Real-IP` names one hop, and a proxy adding its line adds it last.
+    #[test]
+    fn a_real_ip_over_several_field_lines_is_its_last() {
+        assert_eq!(
+            from_the_proxy(&[
+                ("x-real-ip", b"198.51.100.99"),
+                ("x-real-ip", b"203.0.113.7"),
+            ]),
+            ClientOrigin::Forwarded(ip("203.0.113.7")),
+        );
+    }
+
+    /// The same two lines from a peer off the list are the caller's to write.
+    #[test]
+    fn an_untrusted_peer_ignores_every_field_line() {
+        let req = req_from(
+            "203.0.113.200",
+            &[
+                ("x-forwarded-for", "198.51.100.99"),
+                ("x-forwarded-for", "203.0.113.7"),
+            ],
+        );
+        assert_eq!(
+            ClientOrigin::of_with(&req, &listed(&[ip("10.0.0.1")])),
+            ClientOrigin::Peer(ip("203.0.113.200")),
+        );
     }
 
     /// An ingress whose pods move holds no address list: its range names every

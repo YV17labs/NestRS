@@ -41,3 +41,27 @@ Security decided the refusals, Elegance the shape:
   comparing the answer with `203.0.113.7` would meet a spelling only the socket uses.
 
 `Request::peer_addr` stays the socket's own answer, mapped or not.
+
+## 2026-11-05: the chain is every field line
+
+Review of the change above, from runs over a real socket and through the throttler: a
+chain over two field lines read the first alone, so a caller rotating it behind a proxy
+that adds its own line (RFC 7239 §4) answered `200` five times where the same hops on one
+line answered `200, 200, 429, 429, 429`. Security decided:
+
+- **`Forwarded` and `X-Forwarded-For` fold every field line, in order** (RFC 9110 §5.3);
+  `X-Real-IP`, one hop, reads its last. The fold allocates only for a second line and only
+  for a listed peer, so a caller off the list cannot make it allocate.
+- **A quote that closes no value opens none.** Folding alone would have handed a caller's
+  `x="` the proxy's line, and the hop appended to that same line it had already: run, it
+  answered `Forwarded(198.51.100.99)`. A `quoted-string` starts a value and ends at a
+  separator or the value's end, so no scan passes a later value's opening quote.
+- **The browser-origin check's first value stays.** It says what the client asked for, and
+  a value a caller forged can only claim an origin.
+
+Refused: **parsing the lines apart behind a new `resolve` signature.** It would close the
+two-line form and leave the one-line form open, for an API break.
+
+Left, and named: a proxy appending to the caller's own line a quoted value of its own that
+starts with a separator (`host=",a"`) still closes the caller's quote there. The bytes hold
+the ambiguity; a proxy that strips the caller's line has none.

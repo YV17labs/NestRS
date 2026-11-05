@@ -22,8 +22,10 @@ impl Guard for PostAuthorGuard {
         let claims = cx.require::<Claims>()?;
         match claims.sub.user_id() {
             Some(_) => Ok(()),
-            None => Err(Denial::forbidden("writing a post takes a token naming a user")
-                .with_reason("not_a_user")),
+            None => Err(
+                Denial::forbidden("writing a post takes a token naming a user")
+                    .with_reason("not_a_user"),
+            ),
         }
     }
 

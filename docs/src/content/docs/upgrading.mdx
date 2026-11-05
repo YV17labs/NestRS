@@ -2154,9 +2154,10 @@ lists what the boot, a log or the wire shows when one is missed.
   Redis queue lease (…) must be more than one and a half times the Redis budget (…)``, since a
   renewal sent a third into the lease may wait out the whole budget. Raise the lease or lower
   the budget.
-- **`key = "…"` on a scheduled job without `replicas = "one"`**, a one-shot `#[after]`
-  declaring `replicas = "one"`, and `replicas = "one"` with no occurrence lock bound each fail
-  the boot naming the job: the last one's remedy is `RedisScheduleModule`.
+- **`replicas = "one"` with no occurrence lock bound** fails the boot naming the job: import
+  `RedisScheduleModule`. A job attached by hand as a `CronJobMeta` fails it too for a `key`
+  without `replicas = "one"`, or a one-shot declaring it, the two mistakes a decorator refuses
+  at compile time.
 - **Two scheduled jobs sharing one name** fail the boot (`scheduled jobs share one name: …`):
   rename one host, or fold the two methods. **Two jobs firing once under one identity** fail
   it too (`scheduled jobs firing once claim under one identity: …`): give each its own `key`.
@@ -2171,6 +2172,45 @@ lists what the boot, a log or the wire shows when one is missed.
   `<PREFIX>_GRAPHQL__FEDERATION=true` and serve it behind the router it names, or drop the key.
 - **An `McpIdentity` naming a server no `#[mcp]` host serves** fails the boot, as do two hosts
   on one path declaring one prompt.
+- **`HttpTransport::from_config` refuses values a transport built in code passed**: a duration
+  or a `version_header` outside what its variable accepts, naming the variable and the field; a
+  body-read gap at or past the request timeout files one boot `warn`.
+- **A protected resource's URI carrying userinfo**, or loopback `http` in production, fails the
+  boot.
+- **A refused credential or a missing database fails the boot**, where the first request met
+  it: the sentence names the resource and the variable.
+
+**At run time, what now answers differently:**
+
+- **An MCP session an earlier release stored** is refused: the client opens a new one. A
+  session stays its principal's, and a principal naming no subject answers `403`.
+- **The app's interceptors and exception filters now run around every job, tick, listener
+  call, GraphQL root field, MCP operation and WebSocket message**, and the class gate runs
+  before a message's pipes. One written for a request reads the edge from `cx.edge()`.
+- **A `Result` renamed on import or behind an alias fails as a `Result` does**, on the line and
+  to the client, where its error reached the client as data and its line filed `ok`.
+- **`/graphql/anything` answers `404`**, and the graphql-ws handshake's `HEAD` answers `400`.
+  Point a client at `/graphql` itself.
+- **A `Path<T>` signature mistake answers `500`**, where it answered `400`: a route template's
+  parameters and the handler's type are a programmer's, never a client's.
+- **A statement past 15 s is cancelled by Postgres**, answering `503` with its wait. A long
+  report raises `<PREFIX>_SEAORM__STATEMENT_TIMEOUT_SECS`, or runs as a job with its own `timeout`.
+- **The OAuth client refuses a plain `http` endpoint**, and an answer past 64 KiB fails as the
+  provider's.
+- **`requiredScopes`, and a challenge's `scope`**, name the narrowest grant's scopes alone: a
+  client reading the whole list reads that one.
+- **A fall-back day fires more** under a zone that repeats the hour: read a daily job's `#[cron]`
+  beside the zone.
+- **A suite logs what its console allows**: `with_test_telemetry` kept it to `warn`, and a
+  project scaffolded before sets `RUST_LOG=warn` in `.env.test`, as `nestrs new` now writes.
+
+**At build, what your own lines meet:**
+
+- **A `Result` a `let _ =` discarded in your own code** is `clippy::let_underscore_must_use`'s,
+  once the workspace denies it (step 1).
+- **`runtime-tokio-rustls` on a `sea-orm` line of yours** compiles `ring` again, beside the
+  dependency policy's ban: take `runtime-tokio`, with sqlx's `tls-rustls-aws-lc-rs`, as
+  `nest-rs-seaorm` does.
 
 **At compile time, each decorator's own grammar.** Every sentence below is pinned in
 `crates/nest-rs-macro-hygiene/tests/integration/diagnostics/`, one fixture per refusal, by
@@ -2216,7 +2256,8 @@ folder; what a 6.1 project most often meets:
 - **`#[tool]`, `#[prompt]`, `#[resource]`:** no description, or a blank one; a tool with no result;
   a resource with no template or description, one with an RFC 6570 operator, a variable no parameter
   takes, a parameter no variable names, two templates; `#[resources]` twice or with an argument; a
-  server identity on a host, which goes in `McpIdentity`.
+  server identity on a host, which goes in `McpIdentity`. A host written by hand meets rmcp's own:
+  an empty `#[tool_router]`, which takes `#[tool_router(allow_empty)]`.
 - **`#[subscribe_message]`, `#[on_connect]`:** an event that is no string literal, a hook repeated,
   a hook returning a value, a reply that does not serialize under `#[authorize]`, and any layer on a
   connection hook.

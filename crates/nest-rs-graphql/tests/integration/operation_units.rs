@@ -773,6 +773,61 @@ async fn a_copy_a_directive_leaves_out_repeats_no_root_field() {
     }
 }
 
+/// A mutation whose root spreads a chain of `links` fragments, the last selecting
+/// `last`.
+fn fragment_chain(links: usize, last: &str) -> String {
+    let mut query = String::from("mutation { ...F0 }");
+    for link in 0..links - 1 {
+        query.push_str(&format!(
+            " fragment F{link} on Mutation {{ ...F{} }}",
+            link + 1
+        ));
+    }
+    query.push_str(&format!(
+        " fragment F{} on Mutation {{ {last} }}",
+        links - 1
+    ));
+    query
+}
+
+/// The read of a mutation's root runs before async-graphql's own recursion
+/// limit, and a stack overflow aborts the process: as long a chain as a request's
+/// body holds is the limit's to refuse.
+#[tokio::test]
+async fn a_fragment_chain_past_the_recursion_limit_is_refused_and_overflows_nothing() {
+    let (app, journal) = boot().await;
+    let deep = fragment_chain(6_000, "maybeWrite(fail: false)");
+    let reply = post(&app, json!({ "query": deep })).await;
+    assert_eq!(reply["data"], Value::Null);
+    assert_eq!(
+        reply["errors"][0]["message"],
+        "The recursion depth of the query cannot be greater than `32`",
+        "async-graphql says it, so a read before it may stop there"
+    );
+    assert!(journal.read().iter().all(|line| !line.contains("block")));
+}
+
+/// A chain as deep as async-graphql runs is read to its end, and the first one
+/// deeper is refused by it: a bump that moves the limit fails here, and
+/// `RECURSIVE_DEPTH` moves with it.
+#[tokio::test]
+async fn the_read_of_a_mutations_root_reaches_as_deep_as_a_document_runs() {
+    let (app, _) = boot().await;
+    let repeat = "maybeWrite(fail: false) maybeWrite(fail: false)";
+    let reply = post(&app, json!({ "query": fragment_chain(32, repeat) })).await;
+    assert_eq!(
+        reply["errors"][0]["message"],
+        r#"the mutation selects "maybeWrite" more than once at its root"#,
+        "{reply}"
+    );
+    let reply = post(&app, json!({ "query": fragment_chain(33, repeat) })).await;
+    assert_eq!(
+        reply["errors"][0]["message"],
+        "The recursion depth of the query cannot be greater than `32`",
+        "{reply}"
+    );
+}
+
 /// `@skip` and `@include` read a variable's default as an argument reads it,
 /// and what the request sent over it.
 #[tokio::test]

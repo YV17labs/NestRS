@@ -307,6 +307,13 @@ pub(crate) fn selected_operation<'d>(
 /// refuses says what validation says of it.
 pub(crate) struct OperationRefusal(pub(crate) ServerError);
 
+/// The deepest selection set async-graphql (`7.2.1`, `check_recursive_depth`,
+/// `limit_recursive_depth`'s default) runs, nesting through fragments included,
+/// and refuses every document past. A read of a document before that check
+/// stops here: a fragment chain as long as a request's body would otherwise
+/// outgrow the stack, which aborts the process.
+pub(crate) const RECURSIVE_DEPTH: usize = 32;
+
 /// The operation a request selects, read off its document; nothing when it
 /// selects none.
 #[derive(Default)]
@@ -490,7 +497,7 @@ fn repeated_root_selection(
         spread: HashSet::new(),
         expanding: Vec::new(),
     };
-    let (repeated, at) = selections.first_repeated(root)?;
+    let (repeated, at) = selections.first_repeated(root, 0)?;
     let said = match repeated {
         Repeated::Key(key) => format!(r#"the mutation selects "{key}" more than once at its root"#),
         Repeated::Fragment(name) => {
@@ -501,8 +508,9 @@ fn repeated_root_selection(
 }
 
 /// A mutation's root selections, read before validation: each fragment is
-/// expanded once at most, so the walk never outgrows the document, and a
-/// fragment cycle, which validation refuses, ends it.
+/// expanded once at most and no deeper than [`RECURSIVE_DEPTH`], so the walk
+/// never outgrows the document or the stack, and a fragment cycle, which
+/// validation refuses, ends it.
 struct RootSelections<'d> {
     fragments: &'d HashMap<Name, Positioned<FragmentDefinition>>,
     variables: &'d Variables,
@@ -519,9 +527,17 @@ enum Repeated<'d> {
 }
 
 impl<'d> RootSelections<'d> {
-    /// The first selection of `set` naming a response key, or spreading a
-    /// fragment, the root already holds, and where it stands.
-    fn first_repeated(&mut self, set: &'d SelectionSet) -> Option<(Repeated<'d>, Pos)> {
+    /// The first selection of `set`, `depth` selection sets below the root,
+    /// naming a response key, or spreading a fragment, the root already holds, and
+    /// where it stands.
+    fn first_repeated(
+        &mut self,
+        set: &'d SelectionSet,
+        depth: usize,
+    ) -> Option<(Repeated<'d>, Pos)> {
+        if depth > RECURSIVE_DEPTH {
+            return None;
+        }
         let variables = self.variables;
         set.items
             .iter()
@@ -541,12 +557,13 @@ impl<'d> RootSelections<'d> {
                     }
                     let fragment = self.fragments.get(name)?;
                     self.expanding.push(name);
-                    let repeated = self.first_repeated(&fragment.node.selection_set.node);
+                    let repeated =
+                        self.first_repeated(&fragment.node.selection_set.node, depth + 1);
                     self.expanding.pop();
                     repeated
                 }
                 Selection::InlineFragment(fragment) => {
-                    self.first_repeated(&fragment.node.selection_set.node)
+                    self.first_repeated(&fragment.node.selection_set.node, depth + 1)
                 }
             })
     }

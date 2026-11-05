@@ -162,3 +162,70 @@ The provenance reading above is unchanged.
 wire conversion, so a reply's rows are never rebuilt (this decision's
 `Loaded` reading for loaded rows); and serving a field a grant may mask as
 nullable on the GraphQL wire type rather than requiring an `Option` column.
+
+## 2026-11-05 — a relation's field masks by its selection, and its batch filters rows
+
+A relation's batch masked each row into the wire type with no `Context`, so a
+`.fields` grant narrower than the type's non-null columns failed the deserialization
+for every row: a member's every read of a post's author answered `INTERNAL` and filed
+an `ERROR`, whatever it selected, where the same selection answers on a root. It failed
+closed, and it leaked nothing. A second defect stood beside it, by the same absence: a
+`#[field_resolver]` answering a wire type ran no mask, so a field grant did not hold
+there at all.
+
+- **The mask runs where a selection exists, the field, sharing a root's rule**
+  (`refused_selection`, `mask_row`). The batch reads through `Repo` and builds each
+  row's wire type, so what a batch holds depends on no selection, and each alias
+  answers by its own. Correctness, then security: the row stays judged `Loaded`,
+  rebuilt from the wire as a root's is; judging it on its `Model` stays this decision's
+  open question, the owner's.
+- **A caller whose grants narrow no column skips the round trip on a relation.** The
+  rebuild stays on every row of a reply because it is also the check that the body is
+  the entity's, and a relation's row is the entity's own wire type, built from the row
+  the batch read through `Repo`: the type holds that check, and SQL has judged the row.
+  So the promise holds that the hot path pays for nothing it does not use. Measured in
+  the commit that made it, against the 0.23 µs per row above.
+- **A hand-written `#[field_resolver]` is masked with no fast path.** Its rows did not
+  provably come through `Repo`, so a list's refused rows drop as a root's do; security
+  outranks the round trip per answer. The entity is read off the answer's type, through
+  a hidden impl `#[expose(…, graphql)]` emits on the wire type and a probe at the
+  expansion walking down what async-graphql serves around it, so no key is added, what
+  holds the rows owes the mask no serde impl, and an answer holding no wire type pays
+  nothing.
+- **A body's answer takes its provenance off its caller.** A caller a token backs reads
+  through `Repo` under this ability, so its answer is a reply, keeping the trust a read
+  earns whatever read it, the limit above. A visitor's reads are withheld below its root,
+  so no read can have applied its rules, and its answer is a push: judging it `Loaded`
+  would trust a read that cannot have run.
+- **A field with no selection refuses every key the mask took.** `Json<Wire>` is a scalar:
+  it serializes whole, so "a key outside the selection is never serialized" did not hold
+  of it, at a root as at a nested field, and it shipped what the grant withheld. A list
+  relation's page keeps its empty selection, `pageInfo { hasNextPage }` reading no row.
+
+**Refused:**
+
+- **A sealed row type as a loader's value**, so a body could not read a column out of
+  it: it breaks every resolver reading `<Service>ById`, the documented path, and a body
+  holds the same columns from `Repo` anyway. A scalar a body derives from a row is its
+  own line, as it always was off `Repo`, though the batch's mask used to refuse it off a
+  loader: an exception to "whichever path reads it", put to the owner.
+- **Serde's `rc` feature and a serde bound on the wrappers**, reading an answer whole: a
+  `Connection` and an array past 32 rows have no serde impl, so each would have stayed
+  outside the mask with nothing said.
+- **A second, hidden key on each generated loader**, keeping the public one masked at
+  its batch: two paths for one read, and the public one still answering `INTERNAL` to a
+  legitimate read.
+- **A key naming the entity on `#[field_resolver]`** for an answer whose type names
+  none: a public addition, the owner's.
+- **Opening a visitor's nested read of an entity.** It takes more than this mask: a
+  licence per root field, `VisitorReadNamed` being one unit's and a request carrying
+  several roots, and a line saying what it opens, since `define_visitor`'s grant opens
+  the operations naming its entity and a relation's target is named by none. It stays
+  closed, and fails so.
+
+**The limit named:** a field grant cuts a row's columns, never the link a relation
+follows, so `posts { author { id } }` answers though `.fields` withholds `author_id`,
+and `users { posts { … } }` lists what a child's grant withholds the key of. A root has
+always done so. Closing the `belongs_to` half costs the mask a table of each relation's
+key; closing the `has_many` half refuses `orgs { users { name } }` to a grant of
+`[Id, Name]`, which reads as a granted selection, so it is the owner's.

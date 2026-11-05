@@ -56,7 +56,7 @@ refused before its body runs.
 The **mask** runs on every item. Each value the stream yields is evaluated
 against the ability captured at subscribe — the one the gate checked, a guard
 bound on the field included — the row rules first, then the field grants. An item the subscriber may not read is **dropped**, not
-delivered with its fields nulled:
+delivered with its fields nulled, as a row refused leaves an item that is a list:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
 // two subscribers, one stream

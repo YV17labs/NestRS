@@ -156,11 +156,12 @@ is what keeps the sentence above true on that transport: a visitor grant
 opens the operations naming that entity in their `#[public(...)]` and no others.
 
 **A nested GraphQL field reads nothing for a visitor.** A `#[field_resolver]` or a
-relation's loader runs off the operation that named the read, where no mask
-reaches, so a visitor's ability is withheld there and its read answers nothing,
-with the same `warn`. A caller a token backs reads there by `define`, its rows
-filtered and no mask applying its field grants, under an `#[authorize]` operation
-as under a `#[public]` one: a nested read has no posture of its own.
+relation's loader runs off the operation that named the read, and no line on it
+names one, so a visitor's ability is withheld there and its read answers nothing,
+with the same `warn`: a relation reads `null` or an empty page, even of the entity
+its root names. A caller a token backs reads there by `define`, its rows filtered
+and [each field masked by its grants](/security/authorization/response-masking/#a-nested-graphql-field-masks-by-the-same-rule),
+under an `#[authorize]` operation as under a `#[public]` one.
 
 **A gated `/mcp` refuses anonymous callers.** It carries no
 `Posture::InBand` (its requests read `Gated`), so an unauthenticated tool

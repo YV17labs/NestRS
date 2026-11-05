@@ -107,10 +107,17 @@ its own `#[use_guards]`, and only the interceptors and exception filters
 declared on it: never the app's pool, nor the resolver's interceptors, which
 would run once per row.
 
-Nor does a mask reach it. A caller a token backs reads there by `define`, its rows
-filtered and its field grants not applied, so what it answers is chosen in its body;
-a caller with no credential reads nothing a grant guards there, whatever its root
-field names ([Public reads](/security/authorization/public-reads/#limits)).
+What it answers is masked all the same. An answer holding an `#[expose]`d wire type's
+rows, the type itself, an `Option`, a list of any kind, a `Box`, an `Arc`, a `Json`
+scalar, a map's values or a `Connection`, masks by that entity's grants and the field's
+selection, [as a root field's does](/security/authorization/response-masking/#a-nested-graphql-field-masks-by-the-same-rule),
+whatever read them, so a selected column the caller's grant withholds is refused naming
+it. A scalar derived from a row, a DTO of your own or an object holding a wire type name
+no entity, so what those answer is chosen in the body. A row you build by hand answers
+`INTERNAL` where the mask cannot read it back into the entity: answer a DTO of your own
+instead. A caller with no credential reads nothing a grant guards there, whatever its
+root field names ([Public reads](/security/authorization/public-reads/#limits)), and what
+a body answers it is judged as no read filtered it.
 
 ## Its module is imported
 

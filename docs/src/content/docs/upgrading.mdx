@@ -600,7 +600,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `.opaque()` over a borrowed error, or one that is only `Display` | an owned `std::error::Error` that converts into `Box<dyn Error + Send + Sync>`: it logs the whole chain; `JobError::retry` / `abort`, `WsReply::from_handler_error` and `OccurrenceLockError::new` take the same |
    | `ServiceError::internal(format!("password hashing failed: {e}"))` | `ServiceError::internal_because("password hashing failed", e)` |
    | `ServiceError::internal(&reason)`, `reason` a local `String` or a borrowed `&str` | `ServiceError::internal(reason.clone())` or `.to_owned()`: the detail is `'static`; a `String` or a `&'static str` passes unchanged |
-   | `ServiceError::Internal(msg)` / `ServiceError::Masking(msg)` built or matched | `ServiceError::internal(msg)`; match `ServiceError::Internal { .. }` and `Masking { .. }` (built by the relation loaders alone), the detail read as `err.source()`'s `Display` |
+   | `ServiceError::Internal(msg)` / `ServiceError::Masking(msg)` built or matched | `ServiceError::internal(msg)`; match `ServiceError::Internal { .. }` and `Masking { .. }` (which no framework path builds), the detail read as `err.source()`'s `Display` |
    | `AuthError::Failed(format!("…: {e}"))`, `AuthError::Failed(msg)` | `AuthError::failed_because("…", e)`, `AuthError::failed(msg)` |
    | `AuthError::Unavailable(detail)` or `AuthError::Unavailable { detail, retry_after }` built | `AuthError::unavailable(detail, retry_after)`, or `AuthError::unavailable_because(detail, retry_after, e)` |
    | `match err { AuthError::Failed(msg) => … }`, `AuthError::Unavailable { detail, retry_after }` matched | `AuthError::Failed { .. }`, `AuthError::Unavailable { retry_after, .. }`, the detail read as `err.source()`'s `Display` or the chain as `nest_rs::core::error_message(&err)` |
@@ -1698,6 +1698,20 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A client branching on `FORBIDDEN` for a visitor's call to a field whose guard reads
   the principal** now reads `UNAUTHENTICATED`, the class a missing credential answers
   everywhere. On HTTP, a `#[public]` route with such a guard answers `401`, not `500`.
+- **A `#[field_resolver]` answering an `#[expose]`d wire type**, whatever holds its rows,
+  answers `FORBIDDEN` naming a selected column the caller's `.fields` grant withholds, and
+  every selected column to a caller no grant reaches on that entity, where 6.x served
+  them. Grant the column, or answer a DTO of your own where the field means to show it. A
+  body reading a row out of a loader now holds every exposed column, as a row out of
+  `Repo`: what it derives from one is no mask's.
+- **A `#[field_resolver]` answering a row it built** that the mask cannot read back into
+  the entity, an `id` no key can hold, answers `INTERNAL` where 6.x served it, and an
+  answer to a visitor on a rule only a read could decide reads `null` or is refused. Answer
+  a DTO of your own.
+- **A `Json<Wire>` scalar, at a root or as a subscription item,** answers `FORBIDDEN`
+  naming every column the grant takes, or drops the item, where it shipped whole: it has
+  no selection to acquit them. **A subscription item that is a list** is masked row by
+  row, where it passed unmasked. Grant the columns, or answer the object type.
 - **`use_guards_global`, `use_pipes_global`, `use_interceptors_global` or
   `use_exception_filters_global` left in `main`** fails to compile (`no method
   named use_guards_global found for struct AppBuilder`): list the pool in the

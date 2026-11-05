@@ -315,9 +315,29 @@ mask, decided by the subject's type:
 - **GraphQL** (`#[operations]`) — the class gate and a mask around the
   returned value; `unmasked` keeps the gate and leaves masking to the body,
   for a shape the round-trip cannot see through (a cursor connection). A
-  subscription masks each item as a row: refused means dropped. **A
-  masked-out non-nullable field fails the whole operation**, since the schema
-  cannot ship it: a column a field grant may mask is `Option` on the entity.
+  subscription masks each item as a row, a list item row by row: refused means
+  dropped. **A masked-out non-nullable field refuses the field selecting it**, `FORBIDDEN`
+  naming it, since the schema cannot ship it, and is served where nothing selects
+  it, a key outside an object's selection never being serialized: a column a field
+  grant may mask and a client may still select is `Option` on the entity. A field
+  with no selection is a scalar (`Json<Wire>`), which serializes whole, so every
+  key the mask took refuses it. **A nested field masks by the same rule, with no
+  posture**, a read and the ability the request carries, the entity read off what
+  it answers: an exposed relation's field, a row of a list relation with its cursor,
+  whose text is the row's primary key and reads as that column, a refused row
+  reading `null` or leaving its page; and a `#[field_resolver]` whose answer holds a
+  wire type's rows, read off the hidden impl `#[expose(…, graphql)]` emits on the
+  type and a walk down what async-graphql serves around it (every list, `Option`,
+  `Box`, `Arc`, `Cow`, `Json`, a map's values, a `Connection`), which a DTO, an object
+  holding a wire type and a scalar a body derives do not have, so what those ship is
+  the body's. Its rows are judged as a reply's for a caller a token backs, and as a
+  push's for a visitor, whose reads are withheld there. **A relation's batch filters
+  rows and masks nothing**: it is shared by every alias asking, so a
+  selection-dependent value could not be cached in it, and each field masks by its
+  own. A caller whose grants narrow no column pays one rule lookup per field for a
+  relation, its row being the entity's own type read through `Repo`, which spares
+  the rebuild's check that a body is the entity's
+  (`.claude/decisions/mask-provenance.md`, 2026-11-05).
 - **MCP** (`#[tools]`) — GraphQL's caveat without a selection set to soften
   it: rmcp needs the typed value back, so a mask stripping a required key
   refuses the operation. A masked operation spells its return `Result<…>`.
@@ -353,12 +373,13 @@ dependency cycle.** What they guarantee:
   included. **A visitor reads only inside a unit naming its read**
   (`#[public(Action, Entity)]`): `current_ability` answers none for a visitor
   anywhere else in a request, a bare `#[public]`, a nested GraphQL field, a relation's
-  batch, so each fails closed where no mask reaches. A job holding one reads by its
+  batch, so each fails closed where no line names the read. A job holding one reads by its
   grant, `with_ability` being the line there, and `TestApp::unit` stands in for a unit
   naming its read.
 - **A dataloader batch** runs off-task under what its request carries into a
   batch — the request's values, never one field's, and the pool — captured
-  where a field asks the loader; nothing is bound for it.
+  where a field asks the loader; nothing is bound for it. A row out of one holds
+  every exposed column, as a row out of `Repo` does; the field answering it masks.
 - **No edge has a data context of its own**: each runs its unit through the
   port, so commit and rollback cannot drift between edges.
 
@@ -430,7 +451,8 @@ A database error is never an empty batch.
 `#[expose]` on an exposed entity becomes a GraphQL field resolved by a
 dataloader that `#[expose(name = "…", service = <Path>)]` emits on the owning
 service, reached from the inverse side without naming the other service. Every
-batch goes through `Repo::scoped(Action::Read)`, so row filtering applies.
+batch goes through `Repo::scoped(Action::Read)`, so row filtering applies, and
+the field masks the columns by its selection (*Response masking*).
 The serving adapter imports the target's module, and a schema serving a
 field whose loader's owner the app does not reach — a relation, a
 `#[field_resolver]`'s `&DataLoader<L>` parameter — is refused at boot naming

@@ -157,7 +157,9 @@ guard, filter or interceptor loop of its own.
 7. **Response masking armed by the posture**, never hand-written in a body,
    chosen by the protocol rather than by symmetry (`data-layer.md`, *Response
    masking*), and by the subject's type: an entity's posture masks, a
-   `#[subject]`'s arms none. **A unit no mask shapes withholds the ability from its
+   `#[subject]`'s arms none. A nested GraphQL field is no unit and writes no
+   posture: what it answers masks by the entity its type names (`data-layer.md`).
+   **A unit no mask shapes withholds the ability from its
    reads, on every edge, whatever its posture says** (`UnmaskedReply`): a bare
    `#[public]`, a covered unit stating none, a `#[subject]`'s, a route, a stream.
    `unmasked` keeps the ability and leaves the mask to the body, and so does a

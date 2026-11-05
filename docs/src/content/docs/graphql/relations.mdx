@@ -155,6 +155,12 @@ transport — see [Repo and executor](/database/repo-and-executor/).
 This is the killer property: turning a per-row leak into a wire-level
 omission needs no controller code and no manual `if` in the resolver.
 
+The batch decides the rows and the field the columns. A batch serves every alias of
+a field at once, so each field masks what it answers by its own selection, as a root
+field does: under a `.fields([Id, Name])` grant on `User`, `post.author { id name }`
+answers and `post.author { email }` is refused naming `email`
+([Response masking](/security/authorization/response-masking/#a-nested-graphql-field-masks-by-the-same-rule)).
+
 ## What fails if you get it wrong
 
 A batch runs on its **own task** — that is what a DataLoader is — and carries

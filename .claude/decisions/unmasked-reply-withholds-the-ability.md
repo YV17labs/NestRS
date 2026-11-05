@@ -74,3 +74,11 @@ it installs, standing in for a unit naming its read.
   the relation's loader and at a field resolver's answer.
 - **A schema extension around each root field carrying the marker into its children**:
   an extension turns every field of every schema onto async-graphql's slow path.
+
+## 2026-11-05 — a nested read runs a mask for an authenticated caller
+
+The second refusal above says a nested read runs no mask for any authenticated caller.
+That was never so of a relation, whose batch masked, and answered `INTERNAL` under a
+narrow grant; and it is closed for a `#[field_resolver]` answering a wire type, both by
+the entry of this date in `mask-provenance.md`. A visitor's nested read still answers
+nothing, for the reason above.

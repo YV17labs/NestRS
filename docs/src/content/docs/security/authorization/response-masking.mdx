@@ -60,8 +60,9 @@ one difference the schema forces: the masked value has to come back as
 the operation's own type. A stripped column masks to `null` where the
 field is nullable; where it is `String!` — what `#[expose]` emits for a
 non-nullable column — it cannot, so an operation that **selects** such a
-field is refused and one that does not select it is served. Row dropping
-applies either way.
+field is refused and one that does not select it is served. A scalar such as
+`Json<User>` has no selection and serializes whole, so every column a grant
+would take from it refuses it. Row dropping applies either way.
 
 The refusal carries `extensions.code = "FORBIDDEN"` and `extensions.fields` —
 a **list** of the column names it refused:
@@ -80,6 +81,57 @@ every grant — declare `#[authorize(Action, Entity, unmasked)]` and let the
 projection be the field restriction. The gate and the row filter stay either
 way.
 
+## A nested GraphQL field masks by the same rule
+
+A relation and a `#[field_resolver]` run below the operation and write no posture.
+What they answer is masked all the same, as a read under the ability the request
+carries, by the entity the answer's type names.
+
+**An exposed relation.** Its batch reads through `Repo::scoped(Read)`, so SQL decides
+the rows, and it serves every alias of the field at once, so it leaves the columns
+alone. The field masks them by its own selection, under a grant of `[Id, Name]`:
+
+```graphql
+{ posts { author { id name } } }                       # answered
+{ posts { author { email } } }                         # FORBIDDEN, fields: ["email"]
+{ posts { a: author { name } b: author { email } } }   # a answered, b FORBIDDEN
+```
+
+A list relation masks each row beside its cursor. A row the ability refuses leaves the
+page with it, as one reads `null` on a `belongs_to`, and a selected `cursor`,
+`startCursor` or `endCursor` reads as the primary key it spells. A caller whose grants
+narrow no column pays one rule lookup per field and no round trip.
+
+**A `#[field_resolver]` answering a wire type**, whatever read its rows and whatever
+holds them: `Option`, `Vec` or another list, `Box`, `Arc`, `Cow`, a `Json` scalar, a
+map's values, a `Connection`. A root's rule, by the entity the type names and the field's
+selection: it answers a selected column the grant withholds with the same refusal, a
+scalar every column the grant withholds, and a caller a grant does not reach on that
+entity reads none of its columns. A `Connection` keeps its flags and each kept edge's
+cursor, a row the ability refuses leaves with its edge, and a selected cursor reads as
+the primary key, as on a list relation.
+
+A caller a token backs reads through `Repo`, so its answer is judged as a reply, trusted
+on a rule the row cannot decide ([what the mask cannot see](#what-the-mask-cannot-see)),
+and a row a body did not read that way keeps that trust: the limit. A visitor's reads are
+withheld there, so its answer is judged as a push: a grant only a read could decide
+grants nothing, and the row reads `null`, leaves its list or refuses its selection.
+
+What a body makes of a row stays its own. A scalar derived from one, a DTO of its own and
+an object holding a wire type name no entity, so no mask reaches them, and a row out of a
+loader holds every exposed column, as a row out of `Repo` does. Keep a withheld column out
+of such an answer, or answer the wire type. No mask reaches a `&'static` row, a `Weak`, an
+`Arc` holding a `Connection` or a `Connection` of anything but the wire type itself either,
+since it cannot put the row it cut back into them.
+
+<Aside type="caution">
+A grant cuts a row's columns, never the link a relation follows. `posts { author { id } }`
+answers though `.fields` withholds `author_id`, and `users { posts { … } }` lists a
+child whose grant withholds the key linking it. To keep a link from a caller, leave the
+relation [unexposed](/graphql/relations/#opt-out-leave-a-single-relation-unexposed) and
+answer what they may read from a `#[field_resolver]`.
+</Aside>
+
 ## What you get
 
 - **Field masking.** Restricted keys are stripped from the object (their
@@ -92,9 +144,9 @@ way.
   leaves — even an unrestricted grant cannot leak an unexposed column
   like `password_hash`.
 - **Fail-closed.** A successful body that cannot be reconciled with the
-  entity's `Model` yields 500 rather than shipping unmasked; a hidden
-  column the mask could not rebuild never gets that far, refused by
-  `#[expose]` at compile time.
+  entity's `Model` yields 500 rather than shipping unmasked, on GraphQL `INTERNAL`,
+  a row a body invented among them; a hidden column the mask could not rebuild
+  never gets that far, refused by `#[expose]` at compile time.
 
 A non-2xx, a body declaring a type other than JSON and a JSON scalar pass through
 untouched; a body declaring no type is refused like one that does not parse, and

@@ -145,6 +145,12 @@ async fn namesakes(
 }
 ```
 
+A loader's rows hold every exposed column, as rows out of `Repo` do: the batch decides
+the rows, and the field answering decides the columns. `namesakes` answers `Vec<Post>`,
+so it is [masked by the caller's grants](/security/authorization/response-masking/#a-nested-graphql-field-masks-by-the-same-rule)
+and its own selection, as a root field is. A scalar it derived from a row would be its
+own line, which no mask reads.
+
 The parameter is the whole wiring, and it declares the need. A loader is seeded
 only for an owner the app reaches, so the schema build reads the parameter and
 refuses a served field whose loader's owner the app does not import, as it does

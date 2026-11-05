@@ -484,13 +484,7 @@ where
         match ended {
             Ok(answered) => {
                 if let Some(line) = line {
-                    match &answered {
-                        Ok(_) => line.file(nest_rs_core::operation_log::OK),
-                        Err(error) if error.failed_the_server() => {
-                            line.file(nest_rs_core::operation_log::ERROR);
-                        }
-                        Err(_) => line.refused(),
-                    }
+                    line.answered(&answered);
                 }
                 Poll::Ready(answered)
             }
@@ -523,11 +517,21 @@ impl FieldLine<'_> {
         self.emit(outcome);
     }
 
-    /// File `error` for what the caller's request earned, which its span
-    /// leaves unrecorded, as an HTTP `4xx` fails nothing on the server's span.
-    fn refused(mut self) {
-        self.span = tracing::Span::none();
-        self.emit(nest_rs_core::operation_log::ERROR);
+    /// File what the field answered: `ok`, or `error`, which its span records
+    /// unless its caller's request earned it, as an HTTP `4xx` fails nothing on
+    /// the server's span.
+    fn answered<T, E: AnsweredError>(mut self, answered: &Result<T, E>) {
+        if answered
+            .as_ref()
+            .is_err_and(|error| !error.failed_the_server())
+        {
+            self.span = tracing::Span::none();
+        }
+        self.emit(if answered.is_ok() {
+            nest_rs_core::operation_log::OK
+        } else {
+            nest_rs_core::operation_log::ERROR
+        });
     }
 
     fn emit(&mut self, outcome: &'static str) {

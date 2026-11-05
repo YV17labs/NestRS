@@ -374,29 +374,10 @@ async fn a_field_records_an_error_on_its_span_only_for_a_failure_of_the_servers_
             .unwrap_or_else(|| panic!("the span of `{field}`"))
     };
     for field in ["deliberate", "conflict", "forbidden"] {
-        let span = of(field);
-        assert_eq!(span.field("error.type"), None, "{field}: {:?}", span.fields);
-        assert_eq!(
-            span.field("otel.status_code"),
-            None,
-            "{field}: {:?}",
-            span.fields
-        );
+        crate::assert_span_records_no_error(of(field));
     }
     for field in ["failed", "storage", "opaque", "storeDown"] {
-        let span = of(field);
-        assert_eq!(
-            span.field("error.type").as_deref(),
-            Some(nest_rs_core::operation_log::ERROR),
-            "{field}: {:?}",
-            span.fields,
-        );
-        assert_eq!(
-            span.field("otel.status_code").as_deref(),
-            Some("error"),
-            "{field}: {:?}",
-            span.fields,
-        );
+        crate::assert_span_records(of(field), nest_rs_core::operation_log::ERROR);
     }
 }
 
@@ -584,13 +565,7 @@ fn assert_field_span_failed(logs: &LogCapture, field: &str, outcome: &str) {
                 && span.field("graphql.field.name").as_deref() == Some(field)
         })
         .unwrap_or_else(|| panic!("the span of `{field}`"));
-    assert_eq!(
-        span.field("error.type").as_deref(),
-        Some(outcome),
-        "{:?}",
-        span.fields,
-    );
-    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    crate::assert_span_records(&span, outcome);
 }
 
 /// A field that unwinds tears its siblings down with it; only it files `panic`.

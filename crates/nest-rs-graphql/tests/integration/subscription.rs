@@ -562,13 +562,7 @@ async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
         nest_rs_graphql::TARGET,
         nest_rs_graphql::unit::SUBSCRIPTION.name(),
     );
-    assert_eq!(
-        span.field("error.type").as_deref(),
-        Some(nest_rs_core::operation_log::CANCELLED),
-        "{:?}",
-        span.fields,
-    );
-    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    crate::assert_span_records(&span, nest_rs_core::operation_log::CANCELLED);
 }
 
 /// The floor every connection ceiling is held to: a second.
@@ -1209,8 +1203,7 @@ async fn a_socket_the_protocol_refused_records_no_error_on_its_span() {
         nest_rs_graphql::TARGET,
         nest_rs_graphql::unit::SUBSCRIPTION.name(),
     );
-    assert_eq!(span.field("error.type"), None, "{:?}", span.fields);
-    assert_eq!(span.field("otel.status_code"), None, "{:?}", span.fields);
+    crate::assert_span_records_no_error(&span);
 }
 
 /// Both subprotocols async-graphql speaks are negotiated off

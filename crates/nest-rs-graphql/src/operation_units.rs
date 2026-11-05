@@ -182,11 +182,7 @@ impl<E: Executor> OperationUnits<E> {
         let answered = nest_rs_core::panic::contain(scoped).instrument(span).await;
         match answered {
             Ok(answered) => {
-                match answered.outcome() {
-                    Ended::Answered => line.file(OK),
-                    Ended::Refused => line.refused(),
-                    Ended::Failed => line.file(ERROR),
-                }
+                line.answered(&answered);
                 answered.into_response()
             }
             Err(unwound) => {
@@ -422,16 +418,19 @@ impl Answered {
         Self::Unhonoured
     }
 
-    fn outcome(&self) -> Ended {
+    fn outcome(&self) -> &'static str {
         match self {
-            Self::Executed(response) if response.errors.is_empty() => Ended::Answered,
-            Self::Executed(response)
-                if !response.errors.iter().any(AnsweredError::failed_the_server) =>
-            {
-                Ended::Refused
-            }
-            _ => Ended::Failed,
+            Self::Executed(response) if response.errors.is_empty() => OK,
+            _ => ERROR,
         }
+    }
+
+    /// Whether it failed by what its caller's document earned: errors, none of
+    /// them a failure of the server's own.
+    fn refused_its_caller(&self) -> bool {
+        matches!(self, Self::Executed(response)
+            if !response.errors.is_empty()
+                && !response.errors.iter().any(AnsweredError::failed_the_server))
     }
 
     fn into_response(self) -> Response {
@@ -443,17 +442,6 @@ impl Answered {
             Self::Unhonoured => refused(&Problem::new(500, code::INTERNAL)),
         }
     }
-}
-
-/// How an operation's unit ended, for its line and its span.
-enum Ended {
-    /// With no error.
-    Answered,
-    /// With what the caller's document earned: its line says `error`, and its
-    /// span records nothing, as an HTTP `4xx` fails nothing on the server's span.
-    Refused,
-    /// With a failure of the server's own, which its span records too.
-    Failed,
 }
 
 /// GraphQL §6.1.2, *CoerceVariableValues*, for the absent variables
@@ -741,10 +729,14 @@ impl OperationLine {
         self.emit(outcome);
     }
 
-    /// File `error` with nothing on the span: [`Ended::Refused`].
-    fn refused(mut self) {
-        self.span = tracing::Span::none();
-        self.emit(ERROR);
+    /// File what the operation answered: `ok`, or `error`, which its span
+    /// records unless its caller's document earned it, as an HTTP `4xx` fails
+    /// nothing on the server's span.
+    fn answered(mut self, answered: &Answered) {
+        if answered.refused_its_caller() {
+            self.span = tracing::Span::none();
+        }
+        self.emit(answered.outcome());
     }
 
     /// Said inside the operation's unit when the request's deadline cuts it,

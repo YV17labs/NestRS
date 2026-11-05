@@ -1249,13 +1249,7 @@ fn assert_query_span_failed(logs: &LogCapture, name: &str, outcome: &str) {
         span.field("graphql.operation.type").as_deref(),
         Some("query")
     );
-    assert_eq!(
-        span.field("error.type").as_deref(),
-        Some(outcome),
-        "{:?}",
-        span.fields
-    );
-    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    crate::assert_span_records(&span, outcome);
 }
 
 /// The outcome the line of the operation `name` filed, found by its span's
@@ -1369,14 +1363,7 @@ async fn an_operation_records_an_error_on_its_span_only_for_a_failure_of_the_ser
         );
     }
     for name in ["Unknown", "Refused", "Conflict", "NestedRefused"] {
-        let span = operation_span(&logs, name);
-        assert_eq!(span.field("error.type"), None, "{name}: {:?}", span.fields);
-        assert_eq!(
-            span.field("otel.status_code"),
-            None,
-            "{name}: {:?}",
-            span.fields
-        );
+        crate::assert_span_records_no_error(&operation_span(&logs, name));
     }
     let no_document = logs
         .spans()
@@ -1386,12 +1373,7 @@ async fn an_operation_records_an_error_on_its_span_only_for_a_failure_of_the_ser
                 && span.field("graphql.operation.name").is_none()
         })
         .expect("the span of a document that does not parse");
-    assert_eq!(
-        no_document.field("error.type"),
-        None,
-        "{:?}",
-        no_document.fields
-    );
+    crate::assert_span_records_no_error(&no_document);
     for name in ["Failed", "Storage", "NestedFailed", "Mixed"] {
         assert_query_span_failed(&logs, name, nest_rs_core::operation_log::ERROR);
     }
@@ -1409,14 +1391,10 @@ async fn an_operation_its_unit_could_not_honour_records_an_error_on_its_span() {
     )
     .await;
 
-    let span = operation_span(&logs, "Unhonoured");
-    assert_eq!(
-        span.field("error.type").as_deref(),
-        Some(nest_rs_core::operation_log::ERROR),
-        "{:?}",
-        span.fields
+    crate::assert_span_records(
+        &operation_span(&logs, "Unhonoured"),
+        nest_rs_core::operation_log::ERROR,
     );
-    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
 #[tokio::test(start_paused = true)]

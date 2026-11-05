@@ -214,7 +214,7 @@ impl WsError {
             }),
             retry_after_secs: problem.retry_after(),
             errors: problem.errors().cloned().map(Box::new),
-            server_failed: problem.status() >= 500,
+            server_failed: problem.is_server_error(),
             ..Self::classed(problem.client_message(), problem.code())
         }
     }

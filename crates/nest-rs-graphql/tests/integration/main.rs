@@ -34,6 +34,29 @@ mod wire_enum;
 
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_testing::CapturedSpan;
+
+/// `span` records the outcome its line filed, and an `Error` status.
+fn assert_span_records(span: &CapturedSpan, outcome: &str) {
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(outcome),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
+}
+
+/// `span` records no error: what its caller earned fails nothing on it.
+fn assert_span_records_no_error(span: &CapturedSpan) {
+    assert_eq!(span.field("error.type"), None, "{:?}", span.fields);
+    assert_eq!(span.field("otel.status_code"), None, "{:?}", span.fields);
+}
 
 /// What a store refusing the connection reports: the cause a guard keeps.
 #[derive(Debug)]

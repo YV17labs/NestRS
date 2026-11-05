@@ -222,14 +222,6 @@ struct DispatchWiring {
     disconnect_timeout: Option<Duration>,
 }
 
-impl DispatchWiring {
-    /// How long a message may run, and the instant that lands on.
-    fn message_deadline(&self) -> Option<(Duration, tokio::time::Instant)> {
-        self.message_timeout
-            .map(|timeout| (timeout, tokio::time::Instant::now() + timeout))
-    }
-}
-
 /// Per-socket limits resolved once at upgrade from [`WsConfig`].
 #[derive(Clone, Copy)]
 struct SocketLimits {
@@ -358,50 +350,31 @@ async fn serve_connection<G, N, S>(
             _ = &mut writer_stopped => break Closure::WriterStopped,
             message = stream.next() => {
                 let Some(message) = message else { break Closure::PeerGone };
-                match message {
+                let reply = match message {
+                    // The boundary case the protocol-layer cap lets through; framing is
+                    // intact, so the socket survives and the refusal goes in band.
+                    Ok(Message::Text(text)) if text.len() > limits.max_message_bytes => {
+                        refuse_oversize(
+                            &messages,
+                            &wiring,
+                            &client,
+                            text.len(),
+                            limits.max_message_bytes,
+                        )
+                        .await
+                    }
                     Ok(Message::Text(text)) => {
-                        // The boundary case the protocol-layer cap lets through; framing is
-                        // intact, so the socket survives and the refusal goes in band.
-                        if text.len() > limits.max_message_bytes {
-                            let reply = refuse_oversize(
-                                &messages,
-                                &wiring,
-                                &client,
-                                text.len(),
-                                limits.max_message_bytes,
-                            )
-                            .await;
-                            if let Some(frame) = reply
-                                && outbox.try_send(frame.into()).is_err()
-                            {
-                                break stalled_outbox(conn_id);
-                            }
-                            continue;
-                        }
-                        if let Some(reply) =
-                            handle_text(&*gateway, &messages, &wiring, &client, text.as_str()).await
-                        {
-                            // The pushes' outbox, so ordering with broadcasts the handler
-                            // triggered is preserved.
-                            if outbox.try_send(reply.into()).is_err() {
-                                break stalled_outbox(conn_id);
-                            }
-                        }
+                        handle_text(&*gateway, &messages, &wiring, &client, text.as_str()).await
                     }
                     // RFC 6455 §7.4.1's 1003 is the other conformant answer; framing is
                     // intact, so the refusal goes in band.
                     Ok(Message::Binary(data)) => {
-                        let reply = refuse_binary(&messages, &wiring, &client, data.len()).await;
-                        if let Some(frame) = reply
-                            && outbox.try_send(frame.into()).is_err()
-                        {
-                            break stalled_outbox(conn_id);
-                        }
+                        refuse_binary(&messages, &wiring, &client, data.len()).await
                     }
                     Ok(Message::Close(_)) => break Closure::Echo,
                     // tungstenite queues the Pong before a Ping reaches this loop,
                     // and a raw frame is never read.
-                    Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => {}
+                    Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => None,
                     Err(err) => {
                         let (code, reason) = websocket::read_failed(&err);
                         tracing::debug!(
@@ -413,6 +386,13 @@ async fn serve_connection<G, N, S>(
                         );
                         break Closure::Server(code, reason);
                     }
+                };
+                // The pushes' outbox, so ordering with broadcasts the handler
+                // triggered is preserved.
+                if let Some(reply) = reply
+                    && outbox.try_send(reply.into()).is_err()
+                {
+                    break stalled_outbox(conn_id);
                 }
             }
         }
@@ -590,15 +570,14 @@ async fn refuse_oversize(
     bytes: usize,
     max_message_bytes: usize,
 ) -> Option<String> {
-    let conn_id = client.id();
     refuse_unread(
         messages,
         wiring,
         client,
-        move || {
+        || {
             tracing::debug!(
                 target: crate::TARGET,
-                conn_id,
+                conn_id = client.id(),
                 bytes,
                 max_message_bytes,
                 "websocket message refused: over the per-message cap",
@@ -618,15 +597,14 @@ async fn refuse_binary(
     client: &WsClient,
     bytes: usize,
 ) -> Option<String> {
-    let conn_id = client.id();
     refuse_unread(
         messages,
         wiring,
         client,
-        move || {
+        || {
             tracing::debug!(
                 target: crate::TARGET,
-                conn_id,
+                conn_id = client.id(),
                 bytes,
                 "websocket message refused: binary frames carry no envelope",
             );
@@ -651,25 +629,16 @@ async fn refuse_unread(
     report: impl FnOnce() + Send,
     refusal: &crate::WsError,
 ) -> Option<String> {
-    let deadline = wiring.message_deadline();
-    let body = async move {
-        report();
-        crate::message::unserved(
-            messages,
-            client,
-            serde_json::Value::Null,
-            refusal,
-            deadline.map(|(_, at)| at),
-        )
-        .await
-    };
     let reply = in_message_unit(
         wiring,
         client.id(),
         operation_log::OTHER,
         None,
-        deadline,
-        body,
+        |deadline| async move {
+            report();
+            crate::message::unserved(messages, client, serde_json::Value::Null, refusal, deadline)
+                .await
+        },
     )
     .await;
     reply_frame(reply, "error", operation_log::OTHER)
@@ -974,36 +943,45 @@ async fn handle_text<G: Gateway>(
     // What the lines and the span name: the event a handler declares, never
     // one only the client named.
     let named = served.map_or(operation_log::OTHER, |(event, _)| event);
-    let deadline = wiring.message_deadline();
-    let at = deadline.map(|(_, at)| at);
-    let body = async move {
-        match served {
-            Some((event, Some(message))) => {
-                crate::message::answer(gateway, message, client, event, data, at).await
-            }
-            Some((_, None)) => crate::message::refused(),
-            None => {
-                let refusal = crate::WsError::unknown_event();
-                crate::message::unserved(messages, client, data, &refusal, at).await
-            }
-        }
-    };
     let unit_of_work = served.and(wiring.unit_of_work.as_ref());
-    let reply = in_message_unit(wiring, conn_id, named, unit_of_work, deadline, body).await;
+    let reply = in_message_unit(
+        wiring,
+        conn_id,
+        named,
+        unit_of_work,
+        |deadline| async move {
+            match served {
+                Some((event, Some(message))) => {
+                    crate::message::answer(gateway, message, client, event, data, deadline).await
+                }
+                Some((_, None)) => crate::message::refused(),
+                None => {
+                    let refusal = crate::WsError::unknown_event();
+                    crate::message::unserved(messages, client, data, &refusal, deadline).await
+                }
+            }
+        },
+    )
+    .await;
     reply_frame(reply, &event, named)
 }
 
-/// Run `body` as the message `named` names: its span and line, a request scope
-/// of its own, a panic contained so the socket goes on serving, inside
-/// `unit_of_work` when it opens one, its body cut at `deadline`.
+/// Run what `body` builds for the message's deadline as the message `named`
+/// names: its span and line, a request scope of its own, a panic contained so
+/// the socket goes on serving, inside `unit_of_work` when it opens one, the
+/// body cut at that deadline.
 async fn in_message_unit<B: Future<Output = Answered> + Send>(
     wiring: &DispatchWiring,
     conn_id: ConnId,
     named: &'static str,
     unit_of_work: Option<&Arc<dyn UnitOfWork>>,
-    deadline: Option<(Duration, tokio::time::Instant)>,
-    body: B,
+    body: impl FnOnce(Option<tokio::time::Instant>) -> B,
 ) -> WsReply {
+    let deadline = wiring
+        .message_timeout
+        .map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
+    let at = deadline.map(|(_, at)| at);
+    let body = body(at);
     // The body alone is cut: the unit settles outside it, so a commit never is.
     let cut = async move {
         match deadline {
@@ -1013,7 +991,7 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
             None => body.await,
         }
     };
-    let spec = unit_spec(Unit::Message { event: named }, deadline.map(|(_, at)| at));
+    let spec = unit_spec(Unit::Message { event: named }, at);
     let unit = run_unit(
         unit_of_work,
         spec,

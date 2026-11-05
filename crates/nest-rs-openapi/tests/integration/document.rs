@@ -379,7 +379,7 @@ async fn the_uri_strategy_document_does_not_move() {
 /// global pool's, its controller's and its own — whatever the guard is named.
 mod guards {
     use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy};
-    use nest_rs_authz::{Read, subject};
+    use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Read, subject};
     use nest_rs_core::async_trait;
     use nest_rs_core::{
         AmbientValue, ChallengeScheme, DenialDocument, Layer, UnitContext, injectable, module,
@@ -561,8 +561,21 @@ mod guards {
     #[subject]
     struct Browsing;
 
+    /// The rules the gate reads; a document runs none of them.
+    #[injectable]
+    #[derive(Default)]
+    struct BrowsingAbility;
+
+    impl AbilityFactory for BrowsingAbility {
+        type Actor = Caller;
+
+        fn define(&self, _actor: &Caller, _ability: &mut AbilityBuilder) {}
+    }
+
+    type Authz = AbilityGuard<BrowsingAbility>;
+
     #[controller(path = "/machines")]
-    #[use_guards(BasicClients)]
+    #[use_guards(BasicClients, Authz)]
     struct MachinesController;
 
     #[routes]
@@ -574,7 +587,10 @@ mod guards {
         }
     }
 
-    #[module(imports = [openapi()], providers = [BasicClients, MachinesController])]
+    #[module(
+        imports = [openapi()],
+        providers = [BasicClients, BrowsingAbility, Authz, MachinesController],
+    )]
     struct MachinesApp;
 
     fn responses<'d>(document: &'d Value, path: &str) -> &'d Value {

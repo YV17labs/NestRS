@@ -110,6 +110,10 @@ impl Layer for ManagerToken {}
 
 #[async_trait]
 impl Guard for ManagerToken {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }
@@ -137,6 +141,10 @@ impl Layer for VisitorRules {}
 
 #[async_trait]
 impl Guard for VisitorRules {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let ability = rules_of(&role_of(cx)?)
             .build_visitor()

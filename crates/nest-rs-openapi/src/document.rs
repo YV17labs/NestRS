@@ -511,10 +511,13 @@ fn operation_object(
 
     let challenged = challenges(denials);
     if !challenged.is_empty() {
-        let requirements = challenged
+        // One Security Requirement Object: a chain runs every guard, and a
+        // `security` list's entries are alternatives.
+        let requirement: Map<String, Value> = challenged
             .iter()
-            .map(|scheme| json!({ security_scheme_name(*scheme): [] }));
-        op.insert("security".into(), requirements.collect());
+            .map(|scheme| (security_scheme_name(*scheme), json!([])))
+            .collect();
+        op.insert("security".into(), json!([requirement]));
     } else if route.public() {
         // OpenAPI 3.1 §4.8.10.1: an empty list removes any requirement, the
         // `#[public]` opening stated in the document as in the code.
@@ -1197,6 +1200,30 @@ mod tests {
         );
 
         assert_eq!(op["security"], json!([{ "basicAuth": [] }]), "{op}");
+    }
+
+    /// A chain runs every guard, so what two of them challenge is required
+    /// together: one Security Requirement Object naming both, as a list's entries
+    /// are alternatives (OpenAPI 3.1, Security Requirement Object).
+    #[test]
+    fn a_chain_challenging_two_schemes_requires_both_in_one_requirement() {
+        let mut g = generator();
+        let own = DenialDocument::answering(ChallengeScheme::Basic, own_words);
+
+        let op = operation_object(
+            &http_route_meta(route("both", "/both")),
+            &template("/both"),
+            "both",
+            &mut g,
+            &[(401, DenialDocument::PROBLEM), (401, own)],
+            None,
+        );
+
+        assert_eq!(
+            op["security"],
+            json!([{ "bearerAuth": [], "basicAuth": [] }]),
+            "{op}",
+        );
     }
 
     #[test]

@@ -379,9 +379,12 @@ async fn the_uri_strategy_document_does_not_move() {
 /// global pool's, its controller's and its own — whatever the guard is named.
 mod guards {
     use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy};
+    use nest_rs_authz::{Read, subject};
     use nest_rs_core::async_trait;
-    use nest_rs_core::{AmbientValue, Layer, UnitContext, injectable, module};
-    use nest_rs_guards::{Denial, Guard, GuardFor};
+    use nest_rs_core::{
+        AmbientValue, ChallengeScheme, DenialDocument, Layer, UnitContext, injectable, module,
+    };
+    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase};
     use nest_rs_http::{HttpView, Request, controller, routes};
     use nest_rs_testing::TestApp;
     use nest_rs_throttler::ThrottlerGuard as Limit;
@@ -525,6 +528,55 @@ mod guards {
     #[module(imports = [openapi()], providers = [Bearer, Authn, AccountsController])]
     struct AccountsApp;
 
+    /// Challenges `Basic` in its own words, as a token endpoint's client guard does.
+    #[injectable]
+    #[derive(Default)]
+    struct BasicClients;
+
+    impl Layer for BasicClients {}
+
+    #[async_trait]
+    impl Guard for BasicClients {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+            &[401]
+        }
+
+        fn denial_document(&self) -> DenialDocument {
+            DenialDocument::answering(ChallengeScheme::Basic, |generator| {
+                generator.subschema_for::<String>()
+            })
+        }
+    }
+
+    impl GuardFor<HttpView> for BasicClients {}
+
+    #[subject]
+    struct Browsing;
+
+    #[controller(path = "/machines")]
+    #[use_guards(BasicClients)]
+    struct MachinesController;
+
+    #[routes]
+    impl MachinesController {
+        #[get("/")]
+        #[authorize(Read, Browsing)]
+        async fn list(&self) -> &'static str {
+            "[]"
+        }
+    }
+
+    #[module(imports = [openapi()], providers = [BasicClients, MachinesController])]
+    struct MachinesApp;
+
     fn responses<'d>(document: &'d Value, path: &str) -> &'d Value {
         &document["paths"][path]["get"]["responses"]
     }
@@ -533,6 +585,35 @@ mod guards {
         assert_eq!(
             response["headers"]["Retry-After"]["schema"]["type"], "integer",
             "the status declares the Retry-After it carries: {response}",
+        );
+    }
+
+    /// A class gate's `401` is reached past the chain's, so it offers no scheme
+    /// the chain does not challenge with: what its `403` adds stays its own.
+    #[tokio::test]
+    async fn a_class_gate_adds_no_scheme_beside_a_guard_challenging_its_own() {
+        let app = TestApp::for_module::<MachinesApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        assert_eq!(
+            doc["paths"]["/machines"]["get"]["security"],
+            serde_json::json!([{ "basicAuth": [] }]),
+        );
+        let responses = responses(&doc, "/machines");
+        let refused = &responses["401"];
+        assert!(
+            refused["content"].get("application/problem+json").is_none(),
+            "{refused}",
+        );
+        let challenge = refused["headers"]["WWW-Authenticate"]["description"]
+            .as_str()
+            .expect("a 401 names its challenge");
+        assert!(!challenge.contains("Bearer"), "{challenge}");
+        assert!(
+            responses["403"]["content"]
+                .get("application/problem+json")
+                .is_some(),
+            "{responses}",
         );
     }
 

@@ -160,8 +160,9 @@ impl GuardStage for HttpGuardStage {
     }
 
     /// What each guard declares, the chain the stage runs, and what its class
-    /// gates refuse: a caller no principal backs at a gated site, one whose
-    /// ability lacks the grant or its scope anywhere.
+    /// gates refuse: one whose ability lacks the grant or its scope anywhere, and
+    /// at a gated site a caller no principal backs, unless a guard of the chain
+    /// already answers that `401` in its own terms.
     fn denials(&self, public: bool) -> Vec<(u16, DenialDocument)> {
         let mut denials: Vec<(u16, DenialDocument)> = self
             .guards
@@ -174,7 +175,7 @@ impl GuardStage for HttpGuardStage {
             .collect();
         if !self.gates.is_empty() {
             denials.push((403, DenialDocument::PROBLEM));
-            if !public {
+            if !public && !denials.iter().any(|(status, _)| *status == 401) {
                 denials.push((401, DenialDocument::PROBLEM));
             }
         }
@@ -390,7 +391,7 @@ mod tests {
 
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, meta_value};
     use nest_rs_core::async_trait;
-    use nest_rs_core::{Layer, LayerSite, Posture, UnitContext};
+    use nest_rs_core::{ChallengeScheme, Layer, LayerSite, Posture, UnitContext};
 
     use super::*;
     use crate::endpoint::{BoxEndpoint, Endpoint};
@@ -682,6 +683,51 @@ mod tests {
         let stage = HttpGuardStage::new(guards, Vec::new(), StageKind::Route { unmasked: true });
         assert_eq!(statuses(&stage, false), [401, 403, 403, 503]);
         assert_eq!(statuses(&stage, true), [403, 503]);
+    }
+
+    /// Challenges `Basic`, and answers in its protocol's own words.
+    struct ChallengesBasic;
+
+    impl Layer for ChallengesBasic {}
+
+    #[async_trait]
+    impl Guard for ChallengesBasic {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+            Ok(())
+        }
+
+        fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+            &[401]
+        }
+
+        fn denial_document(&self) -> DenialDocument {
+            DenialDocument::answering(
+                ChallengeScheme::Basic,
+                crate::controller::schema_of::<String>,
+            )
+        }
+    }
+
+    /// A gate refusing a caller no principal backs is reached only past the
+    /// chain's own `401`, so it adds no scheme the chain does not challenge with.
+    #[test]
+    fn a_class_gate_implies_no_401_beside_a_guard_declaring_one() {
+        let admit: GateFn = |_| Ok(());
+        let stage = HttpGuardStage::new(
+            chain(ChallengesBasic),
+            vec![admit],
+            StageKind::Route { unmasked: true },
+        );
+
+        let denials = stage.denials(false);
+
+        let unauthorized: Vec<ChallengeScheme> = denials
+            .iter()
+            .filter(|(status, _)| *status == 401)
+            .map(|(_, document)| document.challenge)
+            .collect();
+        assert_eq!(unauthorized, [ChallengeScheme::Basic]);
+        assert_eq!(statuses(&stage, false), [401, 403]);
     }
 
     #[test]

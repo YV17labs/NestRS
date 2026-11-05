@@ -152,8 +152,9 @@ The document composes from the route table, so everything in it is derived:
   nothing else, an id keeping `format: uuid` and a timestamp `format: date-time`;
 - a `bearerAuth` entry in `components.securitySchemes`, beside the scheme of any
   other a guard challenges with (a token endpoint's `basicAuth`), per-operation
-  `security` naming it on a route whose guards can answer `401`, and
-  `security: []` on a `#[public]` one no guard still challenges;
+  `security` naming it on a route whose guards can answer `401`, one requirement
+  naming each scheme where a chain challenges two, since a chain runs every guard,
+  and `security: []` on a `#[public]` one no guard still challenges;
 - the error statuses an operation can actually produce — `400`, `404`, `409`,
   `413` and `500` where the route can answer them, `403` where a mask's
   ability can be refused, and every status the route's guards

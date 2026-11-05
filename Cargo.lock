@@ -3100,6 +3100,7 @@ version = "7.0.0"
 dependencies = [
  "figment",
  "nest-rs-authn",
+ "nest-rs-authz",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",

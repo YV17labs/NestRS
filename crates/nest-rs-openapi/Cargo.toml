@@ -43,6 +43,8 @@ nest-rs-guards = { path = "../nest-rs-guards" }
 # The framework guards whose declared statuses a route's document lists.
 nest-rs-authn = { path = "../nest-rs-authn" }
 nest-rs-throttler = { path = "../nest-rs-throttler" }
+# The class gate `#[authorize]` adds to a route's chain, which the document lists.
+nest-rs-authz = { path = "../nest-rs-authz", features = ["http"] }
 # `figment::Jail` isolates `<PREFIX>_ENV` for the one config branch that reads the
 # *process* environment rather than a `ConfigService`.
 figment = { workspace = true, features = ["test"] }

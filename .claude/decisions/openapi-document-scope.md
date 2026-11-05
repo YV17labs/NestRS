@@ -57,3 +57,9 @@ token endpoint's `Basic`. A guard now says its scheme (`Guard::denial_document`)
 `Bearer`, and the document defines and requires each scheme a route's chain challenges with.
 This moves nothing the refusal above decides: `basicAuth` is exactly what that guard checks, as
 `bearerAuth` is what the others do, and neither scheme is invented.
+
+A chain challenging two schemes takes one requirement object naming both, never two entries:
+OpenAPI 3.1's Security Requirement Object makes a `security` list's entries alternatives and an
+object's schemes all required, and a chain runs every guard. A class gate's implied `401` joins
+only a chain with no `401` of its own: it is reached past that one, and would offer `Bearer`
+beside a guard challenging `Basic`, which is the symptom this entry closes.

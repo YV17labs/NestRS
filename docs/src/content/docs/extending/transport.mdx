@@ -42,7 +42,9 @@ impl Module for MetricsModule {
 Through the umbrella these are `nest_rs::core::{Transport, async_trait, …}`;
 `CancellationToken` is `tokio-util`'s, one of the libraries whose major NestRS
 holds ([Third-party libraries](/semver/#third-party-libraries)). The boot
-lines name the transport `MetricsPort`, read off its type.
+lines name the transport `MetricsPort`, read off its type, until it declares the
+word an operator sets it under, as `HttpTransport` declares `http`: `fn name()`,
+which returns that word.
 
 ## The four steps
 

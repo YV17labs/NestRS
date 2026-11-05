@@ -675,5 +675,5 @@ fn an_app_run_outside_the_kernels_main_still_stops_at_the_signal() {
         .iter()
         .find(|line| line.contains("app draining"))
         .unwrap_or_else(|| panic!("the transition line: {printed:#?}"));
-    assert!(draining.contains("Interrupt"), "{draining}");
+    assert!(draining.contains("sigint"), "{draining}");
 }

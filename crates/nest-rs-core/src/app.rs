@@ -17,6 +17,7 @@ use crate::access::{
     dependency_order, provider_order, reachable_descriptors, reachable_provider_ids, scoped_cycle,
     singleton_cycle, validate_access_graph,
 };
+use crate::app_identity::AppIdentity;
 use crate::app_lifecycle::{AppLifecycle, StopCause};
 use crate::close::InstallRecord;
 use crate::container::ProviderScope;
@@ -76,12 +77,12 @@ pub enum BootStep {
     },
     /// A transport's [`configure`](Transport::configure).
     Configure {
-        /// The transport, by its short type name.
+        /// The transport, by its [`name`](Transport::name).
         transport: String,
     },
     /// A transport's [`listen`](Transport::listen), once every init hook ran.
     Listen {
-        /// The transport, by its short type name.
+        /// The transport, by its [`name`](Transport::name).
         transport: String,
     },
     /// An init lifecycle hook.
@@ -437,11 +438,6 @@ impl App {
     /// `run` up to the shutdown phases: boot what remains of the boot, serve,
     /// and return once every transport has stopped.
     async fn boot_and_serve(&self) -> Result<()> {
-        tracing::info!(
-            target: crate::target::APP,
-            version = env!("CARGO_PKG_VERSION"),
-            "nestrs starting",
-        );
         #[cfg(feature = "logging")]
         crate::export::refuse_unserved_export()?;
         if !crate::way_down::watched() {
@@ -457,7 +453,7 @@ impl App {
             tracing::info!(
                 target: crate::target::APP,
                 transport = &*name,
-                "attached module-contributed transport",
+                "transport attached",
             );
             transports.push((name, transport));
         }
@@ -910,8 +906,10 @@ impl AppBuilder {
         self
     }
 
-    /// Run the four phases, then the wiring step, and return the assembled
-    /// [`App`]. Propagates the first factory error, named
+    /// File the boot's first line, `app starting`, naming the binary
+    /// ([`AppIdentity`]) and the framework, then run the four phases and the
+    /// wiring step, and return the assembled [`App`]. Propagates the first
+    /// factory error, named
     /// ([`FactoryFailedError`]), and the first wiring's
     /// ([`WiringFailedError`](crate::WiringFailedError)); a stop asked while a
     /// factory waits drops it there and returns
@@ -923,6 +921,14 @@ impl AppBuilder {
         crate::logging::init_fallback()?;
         // After the fallback, which reads whether a subscriber was set.
         crate::panic::hold_dispatch_reentrance();
+        let identity = AppIdentity::current();
+        tracing::info!(
+            target: crate::target::APP,
+            app = identity.map(|app| app.name.as_str()),
+            version = identity.map(|app| app.version.as_str()),
+            framework = env!("CARGO_PKG_VERSION"),
+            "app starting",
+        );
         let lifecycle = booting();
         let AppBuilder {
             mut builder,

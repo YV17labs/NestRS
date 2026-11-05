@@ -15,6 +15,7 @@
 //! the pass then settles within what is left of it, or leaves its records to
 //! the next relay.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,6 +75,10 @@ impl OutboxRelay {
 
 #[async_trait]
 impl Transport for OutboxRelay {
+    fn name() -> Cow<'static, str> {
+        "outbox".into()
+    }
+
     async fn configure(&mut self, container: &Container) -> anyhow::Result<()> {
         if let Some(config) = container.get::<OutboxConfig>() {
             self.config = (*config).clone();

@@ -1,4 +1,5 @@
 use std::any::{Any, TypeId};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use nest_rs_core::__private::{
     Tail, caught_problem, declare_handler, declare_site, dispatch, new_unit_context, settled,
 };
 use nest_rs_core::{
-    Container, Correlation, Discovery, Failure, Handler, JobTimedOut, Outcome, Posture,
+    Container, Correlation, Discovery, Edge, Failure, Handler, JobTimedOut, Outcome, Posture,
     ReachableProviders, Transport, Unanswered, UnitContext, inventory, within,
 };
 use nest_rs_database::__private::run_unit_bounded;
@@ -340,6 +341,10 @@ impl Default for Scheduler {
 
 #[async_trait]
 impl Transport for Scheduler {
+    fn name() -> Cow<'static, str> {
+        Edge::Schedule.as_str().into()
+    }
+
     async fn configure(&mut self, container: &Container) -> Result<()> {
         let discovery = Discovery::new(container);
         // Jobs attached by hand through `attach_meta::<…, CronJobMeta>`.

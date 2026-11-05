@@ -286,6 +286,58 @@ fn the_boot_line_tells_a_signal_switched_off_from_one_with_no_endpoint() {
     drop(otel);
 }
 
+/// The boot line names the sampler as the specification does, whatever chose
+/// it, and what chose it beside: the ratio pinned in code, parent-based…
+#[cfg(feature = "otlp")]
+#[test]
+fn the_boot_line_names_a_pinned_ratio_s_sampler_and_where_it_came_from() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let otel = init_under(
+        &[],
+        OpenTelemetryConfig {
+            trace_sample_ratio: 0.25,
+            ..OpenTelemetryConfig::default()
+        },
+    )
+    .expect("the process's first subscriber");
+
+    let event = logs.expect_one(nest_rs_opentelemetry::TARGET, "OpenTelemetry initialised");
+    assert_eq!(
+        event.field("sampler").as_deref(),
+        Some("parentbased_traceidratio")
+    );
+    assert_eq!(
+        event.field("sampler_source").as_deref(),
+        Some("trace_sample_ratio")
+    );
+    assert_eq!(event.field("sample_ratio").as_deref(), Some("0.25"));
+    drop(otel);
+}
+
+/// …or the specification's variable, whose sampler reads no ratio here.
+#[cfg(feature = "otlp")]
+#[test]
+fn the_boot_line_names_the_sampler_the_variable_chose_and_no_ratio_it_ignores() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let otel = init_under(
+        &[("OTEL_TRACES_SAMPLER", "always_on")],
+        OpenTelemetryConfig {
+            trace_sample_ratio: 0.25,
+            ..OpenTelemetryConfig::default()
+        },
+    )
+    .expect("the process's first subscriber");
+
+    let event = logs.expect_one(nest_rs_opentelemetry::TARGET, "OpenTelemetry initialised");
+    assert_eq!(event.field("sampler").as_deref(), Some("always_on"));
+    assert_eq!(
+        event.field("sampler_source").as_deref(),
+        Some("OTEL_TRACES_SAMPLER")
+    );
+    assert_eq!(event.field("sample_ratio"), None, "{:?}", event.fields);
+    drop(otel);
+}
+
 #[nest_rs_core::main]
 async fn initialised_under_main() -> nest_rs_core::anyhow::Result<()> {
     let _otel = OpenTelemetry::init()?;
@@ -469,16 +521,16 @@ fn the_boot_line_says_the_format_the_console_writes() {
             serde_json::from_str::<serde_json::Value>(&line).is_err(),
             "{profile:?}: {line}"
         );
-        assert!(line.contains(" log_format=Text"), "{profile:?}: {line}");
+        assert!(line.contains(" log_format=\"text\""), "{profile:?}: {line}");
     }
     for profile in ["staging", "production", ""] {
         let line = boot_line_under(BOOT_LINE_BY_PROFILE, profile);
         let event: serde_json::Value = serde_json::from_str(&line)
             .unwrap_or_else(|_| panic!("a JSON line under {profile:?}: {line}"));
-        assert_eq!(event["fields"]["log_format"], "Json", "{profile:?}: {line}");
+        assert_eq!(event["fields"]["log_format"], "json", "{profile:?}: {line}");
     }
     let written = boot_line_under(BOOT_LINE, "production");
-    assert!(written.contains(" log_format=Text"), "{written}");
+    assert!(written.contains(" log_format=\"text\""), "{written}");
 }
 
 /// A binary built without the `otlp` feature exports nothing, so an endpoint

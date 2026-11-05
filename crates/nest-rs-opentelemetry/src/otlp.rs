@@ -241,8 +241,8 @@ pub(crate) struct Summary {
     pub service: String,
     /// Where each signal goes — traces, metrics, logs.
     pub destinations: [Destination; 3],
-    /// Whether `OTEL_TRACES_SAMPLER` chose the sampler.
-    pub sampler_from_env: bool,
+    /// The sampler, as the boot line says it.
+    pub sampler: SamplerChoice,
     /// The variables passed over — a value the specification says to pass
     /// over, or a variable this build serves nowhere — said once a subscriber
     /// can hear it.
@@ -337,7 +337,7 @@ fn build_reading(
     refuse_config_file(&read)?;
     read_propagators(&read)?;
     let mut passed_over = Vec::new();
-    let (sampler, sampler_from_env) = sampler(config, &read, &mut passed_over)?;
+    let (sampler, sampler_choice) = sampler(config, &read, &mut passed_over)?;
     let span_limits = span_limits(&read)?;
     let resource = build_resource(config, binary, &as_written)?;
     let interval = metric_interval(config, &read)?;
@@ -421,7 +421,7 @@ fn build_reading(
         summary: Summary {
             service,
             destinations: [to_traces, to_metrics, to_logs],
-            sampler_from_env,
+            sampler: sampler_choice,
             passed_over,
         },
     })
@@ -448,8 +448,19 @@ const SAMPLERS: &str = "must name always_on, always_off, traceidratio, parentbas
                         parentbased_always_off or parentbased_traceidratio, the samplers the SDK \
                         builds, in lowercase";
 
-/// The sampler, and whether `OTEL_TRACES_SAMPLER` chose it: the one it names,
-/// matched as the SDK matches it, a ratio's from `OTEL_TRACES_SAMPLER_ARG`
+/// What the boot line says of the sampler.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SamplerChoice {
+    /// Its name, as `OTEL_TRACES_SAMPLER` spells it.
+    pub name: &'static str,
+    /// What chose it: `OTEL_TRACES_SAMPLER`, or the ratio pinned in code.
+    pub source: &'static str,
+    /// The share of traces it samples, on a sampler reading a ratio.
+    pub ratio: Option<f64>,
+}
+
+/// The sampler, and what the boot line says of it: the one `OTEL_TRACES_SAMPLER`
+/// names, matched as the SDK matches it, a ratio's from `OTEL_TRACES_SAMPLER_ARG`
 /// (1, the specification's default, when unset); else the ratio the app
 /// pinned, parent-based. A pinned ratio outside `[0, 1]` is refused naming its
 /// field, whichever applies.
@@ -463,7 +474,7 @@ fn sampler(
     config: &OpenTelemetryConfig,
     read: &impl Fn(&str) -> Option<String>,
     passed_over: &mut Vec<PassedOver>,
-) -> Result<(Sampler, bool), ConfigError> {
+) -> Result<(Sampler, SamplerChoice), ConfigError> {
     let pinned = config.trace_sample_ratio;
     if !(0.0..=1.0).contains(&pinned) {
         return Err(ConfigError::parse(
@@ -487,26 +498,69 @@ fn sampler(
             })
     };
     let parent_based = |root: Sampler| Sampler::ParentBased(Box::new(root));
-    let name = read(OTEL_TRACES_SAMPLER);
-    let (sampler, reads_argument) = match name.as_deref() {
-        None => (parent_based(Sampler::TraceIdRatioBased(pinned)), false),
-        Some("always_on") => (Sampler::AlwaysOn, false),
-        Some("always_off") => (Sampler::AlwaysOff, false),
-        Some("traceidratio") => (Sampler::TraceIdRatioBased(ratio()?), true),
-        Some("parentbased_always_on") => (parent_based(Sampler::AlwaysOn), false),
-        Some("parentbased_always_off") => (parent_based(Sampler::AlwaysOff), false),
-        Some("parentbased_traceidratio") => {
-            (parent_based(Sampler::TraceIdRatioBased(ratio()?)), true)
+    let Some(name) = read(OTEL_TRACES_SAMPLER) else {
+        if argument.is_some() {
+            passed_over.push(argument_read_by_nothing());
         }
-        Some(_) => return Err(ConfigError::parse(OTEL_TRACES_SAMPLER, SAMPLERS)),
+        return Ok((
+            parent_based(Sampler::TraceIdRatioBased(pinned)),
+            SamplerChoice {
+                name: "parentbased_traceidratio",
+                source: "trace_sample_ratio",
+                ratio: Some(pinned),
+            },
+        ));
     };
-    if argument.is_some() && !reads_argument {
-        passed_over.push(PassedOver {
-            variable: OTEL_TRACES_SAMPLER_ARG,
-            reason: "OTEL_TRACES_SAMPLER names no ratio sampler, so nothing reads it",
-        });
+    let (sampler, name, ratio) = match name.as_str() {
+        "always_on" => (Sampler::AlwaysOn, "always_on", None),
+        "always_off" => (Sampler::AlwaysOff, "always_off", None),
+        "traceidratio" => {
+            let ratio = ratio()?;
+            (
+                Sampler::TraceIdRatioBased(ratio),
+                "traceidratio",
+                Some(ratio),
+            )
+        }
+        "parentbased_always_on" => (
+            parent_based(Sampler::AlwaysOn),
+            "parentbased_always_on",
+            None,
+        ),
+        "parentbased_always_off" => (
+            parent_based(Sampler::AlwaysOff),
+            "parentbased_always_off",
+            None,
+        ),
+        "parentbased_traceidratio" => {
+            let ratio = ratio()?;
+            (
+                parent_based(Sampler::TraceIdRatioBased(ratio)),
+                "parentbased_traceidratio",
+                Some(ratio),
+            )
+        }
+        _ => return Err(ConfigError::parse(OTEL_TRACES_SAMPLER, SAMPLERS)),
+    };
+    if argument.is_some() && ratio.is_none() {
+        passed_over.push(argument_read_by_nothing());
     }
-    Ok((sampler, name.is_some()))
+    Ok((
+        sampler,
+        SamplerChoice {
+            name,
+            source: OTEL_TRACES_SAMPLER,
+            ratio,
+        },
+    ))
+}
+
+/// `OTEL_TRACES_SAMPLER_ARG` beside a sampler that reads no argument.
+fn argument_read_by_nothing() -> PassedOver {
+    PassedOver {
+        variable: OTEL_TRACES_SAMPLER_ARG,
+        reason: "OTEL_TRACES_SAMPLER names no ratio sampler, so nothing reads it",
+    }
 }
 
 /// The metric exporter's temporality, `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`,
@@ -2009,10 +2063,14 @@ mod tests {
         };
         let chosen = |set: &'static [(&'static str, &'static str)]| {
             let mut passed_over = Vec::new();
-            let (sampler, from_env) = sampler(&pinned, &reading(set), &mut passed_over)
+            let (sampler, choice) = sampler(&pinned, &reading(set), &mut passed_over)
                 .unwrap_or_else(|refused| panic!("{set:?}: {refused}"));
             let passed_over: Vec<&str> = passed_over.iter().map(|over| over.variable).collect();
-            (format!("{sampler:?}"), from_env, passed_over)
+            (
+                format!("{sampler:?}"),
+                choice.source == OTEL_TRACES_SAMPLER,
+                passed_over,
+            )
         };
         let parent_based = |inner: &str| format!("ParentBased({inner})");
         assert_eq!(

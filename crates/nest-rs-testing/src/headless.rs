@@ -116,17 +116,13 @@ impl HeadlessApp {
         if let Some(refusal) = nest_rs_core::__private::take_site_refusal(self.container()) {
             return Err(refusal);
         }
-        nest_rs_core::__private::check_stop_bound(
-            &nest_rs_core::__private::short_type_name::<T>(),
-            transport.stop_bound(),
-        )?;
+        nest_rs_core::__private::check_stop_bound(&T::name(), transport.stop_bound())?;
         Ok(())
     }
 
     /// Serve a configured, listening `transport` on the tracked background task.
     pub(crate) fn serve_transport<T: Transport>(&self, transport: T) -> TransportHandle {
-        // Named as `App::run` names a transport: by its short type name.
-        let name: Arc<str> = nest_rs_core::__private::short_type_name::<T>().into();
+        let name: Arc<str> = T::name().into();
         let stop_bound = transport.stop_bound();
         let serving = Arc::clone(&self.serving);
         let cancel = self.lifecycle().stopping();

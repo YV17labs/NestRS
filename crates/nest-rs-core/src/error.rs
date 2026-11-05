@@ -444,7 +444,7 @@ pub struct BootInterruptedError {
 )]
 #[non_exhaustive]
 pub struct UnboundedTransportError {
-    /// The transport, by its short type name.
+    /// The transport, by its [`name`](crate::Transport::name).
     pub transport: String,
     /// The bound it states, in milliseconds, saturated at `u64::MAX`.
     pub stop_bound_ms: u64,

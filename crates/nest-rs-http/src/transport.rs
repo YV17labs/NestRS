@@ -456,6 +456,10 @@ fn no_guard_at_the_request(surface: &str, path: &str, then: &'static str) {
 
 #[async_trait]
 impl Transport for HttpTransport {
+    fn name() -> Cow<'static, str> {
+        Edge::Http.as_str().into()
+    }
+
     async fn configure(&mut self, container: &Container) -> Result<()> {
         let discovery = Discovery::new(container);
         // Applied at registration, so every address the table holds is the one

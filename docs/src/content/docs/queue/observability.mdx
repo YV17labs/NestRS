@@ -19,7 +19,7 @@ service-level logs your `#[process]` method emits keep their own target
 |---|---|---|
 | `nest_rs::queue` | Boot registration, per-attempt events, the reason a job failed, and what the worker says about deliveries and leases. | `debug` on job start, `warn` on a retryable failure, `error` on a dead-letter. |
 | `nest_rs::operation` | One `queue.job` line per attempt — identity, `outcome`, `duration_ms`. Shared with every other edge. | `info`. |
-| `nest_rs::app` | Boot: `attached module-contributed transport transport="QueueWorker"`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
+| `nest_rs::app` | Boot: `transport attached transport="queue"`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
 | `features::<feature>` | Your service-level logs inside the `#[process]` method. | Your call. |
 
 Hot paths respect `RUST_LOG=info`: `job started` sits at `debug`, so a
@@ -142,7 +142,7 @@ and `unique job cancelled` at `info` when a cancel answered `true`.
 
 ## What boot looks like
 
-The worker logs one `attached` line (from the transport), and each active
+The worker logs one `transport attached` line (from the transport), and each active
 processor one `mounted` line — its `host`, its `method` and its `queue`, as
 every edge names a unit it serves — carrying what it declared: its `retries`,
 its `concurrency`, and its throttle when it has one. A `#[process]` method that
@@ -151,7 +151,7 @@ skipped, and said once, at the level its cause earns. Your app's own code is a
 `warn`, with the `cause` and a `hint` naming its remedy:
 
 ```text frame="terminal"
- INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
+ INFO nest_rs::app: transport attached transport="queue"
  INFO nest_rs::queue: mounted host="AudioProcessor" method="transcode" queue="audio" retries=3 concurrency=4
  WARN nest_rs::queue: skipped #[process] method: no instance of the provider in
       this app's container host="ReportJobs" method="weekly" queue=reports

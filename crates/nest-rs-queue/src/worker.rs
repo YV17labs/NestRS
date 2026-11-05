@@ -19,6 +19,7 @@
 //! within the reserve; leases are renewed until the last delivery ends. What
 //! still runs then is said at `error` and left to its lease.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::Future;
 use std::num::NonZeroU32;
@@ -31,8 +32,8 @@ use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use nest_rs_core::__private::RequestScopes;
 use nest_rs_core::{
-    Backoff, Container, Retries, SHUTDOWN_SETTLE_TIMEOUT, Transport, Unanswered, error_message,
-    process_seed, within,
+    Backoff, Container, Edge, Retries, SHUTDOWN_SETTLE_TIMEOUT, Transport, Unanswered,
+    error_message, process_seed, within,
 };
 use nest_rs_database::UnitOfWork;
 use serde_json::Value;
@@ -119,6 +120,10 @@ impl QueueWorker {
 
 #[async_trait]
 impl Transport for QueueWorker {
+    fn name() -> Cow<'static, str> {
+        Edge::Queue.as_str().into()
+    }
+
     async fn configure(&mut self, container: &Container) -> anyhow::Result<()> {
         if let Some(config) = container.get::<QueueConfig>() {
             self.config = (*config).clone();

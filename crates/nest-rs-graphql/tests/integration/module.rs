@@ -83,7 +83,7 @@ async fn the_module_attaches_the_http_transport_it_mounts_on() {
         .iter()
         .map(|contribution| contribution.meta.name().to_owned())
         .collect();
-    assert_eq!(transports, ["HttpTransport"]);
+    assert_eq!(transports, ["http"]);
 }
 
 /// A hand-written adapter that forgets the endpoint.

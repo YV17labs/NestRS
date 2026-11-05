@@ -252,6 +252,156 @@ async fn the_boot_line_files_the_longest_stop_bound_beside_the_hooks_budget() {
     );
 }
 
+/// No `#[nest_rs::main]` captured an identity: the first line names the
+/// framework alone, and no transport names anything else.
+#[tokio::test]
+async fn the_first_line_names_the_framework_alone_without_an_identity() {
+    let logs = LogCapture::install();
+    App::builder()
+        .module::<TwoBoundsModule>()
+        .build()
+        .await
+        .expect("the module boots")
+        .run()
+        .await
+        .expect_err("both transports end on their own");
+
+    let event = logs.expect_one(target::APP, "app starting");
+    assert_eq!(event.level, "info");
+    assert_eq!(
+        event.field("framework").as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    assert_eq!(event.field("app"), None);
+    assert_eq!(event.field("version"), None);
+}
+
+/// The first line names the binary, read off what `#[nest_rs::main]` captured,
+/// beside the framework: `version` is the app's, as an operator reads it.
+#[tokio::test]
+async fn the_first_line_names_the_app_its_version_and_the_framework() {
+    nest_rs_core::__private::capture_app_identity(nest_rs_core::__private::package_identity(
+        "api", "0.1.0", "",
+    ));
+    let logs = LogCapture::install();
+    App::builder()
+        .module::<TwoBoundsModule>()
+        .build()
+        .await
+        .expect("the module boots")
+        .run()
+        .await
+        .expect_err("both transports end on their own");
+
+    let event = logs.expect_one(target::APP, "app starting");
+    assert_eq!(event.field("app").as_deref(), Some("api"));
+    assert_eq!(event.field("version").as_deref(), Some("0.1.0"));
+    assert_eq!(
+        event.field("framework").as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+}
+
+/// What a factory opens reads under the binary that opens it.
+struct OpenedByAFactory;
+
+/// The boot says whose it is before anything it builds says a word, so a
+/// database's line reads under the binary's.
+#[tokio::test]
+async fn the_first_line_precedes_what_a_factory_files() {
+    let logs = LogCapture::install();
+    App::builder()
+        .provide_factory::<OpenedByAFactory, _, _>(|_| async {
+            tracing::info!(target: "acme::orm", "connecting to database");
+            Ok(OpenedByAFactory)
+        })
+        .module::<TwoBoundsModule>()
+        .build()
+        .await
+        .expect("the module boots")
+        .run()
+        .await
+        .expect_err("both transports end on their own");
+
+    let said: Vec<String> = logs.events().into_iter().map(|e| e.message).collect();
+    let at = |message: &str| {
+        said.iter()
+            .position(|line| line == message)
+            .unwrap_or_else(|| panic!("{message}: {said:#?}"))
+    };
+    assert!(
+        at("app starting") < at("connecting to database"),
+        "{said:#?}"
+    );
+}
+
+/// A factory refusing the boot leaves the failing binary named.
+#[tokio::test]
+async fn a_boot_a_factory_refuses_has_said_the_first_line() {
+    let logs = LogCapture::install();
+    let refused = App::builder()
+        .provide_factory::<OpenedByAFactory, _, _>(|_| async {
+            Err(anyhow!("the database refused"))
+        })
+        .module::<TwoBoundsModule>()
+        .build()
+        .await;
+
+    assert!(refused.is_err(), "the factory refuses the boot");
+    logs.expect_one(target::APP, "app starting");
+}
+
+/// A transport is named as it declares itself on every line of the boot, its
+/// short type name when it declares nothing.
+#[tokio::test]
+async fn a_transport_is_named_on_its_lines_by_what_it_declares() {
+    let logs = LogCapture::install();
+    App::builder()
+        .module::<WordedTransportModule>()
+        .build()
+        .await
+        .expect("the module boots")
+        .run()
+        .await
+        .expect_err("the transport ends on its own");
+
+    let attached = logs.expect_one(target::APP, "transport attached");
+    assert_eq!(attached.level, "info");
+    assert_eq!(attached.field("transport").as_deref(), Some("metrics"));
+    let ready = logs.expect_one(target::APP, "app ready");
+    assert_eq!(ready.field("transports").as_deref(), Some("metrics"));
+}
+
+/// A transport declaring the word an operator sets it under.
+struct Worded;
+
+#[async_trait::async_trait]
+impl Transport for Worded {
+    fn name() -> std::borrow::Cow<'static, str> {
+        "metrics".into()
+    }
+
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+struct WordedTransportModule;
+
+impl Module for WordedTransportModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transport(|_| Ok(Worded))
+    }
+}
+
 struct Pool;
 
 #[tokio::test]

@@ -205,8 +205,9 @@ nextest rejects a filterset naming a binary the workspace does not have.
    $ nestrs run dev blog
        Compiling blog v0.1.0
         Running `target/debug/blog`
+   INFO nest_rs::app: app starting app="blog" version="0.1.0" framework="7.0.0"
    INFO nest_rs::routes: mounted host="BlogController" method="hello" verb="GET" path="/"
-   INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3001"
+   INFO nest_rs::app: app ready transports="http" addresses="0.0.0.0:3001"
    ```
 
    The route table prints on every boot, and `app ready` shows the port

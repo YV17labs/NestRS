@@ -302,7 +302,7 @@ app runs:
 ```bash frame="terminal"
 $ nestrs run dev api
 …
- INFO nest_rs::app: attached module-contributed transport transport="Scheduler"
+ INFO nest_rs::app: transport attached transport="schedule"
  INFO nest_rs::schedule: mounted host="AudioTasks" method="enqueue_transcode" trigger="every" interval_ms=5000 replicas="one" key="features::AudioTasks::enqueue_transcode"
  INFO nest_rs::schedule: mounted host="AudioTasks" method="warmup_on_boot" trigger="after" delay_ms=3000 replicas="each"
  INFO nest_rs::schedule: mounted host="AudioTasks" method="heartbeat" trigger="cron" timezone="UTC" replicas="each"

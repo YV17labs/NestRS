@@ -3,6 +3,7 @@
 //! the app's behalf.
 
 use std::any::TypeId;
+use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -32,6 +33,16 @@ pub const MAX_STOP_BOUND: Duration = Duration::from_secs(86_400);
 /// fails the boot before any transport has run anything.
 #[async_trait]
 pub trait Transport: Send + Sync + 'static {
+    /// What the boot's lines and refusals call this transport: the word an
+    /// operator sets it under (`http`, `queue`, `schedule`). A transport
+    /// declaring none reads as its short type name.
+    fn name() -> Cow<'static, str>
+    where
+        Self: Sized,
+    {
+        Cow::Owned(crate::type_name::short_type_name::<Self>())
+    }
+
     /// Scan the container for the surfaces this transport serves and wire them
     /// up, before any request is accepted.
     async fn configure(&mut self, container: &Container) -> Result<()>;
@@ -87,7 +98,7 @@ type Build = Box<dyn Fn(&Container) -> Result<Box<dyn Transport>> + Send + Sync>
 /// [`ContainerBuilder::provide_transport`](crate::ContainerBuilder::provide_transport)
 /// — readable through
 /// [`Discovery::meta`](crate::Discovery::meta), built only by the kernel; its
-/// name is the transport's short type name.
+/// name is the transport's own ([`Transport::name`]).
 ///
 /// ```compile_fail
 /// use nest_rs_core::TransportContribution;
@@ -106,13 +117,13 @@ pub struct TransportContribution {
 impl TransportContribution {
     pub(crate) fn new<T: Transport>(build: fn(&Container) -> Result<T>) -> Self {
         Self {
-            name: crate::type_name::short_type_name::<T>(),
+            name: T::name().into_owned(),
             transport: TypeId::of::<T>(),
             build: Box::new(move |container| Ok(Box::new(build(container)?))),
         }
     }
 
-    /// The transport, as the boot lines name it (`"HttpTransport"`).
+    /// The transport, as the boot lines name it (`"http"`).
     pub fn name(&self) -> &str {
         &self.name
     }

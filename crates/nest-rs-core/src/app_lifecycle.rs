@@ -43,6 +43,18 @@ pub enum StopCause {
 }
 
 impl StopCause {
+    /// The cause as a line says it.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Interrupt => "sigint",
+            Self::Terminate => "sigterm",
+            Self::TransportFailed => "transport_failed",
+            Self::NoTransport => "no_transport",
+            Self::BootFailed => "boot_failed",
+            Self::Closed => "closed",
+        }
+    }
+
     /// The signal's name, for a cause a signal is.
     pub(crate) fn signal(self) -> Option<&'static str> {
         match self {
@@ -210,7 +222,7 @@ impl AppLifecycle {
         if drained {
             tracing::info!(
                 target: crate::target::APP,
-                ?cause,
+                cause = cause.as_str(),
                 signal = cause.signal(),
                 "app draining",
             );
@@ -243,7 +255,7 @@ impl AppLifecycle {
             tracing::warn!(
                 target: crate::target::APP,
                 signal = cause.signal(),
-                ?cause,
+                cause = cause.as_str(),
                 step = %step,
                 "shutdown signal received during the boot: stopping it",
             );
@@ -306,7 +318,7 @@ mod tests {
         );
         assert_eq!(ready.field("addresses").as_deref(), Some("0.0.0.0:3000"));
         let draining = logs.expect_one(crate::target::APP, "app draining");
-        assert_eq!(draining.field("cause").as_deref(), Some("Terminate"));
+        assert_eq!(draining.field("cause").as_deref(), Some("sigterm"));
         assert_eq!(draining.field("signal").as_deref(), Some("SIGTERM"));
     }
 

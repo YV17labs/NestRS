@@ -90,6 +90,13 @@ async fn the_pool_never_logs_in_to_a_server_whose_certificate_no_trusted_authori
         panic!("a pool opened on a server it could not verify");
     };
 
+    let connecting = logs.expect_one(nest_rs_seaorm::target::ORM, "connecting to database");
+    assert_eq!(
+        connecting.field("max_connections"),
+        Some(SeaOrmConfig::default().max_connections.to_string()),
+        "a number, never `Some(10)`",
+    );
+
     let rendered = format!("{refused:#}");
     assert!(
         !started.load(Ordering::SeqCst),

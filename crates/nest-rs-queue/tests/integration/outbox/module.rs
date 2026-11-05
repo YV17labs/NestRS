@@ -31,5 +31,5 @@ async fn a_pinned_config_reaches_the_relay_it_attaches() {
         .iter()
         .map(|contribution| contribution.meta.name().to_owned())
         .collect();
-    assert_eq!(attached, ["OutboxRelay"]);
+    assert_eq!(attached, ["outbox"]);
 }

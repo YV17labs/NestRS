@@ -227,7 +227,10 @@ The boot line, `OpenTelemetry initialised` on `nest_rs::opentelemetry`, says
 where each signal goes: its `traces`, `metrics` and `logs` fields hold the
 endpoint, or why nothing is exported — `off (OTEL_TRACES_EXPORTER=none)`,
 `off (OTEL_SDK_DISABLED=true)` or `off (no endpoint)` — each quoted on a text
-console, `traces="off (no endpoint)"`, so a logfmt reader takes it whole.
+console, `traces="off (no endpoint)"`, so a logfmt reader takes it whole. Its
+`sampler` is the sampler's name as `OTEL_TRACES_SAMPLER` spells it, `sampler_source`
+what chose it, that variable or `trace_sample_ratio`, `sample_ratio` the share it
+samples on a sampler reading one, and `log_format` what the console writes.
 
 ```bash frame="terminal"
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \

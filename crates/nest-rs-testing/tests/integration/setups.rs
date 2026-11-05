@@ -370,7 +370,7 @@ macro_rules! mounts_on_http {
             #[tokio::test]
             async fn attaches_the_http_transport_it_mounts_on() {
                 let seeds: Seeds = $seeds;
-                assert_eq!(wiring::<Alone>(seeds).await.transports, ["HttpTransport"]);
+                assert_eq!(wiring::<Alone>(seeds).await.transports, ["http"]);
             }
         }
     };

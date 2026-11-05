@@ -211,7 +211,7 @@ async fn a_transport_that_fails_stops_the_app_for_that_cause_and_says_so_once() 
     );
     let draining = logs.expect_one(target::APP, "app draining");
     assert_eq!(draining.level, "info");
-    assert_eq!(draining.field("cause").as_deref(), Some("TransportFailed"));
+    assert_eq!(draining.field("cause").as_deref(), Some("transport_failed"));
     assert_eq!(draining.field("signal"), None);
 }
 
@@ -248,7 +248,7 @@ async fn a_run_with_no_transport_says_so_once_and_stops_for_that_cause_after_its
     );
     logs.expect_none(target::APP, "app ready");
     let draining = logs.expect_one(target::APP, "app draining");
-    assert_eq!(draining.field("cause").as_deref(), Some("NoTransport"));
+    assert_eq!(draining.field("cause").as_deref(), Some("no_transport"));
     assert_eq!(lifecycle.state(), AppState::Draining);
     assert!(
         !lifecycle.ready().await,

@@ -967,7 +967,7 @@ async fn listening_on_a_taken_port_fails_the_boot_before_any_transport_serves() 
     assert!(
         matches!(
             refused.downcast_ref::<nest_rs_core::BootStep>(),
-            Some(nest_rs_core::BootStep::Listen { transport }) if transport == "HttpTransport"
+            Some(nest_rs_core::BootStep::Listen { transport }) if transport == "http"
         ),
         "the boot error carries the listen step: {refused:#}"
     );

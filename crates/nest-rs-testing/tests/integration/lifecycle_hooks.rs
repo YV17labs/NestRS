@@ -603,6 +603,69 @@ async fn a_spawned_transport_that_fails_is_filed_at_error_with_its_chain() {
     );
 }
 
+/// Declares the word it is named by, fails as it serves, and states the stop it
+/// was built with.
+struct Worded {
+    stop_bound: std::time::Duration,
+}
+
+#[async_trait::async_trait]
+impl nest_rs_core::Transport for Worded {
+    fn name() -> std::borrow::Cow<'static, str> {
+        "metrics".into()
+    }
+
+    async fn configure(&mut self, _container: &nest_rs_core::Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(
+        self: Box<Self>,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("the metrics port was taken"))
+    }
+
+    fn stop_bound(&self) -> std::time::Duration {
+        self.stop_bound
+    }
+}
+
+/// The harness names a transport as `App::run` does: by what it declares, on its
+/// failure line and in its refusal of a stop it cannot bound.
+#[tokio::test]
+async fn a_spawned_transport_is_named_by_what_it_declares() {
+    let logs = LogCapture::install();
+    let app = HeadlessApp::builder()
+        .module::<ServesNothingModule>()
+        .build_headless()
+        .await
+        .expect("boots");
+
+    let unbounded = app
+        .spawn_transport(Worded {
+            stop_bound: std::time::Duration::MAX,
+        })
+        .await
+        .err()
+        .expect("an unbounded stop is refused");
+    let refused = unbounded
+        .downcast_ref::<nest_rs_core::UnboundedTransportError>()
+        .expect("the stop's refusal");
+    assert_eq!(refused.transport, "metrics");
+
+    let _serving = app
+        .spawn_transport(Worded {
+            stop_bound: std::time::Duration::ZERO,
+        })
+        .await
+        .expect("the transport configures");
+    app.close().await;
+
+    let failed = logs.expect_one(target::APP, "a transport the harness spawned failed");
+    assert_eq!(failed.field("transport").as_deref(), Some("metrics"));
+}
+
 /// Fails its `listen`, or states the stop it was built with.
 struct Refused {
     listens: bool,

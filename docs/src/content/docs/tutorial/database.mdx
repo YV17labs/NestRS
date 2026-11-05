@@ -179,8 +179,9 @@ unwind — a `GET` that writes keeps its write, whatever it answers. No
 
 ```bash frame="terminal"
 $ nestrs run dev blog
-INFO nest_rs::orm: connecting to database endpoint=localhost:5432 max_connections=Some(10)
-INFO nest_rs::app: app ready transports="HttpTransport" addresses="0.0.0.0:3001"
+INFO nest_rs::app: app starting app="blog" version="0.1.0" framework="7.0.0"
+INFO nest_rs::orm: connecting to database endpoint=localhost:5432 max_connections=10
+INFO nest_rs::app: app ready transports="http" addresses="0.0.0.0:3001"
 ```
 
 `connecting to database` names Postgres by host and port, never by its URL,

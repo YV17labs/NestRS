@@ -275,7 +275,7 @@ async fn connect(
     tracing::info!(
         target: crate::target::ORM,
         endpoint = %endpoint,
-        max_connections = ?options.get_max_connections(),
+        max_connections = options.get_max_connections(),
         "connecting to database"
     );
     prove(

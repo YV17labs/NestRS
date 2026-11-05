@@ -294,7 +294,7 @@ mod tests {
             .iter()
             .map(|contribution| contribution.meta.name().to_owned())
             .collect();
-        assert_eq!(attached, ["OutboxRelay"]);
+        assert_eq!(attached, ["outbox"]);
     }
 
     /// A hand-written importer that imports the binding in its register alone.

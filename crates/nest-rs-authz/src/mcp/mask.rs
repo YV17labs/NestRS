@@ -105,7 +105,7 @@ where
     // Counted before the mask consumes the value, to tell two refusals apart
     // below.
     let declared = wire.as_object().map_or(0, serde_json::Map::len);
-    let removed = match mask_wire_detail::<E>(ability, action, wire) {
+    let removed = match mask_wire_detail::<E>(ability, action, wire, Provenance::Loaded) {
         Ok(detail) => detail.removed,
         // Unreachable short of the value's and the entity's serde disagreeing;
         // reported as the masking failure it then is.

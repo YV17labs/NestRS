@@ -28,7 +28,6 @@ mod factory;
 mod gate;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod guard;
-mod mask;
 mod predicate;
 mod subject;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
@@ -98,10 +97,12 @@ pub mod __private {
 
     pub use crate::context::{AmbientAbility, install_ability};
     #[cfg(feature = "graphql")]
-    pub use crate::graphql::mask::{GraphqlMask, graphql_masked_item, graphql_masked_value};
+    pub use crate::graphql::mask::{
+        GraphqlMask, graphql_masked_answer, graphql_masked_answer_nodes, graphql_masked_item,
+        graphql_masked_nodes, graphql_masked_row, graphql_masked_value,
+    };
     #[cfg(feature = "http")]
     pub use crate::http::mask::RouteMask;
-    pub use crate::mask::masked_output_ambient;
     #[cfg(feature = "mcp")]
     pub use crate::mcp::mask::{McpMask, mcp_masked_value};
     pub use crate::subject::{NoRows, Rows, SubjectMask};

@@ -47,3 +47,47 @@ pub struct Model {
     pub updated_at: DateTimeWithTimeZone,
     pub deleted_at: Option<DateTimeWithTimeZone>,
 }
+
+/// A `#[field_resolver]` answering the wire type: the mask it runs, its probe and
+/// the entity's impl through the umbrella.
+#[cfg(feature = "graphql")]
+pub mod answered {
+    use nest_rs::graphql::async_graphql::SimpleObject;
+    use nest_rs::graphql::async_graphql::connection::Connection;
+    use nest_rs::graphql::{operations, resolver};
+
+    use super::HygieneNote;
+
+    #[derive(SimpleObject)]
+    #[graphql(crate = "::nest_rs::graphql::async_graphql", complex)]
+    pub struct HygieneNotebook {
+        pub id: i32,
+    }
+
+    #[resolver]
+    pub struct HygieneNotebooksResolver;
+
+    #[operations]
+    impl HygieneNotebooksResolver {
+        #[query]
+        #[public]
+        fn notebook(&self) -> HygieneNotebook {
+            HygieneNotebook { id: 1 }
+        }
+
+        #[field_resolver]
+        async fn first_note(&self, _parent: &HygieneNotebook) -> Option<HygieneNote> {
+            None
+        }
+
+        #[field_resolver]
+        async fn notes(&self, _parent: &HygieneNotebook) -> Vec<HygieneNote> {
+            Vec::new()
+        }
+
+        #[field_resolver]
+        async fn page(&self, _parent: &HygieneNotebook) -> Connection<String, HygieneNote> {
+            Connection::new(false, false)
+        }
+    }
+}

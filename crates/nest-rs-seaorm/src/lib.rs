@@ -125,7 +125,9 @@ pub mod __private {
     #[cfg(feature = "graphql")]
     pub use crate::graphql::bind::graphql_bind;
     #[cfg(feature = "graphql")]
-    pub use crate::graphql::relations::__private::{relation_key, relation_page};
+    pub use crate::graphql::relations::__private::{
+        masked_relation_page, relation_key, relation_page,
+    };
     #[cfg(feature = "http")]
     pub use crate::http::http_bind;
     #[cfg(feature = "graphql")]
@@ -145,7 +147,7 @@ pub mod __private {
     pub use chrono;
     #[cfg(feature = "graphql")]
     pub use nest_rs_graphql::__private::{
-        FieldFailure, GraphqlRelationRegistration, LoaderOwner, seeded_loader,
+        FieldFailure, GraphqlRelationRegistration, LoaderOwner, WireAnswer, WireRow, seeded_loader,
     };
     #[cfg(feature = "graphql")]
     pub use nest_rs_graphql::{async_graphql, dataloader};

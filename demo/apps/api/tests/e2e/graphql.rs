@@ -588,6 +588,85 @@ async fn a_publish_the_database_refuses_answers_in_band_and_leaves_the_post_a_dr
 }
 
 #[tokio::test]
+async fn a_members_relations_answer_what_its_grant_allows() {
+    let logs = nest_rs::testing::LogCapture::install();
+    let app = boot().await;
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
+    let org = create_org(&app, &bootstrap, "GqlMember").await;
+    let admin = sign(&app, org, Role::Admin);
+    let author_id =
+        Uuid::parse_str(&create_user(&app, &admin, "Author", "author@gqlmember.test").await)
+            .expect("valid user uuid");
+    let author = sign_as(&app, org, Role::Admin, author_id);
+    create_post(&app, &author, "Seen", "Once").await;
+    let member = sign(&app, org, Role::User);
+
+    let served = graphql(&app, &member, "{ posts { author { id name } } }").await;
+    assert!(served.get("errors").is_none(), "{served}");
+    assert_eq!(
+        served["data"]["posts"][0]["author"],
+        json!({ "id": author_id.to_string(), "name": "Author" }),
+    );
+
+    let refused = graphql(&app, &member, "{ posts { author { email } } }").await;
+    assert_eq!(
+        refused["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{refused}"
+    );
+    assert_eq!(
+        refused["errors"][0]["extensions"]["fields"],
+        json!(["email"]),
+        "{refused}"
+    );
+    assert!(
+        !refused.to_string().contains("author@gqlmember.test"),
+        "{refused}"
+    );
+
+    let listed = graphql(
+        &app,
+        &member,
+        "{ orgs { users { edges { node { id name } } } } }",
+    )
+    .await;
+    assert!(listed.get("errors").is_none(), "{listed}");
+    assert_eq!(
+        listed["data"]["orgs"][0]["users"]["edges"][0]["node"]["name"], "Author",
+        "{listed}"
+    );
+
+    let refused = graphql(
+        &app,
+        &member,
+        "{ orgs { users { edges { node { email } } } } }",
+    )
+    .await;
+    assert_eq!(
+        refused["errors"][0]["extensions"]["fields"],
+        json!(["email"]),
+        "{refused}"
+    );
+    assert!(
+        !refused.to_string().contains("author@gqlmember.test"),
+        "{refused}"
+    );
+
+    let whole = graphql(&app, &admin, "{ posts { author { email } } }").await;
+    assert!(whole.get("errors").is_none(), "{whole}");
+    assert_eq!(
+        whole["data"]["posts"][0]["author"]["email"],
+        "author@gqlmember.test"
+    );
+
+    let filed: Vec<String> = logs
+        .events_at(tracing::Level::ERROR)
+        .into_iter()
+        .map(|event| format!("{} {}", event.target, event.message))
+        .collect();
+    assert_eq!(filed, Vec::<String>::new());
+}
+
+#[tokio::test]
 async fn a_field_that_errs_answers_null_beside_the_fields_that_answered() {
     let app = boot().await;
     let bootstrap = sign(&app, ORG_ID, Role::Admin);

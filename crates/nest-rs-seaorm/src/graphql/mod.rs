@@ -5,7 +5,9 @@
 //!
 //! A DataLoader batch needs no binding: it runs on the pool, under the caller's
 //! ability, through what its request carries into a `Batch` — a relation
-//! resolved in a mutation's own response reads the state before the mutation.
+//! resolved in a mutation's own response reads the state before the mutation. It
+//! filters rows: the field answering one masks its columns by its own selection,
+//! since one batch serves every alias asking.
 
 pub(crate) mod bind;
 pub(crate) mod relations;

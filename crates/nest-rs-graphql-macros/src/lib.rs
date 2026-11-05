@@ -179,7 +179,8 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// | `PostsService` | `author` | `PostsServiceAuthor` |
 ///
 /// Name the loader exactly that from the `#[field_resolver]` that reads it:
-/// `author: &DataLoader<UsersServiceById>`.
+/// `author: &DataLoader<UsersServiceById>`. An answer holding an `#[expose]`d wire
+/// type's rows is masked by the field's selection, whatever read them.
 ///
 /// # Expands to
 ///

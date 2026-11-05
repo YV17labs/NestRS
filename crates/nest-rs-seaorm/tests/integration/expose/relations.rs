@@ -218,6 +218,40 @@ fn a_key_is_named_by_the_variant_sea_orm_derives() {
     );
 }
 
+pub(super) mod labels {
+    use super::*;
+
+    #[expose(name = "Label", service = LabelsService, graphql)]
+    #[sea_orm::model]
+    #[derive(Clone, Debug, DeriveEntityModel)]
+    #[sea_orm(table_name = "labels")]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub slug: String,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    #[nest_rs_core::injectable]
+    pub(crate) struct LabelsService;
+
+    impl CrudService for LabelsService {
+        type Entity = Entity;
+    }
+}
+
+#[test]
+fn a_primary_key_needs_no_copy_to_load_its_row() {
+    use nest_rs_seaorm::graphql::PkLoadable;
+    use std::any::TypeId;
+
+    assert_eq!(
+        TypeId::of::<<labels::Entity as PkLoadable>::Loader>(),
+        TypeId::of::<labels::LabelsServiceById>(),
+    );
+}
+
 pub(super) mod racks {
     use super::*;
 

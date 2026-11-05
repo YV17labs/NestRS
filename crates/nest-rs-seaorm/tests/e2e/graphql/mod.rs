@@ -4,3 +4,4 @@ mod bind;
 mod crud;
 mod federation;
 mod mutation;
+mod relations;

@@ -3,11 +3,21 @@
 //!
 //! The framework-carried path is [`masked_value_for`], emitted automatically by
 //! `#[operations]` after every `#[authorize(Action, Entity)]`-declared operation.
+//! A nested field runs off that unit and masks what it answers by the same rule:
+//! [`graphql_masked_row`] and [`graphql_masked_nodes`] on an `#[expose]`d relation,
+//! [`graphql_masked_answer`] and [`graphql_masked_answer_nodes`] on a
+//! `#[field_resolver]` answering a wire type.
+
+use std::any::TypeId;
+use std::collections::BTreeSet;
 
 use nest_rs_core::Edge;
 use nest_rs_graphql::async_graphql::{Context, Error};
+use nest_rs_guards::Denial;
+use sea_orm::{Iterable, PrimaryKeyToColumn};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use super::ability;
 use super::context::forbidden_fields;
@@ -31,15 +41,15 @@ use crate::{Ability, Action, ActionMarker};
 /// longer reaches. A resolver never calls it.
 ///
 /// Each item is a row — the gate ran once, at subscribe — so one the ability
-/// refuses is dropped, never nulled. No `Repo` read filtered it, so a rule
-/// reading a relation or a column the item does not carry — an unexposed one,
-/// or an exposed one its type leaves out — grants nothing and, as a denial,
-/// denies. Fails **closed**: a value that cannot be reconciled with `E::Model`
-/// is an `Err`, and the caller drops the item.
+/// refuses is dropped, never nulled, as a refused row of a list item is. No `Repo`
+/// read filtered it, so a rule reading a relation or a column the item does not
+/// carry — an unexposed one, or an exposed one its type leaves out — grants nothing
+/// and, as a denial, denies. Fails **closed**: a value that cannot be reconciled
+/// with `E::Model` is an `Err`, and the caller drops the item.
 pub fn masked_item_for<A, E, O>(
     ctx: &Context<'_>,
     ability: &Ability,
-    item: O,
+    mut item: O,
 ) -> Result<Option<O>, Error>
 where
     A: ActionMarker,
@@ -47,39 +57,197 @@ where
     O: Serialize + DeserializeOwned,
 {
     let action = A::ACTION;
-    let wire = serde_json::to_value(&item).map_err(|err| {
-        mask_failure::<E>(
-            action,
-            mask_reason::NOT_SERIALIZABLE,
-            "subscription item did not serialize",
-            &err,
-        )
-    })?;
-    // A scalar item has no row to evaluate; it passes as on the query path.
-    if !wire.is_object() {
-        return Ok(Some(item));
+    let wire = written::<E, O>(action, &item)?;
+    if wire.is_array() {
+        return masked_value_with::<E, O>(ctx, ability, action, item, Provenance::Pushed).map(Some);
     }
-    let verdict = judged::<E>(ability, action, &wire, Provenance::Pushed).map_err(|err| {
+    let kept = masked_in_place::<E, O>(
+        ability,
+        action,
+        &mut item,
+        wire,
+        Provenance::Pushed,
+        |removed| refused_field::<E>(ctx, action, removed),
+    )?;
+    Ok(kept.then_some(item))
+}
+
+/// One row, `wire` what it serializes to, through the mask: `false` when the
+/// ability refuses it, the row cut to what it grants when its type can read that,
+/// and otherwise the row as it stands, unless `refused` says the keys the mask took
+/// off it refuse the field.
+fn masked_in_place<E, O>(
+    ability: &Ability,
+    action: Action,
+    row: &mut O,
+    wire: Value,
+    provenance: Provenance,
+    refused: impl FnOnce(&BTreeSet<String>) -> Option<Error>,
+) -> Result<bool, Error>
+where
+    E: WireModel,
+    O: DeserializeOwned,
+{
+    // A scalar has no row to evaluate; it passes as on the query path.
+    if !wire.is_object() {
+        return Ok(true);
+    }
+    let verdict = judged::<E>(ability, action, &wire, provenance).map_err(|err| {
         mask_failure::<E>(
             action,
             mask_reason::IRRECONCILABLE,
-            "subscription item could not be reconciled with the subject model",
+            "row could not be reconciled with the subject model",
             &err,
         )
     })?;
     if !verdict.allowed {
-        return Ok(None);
+        return Ok(false);
     }
     let masked = mask_row::<E>(&verdict, wire);
     match serde_json::from_value(masked.masked) {
-        Ok(masked) => Ok(Some(masked)),
-        // The mask took a key the item's own type requires. Not a failure in
-        // itself — only if the operation asked for that key.
-        Err(_) => match refused_selection(ctx, action, std::any::type_name::<E>(), &masked.removed)
-        {
+        Ok(cut) => {
+            *row = cut;
+            Ok(true)
+        }
+        // The mask took a key the row's own type requires. Not a failure in
+        // itself — only if the field asked for that key.
+        Err(_) => match refused(&masked.removed) {
             Some(denial) => Err(denial),
-            None => Ok(Some(item)),
+            None => Ok(true),
         },
+    }
+}
+
+/// [`masked_in_place`] over a row held by value: `Ok(None)` when the ability refuses it.
+fn masked_row<E, O>(
+    ability: &Ability,
+    action: Action,
+    mut row: O,
+    provenance: Provenance,
+    refused: impl FnOnce(&BTreeSet<String>) -> Option<Error>,
+) -> Result<Option<O>, Error>
+where
+    E: WireModel,
+    O: Serialize + DeserializeOwned,
+{
+    let wire = written::<E, O>(action, &row)?;
+    let kept = masked_in_place::<E, O>(ability, action, &mut row, wire, provenance, refused)?;
+    Ok(kept.then_some(row))
+}
+
+/// What a relation's field answers of the row its batch read, by this field's own
+/// selection: a batch is shared by every alias asking, so it filters rows and
+/// leaves the columns to here. A row the ability refuses reads `None`.
+///
+/// The batch read the row through `Repo` under this ability, into the entity's own
+/// wire type, so a caller whose grants narrow no column pays for no round trip.
+pub fn graphql_masked_row<E, O>(ctx: &Context<'_>, row: Option<O>) -> Result<Option<O>, Error>
+where
+    E: WireModel,
+    O: Serialize + DeserializeOwned,
+{
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let ability = ability()?;
+    if ability.grants_every_column(Action::Read, TypeId::of::<E>()) {
+        return Ok(Some(row));
+    }
+    masked_row::<E, O>(&ability, Action::Read, row, Provenance::Loaded, |removed| {
+        refused_field::<E>(ctx, Action::Read, removed)
+    })
+}
+
+/// [`graphql_masked_row`] over one page of a list relation, each row beside its
+/// cursor: a row the ability refuses leaves with its cursor.
+pub fn graphql_masked_nodes<E, O>(
+    ctx: &Context<'_>,
+    nodes: Vec<(String, O)>,
+) -> Result<Vec<(String, O)>, Error>
+where
+    E: WireModel,
+    O: Serialize + DeserializeOwned,
+{
+    if nodes.is_empty() {
+        return Ok(nodes);
+    }
+    let ability = ability()?;
+    if ability.grants_every_column(Action::Read, TypeId::of::<E>()) {
+        return Ok(nodes);
+    }
+    let selected = page_selection::<E>(ctx);
+    let mut kept = Vec::with_capacity(nodes.len());
+    for (cursor, node) in nodes {
+        let node = masked_row::<E, O>(
+            &ability,
+            Action::Read,
+            node,
+            Provenance::Loaded,
+            |removed| refused_selection::<E>(&selected, Action::Read, removed),
+        )?;
+        if let Some(node) = node {
+            kept.push((cursor, node));
+        }
+    }
+    Ok(kept)
+}
+
+/// What a `#[field_resolver]` answering a wire type answers, masked by a root's
+/// rule, its action a read. An app attaching no ability has no grant to apply, and
+/// its own reads through `Repo` refuse.
+pub fn graphql_masked_answer<E, O>(ctx: &Context<'_>, answer: O) -> Result<O, Error>
+where
+    E: WireModel,
+    O: Serialize + DeserializeOwned,
+{
+    match crate::context::installed() {
+        Some(ability) => masked_value_with::<E, O>(
+            ctx,
+            &ability,
+            Action::Read,
+            answer,
+            answer_provenance(&ability),
+        ),
+        None => Ok(answer),
+    }
+}
+
+/// [`graphql_masked_answer`] over the rows of a connection a body built, each masked
+/// in place by the connection's selection: whether each stays, the rest of its edge
+/// being the body's.
+pub fn graphql_masked_answer_nodes<E, O>(
+    ctx: &Context<'_>,
+    nodes: Vec<&mut O>,
+) -> Result<Vec<bool>, Error>
+where
+    E: WireModel,
+    O: Serialize + DeserializeOwned,
+{
+    let Some(ability) = crate::context::installed() else {
+        return Ok(vec![true; nodes.len()]);
+    };
+    let provenance = answer_provenance(&ability);
+    let selected = page_selection::<E>(ctx);
+    nodes
+        .into_iter()
+        .map(|node| {
+            let wire = written::<E, O>(Action::Read, &*node)?;
+            masked_in_place::<E, O>(&ability, Action::Read, node, wire, provenance, |removed| {
+                refused_selection::<E>(&selected, Action::Read, removed)
+            })
+        })
+        .collect()
+}
+
+/// How a body's answer is judged. A caller a token backs reads through `Repo` under
+/// this ability, so its answer is a reply, keeping the trust a read earns whatever
+/// read it. A visitor's reads are withheld below its root, so no read can have
+/// applied its rules, and its answer is a push.
+fn answer_provenance(ability: &Ability) -> Provenance {
+    if ability.is_visitor() {
+        Provenance::Pushed
+    } else {
+        Provenance::Loaded
     }
 }
 
@@ -92,9 +260,10 @@ where
 /// `Vec<…>`; scalars and `None` pass through untouched.
 ///
 /// A stripped **non-null** field cannot mask to `null`: when the operation
-/// selected it, the operation is refused (`FORBIDDEN`, with the names in the
-/// `fields` extension); otherwise the surviving rows are served. Rows the
-/// ability refuses are dropped either way.
+/// selected it, or the field selects nothing, a scalar serializing whole, the
+/// operation is refused (`FORBIDDEN`, with the names in the `fields` extension);
+/// otherwise the surviving rows are served. Rows the ability refuses are dropped
+/// either way.
 ///
 /// Fails **closed**: an irreconcilable value is a GraphQL error, never
 /// unmasked data. The value is one the resolver read through `Repo` under this
@@ -109,22 +278,29 @@ where
     O: Serialize + DeserializeOwned,
 {
     let ability = ability()?;
-    let action = A::ACTION;
-    let wire = serde_json::to_value(&value).map_err(|err| {
-        mask_failure::<E>(
-            action,
-            mask_reason::NOT_SERIALIZABLE,
-            "resolver value did not serialize",
-            &err,
-        )
-    })?;
-    match mask_wire_json::<E>(&ability, action, wire, Provenance::Loaded) {
+    masked_value_with::<E, O>(ctx, &ability, A::ACTION, value, Provenance::Loaded)
+}
+
+/// [`masked_value_for`] under the ability its caller read, judged as `provenance` says.
+fn masked_value_with<E, O>(
+    ctx: &Context<'_>,
+    ability: &Ability,
+    action: Action,
+    value: O,
+    provenance: Provenance,
+) -> Result<O, Error>
+where
+    E: WireModel,
+    O: Serialize + DeserializeOwned,
+{
+    let wire = written::<E, O>(action, &value)?;
+    match mask_wire_json::<E>(ability, action, wire, provenance) {
         Ok(MaskedWire::Passthrough(_)) => Ok(value),
         Ok(MaskedWire::Masked(masked)) => match serde_json::from_value(masked) {
             Ok(masked) => Ok(masked),
             // The mask took a key the wire type requires — not a failure in
             // itself, only if the operation asked for that key.
-            Err(_) => unrepresentable::<E, O>(ctx, &ability, action, value),
+            Err(_) => unrepresentable::<E, O>(ctx, ability, action, value, provenance),
         },
         Err(err) => Err(mask_failure::<E>(
             action,
@@ -207,6 +383,7 @@ fn unrepresentable<E, O>(
     ability: &Ability,
     action: Action,
     value: O,
+    provenance: Provenance,
 ) -> Result<O, Error>
 where
     E: WireModel,
@@ -214,15 +391,8 @@ where
 {
     // Written again rather than kept: the mask consumed the first, and only a
     // field grant the type cannot express comes this way.
-    let wire = serde_json::to_value(&value).map_err(|err| {
-        mask_failure::<E>(
-            action,
-            mask_reason::NOT_SERIALIZABLE,
-            "resolver value did not serialize",
-            &err,
-        )
-    })?;
-    let detail = mask_wire_detail::<E>(ability, action, wire).map_err(|err| {
+    let wire = written::<E, O>(action, &value)?;
+    let detail = mask_wire_detail::<E>(ability, action, wire, provenance).map_err(|err| {
         mask_failure::<E>(
             action,
             mask_reason::IRRECONCILABLE,
@@ -231,9 +401,7 @@ where
         )
     })?;
 
-    if let Some(denial) =
-        refused_selection(ctx, action, std::any::type_name::<E>(), &detail.removed)
-    {
+    if let Some(denial) = refused_field::<E>(ctx, action, &detail.removed) {
         return Err(denial);
     }
 
@@ -253,16 +421,80 @@ where
     })
 }
 
-/// Whether the keys the mask stripped refuse the *operation*.
-///
-/// A key outside the selection set is never serialized, so it cannot leak.
-fn refused_selection(
+/// What a value serializes to, or the fail-closed exit of one that does not.
+fn written<E, O: Serialize>(action: Action, value: &O) -> Result<Value, Error> {
+    serde_json::to_value(value).map_err(|err| {
+        mask_failure::<E>(
+            action,
+            mask_reason::NOT_SERIALIZABLE,
+            "value did not serialize",
+            &err,
+        )
+    })
+}
+
+/// The fields a field selects, fragments read through.
+fn selection<'c>(ctx: &'c Context<'_>) -> Vec<&'c str> {
+    ctx.field().selection_set().map(|f| f.name()).collect()
+}
+
+/// Whether the keys the mask stripped refuse the field `ctx` answers: those it
+/// selects, or every one where it selects nothing, a scalar, which serializes whole.
+fn refused_field<E>(
     ctx: &Context<'_>,
     action: Action,
-    entity: &'static str,
-    removed: &std::collections::BTreeSet<String>,
+    removed: &BTreeSet<String>,
 ) -> Option<Error> {
-    let selected: Vec<&str> = ctx.field().selection_set().map(|f| f.name()).collect();
+    let selected = selection(ctx);
+    if selected.is_empty() {
+        let whole: Vec<&str> = removed.iter().map(String::as_str).collect();
+        return refused_selection::<E>(&whole, action, removed);
+    }
+    refused_selection::<E>(&selected, action, removed)
+}
+
+/// What a selection reads of each row of a connection: the fields its `nodes` and
+/// its edges' `node` select, and the primary key when it asks a cursor, whose text
+/// is the row's key on a list relation's page.
+fn page_selection<'c, E: WireModel>(ctx: &'c Context<'_>) -> Vec<&'c str> {
+    let mut selected = Vec::new();
+    let mut cursor = false;
+    for field in ctx.field().selection_set() {
+        match field.name() {
+            "nodes" => selected.extend(field.selection_set().map(|f| f.name())),
+            "edges" => {
+                for edge in field.selection_set() {
+                    match edge.name() {
+                        "node" => selected.extend(edge.selection_set().map(|f| f.name())),
+                        "cursor" => cursor = true,
+                        _ => {}
+                    }
+                }
+            }
+            "pageInfo" => {
+                cursor |= field
+                    .selection_set()
+                    .any(|f| matches!(f.name(), "startCursor" | "endCursor"));
+            }
+            _ => {}
+        }
+    }
+    if cursor {
+        selected.extend(E::PrimaryKey::iter().filter_map(|key| E::wire_key(key.into_column())));
+    }
+    selected
+}
+
+/// Whether the keys the mask stripped refuse the *field* that `selected` is read
+/// off.
+///
+/// A key outside the selection set of an object is never serialized, so it cannot
+/// leak; a field with no selection is [`refused_field`]'s to read.
+fn refused_selection<E>(
+    selected: &[&str],
+    action: Action,
+    removed: &BTreeSet<String>,
+) -> Option<Error> {
     let refused: Vec<&str> = removed
         .iter()
         .filter(|key| selected.iter().any(|name| same_key(name, key)))
@@ -275,7 +507,7 @@ fn refused_selection(
     // wire keeps the list.
     let joined = refused.join(",");
     crate::gate::warn_denied(Refusal {
-        subject: Some(entity),
+        subject: Some(std::any::type_name::<E>()),
         action: Some(action),
         fields: Some(&joined),
         reason: Some(reason::FIELD_NOT_GRANTED),
@@ -302,7 +534,7 @@ fn mask_failure<E>(
         None,
         Some(err),
     );
-    Error::new("response masking failed: value did not match the authorized subject type")
+    nest_rs_graphql::denial_to_graphql_error(Denial::internal("response masking failed"))
 }
 
 /// Whether a GraphQL field name and a wire key name the same column, across the

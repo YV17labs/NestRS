@@ -1,6 +1,7 @@
 //! Auto-generated bridges for entities: a PK loader on the entity's service,
 //! trait impls connecting the entity to its loader and wire DTO, and
-//! `#[ComplexObject]` field resolvers for every exposed (`#[expose]`) relation.
+//! `#[ComplexObject]` field resolvers for every exposed (`#[expose]`) relation. A
+//! loader's batch filters rows; each field masks the columns by its own selection.
 //!
 //! The FK-side dataloader (`by_<fk_col>`) and its `RelatedTo<Parent, Via>` impl
 //! are emitted by the entity declaring `belongs_to`, never by the parent.
@@ -109,16 +110,12 @@ fn emit_pk_loader(
                     )
                     .all()
                     .await?;
-                // `scoped(Read)` filters rows only; columns are masked here.
+                // `scoped(Read)` filters rows; each field masks the columns by its
+                // own selection, since one batch serves every alias asking.
                 let mut __map: ::std::collections::HashMap<#pk_ty, #wire> =
                     ::std::collections::HashMap::with_capacity(__rows.len());
                 for __row in __rows {
-                    let __wire = ::nest_rs_authz::__private::masked_output_ambient::<
-                        ::nest_rs_authz::Read,
-                        Entity,
-                        #wire,
-                    >(&__row)
-                    .map_err(|__e| ::nest_rs_seaorm::__private::masking(&__e))?;
+                    let __wire = <#wire>::from(&__row);
                     __map.insert(__row.#pk_ident, __wire);
                 }
                 ::core::result::Result::Ok(__map)
@@ -312,19 +309,14 @@ fn emit_fk_loaders(
                         .await?;
                         for (__parent, __page) in __pages {
                             let mut __edges = ::std::vec::Vec::with_capacity(__page.items.len());
+                            // `scoped(Read)` filters rows; each field masks the columns
+                            // by its own selection, since one batch serves every alias.
                             for __row in &__page.items {
-                                // `scoped(Read)` filters rows only; columns are masked here.
-                                let __wire = ::nest_rs_authz::__private::masked_output_ambient::<
-                                    ::nest_rs_authz::Read,
-                                    Entity,
-                                    #wire,
-                                >(__row)
-                                .map_err(|__e| ::nest_rs_seaorm::__private::masking(&__e))?;
                                 __edges.push((
                                     ::std::string::ToString::to_string(
                                         &::nest_rs_seaorm::PageCursor::from(__row.#pk_ident),
                                     ),
-                                    __wire,
+                                    <#wire>::from(__row),
                                 ));
                             }
                             __out.insert(
@@ -472,7 +464,7 @@ fn relation_registration(
 }
 
 /// One BelongsTo field resolver: load the parent's FK column via the target
-/// entity's PK loader, returning its wire DTO.
+/// entity's PK loader, returning its wire DTO masked by this field's selection.
 fn emit_belongs_to_method(
     model: &ResourceModel,
     field: &ResourceField,
@@ -499,14 +491,17 @@ fn emit_belongs_to_method(
             >(__ctx)
             .map_err(::nest_rs_seaorm::__private::FieldFailure::into_answer)?;
             let __key = #key_expr;
-            ::core::result::Result::Ok(__loader.load_one(__key).await?)
+            ::nest_rs_authz::__private::graphql_masked_row::<#target, _>(
+                __ctx,
+                __loader.load_one(__key).await?,
+            )
         }
     })
 }
 
-/// One HasMany field resolver: one page of the children of `self`, as a Relay
-/// `Connection` cursored by the child's primary key, through the target's
-/// `RelatedTo<Self::Entity, Via>::Loader`.
+/// One HasMany field resolver: one page of the children of `self`, masked by this
+/// field's selection, as a Relay `Connection` cursored by the child's primary key,
+/// through the target's `RelatedTo<Self::Entity, Via>::Loader`.
 fn emit_has_many_method(
     field: &ResourceField,
     target: &syn::Path,
@@ -553,7 +548,7 @@ fn emit_has_many_method(
                 .unwrap_or_default();
             ::core::result::Result::Ok(
                 ::nest_rs_seaorm::graphql::RelationPage::into_connection(
-                    __page,
+                    ::nest_rs_seaorm::__private::masked_relation_page::<#target, _>(__ctx, __page)?,
                     __has_previous_page,
                 ),
             )

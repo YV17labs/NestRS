@@ -74,8 +74,8 @@ pub fn current_ability() -> Option<Arc<Ability>> {
 
 /// Ambient on a unit whose `#[public(Action, Entity)]` admitted a visitor: what
 /// that visitor reads is named, so its rows and its fields are its grant's. What
-/// runs off that unit, a nested GraphQL field or a relation's batch, no mask
-/// shapes, and a visitor's ability is withheld there.
+/// runs off that unit, a nested GraphQL field or a relation's batch, names nothing,
+/// and a visitor's ability is withheld there.
 pub(crate) struct VisitorReadNamed;
 
 impl AmbientValue for VisitorReadNamed {}

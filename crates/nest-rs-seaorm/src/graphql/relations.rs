@@ -37,6 +37,11 @@ pub struct RelationPage<T> {
 /// `graphql` is public: the constructors `#[expose]` emits live here, reached
 /// only through the crate's `__private`.
 pub(crate) mod __private {
+    use nest_rs_authz::__private::{WireModel, graphql_masked_nodes};
+    use nest_rs_graphql::async_graphql::{Context, Error};
+    use serde::Serialize;
+    use serde::de::DeserializeOwned;
+
     use super::{RelationKey, RelationPage};
 
     /// The key `#[expose]`'s relation loader asks one parent's page under.
@@ -58,6 +63,22 @@ pub(crate) mod __private {
             edges,
             has_next_page,
         }
+    }
+
+    /// `page` as `#[expose]`'s relation field answers it: what its selection may
+    /// read of each row, whichever alias the batch read them for.
+    pub fn masked_relation_page<E, T>(
+        ctx: &Context<'_>,
+        page: RelationPage<T>,
+    ) -> Result<RelationPage<T>, Error>
+    where
+        E: WireModel,
+        T: Serialize + DeserializeOwned,
+    {
+        Ok(RelationPage {
+            edges: graphql_masked_nodes::<E, _>(ctx, page.edges)?,
+            has_next_page: page.has_next_page,
+        })
     }
 }
 
@@ -88,7 +109,8 @@ impl<T: OutputType> RelationPage<T> {
 
 /// "This entity loads its wire type by primary key." Implemented
 /// automatically by `#[expose]` on every entity that declares a `service = …`;
-/// the wire type a load answers is the entity's [`Exposed::Wire`].
+/// the wire type a load answers is the entity's [`Exposed::Wire`], every exposed
+/// column of a row the caller may read: the field answering it masks it.
 pub trait PkLoadable: Exposed {
     /// The `#[dataloader]`-generated primary-key loader (`<Service>ById`).
     type Loader: Send + Sync + 'static;

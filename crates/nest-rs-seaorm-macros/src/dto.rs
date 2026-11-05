@@ -4,14 +4,15 @@
 //! columns appear — an unexposed field is absent; a `Uuid` or a timestamp
 //! renders as a `String` on the wire, its schema keeping the `uuid` or
 //! `date-time` format. Derives `JsonSchema` for OpenAPI; with `graphql`, also
-//! `SimpleObject`.
+//! `SimpleObject`, and says which entity's mask shapes its rows where no posture
+//! names one.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::attr::{
-    ResourceModel, complexity_attr, graphql_crate_attr, graphql_object_derive, is_datetime_tz,
-    is_uuid,
+    ResourceModel, complexity_attr, graphql_crate_attr, graphql_object_derive, graphql_root,
+    is_datetime_tz, is_uuid,
 };
 
 pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
@@ -66,6 +67,7 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
 
     let graphql_derives = graphql_object_derive(model, "SimpleObject");
     let graphql_crate = graphql_crate_attr(model);
+    let wire_row = model.graphql.then(|| wire_row_impl(output));
 
     quote! {
         // A derive expands against the call site's prelude: without `crate = `
@@ -96,6 +98,55 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
 
         impl ::nest_rs_seaorm::Exposed for Entity {
             type Wire = #output;
+        }
+
+        #wire_row
+    }
+}
+
+/// What a `#[field_resolver]` answering `output` reads off it: its entity's mask,
+/// as no posture names that entity there.
+fn wire_row_impl(output: &syn::Ident) -> TokenStream2 {
+    let root = graphql_root();
+    quote! {
+        impl ::nest_rs_seaorm::__private::WireAnswer for #output {
+            fn masked(
+                self,
+                __ctx: &#root::Context<'_>,
+            ) -> ::core::result::Result<Self, #root::Error> {
+                ::nest_rs_authz::__private::graphql_masked_answer::<Entity, Self>(__ctx, self)
+            }
+
+            fn masked_option(
+                __answer: ::core::option::Option<Self>,
+                __ctx: &#root::Context<'_>,
+            ) -> ::core::result::Result<::core::option::Option<Self>, #root::Error> {
+                ::nest_rs_authz::__private::graphql_masked_answer::<
+                    Entity,
+                    ::core::option::Option<Self>,
+                >(__ctx, __answer)
+            }
+
+            fn masked_list(
+                __answer: ::std::vec::Vec<Self>,
+                __ctx: &#root::Context<'_>,
+            ) -> ::core::result::Result<::std::vec::Vec<Self>, #root::Error> {
+                ::nest_rs_authz::__private::graphql_masked_answer::<
+                    Entity,
+                    ::std::vec::Vec<Self>,
+                >(__ctx, __answer)
+            }
+        }
+
+        impl ::nest_rs_seaorm::__private::WireRow for #output {
+            fn masked_nodes(
+                __ctx: &#root::Context<'_>,
+                __nodes: ::std::vec::Vec<&mut Self>,
+            ) -> ::core::result::Result<::std::vec::Vec<bool>, #root::Error> {
+                ::nest_rs_authz::__private::graphql_masked_answer_nodes::<Entity, Self>(
+                    __ctx, __nodes,
+                )
+            }
         }
     }
 }

@@ -87,8 +87,9 @@ pub(crate) enum Provenance {
     /// action's rules: an undecidable grant grants nothing, an undecidable
     /// denial denies, and no warn is filed — the caller hears `false`.
     Held,
-    /// A subscription item or a `masked_reply` value, which no read filtered:
-    /// an undecidable grant grants nothing, an undecidable denial denies.
+    /// A subscription item, a `masked_reply` value or a body's answer to a visitor,
+    /// which no read filtered: an undecidable grant grants nothing, an undecidable
+    /// denial denies.
     Pushed,
 }
 
@@ -320,7 +321,8 @@ impl Ability {
     ///
     /// The enforcement layers ignore it; a transport admitting anonymous callers
     /// reads it so a `define_visitor` grant cannot satisfy an `#[authorize]`
-    /// operation. Read it from a guard or a posture attribute's gate only.
+    /// operation. Read it from a guard, a posture attribute's gate or a mask judging
+    /// what no read of this caller's filtered, only.
     pub fn is_visitor(&self) -> bool {
         self.visitor
     }
@@ -417,6 +419,17 @@ impl Ability {
     pub(crate) fn denied_outright(&self, action: Action, subject: TypeId) -> bool {
         self.rules_for(action, subject)
             .any(|rule| rule.inverted && rule.when.is_none())
+    }
+
+    /// Whether some grant opens `action` on `subject` and none of them narrows
+    /// its columns: every row a read admits under this ability ships whole.
+    #[cfg(feature = "graphql")]
+    pub(crate) fn grants_every_column(&self, action: Action, subject: TypeId) -> bool {
+        let mut grants = self
+            .rules_for(action, subject)
+            .filter(|rule| !rule.inverted)
+            .peekable();
+        grants.peek().is_some() && grants.all(|rule| matches!(rule.fields, FieldSet::All))
     }
 
     /// Layer ② — the query pre-filter: `(OR of grant conditions) AND NOT (OR of

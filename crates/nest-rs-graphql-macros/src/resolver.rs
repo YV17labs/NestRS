@@ -1770,6 +1770,23 @@ fn field_method(
         ),
         RootKind::Query,
     );
+    // Through the probes, so the mask reads the row inside a renamed `Result`, and
+    // an answer holding no wire type's rows pays nothing.
+    let call = quote! {
+        match #call {
+            ::core::result::Result::Ok(__out) => {
+                use ::nest_rs_core::__private::AnswerFallback as _;
+                ::core::result::Result::map_err(
+                    ::nest_rs_core::__private::Answer(&__out).mapper()(__out, |__value| {
+                        use ::nest_rs_graphql::__private::FieldAnswerFallback as _;
+                        ::nest_rs_graphql::__private::FieldAnswer(&__value).mask()(__ctx, __value)
+                    }),
+                    ::nest_rs_graphql::__private::FieldFailure::from,
+                )
+            }
+            ::core::result::Result::Err(__err) => ::core::result::Result::Err(__err),
+        }
+    };
     let method = quote! {
         #(#deleg_attrs)*
         async fn #method_name #generics (

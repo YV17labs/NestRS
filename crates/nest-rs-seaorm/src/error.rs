@@ -54,8 +54,7 @@ pub enum ServiceError {
     Db(#[source] DbErr),
     /// Response masking could not reconcile a loaded row into its wire DTO: a
     /// 500. The decode failure is kept as its [`DecodeError`] report, never
-    /// serde's sentence, which quotes the row's values. Built by the
-    /// relation loaders `#[expose]` emits.
+    /// serde's sentence, which quotes the row's values.
     #[error("response masking failed")]
     #[non_exhaustive]
     Masking {
@@ -168,9 +167,8 @@ impl ServiceError {
     }
 }
 
-/// A response mask's decode failure, said without the row's values: what the
-/// relation loaders `#[expose]` emits answer. Reached through the crate's
-/// `__private`.
+/// A response mask's decode failure, said without the row's values. Reached
+/// through the crate's `__private`.
 pub fn masking(failure: &serde_json::Error) -> ServiceError {
     ServiceError::Masking {
         source: DecodeError::new(failure),

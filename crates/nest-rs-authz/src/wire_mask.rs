@@ -149,13 +149,13 @@ pub(crate) struct MaskedDetail {
     pub(crate) dropped_rows: bool,
 }
 
-/// The row/field verdicts behind [`mask_wire_json`] on a decorated reply,
-/// reported instead of applied.
+/// The row/field verdicts behind [`mask_wire_json`], reported instead of applied.
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 pub(crate) fn mask_wire_detail<S: WireModel>(
     ability: &Ability,
     action: Action,
     wire: Value,
+    provenance: Provenance,
 ) -> Result<MaskedDetail, serde_json::Error> {
     let mut removed = BTreeSet::new();
     let mut dropped_rows = false;
@@ -163,7 +163,7 @@ pub(crate) fn mask_wire_detail<S: WireModel>(
         Value::Array(items) => {
             let mut kept = Vec::with_capacity(items.len());
             for item in items {
-                let verdict = judged::<S>(ability, action, &item, Provenance::Loaded)?;
+                let verdict = judged::<S>(ability, action, &item, provenance)?;
                 // Same verdict `mask_many` applies — a refused row is dropped,
                 // never handed back for the caller to render.
                 if !verdict.allowed {
@@ -176,10 +176,16 @@ pub(crate) fn mask_wire_detail<S: WireModel>(
             Value::Array(kept)
         }
         // A lone object is never dropped by `mask` (the class gate and `bind`
-        // decide a singleton's visibility); only its fields go.
+        // decide a singleton's visibility); only its fields go. A pushed one had
+        // no read to admit it, so what refuses it takes every field it holds.
         other => {
-            let verdict = judged::<S>(ability, action, &other, Provenance::Loaded)?;
-            collect_removed::<S>(&verdict.fields, &other, &mut removed);
+            let verdict = judged::<S>(ability, action, &other, provenance)?;
+            let fields = if provenance == Provenance::Pushed && !verdict.allowed {
+                FieldSet::Only(Default::default())
+            } else {
+                verdict.fields
+            };
+            collect_removed::<S>(&fields, &other, &mut removed);
             other
         }
     };

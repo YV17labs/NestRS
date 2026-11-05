@@ -16,7 +16,7 @@ use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_events::{EventBus, EventsModule};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamExt};
 use nest_rs_graphql::async_graphql::{
-    Error as GqlError, Executor, Request as GqlRequest, Result as GqlResult, SimpleObject,
+    Error as GqlError, Executor, Json, Request as GqlRequest, Result as GqlResult, SimpleObject,
 };
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
@@ -66,6 +66,12 @@ struct WidgetDto {
 struct StrictWidgetDto {
     id: i32,
     name: String,
+}
+
+/// A wire shape whose `id` no widget's column can read back.
+#[derive(SimpleObject, Serialize, Deserialize)]
+struct InventedWidgetDto {
+    id: String,
 }
 
 /// No-op stand-in for the authentication guard ahead of the ability guard at
@@ -202,10 +208,52 @@ impl MaskResolver {
         ])
     }
 
+    /// A scalar: it serializes whole, and a client selects nothing into it.
+    #[query]
+    #[authorize(Read, widget::Entity)]
+    async fn json_widget(&self) -> GqlResult<Json<StrictWidgetDto>> {
+        Ok(Json(StrictWidgetDto {
+            id: 1,
+            name: "ada".into(),
+        }))
+    }
+
+    #[query]
+    #[authorize(Read, widget::Entity)]
+    async fn invented_widget(&self) -> GqlResult<InventedWidgetDto> {
+        Ok(InventedWidgetDto {
+            id: "anonymous".into(),
+        })
+    }
+
     #[query]
     #[public]
     async fn motd(&self) -> GqlResult<String> {
         Ok("hello".into())
+    }
+
+    #[subscription]
+    #[authorize(Read, widget::Entity)]
+    async fn json_feed(&self) -> impl Stream<Item = Json<StrictWidgetDto>> {
+        stream::iter([Json(StrictWidgetDto {
+            id: 1,
+            name: "ada".into(),
+        })])
+    }
+
+    #[subscription]
+    #[authorize(Read, widget::Entity)]
+    async fn list_feed(&self) -> impl Stream<Item = Vec<StrictWidgetDto>> {
+        stream::iter([vec![
+            StrictWidgetDto {
+                id: 1,
+                name: "ada".into(),
+            },
+            StrictWidgetDto {
+                id: 2,
+                name: "grace".into(),
+            },
+        ]])
     }
 
     /// The stream both subscribers read; the resolver writes no masking call.
@@ -332,6 +380,47 @@ async fn an_unrestricted_caller_reads_every_field_of_a_strict_shape() {
     assert_eq!(json["data"]["strictWidget"]["name"], "ada", "{json}");
 }
 
+/// A scalar has no selection to acquit a stripped key, so every one refuses.
+#[tokio::test]
+async fn a_scalar_answer_refuses_every_column_the_grant_strips() {
+    let app = boot().await;
+
+    let json = query(&app, "viewer", "{ jsonWidget }").await;
+    assert_eq!(
+        json["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{json}"
+    );
+    assert_eq!(
+        json["errors"][0]["extensions"]["fields"],
+        serde_json::json!(["name"]),
+        "{json}",
+    );
+    assert!(!json.to_string().contains("ada"), "{json}");
+
+    let json = query(&app, "admin", "{ jsonWidget }").await;
+    assert_eq!(json["data"]["jsonWidget"]["name"], "ada", "{json}");
+}
+
+/// Every edge's mask failure answers opaquely under the `INTERNAL` code, the reason
+/// the operator's.
+#[tokio::test]
+async fn a_value_the_mask_cannot_read_back_answers_internal() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+
+    let json = query(&app, "admin", "{ inventedWidget { id } }").await;
+
+    let error = &json["errors"][0];
+    assert_eq!(error["extensions"]["code"], "INTERNAL", "{json}");
+    assert_eq!(
+        error["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "{json}"
+    );
+    assert!(!json.to_string().contains("anonymous"), "{json}");
+    logs.expect_one("nest_rs::authz", "response masking failed");
+}
+
 #[tokio::test]
 async fn rows_the_ability_refuses_are_still_dropped_from_a_strict_list() {
     let app = boot().await;
@@ -421,6 +510,60 @@ fn ids(items: &[serde_json::Value]) -> Vec<i64> {
         .iter()
         .filter_map(|item| item["widgetFeed"]["id"].as_i64())
         .collect()
+}
+
+/// Every item `subscription` streams to `role`, the stream's end ending the read.
+async fn items_to(role: &str, subscription: &str) -> Vec<serde_json::Value> {
+    let app = boot().await;
+    let schema = nest_rs_graphql::__private::compose_schema(
+        app.container().clone(),
+        &nest_rs_graphql::GraphqlConfig::default(),
+    )
+    .expect("the app's boot sealed its reachability set");
+    nest_rs_authz::__private::install_ability(
+        ability_for(role),
+        schema
+            .execute_stream(GqlRequest::new(subscription), None)
+            .map(payload)
+            .collect::<Vec<_>>(),
+    )
+    .await
+}
+
+/// A scalar item has no selection to acquit a stripped key, so it never reaches a
+/// subscriber whose grant cuts it.
+#[tokio::test]
+async fn a_scalar_item_the_grant_cuts_never_reaches_the_subscriber() {
+    let items = items_to("admin", "subscription { jsonFeed }").await;
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0]["jsonFeed"]["name"], "ada", "{items:?}");
+
+    let items = items_to("auditor", "subscription { jsonFeed }").await;
+    assert_eq!(items, Vec::<serde_json::Value>::new());
+}
+
+/// A list item's rows are each judged as an item is: one refused leaves the list,
+/// and a selected column the grant withholds withholds the item.
+#[tokio::test]
+async fn a_list_item_is_masked_row_by_row() {
+    let items = items_to("admin", "subscription { listFeed { id name } }").await;
+    assert_eq!(
+        items,
+        vec![serde_json::json!({ "listFeed": [
+            { "id": 1, "name": "ada" },
+            { "id": 2, "name": "grace" },
+        ] })],
+    );
+
+    let items = items_to("auditor", "subscription { listFeed { id } }").await;
+    assert_eq!(
+        items,
+        vec![serde_json::json!({ "listFeed": [{ "id": 1 }] })],
+        "widget 2 is outside the grant",
+    );
+
+    let items = items_to("auditor", "subscription { listFeed { id name } }").await;
+    assert_eq!(items, Vec::<serde_json::Value>::new());
 }
 
 /// What the harness's socket promises: the ability it attaches is the ambient

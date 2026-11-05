@@ -23,12 +23,16 @@ RUN cargo chef prepare --recipe-path recipe.json
 # --- builder ------------------------------------------------------------------
 FROM chef AS builder
 COPY --from=planner /app/demo/recipe.json /app/demo/recipe.json
+# The recipe holds this workspace alone, and it reaches the framework by path.
+COPY Cargo.toml /app/
+COPY crates /app/crates
 WORKDIR /app/demo
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . /app
 RUN cargo build --release --workspace --exclude seed --bins
+# The cook built an empty binary for every member, `seed` among them.
 RUN mkdir -p /out && \
-    find target/release -maxdepth 1 -type f -executable -exec cp {} /out/ \;
+    find target/release -maxdepth 1 -type f -executable ! -name seed -exec cp {} /out/ \;
 
 # --- runtime ------------------------------------------------------------------
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
@@ -43,4 +47,5 @@ LABEL org.opencontainers.image.licenses="MIT"
 COPY --from=builder --chown=nonroot:nonroot /out/ /usr/local/bin/
 
 USER nonroot:nonroot
-ENTRYPOINT ["/usr/local/bin/api"]
+# A CMD, so the binary a `docker run` names replaces it; an ENTRYPOINT would take it as an argument.
+CMD ["/usr/local/bin/api"]

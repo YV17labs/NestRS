@@ -4,6 +4,7 @@ ARG RUST_VERSION=1.97
 
 FROM rust:${RUST_VERSION}-slim-trixie AS builder
 WORKDIR /repo
+COPY Cargo.toml ./
 COPY crates crates
 COPY bench/sut/nestrs bench/sut/nestrs
 WORKDIR /repo/bench/sut/nestrs

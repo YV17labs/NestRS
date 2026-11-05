@@ -5,6 +5,7 @@ docs/
 .gitignore
 .github/
 .vscode/
+.cargo/
 .claude/
 .devcontainer/
 README.md
@@ -13,3 +14,4 @@ Dockerfile
 .dockerignore
 bacon.toml
 *.log
+**/.env*.local

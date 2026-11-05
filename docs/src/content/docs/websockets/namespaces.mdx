@@ -83,8 +83,8 @@ pub struct AdminNotifier {
 }
 
 impl AdminNotifier {
-    pub fn shout(&self, text: &str) {
-        let _ = self.server.broadcast("alert", &text);
+    pub fn shout(&self, text: &str) -> Result<usize, serde_json::Error> {
+        self.server.broadcast("alert", &text)
     }
 }
 ```

@@ -390,8 +390,8 @@ impl Guard for TenantGuard {
 impl GuardFor<HttpView> for TenantGuard {}
 
 #[get("/me")]
-async fn me(&self, tenant: Ambient<Tenant>) -> Json<Post> {
-    Json(self.svc.find_by_tenant(&tenant.0).await?)
+async fn me(&self, tenant: Ambient<Tenant>) -> Result<Json<Post>> {
+    Ok(Json(self.svc.find_by_tenant(&tenant.0).await?))
 }
 ```
 

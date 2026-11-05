@@ -72,9 +72,10 @@ one `warn` on `nest_rs::ws`, so the dispatch loop never blocks on a slow client.
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("say")]
-async fn say(&self, msg: SendMessageDto, client: &WsClient) {
-    let _ = client.broadcast("said", &msg);
-    let _ = client.to("lobby", "said", &msg);
+async fn say(&self, msg: SendMessageDto, client: &WsClient) -> Result<(), WsError> {
+    client.broadcast("said", &msg).opaque()?;
+    client.to("lobby", "said", &msg).opaque()?;
+    Ok(())
 }
 ```
 

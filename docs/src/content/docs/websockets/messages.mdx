@@ -393,8 +393,9 @@ no reply to the sender:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("typing")]
-async fn typing(&self, msg: SendMessageDto, client: &WsClient) {
-    let _ = client.broadcast("typing", &msg);
+async fn typing(&self, msg: SendMessageDto, client: &WsClient) -> Result<(), WsError> {
+    client.broadcast("typing", &msg).opaque()?;
+    Ok(())
 }
 ```
 

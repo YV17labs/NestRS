@@ -30,8 +30,8 @@ pub struct NotifyService {
 }
 
 impl NotifyService {
-    pub fn announce(&self, text: &str) {
-        let _ = self.server.broadcast("announce", &text);
+    pub fn announce(&self, text: &str) -> Result<usize, serde_json::Error> {
+        self.server.broadcast("announce", &text)
     }
 }
 ```

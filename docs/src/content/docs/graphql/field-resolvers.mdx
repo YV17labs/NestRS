@@ -16,8 +16,8 @@ derived value, a cross-service shape, a non-default cardinality.
 
 ## The smallest field resolver
 
-The first non-`self`, non-`ctx` argument is the parent object; the
-return is the field's value.
+The first argument after `&self` is the parent object; the return is the
+field's value.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 use async_graphql::SimpleObject;
@@ -158,8 +158,8 @@ You have three honest ways out:
 
 ## Why the macro picks the parent
 
-`#[field_resolver]` infers the parent type from the first non-receiver,
-non-`ctx` argument by reference. Every other argument becomes a
+`#[field_resolver]` infers the parent type from the first argument after the
+receiver, by reference, and a `ctx: &Context<'_>` comes after it. Every other argument becomes a
 GraphQL input or, when it's a reference, comes from the container — a
 `&DataLoader<L>` from the request.
 
@@ -167,8 +167,8 @@ GraphQL input or, when it's a reference, comes from the container — a
 #[field_resolver]
 async fn display_name(
     &self,
-    ctx: &Context<'_>,                   // optional
     parent: &User,                       // ← parent type, inferred
+    ctx: &Context<'_>,                   // optional
     upper: bool,                         // GraphQL argument
 ) -> String {
     if upper { parent.name.to_uppercase() } else { parent.name.clone() }

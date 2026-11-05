@@ -41,14 +41,14 @@ request, like any HTTP guard:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 use nest_rs::ws::{gateway, messages};
-use crate::auth::AuthnGuard;
+use crate::authn::AuthnGuard;
 use std::sync::Arc;
 
 #[gateway(path = "/ws")]
 #[use_guards(AuthnGuard)]
 pub struct ChatGateway {
     #[inject]
-    svc: Arc<RoomService>,
+    svc: Arc<ChatService>,
 }
 ```
 
@@ -278,8 +278,8 @@ See [Security](/security/) for the strategy + ability composition, and
 - [`crates/nest-rs-ws/src/guard.rs`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/guard.rs) —
   the guard stage each message's site composes once at boot and runs on
   every message.
-- [`crates/features/src/chat/ws/guard.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/chat/ws/guard.rs) —
-  a per-message guard worked end to end.
+- [`crates/features/src/chat/ws/gateway.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/chat/ws/gateway.rs) —
+  a gateway's upgrade guards and a message's posture, end to end.
 
 ## Going further
 

@@ -128,6 +128,11 @@ const INDICATOR: &str = "an indicator runs inside the health endpoint, whose lay
 const CONNECTION_HOOK_GUARDS: &str = "a connection hook runs on a socket its upgrade's guards \
      admitted — gate the upgrade with `#[use_guards]` on the `#[gateway]`";
 
+/// No layer runs around a connection hook to read a value declared on it.
+const CONNECTION_HOOK_META: &str = "no layer runs around a connection hook, so nothing reads a \
+     value declared on it — declare it on the `#[gateway]` or beside a `#[subscribe_message]`, \
+     where a message's layers read it";
+
 /// A connection hook is handed no payload.
 const CONNECTION_HOOK_PIPES: &str = "a connection hook takes no payload for a pipe to read";
 
@@ -168,7 +173,7 @@ pub fn cell(pair: &DecoratorPair, scope: LayerScope, attribute: LayerAttribute) 
         (P::Hooks, _, _) => Refused(HOOK),
         (P::Indicators, _, _) => Refused(INDICATOR),
 
-        (P::Ws, Hook, A::Meta) => Built,
+        (P::Ws, Hook, A::Meta) => Refused(CONNECTION_HOOK_META),
         (P::Ws, Hook, A::UseGuards | A::ForceGuards) => Refused(CONNECTION_HOOK_GUARDS),
         (P::Ws, Hook, A::UsePipes) => Refused(CONNECTION_HOOK_PIPES),
         (P::Ws, Hook, A::UseInterceptors | A::UseExceptionFilters) => Pending,
@@ -464,13 +469,10 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_hook_takes_its_meta_and_names_why_it_takes_no_guard_or_pipe() {
+    fn a_connection_hook_names_why_it_takes_no_meta_guard_or_pipe() {
         use crate::pair::WS;
-        assert_eq!(
-            cell(&WS, LayerScope::Hook, LayerAttribute::Meta),
-            Cell::Built
-        );
         for (attribute, fact) in [
+            (LayerAttribute::Meta, "nothing reads a value"),
             (LayerAttribute::UseGuards, "upgrade's guards"),
             (LayerAttribute::ForceGuards, "upgrade's guards"),
             (LayerAttribute::UsePipes, "no payload"),

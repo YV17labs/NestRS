@@ -522,10 +522,10 @@ message's `data`, after its guards and its gate; `#[use_pipes]` adds pipes for
 one gateway or one message, each once. A rejection is an error frame, as a
 payload's own pipe's is.
 
-The connection hooks take a `#[meta]` value, and no layer yet:
-`#[use_interceptors]` and `#[use_exception_filters]` beside `#[on_connect]` are
-named compile errors, as are a guard (the upgrade's guards admitted the socket)
-and a pipe (a hook has no payload).
+The connection hooks run no layer yet: `#[use_interceptors]` and
+`#[use_exception_filters]` beside `#[on_connect]` are named compile errors, as
+are a guard (the upgrade's guards admitted the socket), a pipe (a hook has no
+payload) and a `#[meta]` value (no layer would read it).
 
 ## The envelope itself
 

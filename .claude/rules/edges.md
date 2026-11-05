@@ -460,7 +460,8 @@ adds no line to the root, and writing it is the visible opening.
 stage) and `#[interceptor(stage = unit)]`, and one `dispatch`. HTTP, a GraphQL
 field, a WS message, an MCP operation, a job's attempt, a tick and a listener
 call run on it. A WS connection hook is a unit with no site yet: it carries
-what the upgrade attached and runs no layer.
+what the upgrade attached and runs no layer, so a `#[meta]` beside it, which
+nothing would read, is refused with the rest.
 
 **A GraphQL root field is a unit nested in its `/graphql` request**
 (`graphql.field`, inside its operation's unit of work): its site folds the

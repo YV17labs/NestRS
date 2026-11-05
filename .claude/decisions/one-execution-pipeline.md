@@ -382,3 +382,12 @@ test or demo copies a view, and a layer has no need to: it asks `cx.switch_to` a
 once `next.run(cx)` returned, and `field`, `operation`, `role` answer by value.
 Held by a `compile_fail` doctest on each. **Refused:** `respond` on the two now, a
 reply for an operation no caller asked to answer.
+
+**2026-11-05 — a connection hook takes no `#[meta]`, the
+`feat/websocket-on-pipeline` entry's "take `#[meta]`" reversed.** Nothing at run time read it: a hook has no site, so no
+`cx.reflector()` reaches one, and the value's one reader was a test through a hidden
+const, which went with it. An attribute that reads and does nothing is what the
+layer table refuses, so its cell is a named refusal rather than `Built`. A hook that
+comes to run a layer flips the cell with the change that builds it, which adds
+what a refusal withheld. **Refused:** keeping the value for that day: nothing it
+declares could be told from a typo until then.

@@ -69,8 +69,9 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `#[use_pipes(...)]` beside it bind for it, deduped against the gateway's and
 /// the app's.
 /// `#[on_connect]` / `#[on_disconnect]` are the lifecycle hooks — `&self` with
-/// an optional `&WsClient`. `#[meta(EXPR)]` (repeatable) on a handler or a hook
-/// declares a value for it, read over the gateway's of the same type.
+/// an optional `&WsClient`. `#[meta(EXPR)]` (repeatable) on a handler declares a
+/// value for it, read over the gateway's of the same type; beside a hook, which
+/// runs no layer to read it, it is refused.
 ///
 /// # Expands to
 ///

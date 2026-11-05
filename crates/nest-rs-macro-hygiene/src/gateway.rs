@@ -155,7 +155,6 @@ impl HygieneGateway {
     }
 
     #[on_connect]
-    #[meta(HygieneLimit(1))]
     fn connected(&self) {}
 
     /// A message compiled out takes its dispatch arm, chain and guard with it.

@@ -180,26 +180,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             return err.to_compile_error().into();
         }
         if let Some(hook) = hook {
-            let metas = match take_layers(&pair::WS, LayerScope::Hook, &mut method.attrs) {
-                Ok(layers) => layers.meta,
-                Err(err) => return err.to_compile_error().into(),
-            };
-            site_items.push(handler_const(&HandlerSite {
-                unit: if hook == "on_connect" {
-                    quote!(::nest_rs_ws::unit::CONNECT)
-                } else {
-                    quote!(::nest_rs_ws::unit::DISCONNECT)
-                },
-                self_ty: &self_ty,
-                host_name: &host,
-                method: &method.sig.ident,
-                address: quote!(#identity),
-                // A hook runs on a connection the upgrade's guards admitted.
-                posture: SitePosture::Gated,
-                host_meta: HostMeta::Struct,
-                method_meta: &metas,
-                cfgs: &cfgs,
-            }));
+            if let Err(err) = take_layers(&pair::WS, LayerScope::Hook, &mut method.attrs) {
+                return err.to_compile_error().into();
+            }
             if let Err(err) = take_flag_attr(&mut method.attrs, hook) {
                 return err.to_compile_error().into();
             }

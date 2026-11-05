@@ -40,3 +40,5 @@ crate's `__private`, which the framework's `*-macros` crates import.
   unfulfilled expectation fails `-D warnings`.
 - **The kit names `syn` 3 and `proc-macro2` 1 types**, so a `syn` 4 is a
   nestrs major (`public-dependencies.md`); `syn` majors come years apart.
+
+**2026-11-05 — two call sites.** `nest-rs-cli` reads an entity's `#[sea_orm]` too, to write its migration, under the same `#[expect]`, so the parsers have two call sites, each on sea-orm's own attribute.

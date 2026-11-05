@@ -51,8 +51,8 @@ nextest prints each test's time: compare before and after.
 
 - **`TestApp` / `TestAppBuilder`** — boots the real DI graph and drives HTTP,
   GraphQL, OpenAPI and MCP through nestrs's `TestClient`, the stack the server
-  runs, no socket; `TestApp` and the builder's HTTP half (`build`,
-  `build_ws`) are the `http` feature, the builder itself is not. The
+  runs, no socket; `TestApp` and the builder's `build` are the `http` feature,
+  `build_ws` the `ws` feature, which brings it; the builder itself is neither. The
   default entry point, and the composition witness `manifests-ci.md` asks of
   every `for_root` seam. **A suite boots the module `main` boots**, its
   app-wide layer pools included (`container.md`): an app's suite never

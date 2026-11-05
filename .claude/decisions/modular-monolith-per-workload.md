@@ -86,3 +86,5 @@ Kept (2026-11-05): an adapter's host now brings its transport rather than the
 adapter importing it (`adapter-imports-its-transport.md`, the owner's "Tout faire
 (Recommandé)" of 2026-10-31). The opening is still the root's import of the
 adapter, and a host no module the app reaches lists brings nothing.
+
+Kept (2026-11-05): `conformance-scanner.md`, cited in the refusal above, left the tree on 2026-10-03 (d5b8cdf1a), and no entry replaces it. The refusal stands on the owner's line it quotes.

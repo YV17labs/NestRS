@@ -38,3 +38,7 @@ attaches it, a condition narrower than any registration. Nothing replaces the
 forwarder, so there is no second gate to weigh. `GraphqlContextSeed` stays for
 the framework's own seeds; `ctx.data::<T>()` remains async-graphql's API and is
 no longer taught.
+
+## 2026-11-05 — the parameter is `Ambient<T>`
+
+The 2026-10-30 entry's `Ctx<T>` became `nest_rs::core::Ambient<T>` the next day (`ambient-carry.md`, 2026-10-31), so a resolver takes `claims: Ambient<Claims>`. The reasons stand.

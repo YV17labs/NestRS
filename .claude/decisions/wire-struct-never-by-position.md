@@ -68,3 +68,7 @@ those refusals — `Form<AccessTokenRequest>` handed `grant_type=` to the issuer
 as an empty grant — and a third, `Json<AccessTokenRequest>`, that read a JSON
 array by position. The family read above is otherwise unchanged: `PageParams`
 keeps its derive, read from a query string alone.
+
+## 2026-11-05 — the two MCP types left with the gate
+
+The endpoint's lookup before rmcp left with rmcp 3.8 (`every-refusal-carries-its-class.md`, 2026-10-27), and `Addressing` and `CallParams` with it. `WsEnvelope` keeps its own `Deserialize`, and the rule stands for the next type the framework decodes from a client's JSON.

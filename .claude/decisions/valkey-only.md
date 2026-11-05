@@ -26,3 +26,5 @@ the `redis` client that speaks it.
 Reopened when Valkey's latest release lacks a command a script sends — then
 the script changes in the commit that moves the image — or when the owner
 supports a second server.
+
+**2026-11-05.** One file names the image: `.devcontainer/compose/valkey.yml`, which every Valkey service of the dev container extends and CI starts through the `dev-services` action. `ci.yml` became `framework.yml`, and no workflow names an image.

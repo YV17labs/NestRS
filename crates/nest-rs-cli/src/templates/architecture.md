@@ -198,7 +198,7 @@ File name = role, folder = module; snake_case; one role, one file per folder.
 | Interceptor / Exception filter | `interceptor.rs` / `exception_filter.rs` |
 | Module config (`#[config]`) | `config.rs` |
 | An edge's view of the unit it dispatches (`<Edge>View`, the crate's subject and the file) | `view.rs`, at the edge crate's root |
-| Error types (every one — public, crate-private, domain or driver defect; a wire error document a client parses, such as `ProblemDetails`, is named for its document) / Static constants | `error.rs` / `constants.rs` |
+| Error types (a crate's failures, public or crate-private; a wire error document a client parses, such as `ProblemDetails`, is named for its document, and a failure one concern's file alone raises may stay beside it) / Static constants | `error.rs` / `constants.rs` |
 
 An adapter role carries its folder (`schedule/tasks.rs`, `mcp/guard.rs`), as
 does a layer serving one transport; a crate whose subject is one edge keeps them
@@ -224,7 +224,8 @@ recognised provider words — `registry.rs`, `client.rs`, `store.rs`,
 flat at the module root, never in `types/` or `shared/`; a crowded root is a
 module to split. No crate is `shared` or `common`; `core` is the one every
 crate composes on and that composes on none. Test doubles are the one
-crate-root file: `testing.rs`, `#[cfg(test)]`.
+crate-root file: `testing.rs`, `#[cfg(test)]`, or behind a `test-support` feature where
+another crate's suite reads them.
 
 ## Precedence — when a type carries a primitive role *and* logic
 

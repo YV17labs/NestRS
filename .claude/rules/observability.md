@@ -112,7 +112,7 @@ and declaring a field nothing fills is the same defect with the opposite sign.
   named for its mount's catch-all, `/{*path}` — and the method alone when
   nothing matched: naming an unmatched span after its URL lets one scanner fill
   a tracing backend; a method outside the known set reads `HTTP` there.
-- **`otel.kind` values are constants in `operation_log::kind`**, and only the
+- **`otel.kind` values are the variants of `operation_log::Kind`**, and only the
   kinds this framework emits are declared; the edge that first needs another
   adds it.
 - **The span says what the line says, and neither says `ok` for a unit whose

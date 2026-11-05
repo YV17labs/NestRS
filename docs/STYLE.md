@@ -105,9 +105,7 @@ Skeletons live in `docs/templates/`.
   layout the docs teach, so every title sits under it: feature code at
   `crates/features/src/<module>/<role>.rs`, composition and bootstrap at `apps/<app>/src/…`,
   end-to-end suites at `apps/<app>/tests/e2e/…`, a driver the reader writes at
-  `crates/<vendor>/src/…`. `--standalone` exists and its `src/…` shape is real, but a page that
-  shows both teaches neither: the reader cannot tell a different layout from a different file.
-  One shape, and it is the one we recommend.
+  `crates/<vendor>/src/…`: one shape, the one `nestrs new` writes.
 
   It binds the code as well as the caption. An `apps/…` fence reaches a feature through the
   `features` crate — `use features::blog::BlogService;` — and never `use crate::`, which is what

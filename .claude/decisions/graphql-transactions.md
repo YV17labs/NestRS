@@ -129,3 +129,5 @@ closed (`fix/graphql-mutation-settles-on-its-answer`):
   with its nulls — and the root field's block reads the same, so the two
   still agree. Counting only the copies that run needs the request's
   variables beside the kept document.
+
+**2026-11-05 — the mark's name.** No `CarriedUnits` exists: `/graphql` and `/mcp` say their request carries units with `HttpEndpointMeta::carries::<V>()`, and the request runs on the pool as above.

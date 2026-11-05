@@ -17,8 +17,9 @@ paths:
 
 ## Lints are workspace policy
 
-- **`[workspace.lints]` is the one table, and every crate opts in** with
-  `[lints] workspace = true`; no crate restates or narrows it. No lint there is
+- **`[workspace.lints]` is the one table of shared lints, and every crate opts in**
+  with `[lints] workspace = true`; no crate restates or narrows it, and `missing_docs`,
+  which a published crate's root turns on, is the one lint outside it. No lint there is
   `forbid`, so the site that must break one says so with
   `#[expect(lint, reason = "…")]`. `unreachable_pub` is the mechanical half of
   `architecture.md`'s *`pub` means exported*.
@@ -55,7 +56,7 @@ paths:
   covers what an app can reach, not only what the framework builds, and the
   page an app reaches it from says what not to build.
 - **The framework requires itself in lockstep**: every `nest-rs-*` entry of
-  the root `[workspace.dependencies]` is `=` the release, and a framework crate
+  the root `[workspace.dependencies]` is `=` the release, and a published framework crate
   links a sibling only through `{ workspace = true }` — macro expansions and
   sibling crates call `__private`, which semver does not cover (*Semver*). Bump
   them with `[workspace.package] version`.

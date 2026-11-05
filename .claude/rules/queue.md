@@ -44,9 +44,9 @@ contract (`.claude/decisions/queue-redis-streams.md`).
 - **A lost lease cuts its attempt.** The backend answering `Lost`, or no
   renewal confirmed for a whole lease, cuts the attempt (its line files
   `cancelled`) and hands the job back fenced: the delivery holding it decides.
-- **A later backend declares what it lacks, never what it has.** `Disposition`
-  is non-exhaustive, and a variant added later reaches only a backend declaring
-  the capability that names it, so no driver changes behaviour under it.
+- **A later backend changes no driver's behaviour.** `Disposition` is non-exhaustive,
+  and a variant added later reaches only a backend declaring the capability that
+  names it.
 - **A job is named by the port.** The push mints a `JobId` (UUID v7) and seals it
   in the envelope; it keys everything kept about the job, so a backend files an
   envelope whose id it still holds — waiting, held back, running — no second
@@ -241,8 +241,8 @@ scheduler is a `Transport` attached with `ContainerBuilder::provide_transport`.
   at `warn`, any other at `error`, and none is acted on.
 - **A tick has no retry** — its retry is the next occurrence — and **a replica
   runs one occurrence of a job at a time**; an occurrence falling inside a run is
-  skipped and counted. `concurrency` counts per replica. Work that must not be
-  lost is a queue job the tick pushes.
+  skipped and counted, so `#[every]` and `#[cron]` refuse `concurrency`. Work that
+  must not be lost is a queue job the tick pushes.
 - **Where a recurring job fires is declared, never inferred.** `replicas = "each"`
   (the default) fires on every replica; `"one"` fires **once per occurrence**, on
   the replica whose claim succeeds; `#[after]` refuses the key. The claim holds

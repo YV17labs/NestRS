@@ -136,3 +136,7 @@ deployment-over-pin, so the cascade's resource and issuers would no longer
 be read. **Scopes discovered from the rules**: a rule is evaluated per
 actor, and nothing evaluates them at boot. **`requires_scope` keeping a
 string beside the type**: two spellings, one of which can drift.
+
+## 2026-11-05 — `McpAccess` holds `Public` alone
+
+The paragraph above names `McpAccess::{Gated, Public}`. The type holds `Public`: gated is what every import leaves, so no line spells it and none reads as a closing another import's opening would override. `McpAccess::Gated` does not compile.

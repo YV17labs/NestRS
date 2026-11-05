@@ -10,3 +10,5 @@ never reads. The two are reconciled by length: one short line beside the value.
 A scaffolded project is the developer's own repository, so CLI templates may
 teach in comments; the `// SECURITY:` note above a generated `#[public]` route
 is the case that decided it.
+
+**2026-11-05 — the note that decided it was reworded.** No template writes `// SECURITY:`; `hello`'s note above its `#[public]` route says why it is open, and `cli.md` names the GraphQL adapter's note as the case. The rule stands: a scaffold is the developer's own repository.

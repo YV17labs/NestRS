@@ -68,3 +68,5 @@ four-variant `Posture` and refused all but two at boot. The opening is now
 a declaration, contested at a second import and refused beside an
 `EndpointGuards` declaration
 (`.claude/decisions/bare-import-reads-for-root-pins.md`).
+
+**2026-11-05 — `McpAccess` holds `Public` alone.** The entry above names a `Gated` no type holds: gated is the bare import, which no line spells (`bare-import-reads-for-root-pins.md`, this date).

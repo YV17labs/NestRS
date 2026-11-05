@@ -125,3 +125,7 @@ failure.
   behind a transaction, so a `pg_cancel_backend` needs a round trip per unit to
   learn it. The edge answers at its deadline without it, and the statement
   budget bounds how long the rollback waits for the statement.
+
+## 2026-11-05 — a gateway's hooks have their deadlines
+
+The 2026-10-15 entry's second gap closed as it proposed: `WsConfig::connect_timeout` and `disconnect_timeout`, on `message_timeout`'s range and default, read from `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` and `<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS`. A connect hook past it closes its socket unserved with `1011`; a disconnect hook past it is rolled back and the close goes on. A GraphQL operation over the graphql-ws socket is still bounded in count, not in time.

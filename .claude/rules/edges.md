@@ -587,8 +587,8 @@ router parses. The rewrite is skipped when nothing is versioned.
   each edge resolving the pool once at mount; MCP and queues have none. One
   entry, `GlobalPipe::transform(cx, ArgumentKind, input)`: the unit's context
   says which site, the kind which input, so an edge adds a kind, never a
-  method. `input` is the raw JSON, a `serde_json::Value`, the one passthrough
-  the project map's correctness list admits: nothing is decoded yet, and the
+  method. `input` is the raw JSON, a `serde_json::Value`, the stated exception to the
+  project map's correctness list, which refuses it everywhere else: nothing is decoded yet, and the
   handler still receives its argument parsed at the edge
   (`.claude/decisions/one-execution-pipeline.md`). Reusable pipes are
   framework primitives — never define one in an app.

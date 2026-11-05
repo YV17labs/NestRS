@@ -15,3 +15,5 @@ driver's `Redis`, it says nothing about where a log line came from.
 Aliasing (`use … as`) is no alternative either: `#[module]` names a module in
 boot errors by the struct's own ident at its definition, which an alias does
 not change.
+
+**2026-11-05.** `nest-rs-oauth-server` now exports `OAuthServerModule<P>` (`bare-import-reads-for-root-pins.md`). The count above is the tree it was made on; the decision stands: a product module is named from its path, and a colliding framework name is written in full.

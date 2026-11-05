@@ -180,3 +180,5 @@ path frozen for nothing. `McpIdentity::is_empty`, one caller in its crate, is
 `pub(crate)`. Every other crate was read for the same shape, and none holds it. The
 test stays a developer's line: an item whose module the pages teach keeps that module's
 path, and the root drops it.
+
+**2026-11-05 — HTTP's denial renderer is tier 2.** `denial_to_http_response` sits in `nest_rs_http::__private`, and `problem_error` has no HTTP member. `denial_to_graphql_error`, `denial_to_ws_error` and `denial_to_mcp_error` stay tier 1.

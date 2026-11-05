@@ -189,8 +189,8 @@ building its own `Response`, whose type names none.
 ## Keys — one grammar, one refusal sentence
 
 Every key a decorator reads is parsed through `nest_rs_codegen::Grammar`; `syn`'s
-three meta parsers are `disallowed-methods` (`clippy.toml`), and the one site
-calling one carries its `#[expect]`: a foreign attribute's keys are its owner's
+three meta parsers are `disallowed-methods` (`clippy.toml`), and a site calling one
+carries its `#[expect]`, on a foreign attribute alone: its keys are its owner's
 (`#[sea_orm]`'s are sea-orm's). A decorator that reports several refusals of
 an item at once collects them in `nest_rs_codegen::Refusals`.
 An argument a decorator does not accept is a compile error naming the decorator
@@ -236,7 +236,7 @@ type they resolve to (`DuplicateMetaError`).
 by its exhaustive `match`): each cell is built, or refused with the fact that
 makes it meaningless (``#[every] takes no `retries`: a tick's retry is the next
 occurrence``), with a trybuild snapshot per refused cell and a hygiene use site
-per built one. `transactional` is the one key every member builds.
+per built one. `transactional` and `timeout` are the keys every member builds.
 `#[on_event]` is no member — a listener is no worker job — and reads two of the
 family's keys, `transactional` and `timeout`, through a sibling grammar
 (`nest_rs_codegen::__private::ON_EVENT_GRAMMAR`) with the family's parsers,
@@ -275,10 +275,9 @@ reserved word) — and the `Instance` impl's associated type is the decorator's
 to write; `Instance` is sealed behind the `__private` supertrait the
 decorator implements, so no hand-written impl reaches the boot. Its reserved
 words are `nest_rs_codegen`'s list, held to `architecture.md`'s by a test in
-`nest-rs-cli`. It has no use site in `demo/`, where no app opens a resource
-twice: its runnable rustdoc example and `nest-rs-config`'s integration suite
-exercise it until a demo app needs a second instance, and the use site lands
-with that need.
+`nest-rs-cli`. Its use site in `demo/` is `audio`'s `Transcodes`, whose records keep a Valkey
+instance of their own beside the queue's; its runnable rustdoc example and
+`nest-rs-config`'s integration suite exercise the rest.
 
 ## When (not) to write a decorator
 

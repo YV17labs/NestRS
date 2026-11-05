@@ -311,3 +311,9 @@ claim fires its occurrence twice. A server holding either runs `noeviction`: the
 connection's page says so once (`/queue/topologies/#eviction`), and each
 binding's page repeats its own line. The boot does not check it — `CONFIG GET`
 is outside every rule the pages prescribe — so the policy is the deployment's.
+
+## 2026-11-05 — a backend declares what it honours
+
+The shortfalls the 2026-10-05 entry sketched were never built. `QueueBackend::new(name, capabilities)` takes what a backend honours, one `Capability` at a time (`DelayedPush`, `UniquePush`, `Cancellation`, `Throttle`, `Checkpoint`), and the port refuses what it lacks at the earliest site that sees both. A variant added later still reaches only a backend declaring the capability that names it.
+
+**2026-11-05 — `JobSettlement` is gone.** A unit's writes settle through its driver's `OpenUnit::settle`, then its delivery through `JobConsumer::settle`: one word, as above.

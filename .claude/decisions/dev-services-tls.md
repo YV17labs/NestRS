@@ -69,3 +69,5 @@ answers. It is gone, with every address a default held
 (`undeclared-environment-is-production.md`): each profile's `.env` file names
 its Redis, the demo's over TLS, the scaffold's the plaintext server its
 `compose.yml` runs.
+
+**2026-11-05 — the compose file moved.** CI starts the services from `.devcontainer/compose/base.yml` (`one-server-per-backend.md`, 2026-10-08), the dev container's own, so the two still cannot drift.

@@ -99,7 +99,8 @@ By the first rung that can: types (private constructors, `const` assertions,
 exhaustive `match`); rustc and clippy (`[workspace.lints]`, the root
 `clippy.toml`; an exception is `#[expect(lint, reason = "…")]`, never
 `allow`); behaviour tests; review. No test proves a rule by reading Rust
-source, manifests or `.claude/`.
+source, manifests or `.claude/`, but the CLI's own templates, whose source strings
+are what it writes.
 
 ## Naming is the pillar
 
@@ -199,8 +200,8 @@ concurrency invariant) or the reference that explains code which would
 otherwise look wrong (an upstream issue, a `.claude/decisions/` entry). Can't
 name it: don't write it. Then one or two lines. History and reasoning go in the
 commit message, never beside the code; never paraphrase the code. A public item
-gets a one-sentence `///` (the crates deny `missing_docs`), plus an example when
-it helps. `demo/` Rust carries none.
+gets a one-sentence `///` (a published crate's root warns on `missing_docs`, and
+`just lint` denies warnings), plus an example when it helps. `demo/` Rust carries none.
 
 ## Testing
 
@@ -238,7 +239,8 @@ proves (`testing.md`).
    and a `//!`, never a `#[test]`.
 3. Unit tests are `#[cfg(test)] mod tests` in the file under test. nextest runs
    everything; bare `cargo test` only for `--doc`.
-4. `demo/` apps keep the same two suites, driven by `nestrs run test`.
+4. `demo/` keeps the same layout, driven by `nestrs run test`: an app's one suite is
+   `tests/e2e/main.rs`, and the features crate holds both.
 
 ## Definition of done
 

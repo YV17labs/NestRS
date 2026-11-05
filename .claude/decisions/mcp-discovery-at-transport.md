@@ -19,3 +19,5 @@ pool from the operation site, so a global guard overriding only `check_mcp` was
 never consulted while its presence disarmed the deny-all empty-pool tail. An
 endpoint guard's `check_http` and an operation's `check_mcp` are two questions,
 and neither answers the other.
+
+**2026-11-05 — `check_mcp` reads `check`.** An operation's entry has been `Guard::check` since 2026-10-12 (`check-http-stays-on-guard.md`). The request and the operation stay two questions, but a guard writing only `check` answers both with it, and one whose decision is the operation's alone admits the request in `check_http`.

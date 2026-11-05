@@ -139,7 +139,8 @@ access contract. Batch field fetches with `#[dataloader]`.
 - **`src/users/`** — the reference feature, and the CRUD slice the bar is
   measured on.
 - **`src/orgs/`** — the same CRUD for an entity with no tenant.
-- **`src/posts/`** — the tutorial feature.
+- **`src/posts/`** — the feature the tutorial's `blog` grows into: a tenant, an author, a
+  status, events and an MCP tool over the shape `nestrs g resource` writes.
 - **`src/notifications/schedule/`** — work that belongs to the deployment, not
   the process: `replicas = "one"`, hosted by the worker beside the Redis
   schedule binding, so scaling never multiplies it. `audio`'s transcode seed is

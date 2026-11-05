@@ -36,3 +36,7 @@ nothing on any request.
   boot proves, and reads what the proof reads: a resource that can stop the
   boot can take a replica out of rotation. One exempt from the proof ships
   none (`container.md`).
+
+## 2026-11-05 — the module opening the resource is the resource's own
+
+Since the bare import reads (`bare-import-reads-for-root-pins.md`), `SeaOrmModule` and `RedisModule<I>` implement `Module` by type and attach the indicator from their own `register`; `SeaOrmOpening` and `RedisOpening<I>` are gone. Storage keeps a private `StorageOpening`, which `StorageModule` imports. Each still runs once per app.

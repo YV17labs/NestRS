@@ -255,10 +255,9 @@ impl ThrottlerStore for InMemoryThrottler {
 
 /// What the boot tells you when two vendor bindings both bound the store,
 /// shared with every store adapter as part of the store contract.
-pub const BACKEND_REMEDY: &str = "Import exactly one throttler store binding beside \
-                                  `ThrottlerModule`: `nest_rs::redis::RedisThrottlerModule` shares \
-                                  the counters across instances; with none, they stay in this \
-                                  process.";
+pub const BACKEND_REMEDY: &str = "Import exactly one throttler store binding: \
+                                  `nest_rs::redis::RedisThrottlerModule` shares the counters \
+                                  across instances; with none, they stay in this process.";
 
 #[cfg(test)]
 mod tests {

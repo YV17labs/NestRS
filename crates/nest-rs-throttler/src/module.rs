@@ -1,7 +1,7 @@
 //! [`ThrottlerModule`] — the port's own seam: the policy
 //! ([`ThrottlerConfig`], `<PREFIX>_THROTTLER__*`), the [`ThrottlerGuard`] that
 //! applies it, and the in-process [`InMemoryThrottler`] as the default
-//! `dyn ThrottlerStore`, which a vendor binding imported beside it supersedes.
+//! `dyn ThrottlerStore`, which a vendor binding the app imports supersedes.
 
 use std::sync::Arc;
 
@@ -15,10 +15,18 @@ use crate::guard::ThrottlerGuard;
 use crate::store::{InMemoryThrottler, ThrottlerStore};
 use crate::throttle::Throttle;
 
-/// The throttler port: policy, guard, and the in-process default store.
-/// Imported bare, it reads `<PREFIX>_THROTTLER__*` (default
-/// `Throttle::per_minute(60)`); add a vendor binding beside it to share the
-/// counters across instances.
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<ThrottlerGuard>,
+        "Import `nest_rs::throttler::ThrottlerModule` in the adapter binding the guard, which \
+         builds it over the port's policy and store.",
+    )
+}
+
+/// The throttler port: policy, guard, and the in-process default store. An
+/// adapter whose host binds the guard imports it bare, which reads
+/// `<PREFIX>_THROTTLER__*` (default `Throttle::per_minute(60)`); a vendor binding
+/// at the app's root shares the counters across instances.
 pub struct ThrottlerModule;
 
 impl ThrottlerModule {
@@ -89,8 +97,43 @@ fn resolve(config: &ThrottlerConfig) -> Throttle {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::{App, injectable, module};
+
     use super::*;
     use crate::throttle::DEFAULT_THROTTLE;
+
+    #[expect(
+        dead_code,
+        reason = "the guard is declared for the container to resolve, never read"
+    )]
+    #[injectable]
+    struct BindsTheGuard {
+        #[inject]
+        guard: Arc<ThrottlerGuard>,
+    }
+
+    #[module(providers = [BindsTheGuard])]
+    struct AdapterWithoutThePort;
+
+    #[tokio::test]
+    async fn a_host_reaching_the_guard_with_no_port_imported_is_told_the_import() {
+        let Err(refused) = App::builder()
+            .module::<AdapterWithoutThePort>()
+            .build()
+            .await
+        else {
+            panic!("a guard nothing builds must not boot");
+        };
+        let missing = refused
+            .downcast_ref::<MissingDependencyError>()
+            .unwrap_or_else(|| panic!("a named unmet dependency, got: {refused:#}"));
+        assert!(
+            missing
+                .remedy
+                .is_some_and(|remedy| remedy.contains("`nest_rs::throttler::ThrottlerModule`")),
+            "{missing}"
+        );
+    }
 
     #[test]
     fn the_default_config_is_the_ports_default_throttle() {

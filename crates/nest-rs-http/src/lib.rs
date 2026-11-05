@@ -35,6 +35,7 @@ mod documented_body;
 mod documented_payload;
 mod drain;
 mod edge;
+mod edge_answers;
 mod endpoint;
 mod endpoint_guards;
 mod error;
@@ -253,7 +254,6 @@ pub mod __private {
 
     pub use crate::ambient::RejectedCredential;
     pub use crate::canonical_host::CanonicalHost;
-    pub use crate::config::EdgeAnswers;
     pub use crate::controller::{
         HttpRouteParts, http_controller_meta, http_route_meta, route_denials, schema_of,
     };
@@ -266,6 +266,7 @@ pub mod __private {
     pub use crate::documented_payload::{
         DocumentedPayload, PayloadProbe, UndocumentedPayloadProbe,
     };
+    pub use crate::edge_answers::EdgeAnswers;
     pub use crate::endpoint::{OriginCheck, checks_origin, decided_per_unit, guarded_by};
     pub use crate::endpoint_guards::{
         EndpointGuardsMeta, EndpointPosture, NO_GUARD_REMEDY, carried_request_chain,

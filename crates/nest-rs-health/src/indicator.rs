@@ -114,8 +114,9 @@ impl ProbeReport {
     }
 }
 
-/// A route returning it answers `200` up and `503` down, and documents the
-/// report under each.
+/// A route returning it answers `200` up and `503` down. The type states the
+/// `200`, and a route names the `503`'s body with
+/// `#[api(error(503 = ProbeReport))]`.
 impl DocumentedAnswer for ProbeReport {}
 
 impl DocumentedPayload for ProbeReport {

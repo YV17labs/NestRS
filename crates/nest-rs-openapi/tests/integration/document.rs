@@ -1,4 +1,5 @@
-//! Covers `src/document.rs` — what the served document says about a version.
+//! Covers `src/document.rs` — what the served document says about a version, and
+//! what a route answers, each status read live beside it.
 
 use nest_rs_config::Surface;
 use nest_rs_core::module;

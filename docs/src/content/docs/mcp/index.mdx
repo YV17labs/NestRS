@@ -221,8 +221,8 @@ impl PostsTool {
     async fn latest_titles(
         &self,
         Parameters(p): Parameters<LatestParams>,
-    ) -> Result<String, McpError> {
-        let titles = self.svc.latest_titles(p.limit).await.opaque()?;
+    ) -> Result<String, ServiceError> {
+        let titles = self.svc.latest_titles(p.limit).await?;
         Ok(titles.join("\n"))
     }
 
@@ -231,8 +231,8 @@ impl PostsTool {
     async fn post_summary(
         &self,
         Parameters(p): Parameters<SlugParams>,
-    ) -> Result<String, McpError> {
-        let post = self.svc.by_slug(&p.slug).await.opaque()?;
+    ) -> Result<String, ServiceError> {
+        let post = self.svc.by_slug(&p.slug).await?;
         Ok(post.summary())
     }
 }
@@ -291,11 +291,10 @@ describes:
 async fn search_posts(
     &self,
     Parameters(params): Parameters<SearchPostsDto>,
-) -> Result<String, McpError> {
+) -> Result<String, ServiceError> {
     let titles = self.svc
         .search_titles(&params.query, params.limit)
-        .await
-        .opaque()?;
+        .await?;
 
     Ok(titles.join("\n"))
 }
@@ -379,12 +378,27 @@ or two `#[meta]` values of one type on one operation, fail the boot.
 
 ## Failing without leaking
 
-A tool body talks to a **language model**, and an error's `Display` is handed to
-it verbatim: a `DbErr` carries schema, column names and sometimes row values.
-So a failure the model has no business reading goes through `opaque`:
+A tool body talks to a **language model**, and it would repeat whatever an error's
+`Display` carries: a `DbErr` holds schema, column names and sometimes row values.
+So an operation returns its error and the edge says what the model reads. A
+[`ToProblem`](/http/errors/) error answers its class under `data`: a
+`ServiceError` its `NOT_FOUND`, its `FORBIDDEN`, or the `UNAVAILABLE` of a statement
+Postgres cancelled, which a client may retry:
 
-```rust title="crates/features/src/posts/mcp/tool.rs"
-let rows = self.svc.list().await.opaque()?;
+```rust title="crates/features/src/users/mcp/tool.rs (from the demo, abridged)"
+async fn list_people(&self) -> Result<Json<Vec<PersonDto>>, ServiceError> {
+    let rows = self.svc.list().await?;
+    // …
+}
+```
+
+A failure that says no problem, one the model has no business reading, goes through
+`opaque`, at the line where it happens:
+
+```rust title="crates/features/src/audio/mcp/tool.rs (from the demo, abridged)"
+Ok(match self.svc.presign_result(params.file).await.opaque()? {
+    // …
+})
 ```
 
 The real error is logged at `error` on `nest_rs::mcp`, inside rmcp's own

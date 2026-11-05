@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use nest_rs::authz::Read;
-use nest_rs::mcp::{Json, McpError, Opaque, mcp, tools};
-use nest_rs::seaorm::CrudService;
+use nest_rs::mcp::{Json, mcp, tools};
+use nest_rs::seaorm::{CrudService, ServiceError};
 
 use crate::users::{Entity as UserEntity, PersonDto, UsersService};
 
@@ -20,8 +20,8 @@ impl UsersTool {
                        organization."
     )]
     #[authorize(Read, UserEntity, unmasked)]
-    async fn list_people(&self) -> Result<Json<Vec<PersonDto>>, McpError> {
-        let rows = self.svc.list().await.opaque()?;
+    async fn list_people(&self) -> Result<Json<Vec<PersonDto>>, ServiceError> {
+        let rows = self.svc.list().await?;
 
         Ok(Json(
             rows.into_iter()

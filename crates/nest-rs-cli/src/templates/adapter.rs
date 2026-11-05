@@ -334,9 +334,10 @@ pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //! on.
 use std::sync::Arc;
 
-// A fallible service call goes through `Opaque` — `use nest_rs::mcp::Opaque;`
-// then `.opaque()?` — which logs the real error for the operator and hands the
-// model a constant one. An error's `Display` reaches a language model verbatim.
+// A fallible service call returns its error: under `Result<String, ServiceError>`,
+// `?` answers the error's class, and one saying no problem answers a constant, its
+// chain logged, so no `Display` reaches a language model. `use nest_rs::mcp::Opaque;`
+// then `.opaque()?` says that at the call.
 use nest_rs::authz::Read;
 use nest_rs::mcp::{McpError, mcp, tools};
 

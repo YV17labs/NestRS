@@ -365,18 +365,20 @@ line: the decision is made on the type, so however the return is spelled,
 an `Err` never reaches the reply `data`.
 
 <Aside type="caution" title="`Opaque` says it at the call site">
-An error with no `ToProblem` is already answered opaquely. When a failure the
-client could read is one it must not, say so where it happens:
+An error with no `ToProblem` is already answered opaquely, and one with it answers
+its class: return a `ServiceError` and a cancelled statement reaches the client as
+`UNAVAILABLE`. When a failure has no word for the client, say so where it happens:
 
-```rust title="crates/features/src/chat/ws/gateway.rs"
-use nest_rs::ws::Opaque;
-use nest_rs::ws::WsError;
-
-#[subscribe_message("users.list")]
-#[authorize(Read, users::Entity)]
-async fn list(&self) -> Result<Vec<User>, WsError> {
-    let rows = self.svc.list().await.opaque()?;   // real error → the log
-    Ok(rows.iter().map(User::from).collect())
+```rust title="crates/features/src/chat/ws/gateway.rs (from the demo, abridged)"
+#[subscribe_message("message")]
+#[authorize(Create, Posting)]
+async fn on_message(
+    &self,
+    caller: Ambient<Claims>,
+    message: SendMessageDto,
+) -> Result<(), WsError> {
+    self.svc.record(caller.into_inner().sub, message).opaque()?;
+    Ok(())
 }
 ```
 

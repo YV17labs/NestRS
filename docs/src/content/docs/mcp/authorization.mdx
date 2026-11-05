@@ -79,9 +79,8 @@ does so with the attribute a `#[query]` takes:
 impl UsersTool {
     #[tool(description = "List the people the caller may see.")]
     #[authorize(Read, UserEntity)]
-    async fn list_people(&self) -> Result<Json<Vec<User>>, McpError> {
-        Ok(Json(self.svc.list().await.opaque()?
-            .iter().map(User::from).collect()))
+    async fn list_people(&self) -> Result<Json<Vec<User>>, ServiceError> {
+        Ok(Json(self.svc.list().await?.iter().map(User::from).collect()))
     }
 }
 ```
@@ -107,8 +106,8 @@ names what it reads:
 ```rust title="crates/features/src/posts/mcp/tool.rs"
 #[tool(description = "The published posts.")]
 #[public(Read, post::Entity)]
-async fn feed(&self) -> Result<Json<Vec<Post>>, McpError> {
-    Ok(Json(self.svc.feed().await.opaque()?))
+async fn feed(&self) -> Result<Json<Vec<Post>>, ServiceError> {
+    Ok(Json(self.svc.feed().await?))
 }
 ```
 

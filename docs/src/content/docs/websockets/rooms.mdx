@@ -98,9 +98,9 @@ every connection on the registry. A handler often does both in one call.
 The `chat` gateway joins a room at connect, broadcasts peer-visible events and
 replies with a payload:
 
-```rust title="crates/features/src/chat/ws/gateway.rs (from the demo)"
+```rust title="crates/features/src/chat/ws/gateway.rs (from the demo, abridged)"
 #[gateway(path = "/ws")]
-#[use_guards(AuthnGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct ChatGateway {
     #[inject]
     svc: Arc<ChatService>,
@@ -134,6 +134,8 @@ impl ChatGateway {
     async fn history(&self) -> Vec<ChatMessageDto> {
         self.svc.history()
     }
+
+    // …
 
     #[subscribe_message("typing")]
     #[authorize(Create, Posting)]

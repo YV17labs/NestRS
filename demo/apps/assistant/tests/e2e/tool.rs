@@ -1,11 +1,13 @@
 use features::authz::constants;
-use features::testing::{claims, client};
+use features::testing::{cancelling_reads_of, claims, client};
 use features::{Claims, Role};
 use nest_rs::core::Discovery;
 use nest_rs::http::HttpEndpointMeta;
 use nest_rs::http::StatusCode;
 use nest_rs::storage::Storage;
-use nest_rs::testing::mcp::{call_tool_with, initialize_request, open_session, post_message};
+use nest_rs::testing::mcp::{
+    call_method, call_tool_with, initialize_request, open_session, post_message, result,
+};
 use nest_rs::testing::{CapturedEvent, LogCapture};
 use serde_json::json;
 
@@ -24,6 +26,53 @@ async fn health_live_probe_is_ok() {
         .send()
         .await
         .assert_status_is_ok();
+}
+
+#[tokio::test]
+async fn a_cancelled_read_reaches_the_model_as_its_class() {
+    let app = boot().await;
+    let conn = connection(app.container());
+    let auth = sign(&app, ORG_ID);
+    let shared = open_session(app.http(), SHARED_ENDPOINT, Some(&auth)).await;
+    let posts = open_session(app.http(), POSTS_ENDPOINT, Some(&auth)).await;
+
+    for (endpoint, session, table, method, params) in [
+        (
+            SHARED_ENDPOINT,
+            &shared,
+            "user",
+            "tools/call",
+            json!({ "name": "list_people", "arguments": {} }),
+        ),
+        (
+            POSTS_ENDPOINT,
+            &posts,
+            "post",
+            "tools/call",
+            json!({ "name": "list_posts", "arguments": {} }),
+        ),
+        (
+            POSTS_ENDPOINT,
+            &posts,
+            "post",
+            "prompts/get",
+            json!({ "name": "draft_follow_up" }),
+        ),
+        (POSTS_ENDPOINT, &posts, "post", "resources/list", json!({})),
+    ] {
+        let body = cancelling_reads_of(
+            &conn,
+            table,
+            call_method(app.http(), endpoint, session, Some(&auth), method, params),
+        )
+        .await;
+
+        let answer = result(&body);
+        assert_eq!(
+            answer["error"]["data"]["code"], "UNAVAILABLE",
+            "{method}: {answer}",
+        );
+    }
 }
 
 #[tokio::test]

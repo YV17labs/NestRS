@@ -1,11 +1,15 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use nest_rs::config::Config;
 use nest_rs::core::Container;
 use nest_rs::redis::{RedisConfig, RedisConnection};
 use nest_rs::storage::Storage;
-use nest_rs::testing::url_on;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
+use nest_rs::testing::{url_on, wait_for};
+use sea_orm::{
+    ActiveModelTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, Set, Statement,
+    TransactionTrait,
+};
 use uuid::Uuid;
 
 use crate::audio::{AudioService, Transcodes};
@@ -86,6 +90,33 @@ pub async fn seed_user(
     .await
     .expect("seed user")
     .id
+}
+
+pub async fn cancelling_reads_of<T>(
+    conn: &DatabaseConnection,
+    table: &str,
+    read: impl Future<Output = T>,
+) -> T {
+    let lock = conn.begin().await.expect("a transaction to hold the lock");
+    lock.execute_unprepared(&format!("LOCK TABLE \"{table}\" IN ACCESS EXCLUSIVE MODE"))
+        .await
+        .expect("the table locks");
+    let cancelling = wait_for(Duration::from_secs(10), || async {
+        conn.query_one_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT count(pg_cancel_backend(pid)) AS cancelled FROM pg_stat_activity \
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        ))
+        .await
+        .expect("the waiting statements are read")
+        .expect("a count is one row")
+        .try_get::<i64>("", "cancelled")
+        .expect("a count")
+            > 0
+    });
+    let (answer, ()) = tokio::join!(read, cancelling);
+    lock.rollback().await.expect("the lock is released");
+    answer
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

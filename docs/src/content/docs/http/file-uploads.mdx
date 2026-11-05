@@ -20,7 +20,8 @@ async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrl
     Ok(Json(
         self.svc
             .store_upload(upload.part.into_byte_stream())
-            .await?,
+            .await
+            .opaque()?,
     ))
 }
 ```

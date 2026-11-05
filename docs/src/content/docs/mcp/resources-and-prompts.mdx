@@ -22,11 +22,11 @@ A prompt is a `#[prompt]` method beside your tools — one `impl`, both routers:
 impl PostsTool {
     #[tool(description = "List the post titles the caller may read, most recent first.")]
     #[authorize(Read, PostEntity)]
-    async fn list_posts(&self) -> Result<String, McpError> { /* … */ }
+    async fn list_posts(&self) -> Result<String, ServiceError> { /* … */ }
 
     #[prompt(description = "Draft a follow-up post, primed with the titles the caller can read.")]
     #[authorize(Read, PostEntity, unmasked)]
-    async fn draft_follow_up(&self) -> Result<GetPromptResult, McpError> { /* … */ }
+    async fn draft_follow_up(&self) -> Result<GetPromptResult, ServiceError> { /* … */ }
 }
 ```
 
@@ -47,8 +47,8 @@ impl PostsTool {
     // …
     #[resources]
     #[authorize(Read, PostEntity, unmasked)]
-    async fn posts(&self) -> Result<Vec<Resource>, McpError> {
-        let rows = self.svc.list().await.opaque()?;
+    async fn posts(&self) -> Result<Vec<Resource>, ServiceError> {
+        let rows = self.svc.list().await?;
 
         Ok(rows
             .into_iter()
@@ -61,7 +61,7 @@ impl PostsTool {
         description = "One post the caller is allowed to read, as JSON."
     )]
     #[authorize(Read, bind = PostsService)]
-    async fn post(&self, post: Authorized<Read, PostEntity>) -> Result<Json<Post>, McpError> {
+    async fn post(&self, post: Authorized<Read, PostEntity>) -> Result<Json<Post>, ServiceError> {
         Ok(Json(Post::from(&post.into_inner())))
     }
 }

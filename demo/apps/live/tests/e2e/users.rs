@@ -1,5 +1,5 @@
 use features::Role;
-use features::testing::{claims, client, seed_org, seed_user};
+use features::testing::{cancelling_reads_of, claims, client, seed_org, seed_user};
 use features::users::UserRole;
 use nest_rs::http::StatusCode;
 use nest_rs::ws::CloseCode;
@@ -38,6 +38,25 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
             "a member must not see email over WS: {row:?}",
         );
     }
+
+    socket.close(CloseCode::Normal, "done").await;
+    app.shutdown().await.expect("transport shuts down");
+}
+
+#[tokio::test]
+async fn a_cancelled_read_reaches_the_client_as_its_class() {
+    let app = serve().await;
+    let conn = connection(app.container());
+    let mut socket = open(&app, "/users").await;
+
+    let reply = cancelling_reads_of(&conn, "user", async {
+        socket.send("users.list", Value::Null).await;
+        socket.next_envelope().await
+    })
+    .await;
+
+    assert_eq!(reply["event"], "users.list");
+    assert_eq!(reply["data"]["code"], "UNAVAILABLE", "{reply}");
 
     socket.close(CloseCode::Normal, "done").await;
     app.shutdown().await.expect("transport shuts down");

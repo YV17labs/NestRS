@@ -100,8 +100,9 @@ async fn create(&self, Json(input): Json<CreateUser>)
 ```
 
 <Aside type="note">
-The data-layer HTTP mapping lives behind the `http` feature of
-`nest-rs-seaorm`, which only the umbrella's `http` turns on: a worker built
+`ServiceError`'s mapping is its `ToProblem`, which names no edge. What sits behind
+the `http` feature of `nest-rs-seaorm`, which only the umbrella's `http` turns on, is
+`#[crud]`'s error mapping and the loader of a route's bound subject: a worker built
 with `queue,seaorm` and no `http` links no HTTP stack.
 </Aside>
 

@@ -18,7 +18,8 @@ a backoff, as the same job, until the budget is spent.
 ```rust title="crates/features/src/audio/queue/processor.rs"
 #[process(queue = AudioQueue, retries = 3)]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-    self.svc.transcode(job.file).await
+    self.svc.transcode(job.file).await?;
+    Ok(())
 }
 ```
 
@@ -103,10 +104,11 @@ try and retry, as does a `5xx`:
 ```rust title="crates/features/src/audio/queue/processor.rs"
 #[process(queue = AudioQueue, retries = 3)]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-    if !job.file.ends_with(".wav") {
+    if job.file.get_version_num() != 7 {
         return Err(Problem::new(422, code::INVALID_ARGUMENT).into());
     }
-    self.svc.transcode(&job.file).await
+    self.svc.transcode(job.file).await?;
+    Ok(())
 }
 ```
 
@@ -124,9 +126,12 @@ What decides, in order:
 4. Anything else retries within the budget.
 
 A method returning `Result<(), ServiceError>` dead-letters a `NotFound`, a
-`404`, too. A job pushed inside its producer's transaction can run before that
-commit and find nothing: push from a listener on the event the commit
-announces, or return the error as `JobError::retry`. An exception filter may also answer a failed attempt with
+`404`, too. A job filed at once — pushed on the pool, or inside a transaction the
+caller opened itself — can run before that write commits and find nothing: push from a
+listener on the event the commit announces, or return the error as `JobError::retry`.
+One pushed inside the unit's own transaction waits in the outbox for its commit
+([A push inside a transaction](/queue/producing-jobs/#a-push-inside-a-transaction)).
+An exception filter may also answer a failed attempt with
 `job.acknowledge()` through `QueueView`: the job settles as done, what it
 wrote rolls back, and the failure is said at `warn` as
 `job failed; a layer acknowledged it, so it settles done and its writes rolled back`.
@@ -139,7 +144,8 @@ An attempt runs for at most **ten minutes** unless its decorator says otherwise.
 ```rust
 #[process(queue = AudioQueue, retries = 3, timeout = "30m")]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-    self.svc.transcode(job.file).await
+    self.svc.transcode(job.file).await?;
+    Ok(())
 }
 ```
 
@@ -203,9 +209,9 @@ only by the delivery holding it and removed when the job ends — see
 A store that does not answer within the port's net — `BACKEND_TIMEOUT`, eighteen
 seconds — or panics answering fails the attempt, retryably, the panic said once
 at `error`: the read before your method runs does so on its own, and a save does
-when you return its error with `?`. The clear at the job's end comes after the
-attempt, so a store that does not answer it is said at `warn` and the outcome
-stands.
+when you return its error with `?`. The clear at the job's end is no call of its
+own: the backend lets the checkpoint go in the step that settles the job, so it lands
+or fails with the outcome.
 
 ## Where failed jobs go
 
@@ -244,10 +250,10 @@ dead-letter logic, and the pattern is the same on any backend:
 #[process(queue = AudioQueue, retries = 3)]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
     match self.svc.transcode(job.file).await {
-        Ok(()) => Ok(()),
+        Ok(_) => Ok(()),
         Err(e) => {
             self.svc.report_dead(&job, &e).await?;
-            Err(e)
+            Err(e.into())
         }
     }
 }
@@ -262,8 +268,8 @@ so you don't have to think about them separately:
   `job dead-lettered: handler panicked` event carrying the panic message. The
   job dead-letters immediately (regardless of remaining retries), the worker
   stays up.
-- **Deserialization errors** — the macro-emitted handler does the
-  `serde_json::from_value`. A payload that doesn't match the method's
+- **Deserialization errors** — the macro-emitted handler decodes the job from the
+  payload in place. A payload that doesn't match the method's
   job type returns `Err` before your method even runs. Retrying won't
   help: the payload shape is wrong, so it is classified **non-retryable**
   and dead-letters on the **first** attempt, logging
@@ -275,11 +281,10 @@ so you don't have to think about them separately:
   decode your method does itself — `serde_json::from_str(&reply)?` in an
   `anyhow::Result` — is said the same way when it fails, on the retry `warn`,
   the dead-letter line and the record alike.
-- **Container resolution failures** — `Container::get` of the
-  `#[processor]` host can fail if a dep wasn't seeded. The handler
-  returns `Err` with the resolution error. This usually means a
-  configuration mistake at boot, not a transient — investigate, don't
-  rely on retries.
+- **Container resolution failures** — `Container::get` of the `#[processor]` host
+  finds nothing when the host is not registered under its own type. The handler aborts
+  naming it, and the job dead-letters on the **first** attempt: a configuration mistake
+  rather than a transient, so investigate it.
 - **A transaction that could not be settled** — the body returned `Ok`,
   and the attempt's transaction could not be committed, so nothing it
   wrote landed. The attempt fails rather than reporting writes that were

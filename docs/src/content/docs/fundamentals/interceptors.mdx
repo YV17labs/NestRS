@@ -185,10 +185,19 @@ the guards, which importing that module brings to every unit, with no line in
 the module the app boots — it is how a capability such as `Server-Timing` needs
 nothing but its import:
 
-```rust
+```rust title="crates/features/src/timing/interceptor.rs"
+use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, interceptor};
+
 #[interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct Timing;
+
+#[async_trait]
+impl Interceptor for Timing {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        next.run(cx).await
+    }
+}
 ```
 
 It runs on every HTTP unit — a route, a self-mount's request (`/graphql`,

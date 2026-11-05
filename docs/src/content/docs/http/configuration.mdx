@@ -307,7 +307,8 @@ table is built, to every route and every surface that mounts beside them —
 `#[get("/users")]` is registered at `GET /api/users`, `/graphql` at
 `/api/graphql`. What answers sees the path the client sent, prefix included:
 a handler's `uri()`, the template the span and the access line name
-(`/api/users/{id}`), and the boot log and the OpenAPI document. It is one literal
+(`/api/users/{id}`), and the boot log. The OpenAPI document keeps its `paths`
+prefix-free and states the prefix once, as its `servers` base URL. It is one literal
 path: a [route template](/http/controllers/#route-templates)'s braces, or a
 `:`, `*` or `<` the router would read as a parameter, fail the boot naming
 the variable.

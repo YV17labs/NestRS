@@ -207,7 +207,7 @@ pub use nest_rs_queue_macros::processor;
 
 /// Stamp a unit struct with a queue's compile-time identity — its wire name and
 /// the `Job` payload it carries — by implementing [`Queue`]. The producer
-/// (`queue.push(Q, job, None)`) and the consumer (`#[process(queue = Q)]`) both
+/// (`jobs.push(Q, job)`) and the consumer (`#[process(queue = Q)]`) both
 /// name the type, so a typo'd name or a mismatched payload is a compile error.
 ///
 /// ```

@@ -16,7 +16,7 @@ body.
 ## Returning typed JSON
 
 `Json<T>` is the everyday case — serializes `T`, sets
-`Content-Type: application/json`, and feeds the OpenAPI document with
+`Content-Type: application/json; charset=utf-8`, and feeds the OpenAPI document with
 the same JSON schema:
 
 ```rust title="crates/features/src/users/http/controller.rs"
@@ -114,8 +114,8 @@ decorate the same handler.
 
 ### `#[response_header("name", "value")]`
 
-Appends a header to the response. Repeatable; stack as many as the route
-needs. Two checks run at compile time:
+Sets a header on the response, over any value the handler set; `set-cookie` alone
+is appended. Repeatable; stack as many as the route needs. Two checks run at compile time:
 
 - the header name must be lowercase ASCII (the HTTP/2 / HTTP/3 grammar);
 - the value must be printable ASCII (no CR, LF, or NUL).
@@ -155,7 +155,7 @@ async fn create(&self, Json(input): Json<CreatePost>) -> Result<Created<Json<Pos
 ```
 
 The handler answers `201` with the post and its `Location`; the two
-`#[response_header]` attributes append their headers. `#[redirect]` cannot
+`#[response_header]` attributes set their headers. `#[redirect]` cannot
 stack with `#[http_code]` — they decide the same facet (the response status)
 two different ways.
 

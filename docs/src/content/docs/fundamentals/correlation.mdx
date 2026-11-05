@@ -13,13 +13,13 @@ framework carries — a handler, a service under it, the data layer — and it i
 already on every event you log.
 
 ```rust title="crates/features/src/posts/service.rs"
-impl PostService {
-    pub async fn publish(&self, id: Uuid) -> Result<Post, ServiceError> {
-        let post = self.repo.publish(id).await?;
+impl PostsService {
+    pub async fn publish(&self, active: ActiveModel) -> Result<Post, ServiceError> {
+        let published = Repo::<Posts>::update(active).await?;
         // No id is named here, and none should be: the line carries `trace_id`,
         // `span_id` and `actor_id` already.
-        tracing::info!(target: crate::posts::TARGET, %id, "post published");
-        Ok(post)
+        tracing::debug!(target: crate::posts::TARGET, id = %published.id, "post published");
+        Ok(Post::from(&published))
     }
 }
 ```

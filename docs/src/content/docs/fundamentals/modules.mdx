@@ -28,7 +28,7 @@ things: the **providers it owns** (built and registered into the
 container) and the **modules it imports** (whose providers it can
 inject).
 
-At the smallest scale, handlers live in the app itself:
+At the smallest scale, the app's root module lists a feature's service and controller itself:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
@@ -63,7 +63,10 @@ A provider listed by another module cannot be redeclared — the container
 is flat. The access graph (see [Providers](/fundamentals/providers/))
 ensures every `#[inject]` resolves through `imports`.
 
-List order does not affect registration. We still list imports in a
+List order does not decide what registers, and a module's providers build in
+dependency order. It does order the hooks the graph leaves free, and what a
+hand-written module installs reaches only what registers after it
+([what is global](#what-is-global)). We still list imports in a
 readable order: **config → infrastructure → the transports it pins → auth
 wiring → feature adapters**. The app root imports **`PostsHttpModule`**, not
 `PostsModule` — the port rides along inside the adapter's own `imports`.
@@ -71,8 +74,8 @@ Business modules sit at the bottom of the list.
 
 ## Extract a feature
 
-When a domain outgrows the app root, it moves to `crates/features/` with
-its **own name prefix**. The blog handlers become `PostsService` and
+When a domain outgrows the `blog` placeholder, it moves to a folder of its own
+under `crates/features/src/`, with its **own name prefix**. The blog handlers become `PostsService` and
 `PostsController` under `PostsModule` — same domain, feature naming, not
 the app-root `Blog*` prefix anymore.
 

@@ -175,7 +175,7 @@ fn bind(builder: ContainerBuilder) -> ContainerBuilder {
             BACKEND_REMEDY,
             |container| async move {
                 // …
-                Ok(Jobs::new(producer as Arc<dyn JobProducer>))
+                Ok(Jobs::new(producer))
             },
         )
         .provide_declared_factory_after::<

@@ -161,8 +161,8 @@ async fn get(&self, Piped(id): Piped<ParseUuidV7, Path<String>>) -> Result<Json<
 ```
 
 `Path<String>` extracts the raw segment; `ParseUuidV7::transform` validates
-it as a v7 UUID. A non-UUID string is `400` with `"must be a UUID v7"` —
-not a stringly-typed handler doing its own `parse::<Uuid>()`. `Piped(id)`
+it as a v7 UUID. A non-UUID string is `400` with `"must be a valid UUID"`, a UUID
+of another version `400` with `"must be a UUID v7"` — not a stringly-typed handler doing its own `parse::<Uuid>()`. `Piped(id)`
 binds the pipe's output, a `Uuid`; the carrier also derefs to it.
 
 The carrier is read where it is written: `#[routes]` takes `Piped<P, E>`

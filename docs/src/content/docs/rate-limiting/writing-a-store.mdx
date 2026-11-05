@@ -24,7 +24,9 @@ Your crate is `nestrs-<storage>`, depending on the umbrella alone. The
 `throttler` capability brings `http` with it, so your tests run your store
 under the guard on a request with no feature added. The
 [naming rule](/semver/#naming-a-package) roots its target, its keys and its
-settings at that crate.
+settings at that crate. A store whose crate opens its own client adds `config`, for
+`ClientTls` and its settings, and `health`, for its indicator: neither comes with
+`throttler`.
 
 ## The contract
 

@@ -234,8 +234,8 @@ The Redis backend declares `Capability::DelayedPush`, so a push can hold a job
 back:
 
 ```rust title="crates/features/src/audio/service.rs"
-self.queue
-    .push(
+self.jobs
+    .push_with(
         AudioQueue,
         TranscodeCommand { file },
         PushOptions::default().with_delay(Duration::from_secs(60)),

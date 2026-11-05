@@ -215,8 +215,9 @@ the right tool for the leftovers — never the goal.
 Everything above decides how an error is *shaped*. `Opaque` decides whether
 the client sees it at all.
 
-`ServiceError` is wire-safe by construction — its `Db`, `Masking` and
-`Internal` variants answer a `500` whose `code` is `INTERNAL`, with no
+`ServiceError` is wire-safe by construction — its `Masking` and `Internal`
+variants, and a `Db` one but for a statement Postgres cancelled at its bound (the
+[table below](#framework-errors-carry-their-own-mapping)), answer a `500` whose `code` is `INTERNAL`, with no
 `detail`, and display no cause, even wrapped in an error of yours; its log
 line says the database's failure by its SQLSTATE, never by the server's
 message, which quotes the input it refused. A failure of your own that is no
@@ -306,9 +307,9 @@ error type (`Result<T, AuthError>`).
 There is **no `AbilityError`** — an ability denial is not a handler's error. It
 is a `Denial`, the type a guard refuses with: the class gate that
 `#[authorize(Action, Entity)]` declares checks the ability your `AuthzGuard`
-attached and answers its `Denial` before the handler runs: `Forbidden` when no
-grant covers the action, `InsufficientScope` for a token too narrow,
-`Unauthorized` for an anonymous caller off a `#[public]` route. It never
+attached and answers its `Denial` before the handler runs: `Denial::forbidden` when no
+grant covers the action, `Denial::insufficient_scope` for a token too narrow,
+`Denial::unauthorized` for an anonymous caller off a `#[public]` route. It never
 travels the `?` path at all (see
 [Guards](/fundamentals/guards/)). Its document's `code` is the one the
 denial's class carries on every edge: `UNAUTHENTICATED` for a missing or

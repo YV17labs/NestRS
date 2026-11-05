@@ -214,9 +214,9 @@ async fn shout(&self, Json(input): Json<GreetInput>) -> Result<Json<GreetReply>>
 }
 ```
 
-- **`#[input]`** is the shorthand for a DTO the edge **decodes**. It appends
-  `#[derive(::serde::Serialize, ::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]`
-  and `#[serde(deny_unknown_fields)]` — an unknown field on the wire
+- **`#[input]`** is the shorthand for a DTO the edge **decodes**. It derives
+  `Serialize`, `Deserialize`, `Validate` and `JsonSchema` through the framework, so your
+  manifest names none of those crates, and adds `#[serde(deny_unknown_fields)]` — an unknown field on the wire
   (`{"name":"Ada","is_admin":true}`) is rejected with `400` at parse time
   instead of silently dropped. Don't top the list up by hand — a manual
   `#[derive(Serialize)]`, `#[derive(Deserialize)]` or `#[derive(Validate)]`
@@ -264,7 +264,7 @@ $ curl -sX POST http://localhost:3000/ \
 ## Returning typed JSON
 
 `Json<T>` works as a return type as well — the framework serializes `T`
-and sets `Content-Type: application/json`:
+and sets `Content-Type: application/json; charset=utf-8`:
 
 ```rust title="crates/features/src/hello/http/controller.rs"
 #[get("/me")]

@@ -27,7 +27,7 @@ This page is the reference: one extractor, one example, one rule. The
 Parses the request body into `T`; rejects a body that does not decode with
 `400`, naming where — ``JSON body at `title`: missing`` — and never the value.
 Works as a return type too — serializes `T`, sets
-`Content-Type: application/json`, and feeds the OpenAPI document with
+`Content-Type: application/json; charset=utf-8`, and feeds the OpenAPI document with
 the same schema:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
@@ -202,8 +202,11 @@ forwarding header when that peer is a proxy you listed:
 2. The peer is **not** in `<PREFIX>_HTTP__TRUSTED_PROXIES` ⇒ that peer is the
    client, `forwarded = false`, and the headers are not read.
 3. The peer **is** a trusted proxy ⇒ the client is the **rightmost** hop that
-   is not itself a trusted proxy, read from `Forwarded` (RFC 7239) first, then
-   `X-Forwarded-For`, then `X-Real-IP`; `forwarded = true`. Hops parse as a bare
+   is not itself a trusted proxy, read from `Forwarded` (RFC 7239) and
+   `X-Forwarded-For`, then `X-Real-IP`; `forwarded = true`. If every hop is a trusted
+   proxy, the outermost answers. If the two chains name different clients neither is
+   believed, and if no header names a usable hop the proxy's own address answers, both
+   with `forwarded = false`. Hops parse as a bare
    IP, `IP:port`, or a bracketed IPv6 (`[ip]`, `[ip]:port`); a `Forwarded`
    node of `unknown` or an obfuscated `_id` names no address and is skipped.
 
@@ -266,8 +269,8 @@ Two contracts hold:
   `nest_rs::http`, never to the client.
 
 See [Providers](/fundamentals/providers/) for the scope rules — a
-request-scoped provider may inject singletons, never the reverse, never
-another request-scoped one.
+request-scoped provider may inject singletons and other request-scoped providers,
+one instance each per request; a singleton injects neither.
 
 ## `Ambient<T>` — read context a guard attached
 

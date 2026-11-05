@@ -13,8 +13,8 @@ a missing wire fails startup with a clear error, never with a deep
 `Cannot resolve` at first request.
 
 This category walks **`blog`** through the [**Publish**](/publish/) story
-— from an inline root (**step ①**: `BlogService` / `BlogController` in
-`apps/blog/`, no database) to a composed API with a `posts/` feature, the
+— from an inline root (**step ①**: `BlogService` / `BlogController` under
+`crates/features/src/blog/`, which `BlogModule` in `apps/blog/` lists itself, no database) to a composed API with a `posts/` feature, the
 stage the [tutorial](/tutorial/) builds in the repo — and the primitives
 every binary leans on:
 
@@ -102,6 +102,7 @@ pub struct BlogModule;
 ```
 
 ```rust title="apps/blog/src/main.rs"
+use blog::BlogModule;
 use nest_rs::core::App;
 
 #[nest_rs::main]
@@ -116,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
 ```
 
 ```bash frame="terminal"
-$ curl http://localhost:3005/
+$ curl http://localhost:3000/
 A minimal blog API
 ```
 
@@ -132,7 +133,7 @@ repo.
    `BlogController` — into a link-time registry.
 2. **Built** the access graph from `BlogModule`. `BlogController`
    declares it injects `BlogService`; `BlogModule` owns both; reachable. ✓
-3. **Constructed** each provider once. `BlogService::default()` produced
+3. **Constructed** each provider once. `BlogService` became
    one `Arc<BlogService>`, injected into `BlogController::svc`.
 4. **Mounted** `BlogController` on the HTTP transport from the route
    table `#[routes]` generated.

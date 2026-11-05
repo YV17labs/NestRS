@@ -46,8 +46,8 @@ impl BlogService {
 constant the feature's files name, never a literal each one retypes. A
 generated port emits nothing, so it starts without one.
 
-The `#[hooks]` block is separate from the one `#[injectable]` decorates
-— a provider keeps its primary `impl` for methods, and adds a second,
+The `#[hooks]` block is an `impl` of its own, beside the struct `#[injectable]`
+decorates — a provider keeps its primary `impl` for methods, and adds a second,
 hook-only `impl` the macro scans. The phase attributes
 (`#[on_application_bootstrap]`, …) need no import; `#[hooks]` consumes
 them.
@@ -231,7 +231,10 @@ is sized against their sum. A bound per hook could not hold a sum — four hooks
 that hang would spend twenty seconds — which is why it is a budget.
 
 ```text frame="terminal"
-Error: the `#[on_module_init]` hook `MigrationGuard::check` in `api::migrations` failed: pending migrations
+Error: the `#[on_module_init]` hook `MigrationGuard::check` in `api::migrations` failed
+
+Caused by:
+    pending migrations
 ```
 
 ## A hook is a unit of work

@@ -135,15 +135,14 @@ carrying `queue` and, for a job, `job_id`:
 | `queue backend panicked answering a call; the call is abandoned` | `error` | A push, a cancel or a checkpoint call panicked in the backend; its caller gets `QueueError::Panicked`, naming the queue and the call. |
 | `queue delivery panicked outside its attempt; its job is left to its lease` | `error` | Code outside the handler and outside any backend call — a backend's synchronous hook, or the worker's own — panicked during a delivery; the lease is no longer renewed, so another delivery runs the job once it lapses. |
 | `queue backend handed over more deliveries than asked; …`, `queue backend answered a renewal with as many answers as it chose; …` | `error` | A backend broke the consumer contract — a driver's defect. |
-| `queue processor not run: its queue's name is refused` | `error` | A method whose queue name the boot should have refused — a defect, never a configuration. |
 
 A producer files lines of its own on the same target: `queued job cancelled`
 and `unique job cancelled` at `info` when a cancel answered `true`.
 
 ## What boot looks like
 
-The worker logs one `transport attached` line (from the transport), and each active
-processor one `mounted` line — its `host`, its `method` and its `queue`, as
+The composition root logs one `transport attached` line on `nest_rs::app`, and each
+active processor one `mounted` line — its `host`, its `method` and its `queue`, as
 every edge names a unit it serves — carrying what it declared: its `retries`,
 its `concurrency`, and its throttle when it has one. A `#[process]` method that
 compiled in but whose provider isn't reachable from this app's module tree is
@@ -174,7 +173,8 @@ the module-gating rule.
 A legacy payload with no wire envelope logs `processed an unversioned
 job payload` at `warn` (fields `queue`, `job_id`, `hint`) as it starts. It
 still executes; drain the queue to clear pre-envelope jobs. A payload
-tagged with an *unsupported* version fails the job instead of warning.
+tagged with a newer version is handed back at `warn`, as above; one tagged with an
+older version dead-letters.
 </Aside>
 
 ## Filtering recipes

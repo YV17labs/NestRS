@@ -148,10 +148,10 @@ the address a client uses and carries the version as its own field.
 
 ```bash frame="terminal"
 $ NESTRS_HTTP__VERSIONING=header nestrs run dev api
-INFO nest_rs::routes: mounted host="PostsV1Controller" method="list" verb="GET" path="/posts" version=1
+INFO nest_rs::routes: mounted host="PostsV1Controller" method="list" verb="GET" path="/posts" version="1"
 ```
 
-Five behaviours worth knowing before you switch:
+Six behaviours worth knowing before you switch:
 
 - **An address no versioned route answers at is served whatever version is
   stated.** Header versioning is meant to be configured once in the client, so an
@@ -253,8 +253,9 @@ tells you what this transport does instead.
 ## Going further
 
 - [Controllers & routes](/http/controllers/) — back to the route table.
-- [OpenAPI](/openapi/) — the generated spec includes the version prefix
-  on every operation.
+- [OpenAPI](/openapi/) — under the URI strategy the generated spec carries each
+  versioned operation's prefix; under a header or a media type, the version as a
+  parameter.
 - [Configuration](/http/configuration/) — `global_prefix` for the
   orthogonal "everything under `/api`" case (versioning stacks
   on top: `/api/v1/posts`).

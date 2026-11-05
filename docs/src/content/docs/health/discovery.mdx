@@ -89,10 +89,9 @@ genuine failure — read the `error` bucket.
 
 <Aside type="note">
 Stack traces and ambient context follow the indicator's owning
-provider. An indicator that injects an HTTP client logs under the
-provider's `tracing` target — usually `nest_rs::health` for
-framework-shipped ones, the feature crate's own `features::health` for
-product-level ones.
+provider. What an indicator logs itself goes on its provider's own target —
+`features::<feature>` for a product's — and the line reporting its failure, on
+`nest_rs::health`.
 </Aside>
 
 ## Going further

@@ -86,7 +86,7 @@ impl AudioTasks {
   never stops the job.
 - **The cron method is thin.** Its only job is to decide *when* and
   *what payload* (here a synthetic file id). The plumbing — the object
-  store, the `JobProducer`, the queue — lives inside
+  store, the `Jobs` handle, the queue — lives inside
   `AudioService::seed_and_enqueue`, which ends in the same
   `enqueue_transcode` the HTTP producer calls, so there is exactly one
   place where the "enqueue an audio job" decision lives.
@@ -140,10 +140,10 @@ is work the deployment does once, so `replicas = "one"`. The heartbeat says
 rather than inferred. And `#[after]` fires once per process by construction:
 it is a process's own warm-up, and takes no `replicas` at all.
 
-<Aside type="caution">
-A single `#[scheduled]` impl block per struct (multiple would conflict at
-the discovery layer). Put every scheduled method of a service in the same
-block — same convention as `#[routes]`.
+<Aside type="note">
+Keep every scheduled method of a service in one `#[scheduled]` block, the same
+convention as `#[routes]`: layers a block binds cover the methods in that block
+alone, so one block is one place to read them.
 </Aside>
 
 ## Triggers
@@ -153,7 +153,7 @@ block — same convention as `#[routes]`.
 | `#[every("30s")]`                             | Fixed interval (`ms`, `s`, `m`, `h`)     |
 | `#[after("10s")]`                             | One-shot — runs N after boot, then never |
 | `#[cron("0 */5 * * * *")]`                    | 6-field cron expression                  |
-| `#[cron(CronExpression::EVERY_5_SECONDS)]`    | Named preset (compile-time validated)    |
+| `#[cron(CronExpression::EVERY_5_SECONDS)]`    | Named preset (validated at boot)         |
 | `#[cron("0 9 * * MON", tz = "Europe/Paris")]` | Cron + named timezone (default UTC)      |
 | `#[every("5m", replicas = "one")]`            | Once per occurrence across replicas — see [Firing once across replicas](#firing-once-across-replicas) |
 | `#[every("1h", timeout = "30m")]`             | A run lasting past 30 minutes is cut — see [How long a run lasts](#how-long-a-run-lasts) |
@@ -497,7 +497,7 @@ replica — the thing the declaration exists to prevent. So:
   asked to stop is abandoned at once and its occurrence skipped with a `warn`,
   `occurrence skipped: shutdown was asked for before its lock answered the
   claim`, so a Redis that stopped answering cannot hold the scheduler's shutdown
-  until the claim goes stale — most of a day, for a daily cron. Redis may have
+  until the claim goes stale — most of two days, for a daily cron. Redis may have
   taken the claim already, and then nobody fires that occurrence. A claim
   answered before that is acted on, and a run already started gets the five
   seconds every running tick gets at shutdown, then is stopped.

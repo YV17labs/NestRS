@@ -54,7 +54,7 @@ you name.
   pinned struct, TLS, CORS, the framework `Server:` header.
 - [Versioning](/http/versioning/) — `#[controller(version = "1")]` and
   multi-version controllers.
-- [Compression](/http/compression/) — gzip/brotli negotiated from
+- [Compression](/http/compression/) — zstd, brotli, gzip or deflate negotiated from
   `Accept-Encoding`, behind one `HttpConfig` flag.
 - [Streaming responses](/http/streaming/) — a chunked body or a
   Server-Sent Events stream returned from a handler.

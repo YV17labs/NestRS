@@ -24,7 +24,7 @@ cargo add nest-rs --features openapi
 
 ## Wire it in
 
-Add `OpenApiModule::for_root` to the app root, alongside the controllers it
+Add `OpenApiModule` to the app root, alongside the controllers it
 should document:
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
@@ -202,7 +202,8 @@ serving it is a string write.)
 ## Reference
 
 - `apps/api/` — mounts `OpenApiModule` next to REST + GraphQL.
-- `crates/features/src/users/http/controller.rs` — real `#[api(...)]` usage.
+- `crates/features/src/posts/http/controller.rs` — real `#[api(...)]` usage;
+  `crates/features/src/users/http/controller.rs` — `api(get(…), create(…))` on a `#[crud]`.
 - `crates/nest-rs-openapi/` — `OpenApiModule`, `OpenApiConfig`, the document
   composer, the bundled Swagger UI.
 

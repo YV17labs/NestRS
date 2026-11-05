@@ -209,8 +209,8 @@ opens the same connection, but logs no `transport attached transport="queue"` an
 
 ## Reference
 
-- `crates/nest-rs-redis/src/module.rs` — `RedisModule`,
-  `RedisSetup::collect` (config resolution + the instance's connection).
+- `crates/nest-rs-redis/src/module.rs` — `RedisModule` and its `collect` (config
+  resolution + the instance's connection).
 - `crates/nest-rs-redis/src/queue/module.rs` — `RedisQueueModule` binding
   `Jobs` over `RedisQueueProducer` and the Redis consumer as `BoundConsumer`
   over the same connection.

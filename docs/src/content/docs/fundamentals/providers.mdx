@@ -28,12 +28,11 @@ dependencies as `#[inject]` fields.
 ```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
 use nest_rs::core::injectable;
-use sea_orm::DatabaseConnection;
 
 #[injectable]
 pub struct PostsService {
     #[inject]
-    db: Arc<DatabaseConnection>,
+    config: Arc<PostsConfig>,
 }
 
 impl PostsService {
@@ -42,9 +41,9 @@ impl PostsService {
 ```
 
 `#[injectable]` registers `PostsService` by `TypeId`. The
-`#[inject] db` field says: resolve `Arc<DatabaseConnection>` from the
-container when you build me — the pool `SeaOrmModule` opens, in an app importing
-it or a binding over it.
+`#[inject] config` field says: resolve `Arc<PostsConfig>` from the container when
+you build me — a `#[config]` a provider injects loads itself. The database is no
+field: a service reaches it through `Repo`.
 
 Controllers, resolvers, and gateways are providers too — they just also
 mount on a transport:
@@ -62,8 +61,8 @@ pub struct PostsController {
 #[routes]
 impl PostsController {
     #[get("/")]
-    async fn list(&self) -> Vec<Post> {
-        self.svc.list().await
+    async fn list(&self) -> Json<Vec<Post>> {
+        Json(self.svc.list().await)
     }
 }
 ```
@@ -104,9 +103,9 @@ the container and listed in `providers = [...]`:
 | `#[controller]` | `PostsController` — HTTP routes |
 | `#[interceptor(stage = unit)]` | What a module brings around every unit's guards (timing, a challenge, …) |
 
-Other transports use the same idea (`#[resolver]`, `#[gateway]`,
-`#[processor]`, …) when you add them. See their categories when you need
-them — not required to compose a minimal HTTP app.
+Other transports use the same idea (`#[resolver]`, `#[gateway]`, `#[mcp]`) when
+you add them; a queue processor is an `#[injectable]` with a `#[processor]` impl.
+See their categories when you need them — not required to compose a minimal HTTP app.
 
 Every provider implements `Discoverable`; transports mount only what the
 import tree reaches ([Modules](/fundamentals/modules/#compose-the-root-module)).
@@ -257,11 +256,11 @@ flowchart TB
 An `Option<Arc<T>>` field is a dependency the provider runs without when this
 binary lacks the capability:
 
-```rust title="src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 #[injectable]
 pub struct PostsService {
     #[inject]
-    db: Arc<DatabaseConnection>,
+    config: Arc<PostsConfig>,
     #[inject]
     notifications: Option<Arc<NotificationsService>>,
 }
@@ -294,7 +293,7 @@ pub trait PostsService: Send + Sync {
 #[injectable]
 pub(crate) struct PostsServiceImpl {
     #[inject]
-    db: Arc<DatabaseConnection>,
+    config: Arc<PostsConfig>,
 }
 
 #[async_trait]

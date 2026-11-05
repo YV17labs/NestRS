@@ -1197,7 +1197,8 @@ lists what the boot, a log or the wire shows when one is missed.
     - **A request runs 20 seconds by default**, down from 30
       (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS`), counted from its arrival, its
       body's reading included; a body that stops arriving answers `408` after
-      `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS` (10 s). A WebSocket message and an
+      `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS` (10 s), or that budget's `503` when
+      it stops within the budget's last gap. A WebSocket message and an
       MCP operation are cut at 20 s too (`<PREFIX>_WS__MESSAGE_TIMEOUT_SECS`,
       `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS`), and a WebSocket connection hook
       has `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` and `DISCONNECT_TIMEOUT_SECS`.

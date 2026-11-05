@@ -104,7 +104,11 @@ impl HttpRoutes {
     /// §15.5.6). Registered from a self-mount's closure
     /// ([`HttpEndpointMeta`](crate::HttpEndpointMeta)), it is one of that
     /// surface's entries: the guards its posture calls for and the app's
-    /// exception filters run in front of it.
+    /// exception filters run in front of it. Nothing decodes or validates in
+    /// front of it: it reads its own request through an extractor's
+    /// [`from_request`](crate::FromRequest::from_request) and holds the value to
+    /// its rules, a `validator` error answered as the edge does through
+    /// [`pipe_error`](crate::pipe_error)`(&PipeError::from(errors))`.
     pub fn route(&mut self, method: Method, template: &str, endpoint: impl Endpoint) -> &mut Self {
         self.register(Some(method), template, BoxEndpoint::new(endpoint));
         self

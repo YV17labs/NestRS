@@ -5,8 +5,8 @@
 use nest_rs_core::__private::provide_meta;
 use nest_rs_core::{App, Transport, module};
 use nest_rs_http::{
-    BoxEndpoint, HttpConfig, HttpEndpointMeta, HttpRoutes, Method, Request, Response, controller,
-    endpoint_fn, routes,
+    BoxEndpoint, FromRequest, HttpConfig, HttpEndpointMeta, HttpRoutes, Method, Request, Response,
+    controller, endpoint_fn, routes,
 };
 use nest_rs_http::{StatusCode, header};
 
@@ -365,4 +365,69 @@ async fn a_self_mount_registering_an_undeclared_path_fails_the_boot_naming_both(
         msg.contains("WanderingTools") && msg.contains("\"/admin\"") && msg.contains("\"/tools\""),
         "names the owner, the path and what it declared: {msg}"
     );
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema, validator::Validate)]
+struct Rated {
+    #[validate(range(max = 5))]
+    stars: u8,
+}
+
+/// An entry is an endpoint, not a `#[routes]` handler: nothing decodes or
+/// validates in front of it. The `Json` it reads answers the edge's own
+/// refusal, and a rule holds once the entry calls it.
+#[tokio::test]
+async fn an_entry_decodes_and_validates_its_own_request() {
+    let client = table_under(None, |routes| {
+        routes.route(
+            Method::POST,
+            "/unchecked",
+            endpoint_fn(|req: Request| async move {
+                let (head, mut body) = req.split();
+                let nest_rs_http::Json(rated) =
+                    nest_rs_http::Json::<Rated>::from_request(&head, &mut body).await?;
+                Ok(Response::builder().body(rated.stars.to_string()))
+            }),
+        );
+        routes.route(
+            Method::POST,
+            "/checked",
+            endpoint_fn(|req: Request| async move {
+                let (head, mut body) = req.split();
+                let nest_rs_http::Json(rated) =
+                    nest_rs_http::Json::<Rated>::from_request(&head, &mut body).await?;
+                validator::Validate::validate(&rated)
+                    .map_err(|errors| nest_rs_http::pipe_error(&errors.into()))?;
+                Ok(Response::builder().body(rated.stars.to_string()))
+            }),
+        );
+    })
+    .await
+    .expect("the table boots");
+    let sent = |path: &'static str, body: &'static [u8]| {
+        client
+            .post(path)
+            .content_type("application/json")
+            .body(body.to_vec())
+            .send()
+    };
+
+    let unchecked = sent("/unchecked", br#"{"stars":9}"#).await;
+    unchecked.assert_status_is_ok();
+    unchecked.assert_text("9").await;
+
+    sent("/checked", br#"{"stars":9}"#)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    sent("/checked", br#"{"stars":3}"#)
+        .await
+        .assert_status_is_ok();
+
+    client
+        .post("/checked")
+        .content_type("text/plain")
+        .body(b"3".to_vec())
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }

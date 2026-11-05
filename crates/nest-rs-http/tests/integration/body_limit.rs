@@ -8,6 +8,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use bytes::Bytes;
 use futures_util::StreamExt;
 use nest_rs_core::module;
 use nest_rs_http::{Body, HttpConfig, HttpError, Json, RawBody, controller, routes};
@@ -377,6 +378,45 @@ async fn a_stalled_body_is_answered_408_inside_the_default_request_timeout() {
         "the default gap answers before the default budget: {head}"
     );
     serving.cancel.cancel();
+}
+
+/// A stall starting within the budget's last gap: the gap, counted from the
+/// stall, would end past the budget, counted from arrival, so the budget fires
+/// first and the body is answered its `503` with `Retry-After`, not `408`.
+#[tokio::test(start_paused = true)]
+async fn a_body_that_stops_within_the_budgets_last_gap_is_answered_the_budgets_503() {
+    let defaults = HttpConfig::default();
+    let budget = defaults.request_timeout.expect("the default has a budget");
+    let gap = defaults.body_read_timeout;
+    let frame = gap - Duration::from_secs(1);
+    let frames = futures_util::stream::unfold(0_u8, move |sent| async move {
+        tokio::time::sleep(frame).await;
+        (sent < 2).then_some((Ok::<_, std::io::Error>(Bytes::from_static(b"x")), sent + 1))
+    });
+    assert!(
+        frame * 2 > budget - gap,
+        "the last frame lands within the budget's last gap"
+    );
+    let client = crate::boot_on::<ReadModule>(HttpConfig {
+        max_body_bytes: CAP,
+        ..HttpConfig::default()
+    })
+    .await;
+
+    let answered = client
+        .post("/read/counted")
+        .body(Body::from_stream(
+            frames.chain(futures_util::stream::pending()),
+        ))
+        .send()
+        .await;
+
+    answered.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        answered.0.headers().contains_key(header::RETRY_AFTER),
+        "{:?}",
+        answered.0.headers()
+    );
 }
 
 /// Read as it arrives rather than buffered first, a body past the cap still

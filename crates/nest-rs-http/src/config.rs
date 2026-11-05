@@ -403,8 +403,9 @@ pub struct HttpConfig {
     /// cut by it; the whole request is
     /// [`request_timeout`](Self::request_timeout)'s, the one bound on a body
     /// when that is off. Kept under it, since that budget counts from the
-    /// request's arrival: at or past it, a body that stops arriving is answered
-    /// the budget's `503` first, which is said once at boot with a `warn`.
+    /// request's arrival: a body that stops within the budget's last gap is
+    /// answered the budget's `503` first, and at or past it every stalled body
+    /// is, which is said once at boot with a `warn`.
     ///
     /// Read from `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS`, whole seconds from 1
     /// to 3600 — refused outside, from the environment and from the pinned

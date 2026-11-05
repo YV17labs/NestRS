@@ -591,10 +591,11 @@ async fn receive(&self, body: RawBody) -> Result<()> {
 }
 ```
 
-A body past the cap answers `413` and one that stops arriving `408`, whatever
-the guard made of the failed read; a refusal is the guard's own `401`, logged
-at `warn` like any denial, and declared, so the route's document lists it
-beside its `#[public]` opening.
+A body past the cap answers `413` and one that stops arriving `408`, or
+[the request budget's `503`](/http/configuration/#request-timeout) when it stops
+within that budget's last gap, whatever the guard made of the failed read; a
+refusal is the guard's own `401`, logged at `warn` like any denial, and declared,
+so the route's document lists it beside its `#[public]` opening.
 
 ## Declare on the provider
 

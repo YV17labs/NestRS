@@ -366,9 +366,10 @@ everything else.
 request can't tie up a connection indefinitely. It counts from the request's
 arrival, so a body that trickles in a byte at a time counts against it; one
 that stops arriving altogether is answered sooner, `408`, by
-[the body-read deadline](#connection-deadlines) — while that deadline sits
-under this budget; at or past it the budget answers first, which one `warn`
-says at boot. Default
+[the body-read deadline](#connection-deadlines). A body that stops within the
+budget's last `BODY_READ_TIMEOUT_SECS` is answered the budget's `503` with
+`Retry-After`, not `408`: the budget fires first. With that deadline at or past
+the budget every stalled body is, which one `warn` says at boot. Default
 `20` seconds — the [shutdown window](#shutdown)'s own, so a request admitted just
 before a stop is answered inside the window rather than cut;
 `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS=0` turns it off — the framework-wide
@@ -457,7 +458,7 @@ using it gives its place under the cap back. Each is a `<PREFIX>_HTTP__` key:
 | The first request head | `HEADER_READ_TIMEOUT_SECS`, `30` s from accept — a TLS handshake and HTTP/2's preface inside it | closed |
 | Idle, nothing in flight | `IDLE_TIMEOUT_SECS`, `75` s from the last answer's end | HTTP/1 closed, HTTP/2 sent `GOAWAY` |
 | A later HTTP/1 head | `HEADER_READ_TIMEOUT_SECS` from its first byte, or the idle deadline if sooner | closed |
-| A request body that stops arriving | `BODY_READ_TIMEOUT_SECS`, `10` s from its last frame, once something reads it | answered `408 Request Timeout` (RFC 9110 §15.5.9) — HTTP/1 with `Connection: close`, HTTP/2 that stream alone |
+| A request body that stops arriving | `BODY_READ_TIMEOUT_SECS`, `10` s from its last frame, once something reads it | answered `408 Request Timeout` (RFC 9110 §15.5.9) — HTTP/1 with `Connection: close`, HTTP/2 that stream alone; within the budget's last gap, [the budget's `503`](#request-timeout) first |
 | A write the peer takes nothing of | `SEND_TIMEOUT_SECS`, `60` s from the write that started waiting | dropped — on HTTP/2, a stream the peer grants no window is reset and its connection serves on |
 
 A request in flight has no other connection deadline: [its own budget](#request-timeout)

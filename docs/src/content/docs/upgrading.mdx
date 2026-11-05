@@ -2088,8 +2088,10 @@ lists what the boot, a log or the wire shows when one is missed.
   naming `expiry_in`, where such a token used to fail at
   `verify_handshake`: a handshake never inherits the access-token lifetime.
 - **`sign` or `sign_for` on claims naming no subject**, their `actor_id()` `None` or
-  empty and no `sub` of their own, answers a `SignError`, where it minted an access
-  token with no `sub` no verifier could attribute.
+  blank and no `sub` of their own, answers a `SignError`, where it minted an access
+  token with no `sub` no verifier could attribute. So does a `sub` that is no string
+  (`sub: u64`, RFC 7519 §4.1.2), where it minted one a verifier reading a string
+  refuses: hold the id as a string, or under another name with `#[principal(actor)]`.
 - **A signing failure** answers the opaque `500`, where it answered `401` with a
   `Bearer` challenge: a client retrying with another credential now stops, and the
   chain is on `nest_rs::http` at `error`.

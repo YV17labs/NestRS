@@ -875,6 +875,116 @@ fn a_sub_the_claims_carry_is_kept_and_an_empty_one_is_the_actors() {
     );
 }
 
+/// `sign_for` refuses a blank resource by `trim`; a blank subject names no one
+/// as surely, and the actor standing in for it is held to the same.
+#[test]
+fn a_blank_sub_is_the_actors_and_a_blank_actor_names_no_one() {
+    let jwt = service("blank-sub");
+
+    let carried = CarriesItsSub {
+        sub: "   ".into(),
+        actor: Some("bob".into()),
+    };
+    for token in [
+        jwt.sign(&carried).expect("sign"),
+        jwt.sign_for("https://api.example", &carried)
+            .expect("sign for a resource"),
+    ] {
+        assert_eq!(payload(&token)["sub"], "bob");
+    }
+
+    let carried_blank = CarriesItsSub {
+        sub: "\t ".into(),
+        actor: Some("  ".into()),
+    };
+    let actor_blank = NamedByItsActor {
+        user_id: Some("  ".into()),
+    };
+    for refused in [
+        jwt.sign(&carried_blank),
+        jwt.sign_for("https://api.example", &carried_blank),
+        jwt.sign(&actor_blank),
+        jwt.sign_for("https://api.example", &actor_blank),
+    ] {
+        let said = nest_rs_core::error_message(&refused.expect_err("minted naming no one"));
+        assert!(said.contains("name no subject"), "{said}");
+    }
+}
+
+/// The actor of a claims type holding its `sub` as a number.
+#[derive(Serialize, PrincipalIdentity)]
+struct NumberedSub {
+    #[principal(actor)]
+    sub: u64,
+}
+
+/// What the claims carry under `sub`, whatever its JSON type, beside a good actor.
+#[derive(Serialize, PrincipalIdentity)]
+struct ShapedSub {
+    sub: serde_json::Value,
+    #[principal(actor)]
+    id: String,
+}
+
+/// RFC 7519 §4.1.2 makes `sub` a string, which RFC 9068 §2.2 requires: a verifier
+/// reading one refuses anything else, so the signer does not mint it. A claim the
+/// claims carry is never overwritten, so the actor does not stand in, and the
+/// refusal quotes nothing they hold.
+#[tokio::test]
+async fn a_sub_that_is_no_string_mints_no_token() {
+    let jwt = service("no-string");
+
+    let said = nest_rs_core::error_message(
+        &jwt.sign(&NumberedSub { sub: 4242 })
+            .expect_err("minted a numeric `sub`"),
+    );
+    assert!(said.contains("is no string"), "{said}");
+    assert!(!said.contains("4242"), "{said}");
+
+    for shaped in [
+        serde_json::json!(4242),
+        serde_json::json!(true),
+        serde_json::json!({ "user": "ada" }),
+        serde_json::json!(["ada"]),
+    ] {
+        let claims = ShapedSub {
+            sub: shaped.clone(),
+            id: "actor-id".into(),
+        };
+        for refused in [
+            jwt.sign(&claims),
+            jwt.sign_for("https://api.example", &claims),
+        ] {
+            let said = nest_rs_core::error_message(&refused.expect_err("minted a shaped `sub`"));
+            assert!(said.contains("is no string"), "{shaped}: {said}");
+            for value in ["4242", "ada", "actor-id"] {
+                assert!(!said.contains(value), "{shaped}: {said}");
+            }
+        }
+    }
+
+    let forged = sign_unchecked(&jwt, &NumberedSub { sub: 4242 }).expect("a suite forges it");
+    assert_eq!(payload(&forged)["sub"], 4242);
+}
+
+/// An integer id under another name names its subject as its decimal string,
+/// which is what the JWT page tells a claims type holding one to do.
+#[test]
+fn a_numeric_actor_under_another_name_is_stamped_as_its_string() {
+    #[derive(Serialize, PrincipalIdentity)]
+    struct NumberedActor {
+        #[principal(actor)]
+        user_id: u64,
+    }
+
+    let jwt = service("numeric-actor");
+
+    let token = jwt.sign(&NumberedActor { user_id: 42 }).expect("sign");
+
+    assert_eq!(payload(&token)["sub"], "42");
+    assert_eq!(payload(&token)["user_id"], 42);
+}
+
 /// A suite forging what a verifier must refuse has its one way past the bound.
 #[test]
 fn only_the_unchecked_signer_mints_claims_naming_no_subject() {

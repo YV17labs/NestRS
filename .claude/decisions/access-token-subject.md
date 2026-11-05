@@ -128,8 +128,13 @@ and a claims type without one minted `at+jwt` with no `sub`, in silence. Seen ru
 **`sign` and `sign_for` take `C: Serialize + PrincipalIdentity`.** A claims type already
 says who it names, to the guard, through `#[principal(actor)]`, so the signer asks it
 rather than reading a convention off serialized names, which is what the 2026-10-25
-entry refused. A `sub` the claims carry is kept, as every claim is; one absent, `null`
-or empty is their `actor_id()`, and claims whose actor is `None` or empty mint nothing.
+entry refused. A `sub` the claims carry as a string is kept, as every claim is; one
+absent, `null` or blank is their `actor_id()`, and claims whose actor is `None` or blank
+mint nothing. **A `sub` of another JSON type is a `SignError`**, quoting nothing they
+hold: RFC 7519 §4.1.2, which RFC 9068 §2.2 cites, makes it a string, and this crate's own
+`verify::<{ sub: String }>` refused what `#[principal(actor)] sub: u64` minted. Seen run.
+It is not rewritten to the actor's string, since a claim the claims carry is never
+overwritten and a type then disagrees with the token it mints.
 `sign_handshake` keeps `C: Serialize`: a flow's transaction names no one.
 
 That entry's other reason stands: a test minting a hand-made claim set, the one that

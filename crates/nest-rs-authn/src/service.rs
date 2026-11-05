@@ -560,16 +560,17 @@ impl JwtService {
 
     /// Sign `claims` into a compact JWT this service mints for itself. Errors
     /// on a verify-only service (no encoding key), on claims naming no subject
-    /// or on a serialization failure.
+    /// or a `sub` that is no string, or on a serialization failure.
     ///
     /// The token carries what the signer owns of RFC 9068 §2.2's required set
     /// — `iat`, `exp` this service's lifetime after it, a fresh `jti`, and the
     /// configured `aud` and `iss` — beside `claims`, which name the rest:
     /// `sub`, their [`actor_id`](PrincipalIdentity::actor_id) when they carry no
-    /// such claim, and `client_id`. A claim `claims` already carry is never
-    /// overwritten. Claims naming no subject mint nothing, and a type that is
-    /// no principal does not compile. A token for another resource is
-    /// [`sign_for`](Self::sign_for)'s.
+    /// such claim or a blank one, and `client_id`. A claim `claims` already
+    /// carry is never overwritten, so a `sub` of another JSON type, which RFC
+    /// 7519 §4.1.2 does not allow, mints nothing, as do claims naming no subject,
+    /// and a type that is no principal does not compile. A token for another
+    /// resource is [`sign_for`](Self::sign_for)'s.
     ///
     /// ```compile_fail,E0277
     /// use nest_rs_authn::{JwtOptions, JwtService};
@@ -589,9 +590,9 @@ impl JwtService {
     ///
     /// The token carries the stamps [`sign`](Self::sign) does but the
     /// audience. Errors on a blank `resource`, on `claims` naming an `aud` of
-    /// their own or no subject, on a verify-only service, or on a serialization
-    /// failure. Which resources a caller may be minted a token for is the
-    /// issuer's to decide before it calls this.
+    /// their own, no subject or a `sub` that is no string, on a verify-only
+    /// service, or on a serialization failure. Which resources a caller may be
+    /// minted a token for is the issuer's to decide before it calls this.
     pub fn sign_for<C: Serialize + PrincipalIdentity>(
         &self,
         resource: &str,
@@ -838,23 +839,29 @@ fn payload_of<C: Serialize>(claims: &C) -> Result<Map<String, Value>, SignError>
 }
 
 /// `claims` as an access token's payload, its `sub` theirs or, when they carry
-/// none, their actor: RFC 9068 §2.2 requires one, and an empty one names no one.
+/// none, their actor: RFC 9068 §2.2 requires one, a string by RFC 7519 §4.1.2,
+/// and a blank one names no one.
 fn naming_its_subject<C: Serialize + PrincipalIdentity>(
     claims: &C,
 ) -> Result<Map<String, Value>, SignError> {
     let mut payload = payload_of(claims)?;
-    let named = payload
-        .get("sub")
-        .is_some_and(|sub| !sub.is_null() && sub != "");
-    if !named {
-        let Some(actor) = claims.actor_id().filter(|actor| !actor.is_empty()) else {
+    match payload.get("sub") {
+        Some(Value::String(sub)) if !sub.trim().is_empty() => return Ok(payload),
+        None | Some(Value::Null | Value::String(_)) => {}
+        Some(_) => {
             return Err(SignError::new(
-                "the claims name no subject: RFC 9068 §2.2 requires `sub`, which their \
-                 `actor_id` supplies when they carry none",
+                "the claims' `sub` is no string: RFC 7519 §4.1.2 makes it one, and a verifier \
+                 reading one refuses anything else",
             ));
-        };
-        payload.insert("sub".to_owned(), actor.into());
+        }
     }
+    let Some(actor) = claims.actor_id().filter(|actor| !actor.trim().is_empty()) else {
+        return Err(SignError::new(
+            "the claims name no subject: RFC 9068 §2.2 requires `sub`, which their `actor_id` \
+             supplies when they carry none",
+        ));
+    };
+    payload.insert("sub".to_owned(), actor.into());
     Ok(payload)
 }
 

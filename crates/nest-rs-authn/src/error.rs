@@ -99,11 +99,11 @@ const FAILED: &str = "authentication failed";
 pub struct CredentialError;
 
 /// Why this server could not mint a token: it holds no signing key, or the
-/// claims it was handed name no subject or are no JSON object. The failure is
-/// the server's, never a verdict on the caller: a handler returning it answers
-/// opaquely on every edge, and `?` on it where a route answers an `HttpError`
-/// is the opaque `500`, its chain filed at `error`, never a `401` a client would
-/// retry with another credential.
+/// claims it was handed name no subject, hold a `sub` that is no string, or are
+/// no JSON object. The failure is the server's, never a verdict on the caller: a
+/// handler returning it answers opaquely on every edge, and `?` on it where a
+/// route answers an `HttpError` is the opaque `500`, its chain filed at `error`,
+/// never a `401` a client would retry with another credential.
 ///
 /// It displays a constant and keeps what failed as its
 /// [`source`](Error::source), read together with

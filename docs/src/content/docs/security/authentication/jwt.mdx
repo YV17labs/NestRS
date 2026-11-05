@@ -189,10 +189,14 @@ as written: an `exp` of their own outlives or undercuts the signer's.
 
 `sub` is held by the type. `sign` and `sign_for` take a `PrincipalIdentity`, the
 derive your claims already carry for the guard, and a type without it does not
-compile. A claims type holding its subject under another name is stamped its
-`#[principal(actor)]` as `sub`; one naming no subject at all, its actor `None` or
-empty, mints nothing and answers the `SignError` above. A test forging such a token,
-to prove your verifier refuses it, hands it to
+compile. A claims type holding its subject under another name, or a `sub` that is
+blank, is stamped its `#[principal(actor)]` as `sub`; one naming no subject at all,
+its actor `None` or blank, mints nothing and answers the `SignError` above. So does
+a `sub` that is no string, since
+[RFC 7519 §4.1.2](https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.2) makes
+it one and a verifier reading one refuses anything else: an integer id is written as
+its decimal string, which `#[principal(actor)]` on a field of another name does for
+you. A test forging such a token, to prove your verifier refuses it, hands it to
 [`TestApp::bearer`](/tutorial/testing/), which signs what it is given.
 
 The demo's machine tokens name their `client_id`. Its user tokens name none,

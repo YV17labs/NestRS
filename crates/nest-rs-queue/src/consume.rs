@@ -498,6 +498,7 @@ pub(crate) async fn attempt_in(
     let first_opening = !delivery.announced;
     delivery.announced = true;
     let queue = delivery.queue.as_str();
+    let handler = method.site().handler();
     // `.instrument`, never an entered guard held across `.await`.
     let span = nest_rs_core::operation_span!(
         unit::JOB,
@@ -509,14 +510,14 @@ pub(crate) async fn attempt_in(
         messaging.destination.name = queue,
         messaging.message.id = %delivery.id,
         backend_id = delivery.backend_id.as_deref(),
-        host = method.site().handler().host_name(),
-        method = method.site().handler().method(),
+        host = handler.host_name(),
+        method = handler.method(),
         attempt,
         continued_trace,
     );
     let identity = JobIdentity {
         queue: delivery.queue.clone(),
-        handler: method.site().handler(),
+        handler,
         job_id: delivery.id.clone(),
         backend_id: delivery.backend_id.clone(),
         attempt,

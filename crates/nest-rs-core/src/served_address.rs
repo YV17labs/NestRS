@@ -43,64 +43,52 @@ pub struct ServedAddress<'a> {
 impl<'a> ServedAddress<'a> {
     /// An HTTP request: its `verb`, and the template it matched, `None` where
     /// no route matched.
-    pub const fn route(verb: &'a str, path: Option<&'a str>) -> Self {
+    pub fn route(verb: &'a str, path: Option<&'a str>) -> Self {
         Self {
             verb: Some(verb),
             path,
-            ..Self::NOWHERE
+            ..Self::default()
         }
     }
 
     /// A GraphQL `field`, run under an operation of `kind`.
-    pub const fn field(kind: &'a str, field: &'a str) -> Self {
+    pub fn field(kind: &'a str, field: &'a str) -> Self {
         Self {
             kind: Some(kind),
             field: Some(field),
-            ..Self::NOWHERE
+            ..Self::default()
         }
     }
 
     /// A WebSocket message's `event`.
-    pub const fn event(event: &'a str) -> Self {
+    pub fn event(event: &'a str) -> Self {
         Self {
             event: Some(event),
-            ..Self::NOWHERE
+            ..Self::default()
         }
     }
 
     /// An MCP `tool`.
-    pub const fn tool(tool: &'a str) -> Self {
+    pub fn tool(tool: &'a str) -> Self {
         Self {
             tool: Some(tool),
-            ..Self::NOWHERE
+            ..Self::default()
         }
     }
 
     /// An MCP `prompt`.
-    pub const fn prompt(prompt: &'a str) -> Self {
+    pub fn prompt(prompt: &'a str) -> Self {
         Self {
             prompt: Some(prompt),
-            ..Self::NOWHERE
+            ..Self::default()
         }
     }
 
     /// An MCP `resource`, by its template.
-    pub const fn resource(resource: &'a str) -> Self {
+    pub fn resource(resource: &'a str) -> Self {
         Self {
             resource: Some(resource),
-            ..Self::NOWHERE
+            ..Self::default()
         }
     }
-
-    /// No coordinate at all, what the others start from.
-    const NOWHERE: Self = Self {
-        verb: None,
-        path: None,
-        kind: None,
-        field: None,
-        event: None,
-        tool: None,
-        prompt: None,
-        resource: None,
-    };
 }

@@ -248,17 +248,18 @@ async fn dispatch_one(
     // `Correlation::inherited()` is the ambient one unchanged: without `child()`
     // two listeners would share one `span_id`.
     let correlation = cause.child();
+    let handler = listener.handler;
     let span = nest_rs_core::operation_span!(
         crate::unit::DISPATCH,
         &correlation,
         event = event,
-        host = listener.handler.host_name(),
-        method = listener.handler.method(),
+        host = handler.host_name(),
+        method = handler.method(),
     );
     let continuation = nest_rs_core::RequestContinuation::new(None, correlation.clone());
     let line = DispatchLine {
         event,
-        handler: listener.handler,
+        handler,
         continuation: &continuation,
         span: span.clone(),
         started: std::time::Instant::now(),
@@ -281,8 +282,8 @@ async fn dispatch_one(
                     tracing::debug!(
                         target: crate::TARGET,
                         event = event,
-                        host = listener.handler.host_name(),
-                        method = listener.handler.method(),
+                        host = handler.host_name(),
+                        method = handler.method(),
                         "event listener skipped by a layer",
                     );
                 });
@@ -299,8 +300,8 @@ async fn dispatch_one(
                 tracing::warn!(
                     target: crate::TARGET,
                     event = event,
-                    host = listener.handler.host_name(),
-                    method = listener.handler.method(),
+                    host = handler.host_name(),
+                    method = handler.method(),
                     error = %nest_rs_core::error_message(failure.error()),
                     "event listener failed; a layer answered it — dispatch continues with the \
                      next listener",
@@ -313,8 +314,8 @@ async fn dispatch_one(
                 tracing::error!(
                     target: crate::TARGET,
                     event = event,
-                    host = listener.handler.host_name(),
-                    method = listener.handler.method(),
+                    host = handler.host_name(),
+                    method = handler.method(),
                     error = %nest_rs_core::error_message(failure.error()),
                     "event listener failed — dispatch continues with the next listener",
                 );
@@ -328,8 +329,8 @@ async fn dispatch_one(
                     payload.as_ref(),
                     "event listener panicked — dispatch continues with the next listener",
                     event = event,
-                    host = listener.handler.host_name(),
-                    method = listener.handler.method(),
+                    host = handler.host_name(),
+                    method = handler.method(),
                 );
             });
         }

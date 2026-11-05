@@ -449,7 +449,7 @@ const SAMPLERS: &str = "must name always_on, always_off, traceidratio, parentbas
                         builds, in lowercase";
 
 /// What the boot line says of the sampler.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct SamplerChoice {
     /// Its name, as `OTEL_TRACES_SAMPLER` spells it.
     pub name: &'static str,
@@ -498,23 +498,16 @@ fn sampler(
             })
     };
     let parent_based = |root: Sampler| Sampler::ParentBased(Box::new(root));
-    let Some(name) = read(OTEL_TRACES_SAMPLER) else {
-        if argument.is_some() {
-            passed_over.push(argument_read_by_nothing());
-        }
-        return Ok((
+    let chosen = read(OTEL_TRACES_SAMPLER);
+    let (sampler, name, ratio) = match chosen.as_deref() {
+        None => (
             parent_based(Sampler::TraceIdRatioBased(pinned)),
-            SamplerChoice {
-                name: "parentbased_traceidratio",
-                source: "trace_sample_ratio",
-                ratio: Some(pinned),
-            },
-        ));
-    };
-    let (sampler, name, ratio) = match name.as_str() {
-        "always_on" => (Sampler::AlwaysOn, "always_on", None),
-        "always_off" => (Sampler::AlwaysOff, "always_off", None),
-        "traceidratio" => {
+            "parentbased_traceidratio",
+            Some(pinned),
+        ),
+        Some("always_on") => (Sampler::AlwaysOn, "always_on", None),
+        Some("always_off") => (Sampler::AlwaysOff, "always_off", None),
+        Some("traceidratio") => {
             let ratio = ratio()?;
             (
                 Sampler::TraceIdRatioBased(ratio),
@@ -522,17 +515,17 @@ fn sampler(
                 Some(ratio),
             )
         }
-        "parentbased_always_on" => (
+        Some("parentbased_always_on") => (
             parent_based(Sampler::AlwaysOn),
             "parentbased_always_on",
             None,
         ),
-        "parentbased_always_off" => (
+        Some("parentbased_always_off") => (
             parent_based(Sampler::AlwaysOff),
             "parentbased_always_off",
             None,
         ),
-        "parentbased_traceidratio" => {
+        Some("parentbased_traceidratio") => {
             let ratio = ratio()?;
             (
                 parent_based(Sampler::TraceIdRatioBased(ratio)),
@@ -540,27 +533,27 @@ fn sampler(
                 Some(ratio),
             )
         }
-        _ => return Err(ConfigError::parse(OTEL_TRACES_SAMPLER, SAMPLERS)),
+        Some(_) => return Err(ConfigError::parse(OTEL_TRACES_SAMPLER, SAMPLERS)),
     };
-    if argument.is_some() && ratio.is_none() {
-        passed_over.push(argument_read_by_nothing());
+    if argument.is_some() && (chosen.is_none() || ratio.is_none()) {
+        passed_over.push(PassedOver {
+            variable: OTEL_TRACES_SAMPLER_ARG,
+            reason: "OTEL_TRACES_SAMPLER names no ratio sampler, so nothing reads it",
+        });
     }
+    let source = if chosen.is_some() {
+        OTEL_TRACES_SAMPLER
+    } else {
+        "trace_sample_ratio"
+    };
     Ok((
         sampler,
         SamplerChoice {
             name,
-            source: OTEL_TRACES_SAMPLER,
+            source,
             ratio,
         },
     ))
-}
-
-/// `OTEL_TRACES_SAMPLER_ARG` beside a sampler that reads no argument.
-fn argument_read_by_nothing() -> PassedOver {
-    PassedOver {
-        variable: OTEL_TRACES_SAMPLER_ARG,
-        reason: "OTEL_TRACES_SAMPLER names no ratio sampler, so nothing reads it",
-    }
 }
 
 /// The metric exporter's temporality, `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`,

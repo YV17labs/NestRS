@@ -111,11 +111,10 @@ fn line(target: &'static str, message: &'static str, level: Level) -> &'static L
 /// (`http.request`, `ws.message`, …), its host, its method and where it is
 /// served, by the fields the unit's `mounted` line names it by
 /// ([`ServedAddress`](nest_rs_core::ServedAddress)) or the handler's `address`
-/// on a view stating none, the
-/// connection it arrived on (`conn_id`, as every WebSocket line names it), the
-/// status, the denial's reason and `Retry-After`, and the chain behind a denial
-/// keeping a cause — never a denial's own text otherwise, which may name what
-/// no line carries.
+/// on a view stating none, the connection it arrived on (`conn_id`, as every
+/// WebSocket line names it), the status, the denial's reason and `Retry-After`,
+/// and the chain behind a denial keeping a cause — never a denial's own text
+/// otherwise, which may name what no line carries.
 pub(crate) fn file_denial(
     message: &'static str,
     guard: &'static str,

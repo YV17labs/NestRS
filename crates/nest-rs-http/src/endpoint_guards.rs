@@ -144,15 +144,6 @@ pub const NO_GUARD_REMEDY: &str = "list `GlobalGuards<(...)>` in the providers o
      endpoint carrying units, or open it on purpose: `#[public]` on a route, a message or a \
      GraphQL operation, `McpModule::for_root(McpAccess::Public)` on an MCP endpoint";
 
-/// What a surface no guard runs at does with the units its requests carry, as
-/// the `no guard at the request` line says it.
-pub(crate) mod no_guard_then {
-    /// A gated surface: nothing admits a request.
-    pub(crate) const DENIES_EVERY_UNIT: &str = "denies every unit";
-    /// An in-band surface: only a unit open on purpose reaches a caller.
-    pub(crate) const RUNS_PUBLIC_UNITS_ONLY: &str = "runs #[public] units only";
-}
-
 /// What runs at a self-mount's request, before its surface sees it.
 pub(crate) enum RequestStage {
     /// Nothing: a public surface, or one with no guard to run.

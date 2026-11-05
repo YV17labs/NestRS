@@ -26,7 +26,7 @@ use crate::drain::Drain;
 use crate::edge::EdgeEndpoint;
 use crate::endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta};
 use crate::endpoint_guards::{
-    NO_GUARD_REMEDY, RequestStage, check_declarations_reached, no_guard_then, request_stage,
+    NO_GUARD_REMEDY, RequestStage, check_declarations_reached, request_stage,
 };
 use crate::error::RouteError;
 use crate::fallback::{
@@ -443,7 +443,7 @@ impl HttpTransport {
 }
 
 /// The one line of a surface the boot lets serve with no guard at its request.
-fn no_guard_at_the_request(surface: &str, path: &str, then: &'static str) {
+fn no_guard_at_the_request(surface: &str, path: &str, then: &str) {
     tracing::warn!(
         target: nest_rs_core::target::LAYERS,
         surface,
@@ -646,10 +646,11 @@ impl Transport for HttpTransport {
                     "give each one a distinct path",
                 )?;
             }
+            let served = routes.served(d.meta.path());
             tracing::info!(
                 target: crate::target::ROUTES,
                 surface = d.meta.label(),
-                path = routes.served(d.meta.path()).as_str(),
+                path = served.as_str(),
                 "mounted endpoint",
             );
             if let Some(work) = d.meta.detached() {
@@ -679,19 +680,11 @@ impl Transport for HttpTransport {
                     StageKind::SelfMount,
                 ))),
                 RequestStage::Denied => {
-                    no_guard_at_the_request(
-                        d.meta.label(),
-                        &routes.served(d.meta.path()),
-                        no_guard_then::DENIES_EVERY_UNIT,
-                    );
-                    Some(Arc::new(DeniedStage::new(routes.served(d.meta.path()))))
+                    no_guard_at_the_request(d.meta.label(), &served, "denies every unit");
+                    Some(Arc::new(DeniedStage::new(served)))
                 }
                 RequestStage::InBand => {
-                    no_guard_at_the_request(
-                        d.meta.label(),
-                        &routes.served(d.meta.path()),
-                        no_guard_then::RUNS_PUBLIC_UNITS_ONLY,
-                    );
+                    no_guard_at_the_request(d.meta.label(), &served, "runs #[public] units only");
                     None
                 }
             };

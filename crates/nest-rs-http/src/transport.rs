@@ -672,31 +672,25 @@ impl Transport for HttpTransport {
             if let Some(units) = d.meta.carried() {
                 carried.push(units.view);
             }
-            let stage: Option<Arc<dyn GuardStage>> = match request_stage(container, &d.meta, &site)?
+            let request = request_stage(container, &d.meta, &site)?;
+            let identified = matches!(
+                &request,
+                RequestStage::Guarded(chain) if identifying_guard(chain).is_some()
+            );
+            if !identified
+                && handler.posture() == Posture::Gated
+                && d.meta.carried().is_none()
+                && !d.meta.decided_per_unit()
             {
-                RequestStage::Open => {
-                    if handler.posture() == Posture::Gated
-                        && d.meta.carried().is_none()
-                        && !d.meta.decided_per_unit()
-                    {
-                        unguarded_mounts.push(format!("{} ({})", d.meta.path(), d.meta.label()));
-                    }
-                    None
-                }
-                RequestStage::Guarded(chain) => {
-                    if handler.posture() == Posture::Gated
-                        && d.meta.carried().is_none()
-                        && !d.meta.decided_per_unit()
-                        && identifying_guard(&chain).is_none()
-                    {
-                        unguarded_mounts.push(format!("{} ({})", d.meta.path(), d.meta.label()));
-                    }
-                    Some(Arc::new(HttpGuardStage::new(
-                        chain,
-                        Vec::new(),
-                        StageKind::SelfMount,
-                    )))
-                }
+                unguarded_mounts.push(format!("{} ({})", d.meta.path(), d.meta.label()));
+            }
+            let stage: Option<Arc<dyn GuardStage>> = match request {
+                RequestStage::Open => None,
+                RequestStage::Guarded(chain) => Some(Arc::new(HttpGuardStage::new(
+                    chain,
+                    Vec::new(),
+                    StageKind::SelfMount,
+                ))),
                 RequestStage::Denied => {
                     no_guard_at_the_request(d.meta.label(), &served, "denies every unit");
                     Some(Arc::new(DeniedStage::new(served)))

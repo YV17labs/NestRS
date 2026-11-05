@@ -170,7 +170,8 @@ guard, filter or interceptor loop of its own.
 8. **Guards at two scopes, and their `GuardFor` bound when the unit has a
    caller**, plus `#[force_guards]` on a method, which binds the guard there
    and re-runs it, composed once per site and deduplicated by `TypeId`; a
-   denial renders through one `denial_to_<edge>_error`, so a guard's refusal
+   denial renders through one `denial_to_<edge>_error`, on HTTP a response
+   (`denial_to_http_response`), so a guard's refusal
    and a gate's look the same — on HTTP unless the refusing guard wrote an
    error of its protocol's own into the view (`HttpView::respond`, a token
    endpoint's RFC 6749 §5.2 answer), which the guard stage serves instead,

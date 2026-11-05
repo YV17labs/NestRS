@@ -23,7 +23,6 @@ use nest_rs_guards::__private::{
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
 
 use crate::ambient::RejectedCredential;
-use crate::error::HttpError;
 use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
@@ -343,19 +342,6 @@ pub fn denial_to_http_response(denial: Denial) -> Response {
 
 /// [`denial_to_http_response`], the denial kept.
 pub(crate) fn denial_response(denial: &Denial) -> Response {
-    let mut response = problem_response(denial);
-    // The scopes ride as an extension: the challenge also names the RFC 9728
-    // metadata document, which only the oauth-resource interceptor knows.
-    if let Some(required) = required_scopes(denial) {
-        response.extensions_mut().insert(required);
-    }
-    response
-}
-
-/// The problem+json envelope alone — everything [`denial_to_http_response`]
-/// builds except the scope evidence, which the `Err` path attaches to the
-/// [`HttpError`] instead of to this response.
-fn problem_response(denial: &Denial) -> Response {
     let status =
         StatusCode::from_u16(denial.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut problem = ProblemDetails::about_blank(status).with_code(denial_code(denial));
@@ -380,6 +366,11 @@ fn problem_response(denial: &Denial) -> Response {
             .headers_mut()
             .insert(header::RETRY_AFTER, HeaderValue::from(retry_after_secs));
     }
+    // The scopes ride as an extension: the challenge also names the RFC 9728
+    // metadata document, which only the oauth-resource interceptor knows.
+    if let Some(required) = required_scopes(denial) {
+        response.extensions_mut().insert(required);
+    }
     response
 }
 
@@ -389,18 +380,6 @@ fn problem_response(denial: &Denial) -> Response {
 fn required_scopes(denial: &Denial) -> Option<RequiredScopes> {
     let required = denial.required_scopes();
     (!required.is_empty()).then(|| RequiredScopes::new(required.to_vec()))
-}
-
-/// A [`Denial`] as an [`HttpError`] — the `Err` path's counterpart to
-/// [`denial_to_http_response`], for the sites that must reject rather than
-/// return (an extractor). The scope evidence rides the error's extensions,
-/// which its rendering copies onto the response.
-pub fn denial_to_http_error(denial: Denial) -> HttpError {
-    let mut error = HttpError::from_response(problem_response(&denial));
-    if let Some(required) = required_scopes(&denial) {
-        error.extensions_mut().insert(required);
-    }
-    error
 }
 
 #[cfg(test)]
@@ -451,7 +430,7 @@ mod tests {
 
     /// Every denial's document carries the code its class is known by on
     /// every edge, an insufficient scope's included, which its `403` alone
-    /// would name `FORBIDDEN`; both the response and the `Err` path say it.
+    /// would name `FORBIDDEN`.
     #[tokio::test]
     async fn every_denial_names_the_code_its_class_is_known_by() {
         for denial in [
@@ -464,15 +443,11 @@ mod tests {
             Denial::internal("redis at 10.0.3.7 refused"),
         ] {
             let class = denial_code(&denial).as_str();
-            for resp in [
-                denial_to_http_response(denial.clone()),
-                denial_to_http_error(denial.clone()).into_response(),
-            ] {
-                let bytes = resp.into_body().into_bytes().await.expect("body");
-                let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-                assert_eq!(json["code"], class, "{denial:?}: {json}");
-                assert!(!json.to_string().contains("10.0."), "{json}");
-            }
+            let resp = denial_to_http_response(denial.clone());
+            let bytes = resp.into_body().into_bytes().await.expect("body");
+            let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+            assert_eq!(json["code"], class, "{denial:?}: {json}");
+            assert!(!json.to_string().contains("10.0."), "{json}");
         }
     }
 
@@ -518,23 +493,6 @@ mod tests {
             resp.headers()[header::WWW_AUTHENTICATE],
             r#"Bearer error="insufficient_scope", scope="posts:write""#,
             "RFC 6750 §3: the challenge names the scope the request needs",
-        );
-    }
-
-    #[tokio::test]
-    async fn the_err_path_carries_the_scopes_to_the_response_it_renders() {
-        let error = denial_to_http_error(Denial::insufficient_scope(
-            ["posts:write"],
-            "this token may not write posts",
-        ));
-        let resp = error.into_response();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        assert_eq!(
-            resp.extensions()
-                .get::<RequiredScopes>()
-                .map(RequiredScopes::as_slice),
-            Some(["posts:write".to_owned()].as_slice()),
-            "a denial that travels the `Err` path must reach the edge intact",
         );
     }
 

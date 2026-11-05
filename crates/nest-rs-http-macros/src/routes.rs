@@ -15,15 +15,15 @@ use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, PostureWord, RoutePath,
-    SitePosture, at_most_one_authorize, authorized_entity, await_if_async, cfg_attrs,
-    concrete_signature, deprecation_header, exception_filter_specs, force_guard_typeids,
-    guard_capability_bounds, handler_const, handler_ref, host_runtime_entry, impl_self_ident,
-    injected_methods_with_layers, injected_per_request_method, interceptor_specs, layer_deps,
-    mixed_site_ident, normalize_forwarded_args, nth_generic_type, one_role_per_method,
-    posture_contradiction, posture_key_unsupported, refuse_rust_deprecated,
-    reject_meta_on_operations, scoped_specs, shared_receiver, site, spelled, takes_value,
-    ungrouped_expr, unit_of_work_required, unknown_argument, validate_argument,
+    HandlerSite, HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture,
+    authorized_entity, await_if_async, cfg_attrs, concrete_signature, deprecation_header,
+    exception_filter_specs, force_guard_typeids, guard_capability_bounds, handler_const,
+    handler_ref, host_runtime_entry, impl_self_ident, injected_methods_with_layers,
+    injected_per_request_method, interceptor_specs, layer_deps, mixed_site_ident,
+    normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
+    refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
+    spelled, take_posture, takes_value, ungrouped_expr, unit_of_work_required, unknown_argument,
+    validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -248,10 +248,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(idents) => idents,
             Err(err) => return err.to_compile_error().into(),
         };
-        let RoutePosture {
-            gate: authorize,
-            public: is_public,
-        } = match take_posture(&mut method.attrs, &method.sig.ident, &inputs) {
+        let (authorize, is_public) = match take_posture(
+            &mut method.attrs,
+            &method.sig.ident,
+            "route",
+            |attr, word| gate_of(attr, word, &inputs),
+        ) {
             Ok(posture) => posture,
             Err(err) => return err.to_compile_error().into(),
         };
@@ -1042,36 +1044,6 @@ struct AuthorizeSpec {
     bind: Option<Path>,
 }
 
-/// What a route's method declares about who may call it.
-struct RoutePosture {
-    /// What it gates on, where it names a subject.
-    gate: Option<AuthorizeSpec>,
-    /// `#[public]`, named or bare: a caller with no credential is admitted, and
-    /// the app's pool still runs.
-    public: bool,
-}
-
-/// Take the route's posture off its method, whose parameters, the receiver left
-/// out, are `inputs`.
-fn take_posture(
-    attrs: &mut Vec<Attribute>,
-    method: &syn::Ident,
-    inputs: &[FnArg],
-) -> syn::Result<RoutePosture> {
-    let authorize = take_authorize(attrs, inputs)?;
-    let public = nest_rs_codegen::take_single_attr(attrs, PostureWord::Public.as_str())?;
-    let (gate, public) = match (authorize, public) {
-        (Some(_), Some(_)) => {
-            return Err(syn::Error::new_spanned(method, posture_contradiction()));
-        }
-        (Some(gate), None) => (Some(gate), false),
-        (None, Some(attr)) if matches!(attr.meta, Meta::Path(_)) => (None, true),
-        (None, Some(attr)) => (Some(gate_of(&attr, PostureWord::Public, inputs)?), true),
-        (None, None) => (None, false),
-    };
-    Ok(RoutePosture { gate, public })
-}
-
 /// The parameter `bind = Service` fills: where the handler lists it, and what
 /// loads it.
 struct BoundSubject {
@@ -1174,37 +1146,13 @@ fn take_version_attr(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<LitStr>> {
     versioning::parse_version_args(&attr)
 }
 
-/// Take `#[authorize(Action, Subject)]` off a route method whose parameters,
-/// the receiver left out, are `inputs`.
-fn take_authorize(
-    attrs: &mut Vec<Attribute>,
-    inputs: &[FnArg],
-) -> syn::Result<Option<AuthorizeSpec>> {
-    let Some(pos) = attrs.iter().position(|a| a.path().is_ident("authorize")) else {
-        return Ok(None);
-    };
-    let attr = attrs.remove(pos);
-    if attrs.iter().any(|a| a.path().is_ident("authorize")) {
-        return Err(syn::Error::new_spanned(
-            &attr,
-            at_most_one_authorize("route"),
-        ));
-    }
-    gate_of(&attr, PostureWord::Authorize, inputs).map(Some)
-}
-
 /// Read `#[word(Action, Subject)]`, or `#[word(Action, bind = Service)]`, off a
 /// route method whose parameters, the receiver left out, are `inputs`.
 #[expect(
     clippy::map_err_ignore,
     reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
 )]
-fn gate_of(attr: &Attribute, word: PostureWord, inputs: &[FnArg]) -> syn::Result<AuthorizeSpec> {
-    let grammar = match word {
-        PostureWord::Authorize => AUTHORIZE,
-        PostureWord::Public => PUBLIC,
-    };
-    let word = word.as_str();
+fn gate_of(attr: &Attribute, word: &'static str, inputs: &[FnArg]) -> syn::Result<AuthorizeSpec> {
     // Parsed as `Meta`, not `Path`, so `bind = Service` is refused by name rather
     // than by syn's `expected \`,\``.
     let metas: Vec<Meta> = attr
@@ -1242,7 +1190,7 @@ fn gate_of(attr: &Attribute, word: PostureWord, inputs: &[FnArg]) -> syn::Result
             Meta::NameValue(ref nv) if let Some(key) = nv.path.get_ident() => {
                 return Err(syn::Error::new_spanned(
                     key,
-                    unknown_argument(word, &key.to_string(), grammar.keys()),
+                    unknown_argument(word, &key.to_string(), POSTURE_KEYS),
                 ));
             }
             other => {
@@ -1253,7 +1201,7 @@ fn gate_of(attr: &Attribute, word: PostureWord, inputs: &[FnArg]) -> syn::Result
             }
         }
     }
-    grammar.take_all(&keys)?;
+    nest_rs_codegen::Grammar::new(word, POSTURE_KEYS).take_all(&keys)?;
     if let Some(unmasked) = paths.iter().find(|p| p.is_ident("unmasked")) {
         return Err(syn::Error::new_spanned(
             unmasked,
@@ -1295,11 +1243,8 @@ const SSE_NAMES_AN_ENTITY: &str = "an `#[sse]` route's posture names a subject n
      `#[authorize(Action, ThatSubject)]` or `#[public(Action, ThatSubject)]`, then load what it \
      needs inside the handler";
 
-/// The keys a route's `#[authorize]` takes beside its action and subject.
-const AUTHORIZE: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("authorize", &["bind"]);
-
-/// The keys a route's `#[public(...)]` takes beside its action and subject.
-const PUBLIC: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("public", &["bind"]);
+/// The keys a route's posture takes beside its action and subject.
+const POSTURE_KEYS: &[&str] = &["bind"];
 
 /// The posture's shape refusal, in the words of the attribute `word` names.
 fn malformed_posture(attr: &Attribute, word: &str) -> syn::Error {

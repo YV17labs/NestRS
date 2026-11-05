@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::__private::{ClassGate, ResolvedLayer, run_layer};
+use nest_rs_core::__private::{ClassGate, ResolvedLayer, run_layer, withhold_from_reads};
 use nest_rs_core::{AmbientValue, Continuation, UnitContext};
 
 use crate::denial::{by_cause, denial_of};
@@ -87,10 +87,12 @@ impl AmbientValue for RefusalMark {
 /// Run every guard of `chain` on the unit `cx` describes through
 /// [`Guard::check`], in order, then the posture's class `gate`, leaving what
 /// they attached on `cx` for the pipeline to install once its guard stage
-/// passed. The first refusal stops them.
+/// passed, `withheld` from the unit's reads where no mask shapes its reply. The
+/// first refusal stops them.
 pub async fn check_guards(
     chain: &[ResolvedLayer<dyn Guard>],
     gate: Option<ClassGate>,
+    withheld: bool,
     cx: &mut UnitContext<'_>,
 ) -> Result<(), Refused> {
     for entry in chain {
@@ -104,6 +106,9 @@ pub async fn check_guards(
     }
     if let Some(gate) = gate {
         gate(cx).map_err(|refused| Refused::Filed(denial_of(&refused)))?;
+    }
+    if withheld {
+        withhold_from_reads(cx);
     }
     Ok(())
 }

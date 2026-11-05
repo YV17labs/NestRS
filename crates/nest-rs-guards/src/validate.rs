@@ -174,6 +174,18 @@ pub fn validate_carried_chain(
     Ok(())
 }
 
+/// Whether a unit an in-band edge carries needs no guard stage: its `unit` chain
+/// is empty, and a posture that `withheld` its reads has nothing to withhold, with
+/// no guard at its `request` either to have attached anything.
+pub fn carried_stage_idle(
+    unit: &[ResolvedLayer<dyn Guard>],
+    withheld: bool,
+    request: impl FnOnce() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
+) -> Result<bool, String> {
+    let withholds = withheld && !request()?.is_empty();
+    Ok(unit.is_empty() && !withholds)
+}
+
 /// Boot check for one controller or gateway upgrade: compose the global pool
 /// with the host-scope specs (the dedup a route's guard stage composes) and validate the
 /// result. A host-scope spec no imported module provides fails it, naming the
@@ -371,6 +383,28 @@ mod tests {
             panic!("an expectation with a visitor branch reads nothing at boot")
         })
         .expect("it does without");
+    }
+
+    #[test]
+    fn a_carried_unit_keeps_a_stage_for_its_guards_or_for_what_it_withholds() {
+        let idle = |unit: &[ResolvedLayer<dyn Guard>], withheld, request_guarded| {
+            carried_stage_idle(unit, withheld, || {
+                Ok(if request_guarded {
+                    vec![entry(Authn, "Authn")]
+                } else {
+                    Vec::new()
+                })
+            })
+            .expect("the request composes")
+        };
+        assert!(idle(&[], false, false));
+        assert!(idle(&[], false, true), "nothing to withhold");
+        assert!(idle(&[], true, false), "nothing was attached to withhold");
+        assert!(!idle(&[], true, true), "what the request attached");
+        assert!(
+            !idle(&[entry(Authn, "Authn")], false, false),
+            "its own guard"
+        );
     }
 
     #[test]

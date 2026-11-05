@@ -42,7 +42,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::punctuated::Punctuated;
-use syn::{Attribute, Expr, FnArg, ImplItemFn, Meta, Path, Token, Type};
+use syn::{Attribute, Expr, FnArg, Ident, ImplItemFn, Meta, Path, Signature, Token, Type};
 
 use crate::args::{duplicate_argument, takes_value};
 use crate::attrs::take_single_attr;
@@ -50,7 +50,7 @@ use crate::meta::SitePosture;
 use crate::ty::nth_generic_type;
 
 /// The sentence every site prints for a second `#[authorize(...)]`.
-pub fn at_most_one_authorize(site: &str) -> String {
+fn at_most_one_authorize(site: &str) -> String {
     format!("at most one `#[authorize(...)]` per {site}")
 }
 
@@ -78,32 +78,8 @@ pub const AUTHORIZED_NEEDS_BIND: &str = "an `Authorized<Action, E>` parameter re
      posture, or drop the parameter: the type carries the row, the attribute the posture";
 
 /// The sentence an edge prints when an operation declares both postures.
-pub fn posture_contradiction() -> &'static str {
+fn posture_contradiction() -> &'static str {
     "`#[authorize(...)]` and `#[public]` contradict — an operation is gated or public, not both"
-}
-
-/// The attribute a posture is written with, as a refusal names it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "tier 2: the `#[routes]` and `#[operations]` parsers match it, and a new word must \
-              reach each"
-)]
-pub enum PostureWord {
-    /// `#[authorize(Action, Subject)]`: a caller a principal backs.
-    Authorize,
-    /// `#[public]`: a caller with no credential is admitted.
-    Public,
-}
-
-impl PostureWord {
-    /// The attribute's name.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Authorize => "authorize",
-            Self::Public => "public",
-        }
-    }
 }
 
 /// The sentence a site prints for an `#[authorize(...)]` key it cannot express.
@@ -161,10 +137,10 @@ impl Posture {
 
     /// The attribute the posture was written with, for a refusal to name;
     /// `authorize` for one that states none, whose refusal offers it.
-    pub fn word(&self) -> PostureWord {
+    pub fn word(&self) -> &'static str {
         match self {
-            Self::Public(_) => PostureWord::Public,
-            Self::Authorize(_) | Self::Undeclared => PostureWord::Authorize,
+            Self::Public(_) => "public",
+            Self::Authorize(_) | Self::Undeclared => "authorize",
         }
     }
 
@@ -199,11 +175,42 @@ impl Posture {
 
 /// [`Posture::withheld`], for an edge parsing its own posture: `named` is the
 /// subject it names and whether it declares `unmasked`.
-pub fn withheld(named: Option<(&impl quote::ToTokens, bool)>) -> TokenStream {
+pub fn withheld(named: Option<(impl quote::ToTokens, bool)>) -> TokenStream {
     match named {
         None => quote!(true),
         Some((_, true)) => quote!(false),
         Some((subject, false)) => quote!(!<#subject as ::nest_rs_authz::Subject>::__ROWS),
+    }
+}
+
+/// Take a method's posture attributes off `attrs`, every edge's one reading: what
+/// it gates on, which `gate_of` reads off an attribute naming a subject and the
+/// word that attribute is written with, and whether it is `#[public]`, named or
+/// bare. `site` is the noun a repeated `#[authorize]` is refused with, and `method`
+/// is where a contradiction is spanned.
+pub fn take_posture<G>(
+    attrs: &mut Vec<Attribute>,
+    method: &Ident,
+    site: &str,
+    gate_of: impl Fn(&Attribute, &'static str) -> syn::Result<G>,
+) -> syn::Result<(Option<G>, bool)> {
+    let is_authorize = |attr: &Attribute| attr.path().is_ident("authorize");
+    let authorize = match attrs.iter().position(is_authorize) {
+        Some(at) => {
+            let attr = attrs.remove(at);
+            if attrs.iter().any(is_authorize) {
+                return Err(syn::Error::new_spanned(&attr, at_most_one_authorize(site)));
+            }
+            Some(gate_of(&attr, "authorize")?)
+        }
+        None => None,
+    };
+    match (authorize, take_single_attr(attrs, "public")?) {
+        (Some(_), Some(_)) => Err(syn::Error::new_spanned(method, posture_contradiction())),
+        (Some(gate), None) => Ok((Some(gate), false)),
+        (None, Some(attr)) if matches!(attr.meta, Meta::Path(_)) => Ok((None, true)),
+        (None, Some(attr)) => Ok((Some(gate_of(&attr, "public")?), true)),
+        (None, None) => Ok((None, false)),
     }
 }
 
@@ -221,42 +228,16 @@ impl PostureRules {
     /// Take the operation's declared posture off the method;
     /// [`Posture::Undeclared`] when it states none.
     pub fn take(&self, method: &mut ImplItemFn) -> syn::Result<Posture> {
-        let authorize = self.take_authorize(method)?;
-        let public = take_single_attr(&mut method.attrs, PostureWord::Public.as_str())?;
-        match (authorize, public) {
-            (Some(_), Some(_)) => Err(syn::Error::new_spanned(
-                &method.sig.ident,
-                posture_contradiction(),
-            )),
-            (Some(gate), None) => Ok(Posture::Authorize(gate)),
-            (None, Some(attr)) if matches!(attr.meta, Meta::Path(_)) => Ok(Posture::Public(None)),
-            (None, Some(attr)) => Ok(Posture::Public(Some(self.gate_of(
-                &attr,
-                PostureWord::Public,
-                method,
-            )?))),
-            (None, None) => Ok(Posture::Undeclared),
-        }
-    }
-
-    /// Remove and parse the method's one `#[authorize(...)]`.
-    fn take_authorize(&self, method: &mut ImplItemFn) -> syn::Result<Option<PostureGate>> {
-        let Some(pos) = method
-            .attrs
-            .iter()
-            .position(|a| a.path().is_ident("authorize"))
-        else {
-            return Ok(None);
-        };
-        let attr = method.attrs.remove(pos);
-        if method.attrs.iter().any(|a| a.path().is_ident("authorize")) {
-            return Err(syn::Error::new_spanned(
-                &attr,
-                at_most_one_authorize("operation"),
-            ));
-        }
-        self.gate_of(&attr, PostureWord::Authorize, method)
-            .map(Some)
+        let sig = &method.sig;
+        let (gate, public) =
+            take_posture(&mut method.attrs, &sig.ident, "operation", |attr, word| {
+                self.gate_of(attr, word, sig)
+            })?;
+        Ok(match (gate, public) {
+            (gate, true) => Posture::Public(gate),
+            (Some(gate), false) => Posture::Authorize(gate),
+            (None, false) => Posture::Undeclared,
+        })
     }
 
     /// Read `#[word(Action, Subject)]` / `#[word(Action, Subject, unmasked)]`,
@@ -265,13 +246,7 @@ impl PostureRules {
         clippy::map_err_ignore,
         reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
     )]
-    fn gate_of(
-        &self,
-        attr: &Attribute,
-        word: PostureWord,
-        method: &ImplItemFn,
-    ) -> syn::Result<PostureGate> {
-        let word = word.as_str();
+    fn gate_of(&self, attr: &Attribute, word: &str, sig: &Signature) -> syn::Result<PostureGate> {
         let malformed = || {
             let expected = match self.bind_unsupported_because {
                 Some(_) => format!(
@@ -338,11 +313,8 @@ impl PostureRules {
         let (action, entity) = match (positional.as_slice(), &bind) {
             ([action, entity], _) => (action.clone(), entity.clone()),
             ([action], Some(_)) => {
-                let Some(Type::Path(entity)) = authorized_entity(&method.sig.inputs) else {
-                    return Err(syn::Error::new_spanned(
-                        &method.sig.ident,
-                        BIND_NEEDS_AUTHORIZED,
-                    ));
+                let Some(Type::Path(entity)) = authorized_entity(&sig.inputs) else {
+                    return Err(syn::Error::new_spanned(&sig.ident, BIND_NEEDS_AUTHORIZED));
                 };
                 (action.clone(), entity.path.clone())
             }

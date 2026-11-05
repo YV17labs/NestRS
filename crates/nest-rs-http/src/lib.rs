@@ -267,8 +267,7 @@ pub mod __private {
     };
     pub use crate::error::{OriginRefused, OriginRefusedReason};
     pub use crate::guard_stage::{
-        attached, attached_pending, behind_guards, check_request, denial_to_http_error,
-        denial_to_http_response,
+        attached, attached_pending, behind_guards, check_request, denial_to_http_response,
     };
     pub use crate::module::RUNTIME;
     pub use crate::origin::OriginScheme;

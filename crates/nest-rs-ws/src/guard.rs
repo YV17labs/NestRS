@@ -10,13 +10,13 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
     ClassGate, GuardStage, Pending, ResolvedLayer, new_unit_context, report_unresolved, shorten,
-    take_pending, withhold_from_reads,
+    take_pending,
 };
 use nest_rs_core::{Container, Failure, Handler, LayerSite, Peer, Posture, UnitContext};
 use nest_rs_guards::__private::{
-    GlobalBucket, GuardSpec, Refused, SiteChainSources, check_guards, client_message,
-    compose_site_chain, denial_code, denial_of, denial_reason, host_chain, identifying_guard,
-    validate_carried_chain, validate_guard_chain,
+    GlobalBucket, GuardSpec, Refused, SiteChainSources, carried_stage_idle, check_guards,
+    client_message, compose_site_chain, denial_code, denial_of, denial_reason, host_chain,
+    identifying_guard, validate_carried_chain, validate_guard_chain,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::OriginRefused;
@@ -65,16 +65,13 @@ pub fn message_guard_stage(
     };
     let guards = compose_site_chain(container, &site, sources, GlobalBucket::Fold)
         .inspect_err(report_unresolved)?;
-    validate_carried_chain(&site, &guards, || {
-        host_chain(container, &declared.upgrade, &site)
-    })
-    .map_err(nest_rs_core::anyhow::Error::msg)?;
-    // No guard at all, here or at the upgrade: nothing was attached to withhold.
-    let withholds = declared.withheld
-        && !host_chain(container, &declared.upgrade, &site)
+    let upgrade_chain = || host_chain(container, &declared.upgrade, &site);
+    validate_carried_chain(&site, &guards, upgrade_chain)
+        .map_err(nest_rs_core::anyhow::Error::msg)?;
+    if declared.gate.is_none()
+        && carried_stage_idle(&guards, declared.withheld, upgrade_chain)
             .map_err(nest_rs_core::anyhow::Error::msg)?
-            .is_empty();
-    if guards.is_empty() && declared.gate.is_none() && !withholds {
+    {
         return Ok(None);
     }
     Ok(Some(Arc::new(MessageGuardStage {
@@ -96,15 +93,9 @@ struct MessageGuardStage {
 impl GuardStage for MessageGuardStage {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
-            match check_guards(&self.guards, self.gate, cx).await {
-                Ok(()) => {
-                    if self.withheld {
-                        withhold_from_reads(cx);
-                    }
-                    Ok(())
-                }
-                Err(refused) => Err(refuse(cx, refused)),
-            }
+            check_guards(&self.guards, self.gate, self.withheld, cx)
+                .await
+                .map_err(|refused| refuse(cx, refused))
         })
     }
 
@@ -193,7 +184,7 @@ pub(crate) fn check_posture(
     messages: &[DeclaredMessage],
 ) -> nest_rs_core::anyhow::Result<()> {
     let path = path.to_owned();
-    if identifying_guard(upgrade).is_none() {
+    let Some(entry) = identifying_guard(upgrade) else {
         let mut uncovered = Vec::new();
         for message in messages {
             if !is_public(message) && !message.site.chains(container)?.covers() {
@@ -207,27 +198,26 @@ pub(crate) fn check_posture(
         if !messages.iter().any(is_public) {
             return Err(GatewayPostureError::Unopened { path }.into());
         }
-    }
-    if let Some(entry) = identifying_guard(upgrade)
-        && let Some(messages) = events(messages, is_public)
-    {
-        let guard = shorten(entry.name);
-        return Err(if matches!(entry.source, LayerSite::Global) {
-            GatewayPostureError::PublicBehindPool {
-                path,
-                messages,
-                guard,
-            }
-        } else {
-            GatewayPostureError::PublicBehindGuard {
-                path,
-                messages,
-                guard,
-            }
+        return Ok(());
+    };
+    let Some(messages) = events(messages, is_public) else {
+        return Ok(());
+    };
+    let guard = shorten(entry.name);
+    Err(if matches!(entry.source, LayerSite::Global) {
+        GatewayPostureError::PublicBehindPool {
+            path,
+            messages,
+            guard,
         }
-        .into());
+    } else {
+        GatewayPostureError::PublicBehindGuard {
+            path,
+            messages,
+            guard,
+        }
     }
-    Ok(())
+    .into())
 }
 
 fn is_public(message: &DeclaredMessage) -> bool {
@@ -336,31 +326,23 @@ mod tests {
         (checked, view, seen)
     }
 
-    fn stage_withholding(
-        upgrade: Vec<GuardSpec>,
-    ) -> nest_rs_core::anyhow::Result<Option<Arc<dyn GuardStage>>> {
-        message_guard_stage(
+    /// With no guard at the upgrade or beside it, nothing can have attached
+    /// what a bare `#[public]` withholds, so the message keeps no stage.
+    #[test]
+    fn a_message_with_nothing_to_withhold_pays_for_no_stage() {
+        let stage = message_guard_stage(
             &Container::default(),
             &SEND,
             MessageGuards {
-                upgrade,
+                upgrade: Vec::new(),
                 method: Vec::new(),
                 force: Vec::new(),
                 gate: None,
                 withheld: true,
             },
         )
-    }
-
-    /// With no guard at the upgrade or beside it, nothing can have attached
-    /// what a bare `#[public]` withholds, so the message keeps no stage.
-    #[test]
-    fn a_message_with_nothing_to_withhold_pays_for_no_stage() {
-        assert!(
-            stage_withholding(Vec::new())
-                .expect("no guard to resolve")
-                .is_none(),
-        );
+        .expect("no guard to resolve");
+        assert!(stage.is_none());
     }
 
     #[tokio::test]

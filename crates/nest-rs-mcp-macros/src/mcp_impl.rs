@@ -994,7 +994,7 @@ fn masked(role: Role, posture: &Posture, sig: &Signature) -> syn::Result<TokenSt
             Role::Resource => role.mask_unwraps(),
             Role::Tool | Role::Prompt | Role::Resources => "`Json<T>` or `T`",
         };
-        let word = posture.word().as_str();
+        let word = posture.word();
         return Err(syn::Error::new_spanned(
             &sig.output,
             format!(
@@ -1207,7 +1207,7 @@ fn take_operation(
         ..
     } = take_layers(&pair::MCP, LayerScope::Method, &mut method.attrs)?;
     let posture = posture_rules(role).take(method)?;
-    let word = posture.word().as_str();
+    let word = posture.word();
     if posture.masks()
         && let Some(why) = role.unmaskable()
     {

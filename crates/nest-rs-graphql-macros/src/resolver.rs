@@ -16,17 +16,17 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, InjectableBody, PostureWord, SitePosture, TailParam,
-    VersionedEdge, answer_span, at_most_one_authorize, authorized_entity, await_if_async,
-    build_injectable_body, camel_case, cfg_attrs, concrete_signature, delegated_attrs,
-    exception_filter_specs, force_guard_typeids, forwarded_arg_idents, forwarded_idents,
-    from_container_method, guard_capability_bounds, handler_const, handler_ref, host_meta_fn,
-    host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
-    injected_names_with_layers, injected_optional_fns, injected_per_request_method, injects_impls,
-    interceptor_specs, key_as_written, layer_deps, normalize_forwarded_args, nth_generic_type,
-    one_role_per_method, piped_input, posture_contradiction, reject_meta_on_operations,
-    scoped_specs, shared_receiver, site_const_ident, site_fn_ident, site_ref, spelled, tail_param,
-    takes_value, type_label, unit_of_work_required, unknown_argument, validate_argument, withheld,
+    HandlerSite, HostBorrow, HostMeta, InjectableBody, SitePosture, TailParam, VersionedEdge,
+    answer_span, authorized_entity, await_if_async, build_injectable_body, camel_case, cfg_attrs,
+    concrete_signature, delegated_attrs, exception_filter_specs, force_guard_typeids,
+    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
+    handler_const, handler_ref, host_meta_fn, host_runtime_entry, impl_self_ident,
+    injected_keys_with_layers, injected_methods_with_layers, injected_names_with_layers,
+    injected_optional_fns, injected_per_request_method, injects_impls, interceptor_specs,
+    key_as_written, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
+    piped_input, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
+    site_fn_ident, site_ref, spelled, tail_param, take_posture, takes_value, type_label,
+    unit_of_work_required, unknown_argument, validate_argument, withheld,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -239,18 +239,11 @@ enum AuthorizeArg {
     IdArg(Ident, Ident),
 }
 
-const AUTHORIZE: nest_rs_codegen::Grammar =
-    nest_rs_codegen::Grammar::new("authorize", &["bind", "id_arg"]);
+/// The keys an operation's posture takes beside its action and subject.
+const POSTURE_KEYS: &[&str] = &["bind", "id_arg"];
 
-const PUBLIC: nest_rs_codegen::Grammar =
-    nest_rs_codegen::Grammar::new("public", &["bind", "id_arg"]);
-
-/// One token of `#[word(...)]`, whose keys are `grammar`'s.
-fn posture_arg(
-    input: syn::parse::ParseStream,
-    word: PostureWord,
-    grammar: &nest_rs_codegen::Grammar,
-) -> syn::Result<AuthorizeArg> {
+/// One token of `#[word(...)]`.
+fn posture_arg(input: syn::parse::ParseStream, word: &'static str) -> syn::Result<AuthorizeArg> {
     if input.peek(Ident) && input.peek2(Token![=]) {
         let name: Ident = input.parse()?;
         input.parse::<Token![=]>()?;
@@ -272,7 +265,7 @@ fn posture_arg(
             let spelled = name.to_string();
             Err(syn::Error::new_spanned(
                 name,
-                unknown_argument(word.as_str(), &spelled, grammar.keys()),
+                unknown_argument(word, &spelled, POSTURE_KEYS),
             ))
         }
     } else {
@@ -284,16 +277,15 @@ fn posture_arg(
 }
 
 fn refused(
-    word: PostureWord,
+    word: &'static str,
     key: &'static str,
     takes: &'static str,
 ) -> impl Fn(syn::Error) -> syn::Error {
-    move |stopped| syn::Error::new(stopped.span(), takes_value(word.as_str(), Some(key), takes))
+    move |stopped| syn::Error::new(stopped.span(), takes_value(word, Some(key), takes))
 }
 
 /// The posture's shape refusal, in the words of the attribute `word` names.
-fn posture_shape(word: PostureWord) -> String {
-    let word = word.as_str();
+fn posture_shape(word: &str) -> String {
     format!(
         "expected `#[{word}(Action, Subject)]` — e.g. `#[{word}(Read, users::Entity)]`; append \
          `unmasked` to keep the class gate but mask the response yourself. `bind = Service` \
@@ -310,44 +302,9 @@ const POSTURE_REQUIRED: &str = "every `#[query]`/`#[mutation]`/`#[subscription]`
      (a caller with no credential is admitted, and the operation reads nothing a grant guards — \
      `#[use_guards]` guards still run)";
 
-/// What an operation declares about who may call it: what it gates on where it
-/// names a subject, and whether it is `#[public]`, named or bare.
-fn take_posture(
-    attrs: &mut Vec<Attribute>,
-    method: &Ident,
-) -> syn::Result<(Option<AuthorizeSpec>, bool)> {
-    let authorize = take_authorize(attrs)?;
-    let public = nest_rs_codegen::take_single_attr(attrs, PostureWord::Public.as_str())?;
-    match (authorize, public) {
-        (Some(_), Some(_)) => Err(syn::Error::new_spanned(method, posture_contradiction())),
-        (Some(gate), None) => Ok((Some(gate), false)),
-        (None, Some(attr)) if matches!(attr.meta, syn::Meta::Path(_)) => Ok((None, true)),
-        (None, Some(attr)) => Ok((Some(gate_of(&attr, PostureWord::Public)?), true)),
-        (None, None) => Ok((None, false)),
-    }
-}
-
-fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpec>> {
-    let Some(pos) = attrs.iter().position(|a| a.path().is_ident("authorize")) else {
-        return Ok(None);
-    };
-    let attr = attrs.remove(pos);
-    if attrs.iter().any(|a| a.path().is_ident("authorize")) {
-        return Err(syn::Error::new_spanned(
-            &attr,
-            at_most_one_authorize("operation"),
-        ));
-    }
-    gate_of(&attr, PostureWord::Authorize).map(Some)
-}
-
 /// Read `#[word(Action, Subject)]`, `#[word(Action, Subject, unmasked)]` or
 /// `#[word(Action, bind = Service)]`.
-fn gate_of(attr: &Attribute, word: PostureWord) -> syn::Result<AuthorizeSpec> {
-    let grammar = match word {
-        PostureWord::Authorize => AUTHORIZE,
-        PostureWord::Public => PUBLIC,
-    };
+fn gate_of(attr: &Attribute, word: &'static str) -> syn::Result<AuthorizeSpec> {
     let shape_err = || syn::Error::new_spanned(attr, posture_shape(word));
     if !matches!(attr.meta, syn::Meta::List(_)) {
         return Err(shape_err());
@@ -355,7 +312,7 @@ fn gate_of(attr: &Attribute, word: PostureWord) -> syn::Result<AuthorizeSpec> {
     let args: Vec<AuthorizeArg> = attr.parse_args_with(|input: syn::parse::ParseStream| {
         let mut args = Vec::new();
         while !input.is_empty() {
-            args.push(posture_arg(input, word, &grammar)?);
+            args.push(posture_arg(input, word)?);
             if !input.is_empty() {
                 input
                     .parse::<Token![,]>()
@@ -382,7 +339,7 @@ fn gate_of(attr: &Attribute, word: PostureWord) -> syn::Result<AuthorizeSpec> {
             }
         }
     }
-    grammar.take_all(&keys)?;
+    nest_rs_codegen::Grammar::new(word, POSTURE_KEYS).take_all(&keys)?;
     if id_arg.is_some() && bind.is_none() {
         return Err(syn::Error::new_spanned(
             attr,
@@ -1024,7 +981,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             meta: metas,
             ..
         } = take_layers(&pair::GRAPHQL, LayerScope::Method, &mut method.attrs)?;
-        let (authorize_spec, is_public) = take_posture(&mut method.attrs, &method.sig.ident)?;
+        let (authorize_spec, is_public) =
+            take_posture(&mut method.attrs, &method.sig.ident, "operation", gate_of)?;
         all_guard_paths.extend(
             method_guards
                 .iter()
@@ -1360,13 +1318,10 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 }
                 None => quote!(::core::option::Option::None),
             };
-            let subject = authorize_spec
-                .as_ref()
-                .map(|spec| (authz_entity(spec), spec.unmasked));
             let withheld = withheld(
-                subject
+                authorize_spec
                     .as_ref()
-                    .map(|(entity, unmasked)| (entity, *unmasked)),
+                    .map(|spec| (authz_entity(spec), spec.unmasked)),
             );
             let chain_site = if is_entity {
                 ChainSite::Entity

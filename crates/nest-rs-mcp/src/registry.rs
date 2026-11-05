@@ -376,25 +376,22 @@ fn check_postures(
             None => Ok(()),
         };
     }
-    let public = named(operations, |operation| {
-        operation.site.handler().posture() == Posture::Public
-    });
     let chain = carried_request_chain::<McpView>(container, "the MCP endpoints' request")?;
-    if chain.is_empty() {
-        return match public {
-            Some(operations) => Err(McpPostureError::PublicBehindDenial { operations }.into()),
-            None => Ok(()),
+    let identifying = identifying_guard(&chain);
+    if chain.is_empty() || identifying.is_some() {
+        let Some(operations) = named(operations, |operation| {
+            operation.site.handler().posture() == Posture::Public
+        }) else {
+            return Ok(());
         };
-    }
-    if let Some(entry) = identifying_guard(&chain) {
-        return match public {
-            Some(operations) => Err(McpPostureError::PublicBehindGuard {
+        return Err(match identifying {
+            Some(entry) => McpPostureError::PublicBehindGuard {
                 operations,
                 guard: nest_rs_core::__private::shorten(entry.name),
-            }
-            .into()),
-            None => Ok(()),
-        };
+            },
+            None => McpPostureError::PublicBehindDenial { operations },
+        }
+        .into());
     }
     let mut uncovered: Vec<String> = hand_written.iter().map(ToString::to_string).collect();
     for (host, operation) in operations {

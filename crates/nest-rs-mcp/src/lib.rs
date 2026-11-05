@@ -257,8 +257,9 @@ pub use nest_rs_mcp_macros::mcp;
 /// `#[authorize(Action, Subject)]` adds a gate and a reply mask, which are
 /// `nest-rs-authz`'s, and `#[public]` admits a caller with no credential, the one an
 /// endpoint the app opened takes when it declares no gate: bare it reads nothing a
-/// grant guards, and `#[public(Action, Subject)]` names what that caller reads. Its arguments are held to the rules their type declares, a
-/// refusal answered `invalid_params` before the body runs.
+/// grant guards, and `#[public(Action, Subject)]` names what that caller reads. Its
+/// arguments are held to the rules their type declares, a refusal answered
+/// `invalid_params` before the body runs.
 ///
 /// ```
 /// use std::sync::Arc;

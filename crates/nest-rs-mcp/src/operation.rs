@@ -13,7 +13,6 @@ use nest_rs_core::__private::{
     GlobalLayers, GuardStage, HandlerDeclaration, MetaLevels, ResolvedLayer, Site, SiteDeclaration,
     SiteLayers, Tail, compose_chain, declare_handler, declare_site, dedup_bucket, dispatch,
     log_effective_chain, new_unit_context, report_unresolved, resolve_scoped, settled,
-    withhold_from_reads,
 };
 use nest_rs_core::LayerSite;
 use nest_rs_core::{
@@ -21,8 +20,8 @@ use nest_rs_core::{
     anyhow,
 };
 use nest_rs_guards::__private::{
-    GuardSpec, RefusalMark, check_guards, identifying_guard, resolve_global_guards,
-    validate_carried_chain,
+    GuardSpec, RefusalMark, carried_stage_idle, check_guards, identifying_guard,
+    resolve_global_guards, validate_carried_chain,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::carried_request_chain;
@@ -180,9 +179,7 @@ pub fn operation_guard_stage(
             .map_err(|unresolved| unresolved.to_string()),
     };
     validate_carried_chain(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
-    // No guard at all, here or at the request: nothing was attached to withhold.
-    let withholds = declared.withheld && !request_chain().map_err(anyhow::Error::msg)?.is_empty();
-    if chain.is_empty() && !withholds {
+    if carried_stage_idle(&chain, declared.withheld, request_chain).map_err(anyhow::Error::msg)? {
         return Ok(None);
     }
     Ok(Some(Arc::new(OperationGuardStage {
@@ -201,13 +198,9 @@ struct OperationGuardStage {
 impl GuardStage for OperationGuardStage {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
-            check_guards(&self.guards, None, cx)
+            check_guards(&self.guards, None, self.withheld, cx)
                 .await
-                .map_err(|refused| Failure::from(refused.into_denial(DENIED, cx)))?;
-            if self.withheld {
-                withhold_from_reads(cx);
-            }
-            Ok(())
+                .map_err(|refused| Failure::from(refused.into_denial(DENIED, cx)))
         })
     }
 

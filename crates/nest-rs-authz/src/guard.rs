@@ -7,7 +7,7 @@ use std::sync::Arc;
 use nest_rs_core::{
     Edge, Layer, MissingAmbientError, Posture, UnitContext, async_trait, injectable,
 };
-use nest_rs_guards::__private::UNAUTHENTICATED;
+use nest_rs_guards::__private::anonymous_denial;
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 
 use crate::gate::reason;
@@ -116,9 +116,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         if let Some(ability) = crate::context::carried(cx) {
             if ability.is_visitor() && states_no_posture(cx) {
-                return Err(
-                    Denial::unauthorized(UNAUTHENTICATED).with_reason(reason::ANONYMOUS_CALLER)
-                );
+                return Err(anonymous_denial());
             }
             return Ok(());
         }
@@ -126,19 +124,16 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             let built = self.actors(cx).unwrap_or_else(|| self.visitor());
             return attach(cx, built);
         }
-        let identified = cx.ambient::<F::Actor>().is_some();
-        let refused = Denial::unauthorized(match (identified, cx.edge()) {
-            (true, _) => {
+        let refused = Denial::unauthorized(match cx.edge() {
+            _ if cx.ambient::<F::Actor>().is_some() => {
                 "no ambient ability — the caller authenticated, and no ability guard ran at its request"
             }
-            (false, Some(Edge::Graphql)) => {
+            Some(Edge::Graphql) => {
                 "no ambient ability — authentication did not run on the GraphQL operation"
             }
-            (false, Some(Edge::Ws)) => "no ambient ability — WS connection did not authenticate",
-            (false, Some(Edge::Mcp)) => {
-                "no ambient ability — the MCP operation did not authenticate"
-            }
-            (false, _) => "no ambient ability — the unit's request did not authenticate",
+            Some(Edge::Ws) => "no ambient ability — WS connection did not authenticate",
+            Some(Edge::Mcp) => "no ambient ability — the MCP operation did not authenticate",
+            _ => "no ambient ability — the unit's request did not authenticate",
         });
         Err(refused.with_reason(reason::NO_AMBIENT_ABILITY))
     }

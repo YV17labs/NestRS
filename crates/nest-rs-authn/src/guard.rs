@@ -11,7 +11,7 @@ use nest_rs_core::{
     AmbientValue, Container, ContainerBuilder, Discoverable, Layer, Net, Posture,
     ProviderResidency, Unanswered, UnitContext, async_trait, within,
 };
-use nest_rs_guards::__private::{ANONYMOUS_CALLER, UNAUTHENTICATED};
+use nest_rs_guards::__private::anonymous_denial;
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardFor, GuardPhase, PrincipalClaim};
 use nest_rs_http::__private::RejectedCredential;
 use nest_rs_http::HttpView;
@@ -239,12 +239,11 @@ pub enum Verdict {
 /// Not an `async` function: its zero-sized future boxes into no allocation on
 /// every unit the pool admits.
 #[doc(hidden)]
-pub fn check_unit<'fut, P: AmbientValue>(
+pub fn check_unit<P: AmbientValue>(
     cx: &UnitContext<'_>,
-) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>> {
+) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send>> {
     if cx.reflector().posture() == Posture::Gated && cx.ambient::<P>().is_none() {
-        let refused = Denial::unauthorized(UNAUTHENTICATED).with_reason(ANONYMOUS_CALLER);
-        return Box::pin(std::future::ready(Err(refused)));
+        return Box::pin(std::future::ready(Err(anonymous_denial())));
     }
     Box::pin(std::future::poll_fn(|_| Poll::Ready(Ok(()))))
 }
@@ -351,6 +350,7 @@ mod tests {
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, declare_unit};
     use nest_rs_core::operation_log::Kind;
     use nest_rs_core::{Handler, UnitView, with_ambient};
+    use nest_rs_guards::__private::{ANONYMOUS_CALLER, UNAUTHENTICATED};
     use nest_rs_http::Request;
 
     use super::*;

@@ -601,13 +601,11 @@ struct FieldSite<'a> {
     force_guards: &'a [Path],
     interceptors: &'a [Path],
     exception_filters: &'a [Path],
-    /// The posture's class gate, an `Option<ClassGate>` expression.
-    gate: TokenStream2,
+    /// The class gate the posture declares, a `ClassGate` expression.
+    gate: Option<TokenStream2>,
     /// Whether the posture withholds the ability from the field's reads, a
     /// `bool` expression.
     withheld: TokenStream2,
-    /// Whether the posture declares a class gate.
-    gated: bool,
 }
 
 /// The hidden items declaring a field's site beside its handler: the function
@@ -628,8 +626,12 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         exception_filters,
         gate,
         withheld,
-        gated,
     } = site;
+    let gated = gate.is_some();
+    let gate = match gate {
+        Some(gate) => quote!(::core::option::Option::Some(#gate)),
+        None => quote!(::core::option::Option::None),
+    };
     let name = site_const_ident("site", method);
     let layers_fn = site_fn_ident("layers", method);
     let guards_fn = site_fn_ident("guards", method);
@@ -1077,9 +1079,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 force_guards: &force_method_guards,
                 interceptors: &method_interceptors,
                 exception_filters: &method_exception_filters,
-                gate: quote!(::core::option::Option::None),
+                gate: None,
                 withheld: quote!(false),
-                gated: false,
             }));
             site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
             let FieldMethod {
@@ -1313,16 +1314,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     quote!(<#service as ::nest_rs_seaorm::CrudService>::Entity)
                 }
             };
-            let gate = match authorize_spec.as_ref() {
-                Some(spec) => {
-                    let action = &spec.action;
-                    let entity = authz_entity(spec);
-                    quote! {
-                        ::core::option::Option::Some(::nest_rs_authz::class_gate::<#action, #entity>)
-                    }
-                }
-                None => quote!(::core::option::Option::None),
-            };
+            let gate = authorize_spec.as_ref().map(|spec| {
+                let action = &spec.action;
+                let entity = authz_entity(spec);
+                quote!(::nest_rs_authz::class_gate::<#action, #entity>)
+            });
             let withheld = withheld(
                 authorize_spec
                     .as_ref()
@@ -1345,7 +1341,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 exception_filters: &method_exception_filters,
                 gate,
                 withheld,
-                gated: authorize_spec.is_some(),
             }));
             site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
             // After the class gate, so a class-denied caller never reaches the database.

@@ -785,8 +785,7 @@ mod graphql {
     use nest_rs_graphql::async_graphql::{Result as GraphqlResult, SimpleObject};
     use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
 
-    use nest_rs_http::{EndpointGuards, HttpModule};
-    use nest_rs_http::{StatusCode, header};
+    use nest_rs_http::{EndpointGuards, HttpModule, StatusCode, header};
     use nest_rs_testing::{LogCapture, TestApp};
 
     use super::{
@@ -923,11 +922,7 @@ mod graphql {
             .send()
             .await;
         answered.assert_status(StatusCode::OK);
-        answered
-            .json()
-            .await
-            .value()
-            .deserialize::<serde_json::Value>()
+        answered.json().await.value().deserialize()
     }
 
     /// `body` refused for want of a principal, as every gated unit is.

@@ -71,10 +71,8 @@ pub fn message_guard_stage(
     if declared.gate.is_some() {
         validate_gate_reached(&site, &guards, upgrade_chain)
             .map_err(nest_rs_core::anyhow::Error::msg)?;
-    }
-    if declared.gate.is_none()
-        && carried_stage_idle(&guards, declared.withheld, upgrade_chain)
-            .map_err(nest_rs_core::anyhow::Error::msg)?
+    } else if carried_stage_idle(&guards, declared.withheld, upgrade_chain)
+        .map_err(nest_rs_core::anyhow::Error::msg)?
     {
         return Ok(None);
     }

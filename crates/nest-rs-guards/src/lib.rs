@@ -120,7 +120,7 @@ pub mod __private {
 
     pub use crate::chain::{GlobalBucket, SiteChainSources, compose_site_chain, split_at_covered};
     pub use crate::denial::{
-        ANONYMOUS_CALLER, UNAUTHENTICATED, denial_of, required_principal_absent,
+        ANONYMOUS_CALLER, UNAUTHENTICATED, anonymous_denial, denial_of, required_principal_absent,
     };
     pub use crate::reason::{client_message, denial_code, denial_reason};
     pub use crate::registry::{

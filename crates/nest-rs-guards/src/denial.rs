@@ -240,6 +240,11 @@ pub const UNAUTHENTICATED: &str = "unauthenticated";
 /// The reason a denial of a caller no principal backs names.
 pub const ANONYMOUS_CALLER: &str = "anonymous_caller";
 
+/// The refusal of a caller no principal backs.
+pub fn anonymous_denial() -> Denial {
+    Denial::unauthorized(UNAUTHENTICATED).with_reason(ANONYMOUS_CALLER)
+}
+
 /// The principal `guard` declares requiring, when `denial` is its `require`
 /// finding it absent: the boot proved a guard attaching it runs ahead, so the
 /// absence is a caller that guard admitted without one.
@@ -256,7 +261,7 @@ pub fn required_principal_absent(denial: &Denial, guard: &dyn crate::Guard) -> O
 /// requires absent; `denial` itself for any other.
 pub(crate) fn by_cause(denial: Denial, guard: &dyn crate::Guard) -> Denial {
     match required_principal_absent(&denial, guard) {
-        Some(_) => Denial::unauthorized(UNAUTHENTICATED).with_reason(ANONYMOUS_CALLER),
+        Some(_) => anonymous_denial(),
         None => denial,
     }
 }

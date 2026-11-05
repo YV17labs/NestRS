@@ -83,8 +83,8 @@ fn validate(
     chain: &[ResolvedLayer<dyn Guard>],
     warns: impl Fn(&ResolvedLayer<dyn Guard>) -> bool,
 ) -> Result<(), String> {
-    let first_runs = first_runs(chain);
-    let chain = first_runs.as_slice();
+    let runs = first_runs(chain);
+    let chain = runs.as_slice();
     validate_phase_order(label, chain)?;
 
     let producers: Vec<(usize, &'static str, crate::PrincipalClaim)> = chain

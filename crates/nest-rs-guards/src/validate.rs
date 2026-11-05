@@ -38,21 +38,26 @@ pub fn validate_route_chain(label: &str, chain: &[ResolvedLayer<dyn Guard>]) -> 
     validate(label, chain, |entry| entry.source == LayerSite::Method)
 }
 
-fn validate(
-    label: &str,
-    chain: &[ResolvedLayer<dyn Guard>],
-    warns: impl Fn(&ResolvedLayer<dyn Guard>) -> bool,
-) -> Result<(), String> {
-    let first_runs: Vec<&ResolvedLayer<dyn Guard>> = chain
-        .iter()
-        .enumerate()
-        .filter(|(i, entry)| !chain[..*i].iter().any(|e| e.type_id == entry.type_id))
-        .map(|(_, entry)| entry)
-        .collect();
-    let chain = first_runs.as_slice();
-
-    let mut saw_authorization: Option<&'static str> = None;
+/// Each guard of `chain` where it first runs: a `#[force_guards]` replay is no
+/// second run of what it replays, nor a pooled guard at a unit of what its request
+/// ran.
+fn first_runs<'a>(
+    chain: impl IntoIterator<Item = &'a ResolvedLayer<dyn Guard>>,
+) -> Vec<&'a ResolvedLayer<dyn Guard>> {
+    let mut runs: Vec<&ResolvedLayer<dyn Guard>> = Vec::new();
     for entry in chain {
+        if !runs.iter().any(|run| run.type_id == entry.type_id) {
+            runs.push(entry);
+        }
+    }
+    runs
+}
+
+/// Refuse an `Authentication`-phase guard running after an `Authorization`-phase
+/// one in `runs`: what the second read was not attached yet.
+fn validate_phase_order(label: &str, runs: &[&ResolvedLayer<dyn Guard>]) -> Result<(), String> {
+    let mut saw_authorization: Option<&'static str> = None;
+    for entry in runs {
         match entry.layer.phase() {
             GuardPhase::Authorization => saw_authorization = Some(entry.name),
             GuardPhase::Authentication => {
@@ -60,8 +65,8 @@ fn validate(
                     return Err(format!(
                         "guard chain for {label} lists authentication guard `{}` after \
                          authorization guard `{}` — authentication must run first \
-                         so the principal it attaches is available; reorder the \
-                         `use_guards` declaration",
+                         so the principal it attaches is available, and a request's guards \
+                         run ahead of the units it carries; reorder the `use_guards` declaration",
                         shorten(entry.name),
                         shorten(authz),
                     ));
@@ -70,6 +75,17 @@ fn validate(
             GuardPhase::Other => {}
         }
     }
+    Ok(())
+}
+
+fn validate(
+    label: &str,
+    chain: &[ResolvedLayer<dyn Guard>],
+    warns: impl Fn(&ResolvedLayer<dyn Guard>) -> bool,
+) -> Result<(), String> {
+    let first_runs = first_runs(chain);
+    let chain = first_runs.as_slice();
+    validate_phase_order(label, chain)?;
 
     let producers: Vec<(usize, &'static str, crate::PrincipalClaim)> = chain
         .iter()
@@ -138,11 +154,12 @@ fn unattached(label: &str, guard: &str, expected: crate::PrincipalClaim) -> Stri
     )
 }
 
-/// The principal half of [`validate_guard_chain`] on a unit an in-band edge
-/// carries: each guard of its `unit` chain requiring a principal finds a guard
-/// attaching it there or in the chain its `request` ran, which the closure
-/// composes only for a chain that has such a guard. Ordering stays unchecked in
-/// band, and a guard doing without its principal reads what it finds.
+/// [`validate_guard_chain`] on a unit an in-band edge carries, whose `request`
+/// runs ahead of its `unit` chain: no authentication guard follows an authorization
+/// guard across the two, and each guard of `unit` requiring a principal finds a
+/// guard attaching it in either. The closure composes the request only for a chain
+/// holding such a guard, and a guard doing without its principal reads what it
+/// finds.
 pub fn validate_carried_chain(
     label: &str,
     unit: &[ResolvedLayer<dyn Guard>],
@@ -156,10 +173,14 @@ pub fn validate_carried_chain(
             (!expected.or_visitor).then_some((at, entry.name, expected))
         })
         .collect();
-    if required.is_empty() {
+    let authenticates = unit
+        .iter()
+        .any(|entry| entry.layer.phase() == GuardPhase::Authentication);
+    if required.is_empty() && !authenticates {
         return Ok(());
     }
     let request = request()?;
+    validate_phase_order(label, &first_runs(request.iter().chain(unit)))?;
     for (at, guard, expected) in required {
         let attached = request.iter().chain(&unit[..at]).any(|entry| {
             entry
@@ -405,6 +426,46 @@ mod tests {
             !idle(&[entry(Authn, "Authn")], false, false),
             "its own guard"
         );
+    }
+
+    #[test]
+    fn a_carried_chain_listing_authentication_after_authorization_is_refused() {
+        let refused = validate_carried_chain(
+            "field",
+            &[entry(Authz, "Authz"), entry(Authn, "Authn")],
+            || Ok(Vec::new()),
+        )
+        .expect_err("what authorization read was not attached yet");
+        assert!(refused.contains("field"), "{refused}");
+        assert!(refused.contains("after authorization guard"), "{refused}");
+    }
+
+    #[test]
+    fn a_carried_chain_authenticating_after_its_requests_authorization_is_refused() {
+        let refused = validate_carried_chain("field", &[entry(Authn, "Authn")], || {
+            Ok(vec![entry(Authz, "Authz")])
+        })
+        .expect_err("the ability its request built read no principal");
+        assert!(refused.contains("after authorization guard"), "{refused}");
+    }
+
+    #[test]
+    fn a_carried_chain_replaying_what_its_request_ran_keeps_its_first_run() {
+        let request = || Ok(vec![entry(Authn, "Authn"), entry(Authz, "Authz")]);
+        validate_carried_chain(
+            "field",
+            &[entry(Authn, "Authn"), entry(Authz, "Authz")],
+            request,
+        )
+        .expect("the pool at a unit is what its request already ran");
+        let mut replay = entry(Authn, "Authn");
+        replay.source = LayerSite::Method;
+        validate_carried_chain(
+            "field",
+            &[entry(Authn, "Authn"), entry(Authz, "Authz"), replay],
+            || Ok(Vec::new()),
+        )
+        .expect("a forced replay read what the first run attached");
     }
 
     #[test]

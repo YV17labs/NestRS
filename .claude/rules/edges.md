@@ -439,8 +439,9 @@ adds no line to the root, and writing it is the visible opening.
   guard declaring `GuardFor<HttpView>` and writing only `check` refuses with
   it, and none admits by default
   (`.claude/decisions/check-http-stays-on-guard.md`).
-- **Only route mounts (global, controller and method scope composed), the global
-  bucket and a self-mount's request stage are phase-validated**
+- **Every chain is phase-validated**: route mounts (global, controller and method
+  scope composed), the global bucket, a self-mount's request stage, and a unit an
+  in-band edge carries, read after the chain its request ran
   (`.claude/decisions/in-band-phase-validation.md`); **MCP discovery is gated at
   the transport**, where the specification places it
   (`.claude/decisions/mcp-discovery-at-transport.md`).

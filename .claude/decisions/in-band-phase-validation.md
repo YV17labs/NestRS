@@ -39,3 +39,24 @@ second pass). An in-band unit's guard requiring its principal
 chain and the one the request carrying it runs, whose `check_http` is what attaches.
 That is the notion of "produces" this entry waited for, and only that half needs it:
 ordering and a guard doing without its principal stay Deferred.
+
+## 2026-11-05 — ordering is held in band, before 7.0 publishes
+
+Under the owner's words of 2026-11-05. "Additive" no longer holds: the semver page
+makes a new refusal a break, so this one added after 7.0 stops an app that boots, and
+every site already reaches `validate_carried_chain` at wiring. `validate`'s loop and
+its first-run rule are one function both call, and an in-band chain listing
+authentication after authorization refuses the boot. It reads the request's chain
+ahead of the unit's, so a pooled guard is where its request ran it, and an
+authentication guard at a unit whose request ran an ability guard is refused too: the
+ability was built before its principal existed, so every gated call answers `401`. The
+closure composes the request only for a chain holding an authentication guard, a
+pooled `AuthnGuard` among them, once per site at boot.
+
+**Refused:** reading the unit's chain alone, the narrower fix: it leaves that second
+misorder booting and refusing everyone with nothing to say why, this entry's first
+sentence.
+
+What it leaves: the phase is its author's word, which no type can check, and a
+hand-written MCP `ServerHandler` has no chain to read.
+

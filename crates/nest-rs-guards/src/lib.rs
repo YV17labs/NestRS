@@ -76,8 +76,9 @@
 //! same pool; its example runs it.
 //!
 //! Declaration order is the runtime order. List `AuthzGuard` before
-//! `AuthnGuard` — globally, on a controller or gateway, or beside one route —
-//! and the boot fails naming both, instead of every request answering `500`.
+//! `AuthnGuard` — globally, on a controller or gateway, beside one route or on
+//! a unit an in-band edge carries — and the boot fails naming both, instead of
+//! every request answering `500`.
 //!
 //! The pool holds `Arc<dyn Guard>` and runs whichever entry a site calls,
 //! declared or not: `check_http` at every route and request stage — the

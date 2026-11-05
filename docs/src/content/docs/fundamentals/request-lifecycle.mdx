@@ -159,7 +159,8 @@ layer and the site. No site ever runs without a layer it declares.
 A route whose guards are misordered — an authorization guard listed before the
 authentication guard whose principal it reads, at any scope — fails the boot
 naming both, rather than answering `500` to every request; a global pool listed
-that way fails it in an app serving no route too.
+that way fails it in an app serving no route too, and so does a GraphQL field, a
+WebSocket message or an MCP operation, read after the guards its request ran.
 
 <Aside type="caution">
 These are boot-time failures, by design. A missing guard module is a compile-

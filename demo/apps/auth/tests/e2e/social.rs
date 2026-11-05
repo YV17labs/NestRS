@@ -6,7 +6,7 @@ use super::harness::*;
 
 #[tokio::test]
 async fn the_social_authorize_endpoint_redirects_to_the_provider() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let resp = app.http().get("/social/github/authorize").send().await;
     resp.assert_status(StatusCode::FOUND);
     resp.assert_header_exist("location");
@@ -23,7 +23,7 @@ async fn the_social_authorize_endpoint_redirects_to_the_provider() {
 
 #[tokio::test]
 async fn the_provider_path_segment_is_case_insensitive() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let resp = app.http().get("/social/GitHub/authorize").send().await;
     resp.assert_status(StatusCode::FOUND);
     let location = resp.0.headers().get("location").expect("location header");
@@ -38,7 +38,7 @@ async fn the_provider_path_segment_is_case_insensitive() {
 
 #[tokio::test]
 async fn a_configured_provider_that_is_not_imported_is_unknown() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     app.http()
         .get("/social/gitlab/authorize")
         .send()
@@ -48,7 +48,7 @@ async fn a_configured_provider_that_is_not_imported_is_unknown() {
 
 #[tokio::test]
 async fn the_social_callback_rejects_a_forged_state() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     app.http()
         .get("/social/github/callback?code=abc&state=forged")
         .send()
@@ -59,7 +59,7 @@ async fn the_social_callback_rejects_a_forged_state() {
 #[tokio::test]
 async fn the_social_callback_reads_the_transaction_cookie_the_redirect_set() {
     let logs = LogCapture::install();
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let authorize = app.http().get("/social/github/authorize").send().await;
     let set_cookie = authorize
         .0
@@ -95,7 +95,7 @@ async fn the_social_callback_reads_the_transaction_cookie_the_redirect_set() {
 
 #[tokio::test]
 async fn the_social_authorize_endpoint_refuses_a_resource_the_issuer_does_not_serve() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let resp = app
         .http()
         .get("/social/github/authorize")
@@ -110,7 +110,7 @@ async fn the_social_authorize_endpoint_refuses_a_resource_the_issuer_does_not_se
 #[tokio::test]
 async fn a_provider_refusal_at_the_callback_signs_no_one_in() {
     let logs = LogCapture::install();
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let authorize = app
         .http()
         .get("/social/github/authorize")

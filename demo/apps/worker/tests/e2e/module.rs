@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use features::notifications::{Column, Entity, NotifyCommand, NotifyQueue};
-use features::testing::RedisDatabase;
+use features::testing::{RedisDatabase, connection};
 use nest_rs::core::module;
 use nest_rs::queue::{Jobs, PushReceipt, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::schedule::Scheduler;
-use nest_rs::testing::{EphemeralDatabase, HeadlessApp};
+use nest_rs::testing::HeadlessApp;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 use uuid::Uuid;
 use worker::WorkerModule;
@@ -44,12 +44,9 @@ async fn notifications(conn: &DatabaseConnection, org_id: Uuid) -> u64 {
 
 #[tokio::test]
 async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suites() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
     let worker = HeadlessApp::builder()
         .module::<WorkerModule>()
-        .provide_arc(db.connection())
+        .ephemeral_database::<migrations::Migrator>()
         .provide(RedisDatabase::WorkerRuns.config())
         .build_headless()
         .await
@@ -69,7 +66,7 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
     let ours = Uuid::now_v7();
     notify(&worker, ours).await;
 
-    let conn = db.connection();
+    let conn = connection(worker.container());
     let mut ran = false;
     for _ in 0..60 {
         if notifications(&conn, ours).await == 1 {
@@ -100,12 +97,9 @@ async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suit
 
 #[tokio::test]
 async fn worker_app_binds_the_lock_its_one_replica_purge_claims_through() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
     let worker = HeadlessApp::builder()
         .module::<WorkerModule>()
-        .provide_arc(db.connection())
+        .ephemeral_database::<migrations::Migrator>()
         .build_headless()
         .await
         .expect("WorkerModule boots against the throwaway database and Redis");

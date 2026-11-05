@@ -11,13 +11,13 @@ use crate::*;
 
 #[tokio::test]
 async fn users_are_scoped_to_their_org_and_bound_by_id() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org_a = create_org(&app, &bootstrap, "Acme").await;
     let org_b = create_org(&app, &bootstrap, "Globex").await;
-    let token_a = format!("Bearer {}", token_for(&org_a, "admin").await);
-    let token_b = format!("Bearer {}", token_for(&org_b, "admin").await);
+    let token_a = sign(&app, org_a, Role::Admin);
+    let token_b = sign(&app, org_b, Role::Admin);
 
     let created = app
         .http()
@@ -100,14 +100,13 @@ mod user_row {
 
 #[tokio::test]
 async fn writes_are_scoped_to_the_callers_ability() {
-    let (db, app) = boot().await;
+    let app = boot().await;
 
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org_a = create_org(&app, &bootstrap, "Acme Writes").await;
     let org_b = create_org(&app, &bootstrap, "Globex Writes").await;
-    let token_a = format!("Bearer {}", token_for(&org_a, "admin").await);
-    let token_b = format!("Bearer {}", token_for(&org_b, "admin").await);
-    let org_b_id = Uuid::parse_str(&org_b).expect("valid org uuid");
+    let token_a = sign(&app, org_a, Role::Admin);
+    let token_b = sign(&app, org_b, Role::Admin);
 
     let created = app
         .http()
@@ -154,11 +153,11 @@ async fn writes_are_scoped_to_the_callers_ability() {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 
-    let conn = db.connection();
+    let conn = connection(app.container());
     let blocked = Arc::new({
         let mut b = AbilityBuilder::new();
         b.can(Action::Manage, user_row::Entity)
-            .when(move |p| p.eq(user_row::Column::OrgId, org_b_id));
+            .when(move |p| p.eq(user_row::Column::OrgId, org_b));
         b.build().expect("valid test ability")
     });
     let (update, delete) = app
@@ -187,7 +186,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
     );
 
     let survivor = user_row::Entity::find_by_id(user_a_id)
-        .one(&*db.connection())
+        .one(&*connection(app.container()))
         .await
         .expect("re-read user A")
         .expect("user A still exists");
@@ -207,7 +206,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
         .assert_status(StatusCode::NOT_FOUND);
 
     let tombstone = user_row::Entity::find_by_id(user_a_id)
-        .one(&*db.connection())
+        .one(&*connection(app.container()))
         .await
         .expect("re-read user A directly")
         .expect("soft-deleted user row remains in the database");
@@ -219,16 +218,13 @@ async fn writes_are_scoped_to_the_callers_ability() {
 
 #[tokio::test]
 async fn a_plain_user_get_by_id_masks_the_email() {
-    let (_db, app) = boot().await;
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &bootstrap, "Initech").await;
 
     app.http()
         .post("/users")
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {}", token_for(&org, "admin").await),
-        )
+        .header(header::AUTHORIZATION, sign(&app, org, Role::Admin))
         .body_json(&json!({ "name": "Bob", "email": "bob@initech.test" }))
         .send()
         .await
@@ -237,10 +233,7 @@ async fn a_plain_user_get_by_id_masks_the_email() {
     let listed = app
         .http()
         .get("/users")
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {}", token_for(&org, "admin").await),
-        )
+        .header(header::AUTHORIZATION, sign(&app, org, Role::Admin))
         .send()
         .await;
     listed.assert_status_is_ok();
@@ -257,7 +250,7 @@ async fn a_plain_user_get_by_id_masks_the_email() {
         .string()
         .to_owned();
 
-    let user = format!("Bearer {}", token_for(&org, "user").await);
+    let user = sign(&app, org, Role::User);
     let got = app
         .http()
         .get(format!("/users/{user_id}"))
@@ -276,22 +269,19 @@ async fn a_plain_user_get_by_id_masks_the_email() {
 
 #[tokio::test]
 async fn a_plain_user_listing_masks_the_email() {
-    let (_db, app) = boot().await;
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &bootstrap, "Initech").await;
 
     app.http()
         .post("/users")
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {}", token_for(&org, "admin").await),
-        )
+        .header(header::AUTHORIZATION, sign(&app, org, Role::Admin))
         .body_json(&json!({ "name": "Bob", "email": "bob@initech.test" }))
         .send()
         .await
         .assert_status(StatusCode::CREATED);
 
-    let user = format!("Bearer {}", token_for(&org, "user").await);
+    let user = sign(&app, org, Role::User);
     let listed = app
         .http()
         .get("/users")
@@ -316,10 +306,10 @@ async fn a_plain_user_listing_masks_the_email() {
 
 #[tokio::test]
 async fn a_failed_mutation_persists_nothing() {
-    let (_db, app) = boot().await;
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &bootstrap, "Hooli").await;
-    let admin = format!("Bearer {}", token_for(&org, "admin").await);
+    let admin = sign(&app, org, Role::Admin);
 
     app.http()
         .post("/users")
@@ -342,8 +332,8 @@ async fn a_failed_mutation_persists_nothing() {
 
 #[tokio::test]
 async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
 
     create_org(&app, &admin, "SameName").await;
     app.http()
@@ -355,7 +345,7 @@ async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
         .assert_status(StatusCode::CONFLICT);
 
     let org = create_org(&app, &admin, "Conflict").await;
-    let token = format!("Bearer {}", token_for(&org, "admin").await);
+    let token = sign(&app, org, Role::Admin);
     let body = json!({ "name": "Dup", "email": "dup@conflict.test" });
     app.http()
         .post("/users")
@@ -427,8 +417,8 @@ async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
 
 #[tokio::test]
 async fn crud_generated_update_and_delete_round_trip() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
 
     let id = create_org(&app, &admin, "Before").await;
 
@@ -488,12 +478,16 @@ async fn crud_generated_update_and_delete_round_trip() {
 
 #[tokio::test]
 async fn crud_cursor_pagination_walks_the_collection_in_order() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
 
     let mut created = Vec::new();
     for i in 0..5 {
-        created.push(create_org(&app, &admin, &format!("Page{i}")).await);
+        created.push(
+            create_org(&app, &admin, &format!("Page{i}"))
+                .await
+                .to_string(),
+        );
     }
 
     let mut seen: Vec<String> = Vec::new();

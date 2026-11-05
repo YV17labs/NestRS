@@ -6,8 +6,8 @@ use crate::*;
 
 #[tokio::test]
 async fn every_write_the_api_admits_is_audited_once_and_nothing_else_is() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
 
     let logs = LogCapture::install();
     create_org(&app, &admin, "AuditedAcme").await;

@@ -5,9 +5,8 @@ use crate::*;
 
 #[tokio::test]
 async fn create_org_persists_and_is_listed_with_a_bearer_token() {
-    let (_db, app) = boot().await;
-    let token = login().await;
-    let bearer = format!("Bearer {token}");
+    let app = boot().await;
+    let bearer = sign(&app, ORG_ID, Role::Admin);
     let name = "Acme E2E";
 
     let created = app
@@ -47,8 +46,8 @@ async fn create_org_persists_and_is_listed_with_a_bearer_token() {
 
 #[tokio::test]
 async fn orgs_admin_sees_all_but_a_plain_user_is_scoped_to_its_own() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
     let org_x = create_org(&app, &admin, "OrgX").await;
     let org_y = create_org(&app, &admin, "OrgY").await;
 
@@ -72,7 +71,7 @@ async fn orgs_admin_sees_all_but_a_plain_user_is_scoped_to_its_own() {
         "the admin sees every org: {admin_names:?}",
     );
 
-    let user_x = format!("Bearer {}", token_for(&org_x, "user").await);
+    let user_x = sign(&app, org_x, Role::User);
     let user_list = app
         .http()
         .get("/orgs")

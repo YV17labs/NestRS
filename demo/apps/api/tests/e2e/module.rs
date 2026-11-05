@@ -1,64 +1,47 @@
 use api::ApiModule;
 use features::Role;
-use features::authz::constants;
-use features::testing::{ASSISTANT, claims, client, signed_for};
-use nest_rs::authn::AuthnConfig;
+use features::testing::{API, ASSISTANT, with_claim};
 use nest_rs::http::{StatusCode, header};
 use nest_rs::schedule::Scheduler;
-use nest_rs::testing::{EphemeralDatabase, HeadlessApp, TestApp, TestResponse};
+use nest_rs::testing::{HeadlessApp, TestApp, TestResponse};
 
-use crate::{API, DEV_PUBLIC_KEY, ORG_ID};
+use crate::{ORG_ID, boot, claims, client};
 
 #[tokio::test]
 async fn the_api_requires_its_own_audience_read_from_its_own_file() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let app = TestApp::builder()
-        .module::<ApiModule>()
-        .provide_arc(db.connection())
-        .build()
-        .await
-        .expect("ApiModule boots on the configuration `nestrs run dev` reads");
-    let claims = claims(
-        ORG_ID.parse().expect("a valid org uuid"),
-        vec![Role::Admin],
-        client(),
-        constants::all(),
-    );
+    let app = boot().await;
+    let for_resource = |resource: &str| {
+        app.bearer(&with_claim(
+            claims(ORG_ID, Role::Admin, client()),
+            "aud",
+            resource,
+        ))
+    };
 
-    list_users(&app, &signed_for(ASSISTANT, &claims))
+    list_users(&app, &for_resource(ASSISTANT))
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
-    list_users(&app, &signed_for(API, &claims))
+    list_users(&app, &for_resource(API))
         .await
         .assert_status_is_ok();
 }
 
-async fn list_users(app: &TestApp, token: &str) -> TestResponse {
+async fn list_users(app: &TestApp, authorization: &str) -> TestResponse {
     app.http()
         .get("/users")
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::AUTHORIZATION, authorization)
         .send()
         .await
 }
 
 #[tokio::test]
 async fn api_app_binds_the_lock_its_one_replica_transcode_seed_claims_through() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
     let api = HeadlessApp::builder()
         .module::<ApiModule>()
-        .provide_arc(db.connection())
-        .provide(AuthnConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(API.into()),
-            ..Default::default()
-        })
+        .ephemeral_database::<migrations::Migrator>()
         .build_headless()
         .await
-        .expect("ApiModule boots against the throwaway database and Redis");
+        .expect("ApiModule boots against a throwaway database and Redis");
     let scheduler = api.spawn_transport(Scheduler::new()).await.expect(
         "the scheduler configures: the transcode seed declared replicas = \"one\" has a lock",
     );

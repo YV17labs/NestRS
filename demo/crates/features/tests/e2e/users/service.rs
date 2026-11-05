@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use features::orgs::ActiveModel as OrgActiveModel;
+use features::testing::seed_org;
 use features::users::{
     ActiveModel as UserActiveModel, Model, SocialIdentity, UserRole, UsersService,
 };
@@ -16,31 +16,8 @@ use uuid::Uuid;
 
 use crate::{connection, data_app};
 
-async fn seed_org(conn: &DatabaseConnection, id: Uuid) {
-    OrgActiveModel {
-        id: Set(id),
-        name: Set("Acme".to_owned()),
-        ..Default::default()
-    }
-    .insert(conn)
-    .await
-    .expect("seed org");
-}
-
 async fn seed_user(conn: &DatabaseConnection, org_id: Uuid, email: &str) -> Uuid {
-    UserActiveModel {
-        id: Set(Uuid::now_v7()),
-        org_id: Set(org_id),
-        name: Set("Seed".to_owned()),
-        email: Set(email.to_owned()),
-        role: Set(UserRole::User),
-        password_hash: Set(None),
-        ..Default::default()
-    }
-    .insert(conn)
-    .await
-    .expect("seed user")
-    .id
+    features::testing::seed_user(conn, org_id, "Seed", email, UserRole::User).await
 }
 
 fn github(subject: &str, email: &str, verified: bool) -> SocialIdentity {
@@ -131,9 +108,8 @@ async fn an_unknown_db_role_fails_to_load_rather_than_demoting_silently() {
     use sea_orm::EntityTrait;
 
     let app = data_app().await;
-    let conn = connection(&app);
-    let org_id = Uuid::now_v7();
-    seed_org(conn.as_ref(), org_id).await;
+    let conn = connection(app.container());
+    let org_id = seed_org(conn.as_ref(), "Acme").await;
 
     let rogue = Uuid::now_v7();
     let stmt = Statement::from_sql_and_values(
@@ -157,9 +133,8 @@ async fn an_unknown_db_role_fails_to_load_rather_than_demoting_silently() {
 #[tokio::test]
 async fn a_known_identity_wins_over_a_drifted_email() {
     let app = data_app().await;
-    let conn = connection(&app);
-    let org_id = Uuid::now_v7();
-    seed_org(conn.as_ref(), org_id).await;
+    let conn = connection(app.container());
+    let org_id = seed_org(conn.as_ref(), "Acme").await;
 
     let created = sign_in(&app, &github("42", "ada@first.example", true), org_id)
         .await
@@ -190,9 +165,8 @@ async fn a_known_identity_wins_over_a_drifted_email() {
 #[tokio::test]
 async fn a_verified_email_links_to_an_existing_account_exactly_once() {
     let app = data_app().await;
-    let conn = connection(&app);
-    let org_id = Uuid::now_v7();
-    seed_org(conn.as_ref(), org_id).await;
+    let conn = connection(app.container());
+    let org_id = seed_org(conn.as_ref(), "Acme").await;
     let carol = seed_user(conn.as_ref(), org_id, "carol@example.com").await;
 
     let first = sign_in(&app, &github("77", "carol@example.com", true), org_id)
@@ -220,9 +194,8 @@ async fn a_verified_email_links_to_an_existing_account_exactly_once() {
 #[tokio::test]
 async fn an_unverified_email_never_links_to_an_existing_account() {
     let app = data_app().await;
-    let conn = connection(&app);
-    let org_id = Uuid::now_v7();
-    seed_org(conn.as_ref(), org_id).await;
+    let conn = connection(app.container());
+    let org_id = seed_org(conn.as_ref(), "Acme").await;
     seed_user(conn.as_ref(), org_id, "dave@example.com").await;
 
     let outcome = sign_in(&app, &github("7", "dave@example.com", false), org_id).await;
@@ -246,9 +219,8 @@ async fn an_unverified_email_never_links_to_an_existing_account() {
 #[tokio::test]
 async fn an_unknown_verified_identity_provisions_a_user_and_its_identity() {
     let app = data_app().await;
-    let conn = connection(&app);
-    let org_id = Uuid::now_v7();
-    seed_org(conn.as_ref(), org_id).await;
+    let conn = connection(app.container());
+    let org_id = seed_org(conn.as_ref(), "Acme").await;
 
     let user = sign_in(&app, &github("1000", "erin@example.com", true), org_id)
         .await
@@ -275,9 +247,8 @@ async fn an_unknown_verified_identity_provisions_a_user_and_its_identity() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_first_logins_resolve_to_a_single_user() {
     let app = data_app().await;
-    let conn = connection(&app);
-    let org_id = Uuid::now_v7();
-    seed_org(conn.as_ref(), org_id).await;
+    let conn = connection(app.container());
+    let org_id = seed_org(conn.as_ref(), "Acme").await;
 
     let frank = github("999", "frank@example.com", true);
     let (u1, u2) = tokio::join!(sign_in(&app, &frank, org_id), sign_in(&app, &frank, org_id));
@@ -317,7 +288,7 @@ async fn sign_in_beside(
     org_id: Uuid,
     rival: DatabaseTransaction,
 ) -> Result<Model, AuthError> {
-    let conn = connection(app);
+    let conn = connection(app.container());
     let rival_commits = async {
         wait_for(Duration::from_secs(10), || {
             a_statement_waits_on_a_lock(&conn)
@@ -332,9 +303,8 @@ async fn sign_in_beside(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_mutating_request_linking_an_identity_a_rival_just_linked_commits() {
     let app = data_app().await;
-    let conn = connection(&app);
-    let org_id = Uuid::now_v7();
-    seed_org(conn.as_ref(), org_id).await;
+    let conn = connection(app.container());
+    let org_id = seed_org(conn.as_ref(), "Acme").await;
     let carol = seed_user(conn.as_ref(), org_id, "carol@example.com").await;
 
     let rival = conn.begin().await.expect("a rival login");
@@ -359,9 +329,8 @@ async fn a_mutating_request_linking_an_identity_a_rival_just_linked_commits() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_mutating_request_provisioning_a_user_a_rival_just_created_links_it_and_commits() {
     let app = data_app().await;
-    let conn = connection(&app);
-    let org_id = Uuid::now_v7();
-    seed_org(conn.as_ref(), org_id).await;
+    let conn = connection(app.container());
+    let org_id = seed_org(conn.as_ref(), "Acme").await;
 
     let rival = conn.begin().await.expect("a rival login");
     let frank = UserActiveModel {

@@ -1,6 +1,6 @@
-use features::Role;
 use features::authz::constants;
-use features::testing::{ASSISTANT, ORG_ID, client, token_with_scopes};
+use features::testing::{ORG_ID, claims, client};
+use features::{Claims, Role};
 use nest_rs::testing::mcp::{call_method, call_tool, open_session, result};
 use serde_json::json;
 
@@ -8,14 +8,14 @@ use crate::*;
 
 #[tokio::test]
 async fn a_repo_backed_tool_reads_rows_through_the_ambient_executor() {
-    let (db, app) = boot().await;
-    let org_id = seed_org_with_post(&db.connection(), "Acme", "acme-only-post").await;
+    let app = boot().await;
+    let org_id = seed_org_with_post(&app, "Acme", "acme-only-post").await;
 
     let body = call_tool(
         app.http(),
         POSTS_ENDPOINT,
         "list_posts",
-        Some(&bearer_for(&org_id.to_string())),
+        Some(&sign(&app, org_id)),
     )
     .await;
 
@@ -28,16 +28,15 @@ async fn a_repo_backed_tool_reads_rows_through_the_ambient_executor() {
 
 #[tokio::test]
 async fn a_tool_never_sees_another_orgs_rows() {
-    let (db, app) = boot().await;
-    let conn = db.connection();
-    let acme = seed_org_with_post(&conn, "Acme", "acme-only-post").await;
-    seed_org_with_post(&conn, "Globex", "globex-only-post").await;
+    let app = boot().await;
+    let acme = seed_org_with_post(&app, "Acme", "acme-only-post").await;
+    seed_org_with_post(&app, "Globex", "globex-only-post").await;
 
     let body = call_tool(
         app.http(),
         POSTS_ENDPOINT,
         "list_posts",
-        Some(&bearer_for(&acme.to_string())),
+        Some(&sign(&app, acme)),
     )
     .await;
 
@@ -54,12 +53,11 @@ async fn a_tool_never_sees_another_orgs_rows() {
 
 #[tokio::test]
 async fn a_prompt_is_row_filtered_like_a_tool() {
-    let (db, app) = boot().await;
-    let conn = db.connection();
-    let acme = seed_org_with_post(&conn, "Acme", "acme-only-post").await;
-    seed_org_with_post(&conn, "Globex", "globex-only-post").await;
+    let app = boot().await;
+    let acme = seed_org_with_post(&app, "Acme", "acme-only-post").await;
+    seed_org_with_post(&app, "Globex", "globex-only-post").await;
 
-    let bearer = bearer_for(&acme.to_string());
+    let bearer = sign(&app, acme);
     let session = open_session(app.http(), POSTS_ENDPOINT, Some(&bearer)).await;
     let body = call_method(
         app.http(),
@@ -85,12 +83,11 @@ async fn a_prompt_is_row_filtered_like_a_tool() {
 
 #[tokio::test]
 async fn a_resource_read_of_another_orgs_row_or_a_malformed_uri_is_not_found_quoting_neither() {
-    let (db, app) = boot().await;
-    let conn = db.connection();
-    let acme = seed_org_with_post(&conn, "Acme", "acme-only-post").await;
-    let globex = seed_org_with_post(&conn, "Globex", "globex-only-post").await;
+    let app = boot().await;
+    let acme = seed_org_with_post(&app, "Acme", "acme-only-post").await;
+    let globex = seed_org_with_post(&app, "Globex", "globex-only-post").await;
 
-    let acme_bearer = bearer_for(&acme.to_string());
+    let acme_bearer = sign(&app, acme);
     let session = open_session(app.http(), POSTS_ENDPOINT, Some(&acme_bearer)).await;
     let listed = call_method(
         app.http(),
@@ -132,7 +129,7 @@ async fn a_resource_read_of_another_orgs_row_or_a_malformed_uri_is_not_found_quo
         "the caller reads its own org's post through the template: {own}",
     );
 
-    let globex_bearer = bearer_for(&globex.to_string());
+    let globex_bearer = sign(&app, globex);
     let session = open_session(app.http(), POSTS_ENDPOINT, Some(&globex_bearer)).await;
     for asked in [uri.as_str(), "post://not-a-uuid"] {
         let denied = call_method(
@@ -158,17 +155,11 @@ async fn a_resource_read_of_another_orgs_row_or_a_malformed_uri_is_not_found_quo
 
 #[tokio::test]
 async fn a_token_without_the_read_scope_is_refused_every_posts_operation_by_name() {
-    let (_db, app) = boot().await;
-    let narrowed = format!(
-        "Bearer {}",
-        token_with_scopes(
-            ASSISTANT,
-            ORG_ID.parse().expect("a valid org uuid"),
-            vec![Role::Admin],
-            client(),
-            vec![constants::AUDIO_TRANSCODE.into()],
-        )
-    );
+    let app = boot().await;
+    let narrowed = app.bearer(&Claims {
+        scopes: vec![constants::AUDIO_TRANSCODE.into()],
+        ..claims(ORG_ID, Role::Admin, client())
+    });
 
     let listed = call_tool(app.http(), POSTS_ENDPOINT, "list_posts", Some(&narrowed)).await;
     let session = open_session(app.http(), POSTS_ENDPOINT, Some(&narrowed)).await;

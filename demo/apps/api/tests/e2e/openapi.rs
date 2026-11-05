@@ -5,7 +5,7 @@ use crate::*;
 
 #[tokio::test]
 async fn openapi_document_describes_the_routes() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let resp = app.http().get("/api-json").send().await;
     resp.assert_status_is_ok();
     let bytes = resp.0.into_body().into_bytes().await.expect("body");
@@ -191,7 +191,7 @@ async fn openapi_document_describes_the_routes() {
 
 #[tokio::test]
 async fn the_committed_document_is_the_one_the_app_serves() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let resp = app.http().get("/api-json").send().await;
     resp.assert_status_is_ok();
     let bytes = resp.0.into_body().into_bytes().await.expect("body");

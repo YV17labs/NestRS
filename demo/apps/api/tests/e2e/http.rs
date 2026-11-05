@@ -5,8 +5,8 @@ use crate::*;
 
 #[tokio::test]
 async fn responses_are_gzip_compressed_when_the_client_accepts_it() {
-    let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", login().await);
+    let app = boot().await;
+    let bearer = sign(&app, ORG_ID, Role::Admin);
 
     let compressed = app
         .http()
@@ -30,7 +30,7 @@ async fn responses_are_gzip_compressed_when_the_client_accepts_it() {
 
 #[tokio::test]
 async fn protected_route_rejects_a_missing_or_bogus_bearer_token() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     app.http()
         .get("/orgs")
@@ -48,8 +48,8 @@ async fn protected_route_rejects_a_missing_or_bogus_bearer_token() {
 
 #[tokio::test]
 async fn every_modelled_failure_returns_rfc9457_problem_json() {
-    let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", login().await);
+    let app = boot().await;
+    let bearer = sign(&app, ORG_ID, Role::Admin);
 
     let unauthorized = app.http().get("/orgs").send().await;
     unauthorized.assert_status(StatusCode::UNAUTHORIZED);
@@ -125,11 +125,8 @@ const FOREIGN_MEDIA_TYPE: &str = "text/x-quoted-marker";
 
 #[tokio::test]
 async fn a_body_under_another_media_type_answers_415_naming_only_the_expected_type() {
-    let (_db, app) = boot().await;
-    let bearer = format!(
-        "Bearer {}",
-        token_with_sub(ORG_ID, "admin", Uuid::now_v7()).await
-    );
+    let app = boot().await;
+    let bearer = sign_as(&app, ORG_ID, Role::Admin, Uuid::now_v7());
     let any = Uuid::now_v7();
     let json_bodies = [
         ("POST", "/users".to_owned()),
@@ -172,8 +169,8 @@ async fn a_body_under_another_media_type_answers_415_naming_only_the_expected_ty
 
 #[tokio::test]
 async fn an_undecodable_value_is_refused_without_quoting_it() {
-    let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", login().await);
+    let app = boot().await;
+    let bearer = sign(&app, ORG_ID, Role::Admin);
     let secret = "sk_live_51UndecodableMarker";
     let resp = app
         .http()

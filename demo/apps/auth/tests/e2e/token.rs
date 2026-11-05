@@ -21,7 +21,7 @@ async fn request_token(
 
 #[tokio::test]
 async fn token_endpoint_issues_a_token_the_public_key_verifies() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = request_token(
         &app,
@@ -42,18 +42,18 @@ async fn token_endpoint_issues_a_token_the_public_key_verifies() {
     assert_eq!(obj.get("token_type").string(), "Bearer");
     assert!(obj.get("expires_in").i64() > 0);
 
-    let claims: Claims = resource_server_verifier(API)
+    let claims: Claims = resource_server_verifier(&app, API)
         .verify(obj.get("access_token").string())
         .await
         .expect("the public key verifies the privately-signed token");
-    assert_eq!(claims.org_id.to_string(), ORG_ID);
+    assert_eq!(claims.org_id, ORG_ID);
     assert_eq!(claims.roles, [Role::Admin]);
     assert_eq!(claims.scopes, [POSTS_READ, POSTS_WRITE]);
 }
 
 #[tokio::test]
 async fn a_client_asking_for_no_scope_is_granted_exactly_its_registration() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = request_token(
         &app,
@@ -67,20 +67,20 @@ async fn a_client_asking_for_no_scope_is_granted_exactly_its_registration() {
     let obj = json.value().object();
     assert_eq!(obj.get("scope").string(), POSTS_READ.as_str());
 
-    let claims: Claims = resource_server_verifier(API)
+    let claims: Claims = resource_server_verifier(&app, API)
         .verify(obj.get("access_token").string())
         .await
         .expect("the client's one resource is its tokens' audience");
     assert_eq!(claims.scopes, [POSTS_READ]);
     assert_eq!(claims.roles, [Role::User]);
-    assert_eq!(claims.org_id.to_string(), ORG_ID);
+    assert_eq!(claims.org_id, ORG_ID);
     assert_eq!(claims.sub, Subject::Client(READER_ID.into()));
     assert_eq!(claims.client_id.as_deref(), Some(READER_ID));
 }
 
 #[tokio::test]
 async fn token_endpoint_rejects_an_unsupported_grant() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     request_token(
         &app,
         (CLIENT_ID, CLIENT_SECRET),
@@ -92,7 +92,7 @@ async fn token_endpoint_rejects_an_unsupported_grant() {
 
 #[tokio::test]
 async fn a_token_names_the_resource_requested_and_no_other() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = request_token(
         &app,
@@ -106,12 +106,12 @@ async fn a_token_names_the_resource_requested_and_no_other() {
     resp.assert_status_is_ok();
     let token = access_token(resp).await;
 
-    resource_server_verifier(ASSISTANT)
+    resource_server_verifier(&app, ASSISTANT)
         .verify::<Claims>(&token)
         .await
         .expect("the resource requested accepts it");
     assert!(
-        resource_server_verifier(API)
+        resource_server_verifier(&app, API)
             .verify::<Claims>(&token)
             .await
             .is_err(),
@@ -122,7 +122,7 @@ async fn a_token_names_the_resource_requested_and_no_other() {
 #[tokio::test]
 async fn a_resource_outside_the_registration_or_none_among_several_is_an_invalid_target() {
     let logs = LogCapture::install();
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     for (client, form) in [
         (
@@ -176,7 +176,7 @@ async fn assert_token_error(resp: TestResponse, status: StatusCode, expected: se
 
 #[tokio::test]
 async fn token_endpoint_rejects_an_unauthenticated_client() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     for body in [
         "grant_type=client_credentials".to_owned(),
@@ -203,7 +203,7 @@ async fn token_endpoint_rejects_an_unauthenticated_client() {
 
 #[tokio::test]
 async fn token_endpoint_rejects_a_bad_client_secret() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = request_token(
         &app,
@@ -223,7 +223,7 @@ async fn token_endpoint_rejects_a_bad_client_secret() {
 
 #[tokio::test]
 async fn token_endpoint_refuses_a_request_without_a_grant_type() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     for form in [
         &[("scope", POSTS_READ.as_str())][..],
@@ -245,7 +245,7 @@ async fn token_endpoint_refuses_a_request_without_a_grant_type() {
 #[tokio::test]
 async fn token_endpoint_refuses_a_scope_beyond_the_registration_naming_the_client_as_actor() {
     let logs = LogCapture::install();
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = request_token(
         &app,
@@ -268,7 +268,7 @@ async fn token_endpoint_refuses_a_scope_beyond_the_registration_naming_the_clien
 
 #[tokio::test]
 async fn token_endpoint_refuses_another_media_type_naming_only_the_form_type() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = app
         .http()

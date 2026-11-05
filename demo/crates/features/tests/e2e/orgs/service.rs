@@ -1,23 +1,11 @@
 use std::sync::Arc;
 
-use features::orgs::{ActiveModel, Column, Entity, OrgsService};
+use features::orgs::{Column, Entity, OrgsService};
+use features::testing::seed_org;
 use nest_rs::authz::{Ability, AbilityBuilder, Action};
 use nest_rs::seaorm::{Access, CrudService};
-use sea_orm::{ActiveModelTrait, Set};
-use uuid::Uuid;
 
 use crate::{connection, data_app};
-
-async fn seed_org(conn: &sea_orm::DatabaseConnection, id: Uuid, name: &str) {
-    ActiveModel {
-        id: Set(id),
-        name: Set(name.to_owned()),
-        ..Default::default()
-    }
-    .insert(conn)
-    .await
-    .expect("seed org");
-}
 
 fn read_all_ability() -> Arc<Ability> {
     let mut b = AbilityBuilder::new();
@@ -28,8 +16,7 @@ fn read_all_ability() -> Arc<Ability> {
 #[tokio::test]
 async fn list_returns_seeded_orgs_for_an_unrestricted_reader() {
     let app = data_app().await;
-    let org_id = Uuid::now_v7();
-    seed_org(&connection(&app), org_id, "Acme").await;
+    let org_id = seed_org(&connection(app.container()), "Acme").await;
 
     let rows = app
         .unit(read_all_ability(), || OrgsService.list())
@@ -44,10 +31,9 @@ async fn list_returns_seeded_orgs_for_an_unrestricted_reader() {
 #[tokio::test]
 async fn access_hides_out_of_scope_orgs() {
     let app = data_app().await;
-    let allowed = Uuid::now_v7();
-    let blocked = Uuid::now_v7();
-    seed_org(&connection(&app), allowed, "Allowed").await;
-    seed_org(&connection(&app), blocked, "Blocked").await;
+    let conn = connection(app.container());
+    let allowed = seed_org(&conn, "Allowed").await;
+    let blocked = seed_org(&conn, "Blocked").await;
 
     let ability = Arc::new({
         let mut b = AbilityBuilder::new();

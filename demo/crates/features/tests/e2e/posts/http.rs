@@ -3,18 +3,16 @@ use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::http::{StatusCode, header};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
-use nest_rs::testing::{EphemeralDatabase, TestApp, TestResponse};
+use nest_rs::testing::{TestApp, TestResponse};
 use serde_json::json;
 use uuid::Uuid;
 
 use features::authn::AuthnModule;
-use features::authn::{Role, Subject};
+use features::authn::{Claims, Role, Subject};
 use features::authz::{AuthzModule, constants};
-use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
-use features::testing::{API, DEV_PUBLIC_KEY, client, token, token_with_scopes, user};
-use features::users::{ActiveModel as UserActive, UserRole};
-use nest_rs::authn::AuthnConfig;
+use features::testing::{claims, client, connection, seed_org, seed_user, user};
+use features::users::UserRole;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 #[module(
@@ -31,57 +29,29 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 )]
 struct PostsHttpTestModule;
 
-async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let org_id = Uuid::now_v7();
-    let author_id = Uuid::now_v7();
-    OrgActive {
-        id: Set(org_id),
-        name: Set("Acme".into()),
-        ..Default::default()
-    }
-    .insert(db.connection().as_ref())
-    .await
-    .expect("seed org");
-    UserActive {
-        id: Set(author_id),
-        org_id: Set(org_id),
-        name: Set("Ada".into()),
-        email: Set("ada@acme.test".into()),
-        role: Set(UserRole::User),
-        password_hash: Set(None),
-        ..Default::default()
-    }
-    .insert(db.connection().as_ref())
-    .await
-    .expect("seed author");
-
-    let bearer = token(API, org_id, vec![Role::User], Subject::User(author_id));
-
+async fn boot() -> (TestApp, String, Uuid) {
     let app = TestApp::builder()
         .module::<PostsHttpTestModule>()
-        .provide_arc(db.connection())
-        .provide(AuthnConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(API.into()),
-            ..Default::default()
-        })
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
         .build()
         .await
-        .expect("PostsHttpTestModule boots against the throwaway database");
-    (db, app, bearer, org_id)
+        .expect("PostsHttpTestModule boots against a throwaway database");
+    let conn = connection(app.container());
+    let org = seed_org(&conn, "Acme").await;
+    let author = seed_user(&conn, org, "Ada", "ada@acme.test", UserRole::User).await;
+
+    let bearer = app.bearer(&claims(org, Role::User, Subject::User(author)));
+    (app, bearer, org)
 }
 
-fn admin_bearer(org_id: Uuid) -> String {
-    token(API, org_id, vec![Role::Admin], user())
+fn admin_bearer(app: &TestApp, org_id: Uuid) -> String {
+    app.bearer(&claims(org_id, Role::Admin, user()))
 }
 
 #[tokio::test]
 async fn posts_round_trip() {
-    let (_db, app, bearer, _org_id) = boot().await;
-    let auth = format!("Bearer {bearer}");
+    let (app, auth, _org_id) = boot().await;
 
     let created = app
         .http()
@@ -128,11 +98,11 @@ async fn assert_refused_to_a_client(refused: TestResponse) {
 
 #[tokio::test]
 async fn a_client_authors_no_post_whatever_its_scope() {
-    let (_db, app, bearer, org_id) = boot().await;
+    let (app, bearer, org_id) = boot().await;
     let draft = app
         .http()
         .post("/posts")
-        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(header::AUTHORIZATION, &bearer)
         .body_json(&json!({ "title": "Draft", "body": "World" }))
         .send()
         .await;
@@ -147,10 +117,10 @@ async fn a_client_authors_no_post_whatever_its_scope() {
         .to_owned();
 
     for scopes in [constants::all(), vec![constants::POSTS_READ.into()]] {
-        let machine = format!(
-            "Bearer {}",
-            token_with_scopes(API, org_id, vec![Role::Admin], client(), scopes)
-        );
+        let machine = app.bearer(&Claims {
+            scopes,
+            ..claims(org_id, Role::Admin, client())
+        });
 
         assert_refused_to_a_client(
             app.http()
@@ -174,7 +144,7 @@ async fn a_client_authors_no_post_whatever_its_scope() {
     let unpublished = app
         .http()
         .get(format!("/posts/{id}"))
-        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(header::AUTHORIZATION, &bearer)
         .send()
         .await;
     unpublished.assert_status_is_ok();
@@ -192,10 +162,10 @@ async fn a_client_authors_no_post_whatever_its_scope() {
 
 #[tokio::test]
 async fn create_with_empty_title_returns_400() {
-    let (_db, app, bearer, _org_id) = boot().await;
+    let (app, bearer, _org_id) = boot().await;
     app.http()
         .post("/posts")
-        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(header::AUTHORIZATION, &bearer)
         .body_json(&json!({ "title": "", "body": "World" }))
         .send()
         .await
@@ -204,8 +174,7 @@ async fn create_with_empty_title_returns_400() {
 
 #[tokio::test]
 async fn audit_interceptor_is_transparent_to_posts_requests() {
-    let (_db, app, bearer, _org_id) = boot().await;
-    let auth = format!("Bearer {bearer}");
+    let (app, auth, _org_id) = boot().await;
 
     let created = app
         .http()
@@ -234,12 +203,12 @@ async fn audit_interceptor_is_transparent_to_posts_requests() {
 
 #[tokio::test]
 async fn publish_transitions_a_draft_to_published() {
-    let (_db, app, bearer, org_id) = boot().await;
+    let (app, bearer, org_id) = boot().await;
 
     let created = app
         .http()
         .post("/posts")
-        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(header::AUTHORIZATION, &bearer)
         .body_json(&json!({ "title": "Draft", "body": "World" }))
         .send()
         .await;
@@ -251,10 +220,7 @@ async fn publish_transitions_a_draft_to_published() {
     let published = app
         .http()
         .post(format!("/posts/{id}/publish"))
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {}", admin_bearer(org_id)),
-        )
+        .header(header::AUTHORIZATION, admin_bearer(&app, org_id))
         .send()
         .await;
     published.assert_status_is_ok();
@@ -272,12 +238,12 @@ async fn publish_transitions_a_draft_to_published() {
 
 #[tokio::test]
 async fn re_publishing_returns_rfc9457_problem_json() {
-    let (_db, app, bearer, org_id) = boot().await;
+    let (app, bearer, org_id) = boot().await;
 
     let created = app
         .http()
         .post("/posts")
-        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(header::AUTHORIZATION, &bearer)
         .body_json(&json!({ "title": "Draft", "body": "World" }))
         .send()
         .await;
@@ -291,7 +257,7 @@ async fn re_publishing_returns_rfc9457_problem_json() {
         .string()
         .to_owned();
 
-    let admin = format!("Bearer {}", admin_bearer(org_id));
+    let admin = admin_bearer(&app, org_id);
     app.http()
         .post(format!("/posts/{id}/publish"))
         .header(header::AUTHORIZATION, &admin)
@@ -322,10 +288,10 @@ async fn re_publishing_returns_rfc9457_problem_json() {
     );
 }
 
-async fn publication_count(db: &EphemeralDatabase, post_id: Uuid) -> usize {
+async fn publication_count(app: &TestApp, post_id: Uuid) -> usize {
     publication::Entity::find()
         .filter(publication::Column::PostId.eq(post_id))
-        .all(db.connection().as_ref())
+        .all(connection(app.container()).as_ref())
         .await
         .expect("query the publication audit log")
         .len()
@@ -333,12 +299,12 @@ async fn publication_count(db: &EphemeralDatabase, post_id: Uuid) -> usize {
 
 #[tokio::test]
 async fn publish_writes_the_status_and_an_audit_row_atomically() {
-    let (db, app, bearer, org_id) = boot().await;
+    let (app, bearer, org_id) = boot().await;
 
     let created = app
         .http()
         .post("/posts")
-        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(header::AUTHORIZATION, &bearer)
         .body_json(&json!({ "title": "Draft", "body": "World" }))
         .send()
         .await;
@@ -354,7 +320,7 @@ async fn publish_writes_the_status_and_an_audit_row_atomically() {
     let id = Uuid::parse_str(&id_str).expect("valid post uuid");
 
     assert_eq!(
-        publication_count(&db, id).await,
+        publication_count(&app, id).await,
         0,
         "a fresh draft has no audit row yet",
     );
@@ -362,10 +328,7 @@ async fn publish_writes_the_status_and_an_audit_row_atomically() {
     let published = app
         .http()
         .post(format!("/posts/{id_str}/publish"))
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {}", admin_bearer(org_id)),
-        )
+        .header(header::AUTHORIZATION, admin_bearer(&app, org_id))
         .send()
         .await;
     published.assert_status_is_ok();
@@ -381,7 +344,7 @@ async fn publish_writes_the_status_and_an_audit_row_atomically() {
     );
 
     assert_eq!(
-        publication_count(&db, id).await,
+        publication_count(&app, id).await,
         1,
         "publish wrote exactly one audit row alongside the status update",
     );
@@ -389,12 +352,12 @@ async fn publish_writes_the_status_and_an_audit_row_atomically() {
 
 #[tokio::test]
 async fn a_failing_audit_insert_rolls_back_the_status_update() {
-    let (db, app, bearer, org_id) = boot().await;
+    let (app, bearer, org_id) = boot().await;
 
     let created = app
         .http()
         .post("/posts")
-        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(header::AUTHORIZATION, &bearer)
         .body_json(&json!({ "title": "Draft", "body": "World" }))
         .send()
         .await;
@@ -415,17 +378,14 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
         actor_id: Set(Uuid::now_v7()),
         published_at: Set(chrono::Utc::now().fixed_offset()),
     }
-    .insert(db.connection().as_ref())
+    .insert(connection(app.container()).as_ref())
     .await
     .expect("seed the conflicting publication row");
 
     let conflict = app
         .http()
         .post(format!("/posts/{id_str}/publish"))
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {}", admin_bearer(org_id)),
-        )
+        .header(header::AUTHORIZATION, admin_bearer(&app, org_id))
         .send()
         .await;
     conflict.assert_status(StatusCode::CONFLICT);
@@ -438,7 +398,7 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
     let got = app
         .http()
         .get(format!("/posts/{id_str}"))
-        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(header::AUTHORIZATION, &bearer)
         .send()
         .await;
     got.assert_status_is_ok();
@@ -449,7 +409,7 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
     );
 
     assert_eq!(
-        publication_count(&db, id).await,
+        publication_count(&app, id).await,
         1,
         "the rolled-back publish added no audit row",
     );
@@ -457,12 +417,12 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
 
 #[tokio::test]
 async fn two_concurrent_publishes_of_one_post_answer_once_and_conflict_once() {
-    let (db, app, bearer, org_id) = boot().await;
+    let (app, bearer, org_id) = boot().await;
 
     let created = app
         .http()
         .post("/posts")
-        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header(header::AUTHORIZATION, &bearer)
         .body_json(&json!({ "title": "Race", "body": "Twice" }))
         .send()
         .await;
@@ -480,10 +440,7 @@ async fn two_concurrent_publishes_of_one_post_answer_once_and_conflict_once() {
     let publish = || {
         app.http()
             .post(format!("/posts/{id_str}/publish"))
-            .header(
-                header::AUTHORIZATION,
-                format!("Bearer {}", admin_bearer(org_id)),
-            )
+            .header(header::AUTHORIZATION, admin_bearer(&app, org_id))
             .send()
     };
     let (first, second) = tokio::join!(publish(), publish());
@@ -495,7 +452,7 @@ async fn two_concurrent_publishes_of_one_post_answer_once_and_conflict_once() {
         "one publish lands and the other conflicts, never a 500",
     );
     assert_eq!(
-        publication_count(&db, id).await,
+        publication_count(&app, id).await,
         1,
         "the conflicting publish wrote no second audit row",
     );

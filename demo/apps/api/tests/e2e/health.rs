@@ -2,7 +2,7 @@ use crate::*;
 
 #[tokio::test]
 async fn health_live_probe_is_ok() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     app.http()
         .get("/health/live")
         .send()
@@ -12,7 +12,7 @@ async fn health_live_probe_is_ok() {
 
 #[tokio::test]
 async fn health_ready_probe_reports_every_resource_the_app_opens_up() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let resp = app.http().get("/health/ready").send().await;
     resp.assert_status_is_ok();
     let body = resp.json().await;

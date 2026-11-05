@@ -7,7 +7,7 @@ use uuid::Uuid;
 async fn the_committed_schema_is_the_one_the_app_serves() {
     let emitted =
         std::env::temp_dir().join(format!("nestrs-api-schema-{}.graphql", Uuid::now_v7()));
-    let (_db, _app) = crate::boot_with(TestApp::builder().provide(GraphqlConfig {
+    let _app = crate::boot_with(TestApp::builder().provide(GraphqlConfig {
         emit: Surface::Open,
         emit_path: emitted.clone(),
         ..Default::default()

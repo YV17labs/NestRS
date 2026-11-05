@@ -1,21 +1,19 @@
-use nest_rs::authn::{JwtOptions, JwtService};
+use std::sync::Arc;
+
 use nest_rs::config::Config;
 use nest_rs::core::Container;
 use nest_rs::redis::{RedisConfig, RedisConnection};
 use nest_rs::storage::Storage;
 use nest_rs::testing::url_on;
-use serde::Serialize;
+use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 use uuid::Uuid;
 
 use crate::audio::{AudioService, Transcodes};
+use crate::orgs::ActiveModel as OrgActive;
+use crate::users::{ActiveModel as UserActive, UserRole};
 use crate::{Claims, Role, Subject};
 
-pub const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEYTRN4vmCuIfaUslO5G9pKyxkDJn3q3t9WDHo2FCfw3\n-----END PRIVATE KEY-----\n";
-pub const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHfPOjd2Y3m1BLM5nBJBMZFAlfWt69WL1NY8XyYeGfeo=\n-----END PUBLIC KEY-----\n";
-
-pub const ORG_ID: &str = "018f0000-0000-7000-8000-000000000000";
-
-pub const ISSUER: &str = "http://localhost:3001";
+pub const ORG_ID: Uuid = Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0000);
 
 pub const API: &str = "http://localhost:3002";
 
@@ -35,58 +33,59 @@ pub fn user() -> Subject {
     Subject::User(Uuid::now_v7())
 }
 
-fn issuer_named(name: &str) -> JwtService {
-    let mut options = JwtOptions::eddsa(DEV_PRIVATE_KEY, DEV_PUBLIC_KEY);
-    options.issuer = Some(name.into());
-    JwtService::new(options).expect("the dev keypair parses")
-}
-
-pub fn signed_for(resource: &str, claims: &impl Serialize) -> String {
-    signed_by(ISSUER, resource, claims)
-}
-
-pub fn signed_by(issuer: &str, resource: &str, claims: &impl Serialize) -> String {
-    issuer_named(issuer)
-        .sign_for(resource, claims)
-        .expect("sign the test token")
-}
-
-pub fn token(resource: &str, org_id: Uuid, roles: Vec<Role>, sub: Subject) -> String {
-    token_with_scopes(resource, org_id, roles, sub, crate::authz::constants::all())
-}
-
-pub fn claims(org_id: Uuid, roles: Vec<Role>, sub: Subject, scopes: Vec<String>) -> Claims {
-    let client_id = sub.client_id().map(str::to_owned);
+pub fn claims(org_id: Uuid, role: Role, sub: Subject) -> Claims {
     Claims {
+        client_id: sub.client_id().map(str::to_owned),
         sub,
-        client_id,
         org_id,
-        roles,
-        scopes,
+        roles: vec![role],
+        scopes: crate::authz::constants::all(),
     }
 }
 
-pub fn token_with_scopes(
-    resource: &str,
-    org_id: Uuid,
-    roles: Vec<Role>,
-    sub: Subject,
-    scopes: Vec<String>,
-) -> String {
-    signed_for(resource, &claims(org_id, roles, sub, scopes))
+pub fn with_claim(claims: Claims, claim: &str, value: &str) -> serde_json::Value {
+    let mut set = serde_json::to_value(claims).expect("the claims serialize");
+    set[claim] = value.into();
+    set
 }
 
-pub fn token_for(resource: &str, org_id: &str, role: &str, sub: Subject) -> String {
-    let roles = match role {
-        "admin" => vec![Role::Admin],
-        _ => vec![Role::User],
-    };
-    token(
-        resource,
-        Uuid::parse_str(org_id).expect("valid org uuid"),
-        roles,
-        sub,
-    )
+pub fn connection(container: &Container) -> Arc<DatabaseConnection> {
+    container
+        .get::<DatabaseConnection>()
+        .expect("the app's pool is its throwaway database")
+}
+
+pub async fn seed_org(conn: &DatabaseConnection, name: &str) -> Uuid {
+    OrgActive {
+        id: Set(Uuid::now_v7()),
+        name: Set(name.into()),
+        ..Default::default()
+    }
+    .insert(conn)
+    .await
+    .expect("seed org")
+    .id
+}
+
+pub async fn seed_user(
+    conn: &DatabaseConnection,
+    org_id: Uuid,
+    name: &str,
+    email: &str,
+    role: UserRole,
+) -> Uuid {
+    UserActive {
+        id: Set(Uuid::now_v7()),
+        org_id: Set(org_id),
+        name: Set(name.into()),
+        email: Set(email.into()),
+        role: Set(role),
+        ..Default::default()
+    }
+    .insert(conn)
+    .await
+    .expect("seed user")
+    .id
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

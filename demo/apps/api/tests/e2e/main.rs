@@ -20,51 +20,40 @@ mod subscription;
 mod users;
 
 use api::ApiModule;
-use nest_rs::authn::AuthnConfig;
+use features::{Role, Subject};
 use nest_rs::http::{StatusCode, header};
-use nest_rs::testing::TestResponse;
-use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
+use nest_rs::testing::{TestApp, TestAppBuilder, TestResponse};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-pub(crate) use features::testing::{API, DEV_PUBLIC_KEY, ORG_ID, RedisDatabase, delete_transcode};
+pub(crate) use features::testing::{
+    ORG_ID, RedisDatabase, claims, client, connection, delete_transcode,
+};
 
-pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
+pub(crate) async fn boot() -> TestApp {
     boot_with(TestApp::builder()).await
 }
 
-pub(crate) async fn boot_on(redis: RedisDatabase) -> (EphemeralDatabase, TestApp) {
+pub(crate) async fn boot_on(redis: RedisDatabase) -> TestApp {
     boot_with(TestApp::builder().provide(redis.config())).await
 }
 
-async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let app = builder
+async fn boot_with(builder: TestAppBuilder) -> TestApp {
+    builder
         .module::<ApiModule>()
-        .provide_arc(db.connection())
-        .provide(AuthnConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(API.into()),
-            ..Default::default()
-        })
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
         .build()
         .await
-        .expect("ApiModule boots against the throwaway database");
-    (db, app)
+        .expect("ApiModule boots against a throwaway database")
 }
 
-pub(crate) async fn login() -> String {
-    token_for(ORG_ID, "admin").await
+pub(crate) fn sign(app: &TestApp, org_id: Uuid, role: Role) -> String {
+    app.bearer(&claims(org_id, role, client()))
 }
 
-pub(crate) async fn token_for(org_id: &str, role: &str) -> String {
-    features::testing::token_for(API, org_id, role, features::testing::client())
-}
-
-pub(crate) async fn token_with_sub(org_id: &str, role: &str, sub: Uuid) -> String {
-    features::testing::token_for(API, org_id, role, features::Subject::User(sub))
+pub(crate) fn sign_as(app: &TestApp, org_id: Uuid, role: Role, sub: Uuid) -> String {
+    app.bearer(&claims(org_id, role, Subject::User(sub)))
 }
 
 pub(crate) async fn create_user(app: &TestApp, bearer: &str, name: &str, email: &str) -> String {
@@ -87,8 +76,11 @@ pub(crate) async fn create_post(app: &TestApp, bearer: &str, title: &str, body: 
     .await
 }
 
-pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> String {
-    create(app, bearer, "/orgs", json!({ "name": name })).await
+pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> Uuid {
+    create(app, bearer, "/orgs", json!({ "name": name }))
+        .await
+        .parse()
+        .expect("an org id")
 }
 
 async fn create(app: &TestApp, bearer: &str, collection: &str, body: Value) -> String {

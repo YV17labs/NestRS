@@ -21,8 +21,8 @@ fn the_one_refusal_says_neither(logs: &LogCapture, reason: &str, email: &str, pa
 
 #[tokio::test]
 async fn login_issues_a_token_the_public_key_verifies() {
-    let (db, app) = boot().await;
-    seed_org_and_user(db.connection().as_ref()).await;
+    let app = boot().await;
+    seed_org_and_user(&app).await;
 
     let resp = app
         .http()
@@ -38,18 +38,18 @@ async fn login_issues_a_token_the_public_key_verifies() {
     resp.assert_header("pragma", "no-cache");
 
     let token = access_token(resp).await;
-    let claims: Claims = resource_server_verifier(API)
+    let claims: Claims = resource_server_verifier(&app, API)
         .verify(&token)
         .await
         .expect("the public key verifies the privately-signed token");
     assert!(
-        resource_server_verifier(ASSISTANT)
+        resource_server_verifier(&app, ASSISTANT)
             .verify::<Claims>(&token)
             .await
             .is_err(),
         "a sign-in naming no resource is minted for the first served, and only for it"
     );
-    assert_eq!(claims.org_id.to_string(), ORG_ID);
+    assert_eq!(claims.org_id, ORG_ID);
     assert!(claims.sub.user_id().is_some(), "{:?}", claims.sub);
     assert_eq!(claims.client_id, None);
     assert!(claims.roles.contains(&Role::Admin));
@@ -58,8 +58,8 @@ async fn login_issues_a_token_the_public_key_verifies() {
 #[tokio::test]
 async fn login_rejects_bad_credentials() {
     let logs = LogCapture::install();
-    let (db, app) = boot().await;
-    seed_org_and_user(db.connection().as_ref()).await;
+    let app = boot().await;
+    seed_org_and_user(&app).await;
 
     let resp = app
         .http()
@@ -78,7 +78,7 @@ async fn login_rejects_bad_credentials() {
 #[tokio::test]
 async fn login_rejects_unknown_email() {
     let logs = LogCapture::install();
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = app
         .http()
@@ -96,7 +96,7 @@ async fn login_rejects_unknown_email() {
 
 #[tokio::test]
 async fn login_refuses_another_media_type_naming_only_json() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = app
         .http()
@@ -119,8 +119,8 @@ async fn login_refuses_another_media_type_naming_only_json() {
 
 #[tokio::test]
 async fn login_names_the_resource_its_token_is_for() {
-    let (db, app) = boot().await;
-    seed_org_and_user(db.connection().as_ref()).await;
+    let app = boot().await;
+    seed_org_and_user(&app).await;
 
     let resp = app
         .http()
@@ -135,12 +135,12 @@ async fn login_names_the_resource_its_token_is_for() {
     resp.assert_status_is_ok();
     let token = access_token(resp).await;
 
-    resource_server_verifier(ASSISTANT)
+    resource_server_verifier(&app, ASSISTANT)
         .verify::<Claims>(&token)
         .await
         .expect("the resource asked for accepts it");
     assert!(
-        resource_server_verifier(API)
+        resource_server_verifier(&app, API)
             .verify::<Claims>(&token)
             .await
             .is_err()
@@ -150,8 +150,8 @@ async fn login_names_the_resource_its_token_is_for() {
 #[tokio::test]
 async fn login_for_a_resource_the_issuer_does_not_serve_is_an_invalid_target() {
     let logs = LogCapture::install();
-    let (db, app) = boot().await;
-    seed_org_and_user(db.connection().as_ref()).await;
+    let app = boot().await;
+    seed_org_and_user(&app).await;
 
     let resp = app
         .http()

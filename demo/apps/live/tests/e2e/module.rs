@@ -1,30 +1,28 @@
-use features::testing::{ASSISTANT, client, token_for};
-use live::LiveModule;
+use features::Role;
+use features::testing::{ASSISTANT, LIVE, claims, client, with_claim};
 use nest_rs::http::StatusCode;
-use nest_rs::testing::{EphemeralDatabase, TestApp};
 use nest_rs::ws::CloseCode;
 
-use super::harness::{ORG_ID, machine_token};
+use super::harness::{ORG_ID, open_as, serve};
 
 #[tokio::test]
 async fn the_live_app_requires_its_own_audience_read_from_its_own_file() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let app = TestApp::builder()
-        .module::<LiveModule>()
-        .provide_arc(db.connection())
-        .build_ws()
-        .await
-        .expect("LiveModule serves on the configuration `nestrs run dev` reads");
+    let app = serve().await;
+    let for_resource = |resource: &str| {
+        app.bearer(&with_claim(
+            claims(ORG_ID, Role::User, client()),
+            "aud",
+            resource,
+        ))
+    };
 
     let refused = app
         .socket("/ws")
-        .header("authorization", format!("Bearer {}", token_for(ASSISTANT, ORG_ID, "user", client())))
+        .header("authorization", for_resource(ASSISTANT))
         .expect_refused()
         .await;
     assert_eq!(refused, StatusCode::UNAUTHORIZED);
-    let mut socket = app.socket("/ws").header("authorization", format!("Bearer {}", machine_token())).connect().await;
+    let mut socket = open_as(&app, "/ws", &for_resource(LIVE)).await;
 
     socket.close(CloseCode::Normal, "done").await;
     app.shutdown().await.expect("transport shuts down");

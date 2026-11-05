@@ -4,12 +4,11 @@ use std::time::Duration;
 use chrono::Utc;
 use features::authz::AuthzAbility;
 use features::notifications::{Entity as Notifications, NotificationsQueueModule};
-use features::orgs::ActiveModel as OrgActive;
 use features::posts::{
     ActiveModel as PostActive, Entity as Posts, PostStatus, PostsModule, PostsService,
 };
-use features::testing::RedisDatabase;
-use features::users::{ActiveModel as UserActive, UserRole};
+use features::testing::{RedisDatabase, connection, seed_org, seed_user};
+use features::users::UserRole;
 use features::{Claims, Role, Subject};
 use nest_rs::authz::{Ability, AbilityBuilder, AbilityFactory, with_ability};
 use nest_rs::core::module;
@@ -19,7 +18,7 @@ use nest_rs::database::{
 use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
-use nest_rs::testing::{EphemeralDatabase, HeadlessApp};
+use nest_rs::testing::HeadlessApp;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use uuid::Uuid;
 
@@ -47,28 +46,8 @@ struct PublishingHarness;
 struct NotifyingWorkerHarness;
 
 async fn author(conn: &DatabaseConnection) -> (Uuid, Uuid) {
-    let org_id = Uuid::now_v7();
-    let author_id = Uuid::now_v7();
-    OrgActive {
-        id: Set(org_id),
-        name: Set("Acme".into()),
-        ..Default::default()
-    }
-    .insert(conn)
-    .await
-    .expect("seed org");
-    UserActive {
-        id: Set(author_id),
-        org_id: Set(org_id),
-        name: Set("Ada".into()),
-        email: Set("ada@acme.test".into()),
-        role: Set(UserRole::User),
-        password_hash: Set(None),
-        ..Default::default()
-    }
-    .insert(conn)
-    .await
-    .expect("seed author");
+    let org_id = seed_org(conn, "Acme").await;
+    let author_id = seed_user(conn, org_id, "Ada", "ada@acme.test", UserRole::User).await;
     (org_id, author_id)
 }
 
@@ -164,21 +143,17 @@ async fn notifications(conn: &DatabaseConnection) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_publish_whose_transaction_rolls_back_enqueues_no_notification() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let conn = db.connection();
-    let (org_id, author_id) = author(&conn).await;
-    let rolled_back = draft(&conn, org_id, author_id, "Rolled back").await;
-    let committed = draft(&conn, org_id, author_id, "Committed").await;
-
     let app = HeadlessApp::builder()
         .module::<PublishingHarness>()
-        .provide_arc(conn.clone())
+        .ephemeral_database::<migrations::Migrator>()
         .provide(RedisDatabase::PostsRollback.config())
         .build_headless()
         .await
-        .expect("the publishing app boots against the throwaway database and Redis");
+        .expect("the publishing app boots against a throwaway database and Redis");
+    let conn = connection(app.container());
+    let (org_id, author_id) = author(&conn).await;
+    let rolled_back = draft(&conn, org_id, author_id, "Rolled back").await;
+    let committed = draft(&conn, org_id, author_id, "Committed").await;
     let relaying = app
         .spawn_transport(OutboxRelay::new())
         .await

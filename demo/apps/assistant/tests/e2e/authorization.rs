@@ -5,15 +5,13 @@ use serde_json::{Value, json};
 
 use features::Role;
 use features::authz::constants;
-use features::testing::{
-    API, ASSISTANT, ISSUER, ORG_ID, claims, client, signed_by, signed_for, token_for, user,
-};
+use features::testing::{API, ASSISTANT, ORG_ID, claims, client, user, with_claim};
 
 use crate::{SHARED_ENDPOINT, boot};
 
 #[tokio::test]
 async fn an_unauthenticated_tool_call_points_at_the_metadata_document() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = app.http().post(SHARED_ENDPOINT).send().await;
     resp.assert_status(StatusCode::UNAUTHORIZED);
@@ -42,7 +40,7 @@ async fn an_unauthenticated_tool_call_points_at_the_metadata_document() {
 
 #[tokio::test]
 async fn the_metadata_document_names_the_resource_and_its_authorization_server() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = app
         .http()
@@ -65,7 +63,7 @@ async fn the_metadata_document_names_the_resource_and_its_authorization_server()
 
 #[tokio::test]
 async fn discovery_is_reachable_without_a_token_but_tools_are_not() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     app.http()
         .get("/.well-known/oauth-protected-resource")
@@ -82,20 +80,14 @@ async fn discovery_is_reachable_without_a_token_but_tools_are_not() {
 
 #[tokio::test]
 async fn a_token_naming_no_subject_opens_no_session() {
-    let (_db, app) = boot().await;
-    let mut claim_set = serde_json::to_value(claims(
-        ORG_ID.parse().expect("a valid org uuid"),
-        vec![Role::Admin],
-        client(),
-        constants::all(),
-    ))
-    .expect("the claims serialize");
-    let named = format!("Bearer {}", signed_for(ASSISTANT, &claim_set));
+    let app = boot().await;
+    let mut claim_set = serde_json::to_value(admin_claims()).expect("the claims serialize");
+    let named = app.bearer(&claim_set);
     claim_set
         .as_object_mut()
         .expect("a claim set is an object")
         .remove("sub");
-    let subjectless = format!("Bearer {}", signed_for(ASSISTANT, &claim_set));
+    let subjectless = app.bearer(&claim_set);
 
     open_session(app.http(), SHARED_ENDPOINT, Some(&named)).await;
     let refused = post_message(
@@ -120,9 +112,9 @@ async fn a_token_naming_no_subject_opens_no_session() {
 
 #[tokio::test]
 async fn another_users_bearer_reaches_no_session_it_did_not_open() {
-    let (_db, app) = boot().await;
-    let owner = format!("Bearer {}", token_for(ASSISTANT, ORG_ID, "admin", user()));
-    let colleague = format!("Bearer {}", token_for(ASSISTANT, ORG_ID, "user", user()));
+    let app = boot().await;
+    let owner = app.bearer(&claims(ORG_ID, Role::Admin, user()));
+    let colleague = app.bearer(&claims(ORG_ID, Role::User, user()));
     let session = open_session(app.http(), SHARED_ENDPOINT, Some(&owner)).await;
 
     post_message(
@@ -161,18 +153,13 @@ async fn another_users_bearer_reaches_no_session_it_did_not_open() {
 const ANOTHER_ISSUER: &str = "https://auth.elsewhere.example";
 
 fn admin_claims() -> features::Claims {
-    claims(
-        ORG_ID.parse().expect("a valid org uuid"),
-        vec![Role::Admin],
-        client(),
-        constants::all(),
-    )
+    claims(ORG_ID, Role::Admin, client())
 }
 
 #[tokio::test]
 async fn a_token_minted_for_another_resource_opens_no_session() {
-    let (_db, app) = boot().await;
-    let for_another = format!("Bearer {}", signed_for(API, &admin_claims()));
+    let app = boot().await;
+    let for_another = app.bearer(&with_claim(admin_claims(), "aud", API));
 
     let refused = post_message(
         app.http(),
@@ -189,12 +176,9 @@ async fn a_token_minted_for_another_resource_opens_no_session() {
 
 #[tokio::test]
 async fn a_token_from_an_issuer_the_document_does_not_name_opens_no_session() {
-    let (_db, app) = boot().await;
-    let foreign = format!(
-        "Bearer {}",
-        signed_by(ANOTHER_ISSUER, ASSISTANT, &admin_claims())
-    );
-    let own = format!("Bearer {}", signed_by(ISSUER, ASSISTANT, &admin_claims()));
+    let app = boot().await;
+    let foreign = app.bearer(&with_claim(admin_claims(), "iss", ANOTHER_ISSUER));
+    let own = app.bearer(&admin_claims());
 
     open_session(app.http(), SHARED_ENDPOINT, Some(&own)).await;
     let refused = post_message(

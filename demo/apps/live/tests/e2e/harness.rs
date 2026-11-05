@@ -1,64 +1,51 @@
+use features::testing::{claims, client};
 use features::{Role, Subject};
 use live::LiveModule;
-use nest_rs::authn::AuthnConfig;
 use nest_rs::testing::ws::{WsApp, WsSocket};
-use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
+use nest_rs::testing::{TestApp, TestAppBuilder};
 use serde_json::Value;
 use uuid::Uuid;
 
-pub(crate) use features::testing::{DEV_PUBLIC_KEY, LIVE, ORG_ID};
+pub(crate) use features::testing::{ORG_ID, connection};
 
-pub(crate) fn user_token(user: Uuid) -> String {
-    features::testing::token_for(LIVE, ORG_ID, "user", Subject::User(user))
+pub(crate) fn user_bearer(app: &WsApp, user: Uuid) -> String {
+    app.bearer(&claims(ORG_ID, Role::User, Subject::User(user)))
 }
 
-pub(crate) fn machine_token() -> String {
-    features::testing::token_for(LIVE, ORG_ID, "user", features::testing::client())
+pub(crate) fn machine_bearer(app: &WsApp) -> String {
+    app.bearer(&claims(ORG_ID, Role::User, client()))
 }
 
-pub(crate) async fn token_for_org(org_id: Uuid, role: Role) -> String {
-    features::testing::token(LIVE, org_id, vec![role], features::testing::client())
-}
-
-pub(crate) async fn boot_builder() -> (EphemeralDatabase, TestAppBuilder) {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let builder = TestApp::builder()
+pub(crate) fn builder() -> TestAppBuilder {
+    TestApp::builder()
         .module::<LiveModule>()
-        .provide_arc(db.connection())
-        .provide(AuthnConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(LIVE.into()),
-            ..Default::default()
-        });
-    (db, builder)
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
 }
 
-pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
-    let (db, builder) = boot_builder().await;
-    let app = builder
+pub(crate) async fn boot() -> TestApp {
+    builder()
         .build()
         .await
-        .expect("LiveModule boots against the throwaway database");
-    (db, app)
+        .expect("LiveModule boots against a throwaway database")
 }
 
-pub(crate) async fn serve() -> (EphemeralDatabase, WsApp) {
-    let (db, builder) = boot_builder().await;
-    let app = builder
+pub(crate) async fn serve() -> WsApp {
+    builder()
         .build_ws()
         .await
-        .expect("LiveModule serves on a real port against the throwaway database");
-    (db, app)
+        .expect("LiveModule serves on a real port against a throwaway database")
 }
 
 pub(crate) async fn open(app: &WsApp, path: &str) -> WsSocket {
-    open_as(app, path, &user_token(Uuid::now_v7())).await
+    open_as(app, path, &user_bearer(app, Uuid::now_v7())).await
 }
 
-pub(crate) async fn open_as(app: &WsApp, path: &str, token: &str) -> WsSocket {
-    app.socket(path).header("authorization", format!("Bearer {token}")).connect().await
+pub(crate) async fn open_as(app: &WsApp, path: &str, authorization: &str) -> WsSocket {
+    app.socket(path)
+        .header("authorization", authorization)
+        .connect()
+        .await
 }
 
 pub(crate) async fn wait_for_presence(socket: &mut WsSocket, want: u64) {

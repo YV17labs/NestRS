@@ -1,5 +1,5 @@
 use nest_rs::http::header;
-use sea_orm::{ActiveModelTrait, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -7,13 +7,14 @@ use crate::*;
 
 #[tokio::test]
 async fn graphql_requires_a_jwt_and_scopes_to_the_callers_org() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
     let org_a = create_org(&app, &admin, "GqlAcme").await;
-    let token_a = format!("Bearer {}", token_for(&org_a, "admin").await);
-    let token_b = format!(
-        "Bearer {}",
-        token_for(&create_org(&app, &admin, "GqlGlobex").await, "admin").await
+    let token_a = sign(&app, org_a, Role::Admin);
+    let token_b = sign(
+        &app,
+        create_org(&app, &admin, "GqlGlobex").await,
+        Role::Admin,
     );
 
     let created = app
@@ -137,12 +138,12 @@ async fn graphql_requires_a_jwt_and_scopes_to_the_callers_org() {
 
 #[tokio::test]
 async fn graphql_auto_resolved_relations_respect_ability_scope() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
     let org_a = create_org(&app, &admin, "RelA").await;
     let org_b = create_org(&app, &admin, "RelB").await;
-    let token_a = format!("Bearer {}", token_for(&org_a, "admin").await);
-    let token_b = format!("Bearer {}", token_for(&org_b, "admin").await);
+    let token_a = sign(&app, org_a, Role::Admin);
+    let token_b = sign(&app, org_b, Role::Admin);
 
     for (tok, email) in [
         (&token_a, "ada@rel.test"),
@@ -186,7 +187,8 @@ async fn graphql_auto_resolved_relations_respect_ability_scope() {
     for u in users_a.iter() {
         let org_id = u.object().get("org").object().get("id").string();
         assert_eq!(
-            org_id, org_a,
+            org_id,
+            org_a.to_string(),
             "auto-resolved org must be caller's: {org_id}"
         );
     }
@@ -246,12 +248,10 @@ async fn graphql_auto_resolved_relations_respect_ability_scope() {
 
 #[tokio::test]
 async fn every_parent_gets_its_own_page_of_an_auto_resolved_has_many() {
-    use sea_orm::ConnectionTrait;
-
-    let (db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &admin, "Fanout").await;
-    let token = format!("Bearer {}", token_for(&org, "admin").await);
+    let token = sign(&app, org, Role::Admin);
 
     let authors = [
         create_user(&app, &token, "Ann", "fanout-ann@rel.test").await,
@@ -261,20 +261,19 @@ async fn every_parent_gets_its_own_page_of_an_auto_resolved_has_many() {
     let per_author = 25_u64;
     let page = 10_u64;
 
-    let mut rows: Vec<String> = Vec::new();
-    for author in &authors {
-        for i in 0..per_author {
-            rows.push(format!(
-                "('{}','{org}','{author}','t{i}','b{i}')",
-                Uuid::now_v7()
-            ));
-        }
-    }
-    db.connection()
-        .execute_unprepared(&format!(
-            "INSERT INTO post (id, org_id, author_id, title, body) VALUES {}",
-            rows.join(", "),
-        ))
+    let rows = authors.iter().flat_map(|author| {
+        let author_id: Uuid = author.parse().expect("a user id");
+        (0..per_author).map(move |i| features::posts::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            org_id: Set(org),
+            author_id: Set(author_id),
+            title: Set(format!("t{i}")),
+            body: Set(format!("b{i}")),
+            ..Default::default()
+        })
+    });
+    features::posts::Entity::insert_many(rows)
+        .exec(connection(app.container()).as_ref())
         .await
         .expect("bulk insert posts");
 
@@ -367,11 +366,11 @@ fn node_ids(connection: &serde_json::Value) -> Vec<String> {
 
 #[tokio::test]
 async fn a_crud_list_pages_on_from_the_last_id_it_served() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
     let mut created = Vec::new();
     for name in ["GqlPage0", "GqlPage1", "GqlPage2"] {
-        created.push(create_org(&app, &admin, name).await);
+        created.push(create_org(&app, &admin, name).await.to_string());
     }
 
     let first = org_ids(&graphql(&app, &admin, "{ orgs(first: 2) { id } }").await);
@@ -403,11 +402,11 @@ fn org_ids(body: &serde_json::Value) -> Vec<String> {
 
 #[tokio::test]
 async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &admin, "GqlFields").await;
-    let admin_org = format!("Bearer {}", token_for(&org, "admin").await);
-    let member = format!("Bearer {}", token_for(&org, "user").await);
+    let admin_org = sign(&app, org, Role::Admin);
+    let member = sign(&app, org, Role::User);
     create_user(&app, &admin_org, "Gql Grace", "gqlgrace@fields.test").await;
 
     let granted = graphql(&app, &member, "{ users { id name } }").await;
@@ -449,12 +448,10 @@ async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
 
 #[tokio::test]
 async fn graphql_create_user_lands_in_the_callers_org_and_a_taken_email_is_a_conflict() {
-    use sea_orm::EntityTrait;
-
-    let (db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &admin, "GqlCreate").await;
-    let member = format!("Bearer {}", token_for(&org, "user").await);
+    let member = sign(&app, org, Role::User);
     let mutation = r#"mutation { createUser(input: {name: "Gql Hopper", email: "hopper@gqlcreate.test"}) { id name } }"#;
 
     let created = graphql(&app, &member, mutation).await;
@@ -467,13 +464,12 @@ async fn graphql_create_user_lands_in_the_callers_org_and_a_taken_email_is_a_con
         .as_str()
         .unwrap_or_else(|| panic!("the created user's id: {created}"));
     let row = features::users::Entity::find_by_id(Uuid::parse_str(id).expect("a uuid id"))
-        .one(db.connection().as_ref())
+        .one(connection(app.container()).as_ref())
         .await
         .expect("read the created row")
         .expect("the created row persisted");
     assert_eq!(
-        row.org_id.to_string(),
-        org,
+        row.org_id, org,
         "the create took the caller's org from its grant",
     );
     assert_eq!(
@@ -508,8 +504,8 @@ pub(crate) async fn graphql(
 
 #[tokio::test]
 async fn graphql_validation_errors_name_the_offending_fields() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
 
     let rejected = graphql(
         &app,
@@ -541,14 +537,14 @@ async fn graphql_validation_errors_name_the_offending_fields() {
 #[tokio::test]
 async fn a_publish_the_database_refuses_answers_in_band_and_leaves_the_post_a_draft() {
     let logs = nest_rs::testing::LogCapture::install();
-    let (db, app) = boot().await;
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &bootstrap, "GqlRefused").await;
-    let admin = format!("Bearer {}", token_for(&org, "admin").await);
+    let admin = sign(&app, org, Role::Admin);
     let author_id =
         Uuid::parse_str(&create_user(&app, &admin, "Author", "author@gqlrefused.test").await)
             .expect("valid user uuid");
-    let author = format!("Bearer {}", token_with_sub(&org, "admin", author_id).await);
+    let author = sign_as(&app, org, Role::Admin, author_id);
     let post = create_post(&app, &author, "Refused", "Once").await;
     features::posts::publication::ActiveModel {
         id: Set(Uuid::now_v7()),
@@ -556,7 +552,7 @@ async fn a_publish_the_database_refuses_answers_in_band_and_leaves_the_post_a_dr
         actor_id: Set(Uuid::now_v7()),
         published_at: Set(nest_rs::seaorm::now()),
     }
-    .insert(db.connection().as_ref())
+    .insert(connection(app.container()).as_ref())
     .await
     .expect("seed the conflicting publication row");
 
@@ -593,10 +589,10 @@ async fn a_publish_the_database_refuses_answers_in_band_and_leaves_the_post_a_dr
 
 #[tokio::test]
 async fn a_field_that_errs_answers_null_beside_the_fields_that_answered() {
-    let (_db, app) = boot().await;
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &bootstrap, "GqlNull").await;
-    let admin = format!("Bearer {}", token_for(&org, "admin").await);
+    let admin = sign(&app, org, Role::Admin);
     let first = create_user(&app, &admin, "Gql First", "gqlfirst@null.test").await;
     let second = create_user(&app, &admin, "Gql Second", "gqlsecond@null.test").await;
 
@@ -641,8 +637,8 @@ async fn a_field_that_errs_answers_null_beside_the_fields_that_answered() {
 
 #[tokio::test]
 async fn a_non_null_field_that_errs_rolls_the_whole_mutation_back_and_runs_no_later_field() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
 
     let reply = graphql(
         &app,

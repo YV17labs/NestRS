@@ -44,7 +44,7 @@ async fn exists(conn: &DatabaseConnection, id: Uuid) -> bool {
 #[tokio::test]
 async fn the_purge_deletes_what_is_past_retention_and_keeps_the_rest() {
     let app = data_app().await;
-    let conn = connection(&app);
+    let conn = connection(app.container());
     let expired = seed_notification(conn.as_ref(), TimeDelta::days(31)).await;
     let kept = seed_notification(conn.as_ref(), TimeDelta::days(29)).await;
 
@@ -61,7 +61,7 @@ async fn the_purge_deletes_what_is_past_retention_and_keeps_the_rest() {
 #[tokio::test]
 async fn the_purge_deletes_nothing_for_a_request_granted_nothing() {
     let app = data_app().await;
-    let conn = connection(&app);
+    let conn = connection(app.container());
     let expired = seed_notification(conn.as_ref(), TimeDelta::days(31)).await;
 
     let nothing = Arc::new(

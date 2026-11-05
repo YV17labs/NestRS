@@ -18,7 +18,7 @@ fn quoted_in_a_log(logs: &LogCapture, text: &str) -> bool {
 
 #[tokio::test]
 async fn audio_transcode_endpoint_enqueues_a_job_for_the_worker() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let file = Uuid::now_v7().to_string();
 
     app.http()
@@ -28,7 +28,7 @@ async fn audio_transcode_endpoint_enqueues_a_job_for_the_worker() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 
-    let bearer = format!("Bearer {}", login().await);
+    let bearer = sign(&app, ORG_ID, Role::Admin);
     let logs = LogCapture::install();
     let resp = app
         .http()
@@ -56,8 +56,8 @@ async fn audio_transcode_endpoint_enqueues_a_job_for_the_worker() {
 
 #[tokio::test]
 async fn a_download_whose_file_is_no_uuid_names_the_parameter_and_never_the_value() {
-    let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", login().await);
+    let app = boot().await;
+    let bearer = sign(&app, ORG_ID, Role::Admin);
     let resp = app
         .http()
         .get("/audio/download?file=not-a-uuid")
@@ -81,8 +81,8 @@ async fn a_download_whose_file_is_no_uuid_names_the_parameter_and_never_the_valu
 
 #[tokio::test]
 async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
-    let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", login().await);
+    let app = boot().await;
+    let bearer = sign(&app, ORG_ID, Role::Admin);
 
     let file = Uuid::now_v7();
     for _ in 0..20 {
@@ -119,12 +119,12 @@ struct AudioWorkerHarness;
 
 #[tokio::test]
 async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
-    let (db, app) = boot_on(RedisDatabase::AudioUpload).await;
+    let app = boot_on(RedisDatabase::AudioUpload).await;
     let http = reqwest::Client::new();
 
     let worker = HeadlessApp::builder()
         .module::<AudioWorkerHarness>()
-        .provide_arc(db.connection())
+        .provide_arc(connection(app.container()))
         .provide(RedisDatabase::AudioUpload.config())
         .build_headless()
         .await
@@ -138,7 +138,7 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
         .await
         .expect("the worker's QueueWorker drains the audio queue");
 
-    let bearer = format!("Bearer {}", login().await);
+    let bearer = sign(&app, ORG_ID, Role::Admin);
 
     let ticket = app
         .http()
@@ -254,11 +254,11 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
 
 #[tokio::test]
 async fn audio_multipart_upload_and_streamed_download_round_trip() {
-    let (db, app) = boot_on(RedisDatabase::AudioMultipart).await;
+    let app = boot_on(RedisDatabase::AudioMultipart).await;
 
     let worker = HeadlessApp::builder()
         .module::<AudioWorkerHarness>()
-        .provide_arc(db.connection())
+        .provide_arc(connection(app.container()))
         .provide(RedisDatabase::AudioMultipart.config())
         .build_headless()
         .await
@@ -272,7 +272,7 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
         .await
         .expect("the worker's QueueWorker drains the audio queue");
 
-    let bearer = format!("Bearer {}", login().await);
+    let bearer = sign(&app, ORG_ID, Role::Admin);
     let filename = "../../escape.mp3";
     let payload = b"nestrs multipart + streaming payload \xf0\x9f\x8e\xa7".to_vec();
 

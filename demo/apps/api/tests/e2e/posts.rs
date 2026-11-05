@@ -15,20 +15,17 @@ use crate::*;
 
 #[tokio::test]
 async fn posts_graphql_scopes_reads_and_publish_transitions() {
-    let (_db, app) = boot().await;
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org_a = create_org(&app, &bootstrap, "PostAcme").await;
     let org_b = create_org(&app, &bootstrap, "PostGlobex").await;
 
-    let admin_a = format!("Bearer {}", token_for(&org_a, "admin").await);
+    let admin_a = sign(&app, org_a, Role::Admin);
     let author_id =
         Uuid::parse_str(&create_user(&app, &admin_a, "Author", "author@postacme.test").await)
             .expect("valid user uuid");
-    let author_a = format!(
-        "Bearer {}",
-        token_with_sub(&org_a, "admin", author_id).await
-    );
-    let admin_b = format!("Bearer {}", token_for(&org_b, "admin").await);
+    let author_a = sign_as(&app, org_a, Role::Admin, author_id);
+    let admin_b = sign(&app, org_b, Role::Admin);
 
     let post_a = create_post(&app, &author_a, "Launch", "Big news").await;
 
@@ -197,11 +194,11 @@ struct NotificationsWorkerHarness;
 
 #[tokio::test]
 async fn a_publish_notifies_its_org_once_after_its_commit_and_never_after_its_rollback() {
-    let (db, app) = boot_on(RedisDatabase::PostsNotify).await;
+    let app = boot_on(RedisDatabase::PostsNotify).await;
 
     let worker = HeadlessApp::builder()
         .module::<NotificationsWorkerHarness>()
-        .provide_arc(db.connection())
+        .provide_arc(connection(app.container()))
         .provide(RedisDatabase::PostsNotify.config())
         .build_headless()
         .await
@@ -215,28 +212,26 @@ async fn a_publish_notifies_its_org_once_after_its_commit_and_never_after_its_ro
         .await
         .expect("the worker's QueueWorker drains the notifications queue");
 
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org_a = create_org(&app, &bootstrap, "NotifyAcme").await;
     let org_b = create_org(&app, &bootstrap, "NotifyGlobex").await;
-    let admin_a = format!("Bearer {}", token_for(&org_a, "admin").await);
-    let admin_b = format!("Bearer {}", token_for(&org_b, "admin").await);
+    let admin_a = sign(&app, org_a, Role::Admin);
+    let admin_b = sign(&app, org_b, Role::Admin);
     let author_id =
         Uuid::parse_str(&create_user(&app, &admin_a, "Author", "author@notify.test").await)
             .expect("valid user uuid");
-    let author_a = format!(
-        "Bearer {}",
-        token_with_sub(&org_a, "admin", author_id).await
-    );
+    let author_a = sign_as(&app, org_a, Role::Admin, author_id);
 
     let launched = create_post(&app, &author_a, "Launch", "Big news").await;
     let refused = create_post(&app, &author_a, "Refused", "Never").await;
+    let conn = connection(app.container());
     features::posts::publication::ActiveModel {
         id: Set(Uuid::now_v7()),
         post_id: Set(Uuid::parse_str(&refused).expect("valid post uuid")),
         actor_id: Set(author_id),
         published_at: Set(nest_rs::seaorm::now()),
     }
-    .insert(db.connection().as_ref())
+    .insert(conn.as_ref())
     .await
     .expect("seed the publication row the refused publish conflicts with");
 
@@ -250,7 +245,6 @@ async fn a_publish_notifies_its_org_once_after_its_commit_and_never_after_its_ro
     publish(&launched).await.assert_status_is_ok();
     publish(&launched).await.assert_status(StatusCode::CONFLICT);
 
-    let conn = db.connection();
     wait_for(Duration::from_secs(20), || async {
         Notifications::find()
             .count(conn.as_ref())
@@ -303,8 +297,8 @@ async fn a_publish_notifies_its_org_once_after_its_commit_and_never_after_its_ro
 
 #[tokio::test]
 async fn a_post_author_denial_files_one_line_on_every_edge() {
-    let (_db, app) = boot().await;
-    let client = format!("Bearer {}", login().await);
+    let app = boot().await;
+    let client = sign(&app, ORG_ID, Role::Admin);
 
     let post = Uuid::now_v7();
 

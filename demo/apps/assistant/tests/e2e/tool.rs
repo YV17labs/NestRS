@@ -1,6 +1,6 @@
-use features::Role;
 use features::authz::constants;
-use features::testing::{ASSISTANT, client, token_with_scopes};
+use features::testing::{claims, client};
+use features::{Claims, Role};
 use nest_rs::core::Discovery;
 use nest_rs::http::HttpEndpointMeta;
 use nest_rs::http::StatusCode;
@@ -18,7 +18,7 @@ fn is_rmcp_own_event_below_info(event: &CapturedEvent) -> bool {
 
 #[tokio::test]
 async fn health_live_probe_is_ok() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     app.http()
         .get("/health/live")
         .send()
@@ -28,7 +28,7 @@ async fn health_live_probe_is_ok() {
 
 #[tokio::test]
 async fn audio_tool_self_mounts_the_mcp_endpoint() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let endpoints = Discovery::new(app.container()).meta::<HttpEndpointMeta>();
     assert!(
         endpoints
@@ -40,7 +40,7 @@ async fn audio_tool_self_mounts_the_mcp_endpoint() {
 
 #[tokio::test]
 async fn mcp_endpoint_refuses_an_unauthenticated_request() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let resp = post_message(
         app.http(),
         SHARED_ENDPOINT,
@@ -58,8 +58,8 @@ async fn mcp_endpoint_refuses_an_unauthenticated_request() {
 
 #[tokio::test]
 async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
-    let (_db, app) = boot().await;
-    let auth = bearer();
+    let app = boot().await;
+    let auth = sign(&app, ORG_ID);
 
     let session = open_session(app.http(), SHARED_ENDPOINT, Some(&auth)).await;
 
@@ -132,17 +132,11 @@ async fn audio_tool_reports_transcode_status_through_a_guarded_session() {
 
 #[tokio::test]
 async fn a_service_token_narrowed_to_reading_posts_is_refused_the_transcode_tool() {
-    let (_db, app) = boot().await;
-    let reader = format!(
-        "Bearer {}",
-        token_with_scopes(
-            ASSISTANT,
-            ORG_ID.parse().expect("a valid org uuid"),
-            vec![Role::Admin],
-            client(),
-            vec![constants::POSTS_READ.into()],
-        )
-    );
+    let app = boot().await;
+    let reader = app.bearer(&Claims {
+        scopes: vec![constants::POSTS_READ.into()],
+        ..claims(ORG_ID, Role::Admin, client())
+    });
 
     let logs = LogCapture::install();
     let body = call_tool_with(

@@ -2372,7 +2372,6 @@ dependencies = [
  "features",
  "migrations",
  "nest-rs",
- "sea-orm",
  "serde_json",
  "tokio",
  "uuid",

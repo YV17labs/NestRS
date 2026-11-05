@@ -10,7 +10,7 @@ const QUIET: std::time::Duration = std::time::Duration::from_millis(150);
 
 #[tokio::test]
 async fn gateway_endpoint_is_mounted() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resp = app.http().get("/ws").send().await;
     resp.assert_status(StatusCode::UNAUTHORIZED);
@@ -18,9 +18,9 @@ async fn gateway_endpoint_is_mounted() {
 
 #[tokio::test]
 async fn gateway_echoes_messages_over_a_real_socket() {
-    let (_db, app) = serve().await;
+    let app = serve().await;
     let ada = Uuid::now_v7();
-    let mut socket = open_as(&app, "/ws", &user_token(ada)).await;
+    let mut socket = open_as(&app, "/ws", &user_bearer(&app, ada)).await;
 
     socket.send("message", json!({ "text": "hello" })).await;
     let echoed = socket.next_envelope().await;
@@ -49,7 +49,7 @@ async fn gateway_echoes_messages_over_a_real_socket() {
 
 #[tokio::test]
 async fn a_request_scoped_provider_is_reachable_per_message_over_ws() {
-    let (_db, app) = serve().await;
+    let app = serve().await;
     let mut socket = open(&app, "/ws").await;
 
     socket.send("seq", Value::Null).await;
@@ -72,9 +72,9 @@ async fn a_request_scoped_provider_is_reachable_per_message_over_ws() {
 
 #[tokio::test]
 async fn a_message_is_broadcast_to_every_connected_client() {
-    let (_db, app) = serve().await;
+    let app = serve().await;
     let alice_id = Uuid::now_v7();
-    let mut alice = open_as(&app, "/ws", &user_token(alice_id)).await;
+    let mut alice = open_as(&app, "/ws", &user_bearer(&app, alice_id)).await;
     let mut bob = open(&app, "/ws").await;
 
     alice.send("message", json!({ "text": "hi all" })).await;
@@ -94,9 +94,9 @@ async fn a_message_is_broadcast_to_every_connected_client() {
 
 #[tokio::test]
 async fn a_message_naming_an_author_is_refused_and_reaches_no_one() {
-    let (_db, app) = serve().await;
+    let app = serve().await;
     let alice_id = Uuid::now_v7();
-    let mut alice = open_as(&app, "/ws", &user_token(alice_id)).await;
+    let mut alice = open_as(&app, "/ws", &user_bearer(&app, alice_id)).await;
     wait_for_presence(&mut alice, 1).await;
     let mut mallory = open(&app, "/ws").await;
     wait_for_presence(&mut alice, 2).await;
@@ -130,9 +130,9 @@ async fn a_message_naming_an_author_is_refused_and_reaches_no_one() {
 
 #[tokio::test]
 async fn typing_is_broadcast_under_the_callers_name() {
-    let (_db, app) = serve().await;
+    let app = serve().await;
     let alice_id = Uuid::now_v7();
-    let mut alice = open_as(&app, "/ws", &user_token(alice_id)).await;
+    let mut alice = open_as(&app, "/ws", &user_bearer(&app, alice_id)).await;
     let mut bob = open(&app, "/ws").await;
 
     alice.send("typing", json!({ "text": "..." })).await;
@@ -150,10 +150,10 @@ async fn typing_is_broadcast_under_the_callers_name() {
 
 #[tokio::test]
 async fn lifecycle_hooks_track_presence_and_the_posting_gate_refuses_a_token_naming_no_user() {
-    let (_db, app) = serve().await;
+    let app = serve().await;
     let mut alice = open(&app, "/ws").await;
     wait_for_presence(&mut alice, 1).await;
-    let mut bot = open_as(&app, "/ws", &machine_token()).await;
+    let mut bot = open_as(&app, "/ws", &machine_bearer(&app)).await;
     wait_for_presence(&mut alice, 2).await;
 
     let logs = LogCapture::install();
@@ -179,7 +179,7 @@ async fn lifecycle_hooks_track_presence_and_the_posting_gate_refuses_a_token_nam
 
 #[tokio::test]
 async fn namespaced_gateways_isolate_their_broadcasts() {
-    let (_db, app) = serve().await;
+    let app = serve().await;
     let mut chat = open(&app, "/ws").await;
     let mut notify = open(&app, "/notify").await;
 
@@ -198,7 +198,7 @@ async fn namespaced_gateways_isolate_their_broadcasts() {
 
 #[tokio::test]
 async fn an_oversized_message_is_rejected_and_closes_the_socket() {
-    let (_db, app) = serve().await;
+    let app = serve().await;
     let mut socket = open(&app, "/ws").await;
 
     let oversized = "x".repeat(128 * 1024);
@@ -216,8 +216,7 @@ async fn an_oversized_message_is_rejected_and_closes_the_socket() {
 
 #[tokio::test]
 async fn the_socket_lifetime_ceiling_closes_the_socket() {
-    let (_db, builder) = boot_builder().await;
-    let app = builder
+    let app = builder()
         .provide(nest_rs::ws::WsConfig {
             max_connection: Some(std::time::Duration::from_secs(1)),
             ..Default::default()

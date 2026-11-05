@@ -78,6 +78,24 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     });
 
+    // Both phases, after the imports: what a host runs on is there when the
+    // fixpoint below builds a provider injecting it.
+    let host_runtimes: Vec<proc_macro2::TokenStream> = groups
+        .iter()
+        .map(|group| {
+            let provider = match group {
+                ProviderGroup::Concrete(p) => p,
+                ProviderGroup::Dyn { provider, .. } => provider,
+            };
+            quote! {
+                builder = ::nest_rs_core::__private::import_host_runtime(
+                    builder,
+                    ::std::any::TypeId::of::<#provider>(),
+                );
+            }
+        })
+        .collect();
+
     // A dynamic import is named by its value's type, without evaluating it.
     let import_type_ids = args.imports.iter().map(|import| match import {
         Expr::Path(p) => {
@@ -293,6 +311,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 
         quote! {
             #(#import_calls)*
+            #(#host_runtimes)*
             let mut __done = [false; #count];
             loop {
                 let mut __pending_keys: ::std::vec::Vec<::std::any::TypeId> =
@@ -373,6 +392,7 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
                 _: ::nest_rs_core::Collecting<Self>,
             ) -> ::nest_rs_core::ContainerBuilder {
                 #(#collect_calls)*
+                #(#host_runtimes)*
                 builder
             }
         }

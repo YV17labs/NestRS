@@ -201,8 +201,8 @@ Its `collect` and its `register` each end on `.import::<RedisModule<I>>()`: a
 binding imports the module opening what it runs on, bare, so an app writes the
 binding alone and names that module only to pin it.
 
-An app running jobs imports your module beside its queue adapters, which
-import `QueueModule`; one only pushing imports no queue adapter, so no worker. Checkpoint: the worker app's boot logs
+An app running jobs imports your module beside its queue adapters, whose hosts
+bring `QueueModule`; one only pushing imports no queue adapter, so no worker. Checkpoint: the worker app's boot logs
 `transport attached transport="queue"`.
 
 ## Budget and net

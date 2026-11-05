@@ -1,7 +1,7 @@
 //! [`RedisQueueModule`] — binds the queue port over the shared
 //! [`RedisConnection`]: the producer a feature pushes through, and the consumer
-//! the port's `QueueWorker` runs jobs with when the app imports
-//! `QueueModule`.
+//! the port's `QueueWorker` runs jobs with when the app reaches a `#[process]`
+//! host, which brings `QueueModule`.
 
 use std::borrow::Borrow;
 use std::marker::PhantomData;
@@ -17,7 +17,7 @@ use crate::instance::RedisInstance;
 use crate::{RedisConnection, RedisError, RedisModule};
 
 /// The Redis queue binding: an app pushing jobs injects the port's `Arc<Jobs>`,
-/// and a queue adapter brings the `QueueModule` that runs them. A bare import
+/// and an app running them imports a queue adapter beside it. A bare import
 /// reads `<PREFIX>_REDIS__QUEUE__*`; [`for_root`](RedisQueueModule::for_root)
 /// pins the base those variables overlay. It queues on the default instance's
 /// connection, or on a named one's — `RedisQueueModule::<Background>` reading

@@ -101,6 +101,10 @@ An edge is two decorators (`CLAUDE.md`, hard "no"). The table is closed:
 | queue / schedule / events / health / lifecycle | `#[injectable]` | `#[processor]` / `#[scheduled]` / `#[listeners]` / `#[indicators]` / `#[hooks]` |
 
 The struct half is named for the host role, the impl half for what it collects.
+**The half emitting a host's `Discoverable` brings what its edge runs on**
+(`nest_rs_codegen::__private::host_runtime_entry`, over its crate's
+`__private::RUNTIME`), and a provider-hosted pair, whose `Discoverable` is
+`#[injectable]`'s, per dispatched method under its `#[cfg]`s.
 One attribute on two item shapes would give two grammars one rustdoc page and
 one go-to-definition. Held by `nest_rs_codegen::__private::pair::ALL` — a
 `DecoratorPair` is constructible only there, and both halves parse through it —

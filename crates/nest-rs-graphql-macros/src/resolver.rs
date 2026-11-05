@@ -21,13 +21,13 @@ use nest_rs_codegen::__private::{
     answer_span, at_most_one_authorize, authorized_entity, await_if_async, build_injectable_body,
     camel_case, cfg_attrs, concrete_signature, delegated_attrs, exception_filter_specs,
     force_guard_typeids, forwarded_arg_idents, forwarded_idents, from_container_method,
-    guard_capability_bounds, handler_const, handler_ref, host_meta_fn, impl_self_ident,
-    injected_keys_with_layers, injected_methods_with_layers, injected_names_with_layers,
-    injected_optional_fns, injected_per_request_method, injects_impls, interceptor_specs,
-    key_as_written, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
-    piped_input, posture_contradiction, reject_meta_on_operations, scoped_specs, shared_receiver,
-    site_const_ident, site_fn_ident, site_ref, spelled, tail_param, takes_value, type_label,
-    unit_of_work_required, unknown_argument, validate_argument,
+    guard_capability_bounds, handler_const, handler_ref, host_meta_fn, host_runtime_entry,
+    impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
+    injected_names_with_layers, injected_optional_fns, injected_per_request_method, injects_impls,
+    interceptor_specs, key_as_written, layer_deps, normalize_forwarded_args, nth_generic_type,
+    one_role_per_method, piped_input, posture_contradiction, reject_meta_on_operations,
+    scoped_specs, shared_receiver, site_const_ident, site_fn_ident, site_ref, spelled, tail_param,
+    takes_value, type_label, unit_of_work_required, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -1536,6 +1536,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     );
 
     let crossings = declared.crossings();
+    let host_runtime = host_runtime_entry(
+        &self_ty,
+        &quote!(::nest_rs_graphql::__private::RUNTIME),
+        &[],
+    );
 
     Ok(quote! {
         #item
@@ -1573,6 +1578,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         #mutation_block
         #subscription_block
         #(#field_blocks)*
+
+        #host_runtime
 
         impl ::nest_rs_core::Discoverable for #self_ty {
             #injected_methods

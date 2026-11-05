@@ -195,6 +195,7 @@ async fn a_message_guard_no_module_provides_fails_the_boot_naming_it_and_its_mes
     // Built by hand, so neither the access graph nor the wiring step refuses first.
     let container = nest_rs_core::Container::builder()
         .provide(WsConfig::default())
+        .provide(nest_rs_http::HttpConfig::default())
         .import::<UnprovidedModule>()
         .build()
         .expect("the container builds");
@@ -239,6 +240,7 @@ struct UnprovidedUpgradeModule;
 async fn an_upgrade_guard_no_module_provides_fails_the_boot_naming_it_and_the_gateway() {
     let container = nest_rs_core::Container::builder()
         .provide(WsConfig::default())
+        .provide(nest_rs_http::HttpConfig::default())
         .import::<UnprovidedUpgradeModule>()
         .build()
         .expect("the container builds");

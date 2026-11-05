@@ -1,19 +1,16 @@
-//! Covers `src/module.rs` — a `#[process]` host the app reaches without
-//! `QueueModule` is named at run, with the import that serves it, and one the
-//! worker serves is not.
+//! Covers `src/module.rs` — a listed `#[process]` host brings `QueueModule`, so
+//! the app importing its adapter attaches the worker, and a host whose methods
+//! are all compiled out brings nothing.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::{App, AppLifecycle, injectable, module, target};
-use nest_rs_queue::{BoundConsumer, Jobs, QueueModule, processor, queue};
-use nest_rs_testing::LogCapture;
+use nest_rs_core::{App, AppLifecycle, Module, injectable, module, target};
+use nest_rs_queue::{BoundConsumer, Jobs, QueueConfig, processor, queue};
+use nest_rs_testing::{HeadlessApp, LogCapture};
 use serde::{Deserialize, Serialize};
 
 use crate::memory::{Memory, PLAIN};
-
-/// What `App::run` files for a host whose edge's transport the app does not attach.
-const UNSERVED: &str = "host not served: its edge's transport is not attached";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ReindexCommand {
@@ -35,50 +32,67 @@ impl ReindexProcessor {
     }
 }
 
-/// A hand-written adapter that forgets the worker.
+/// An adapter as a developer writes it: the processor, and nothing of the
+/// edge's.
 #[module(providers = [ReindexProcessor])]
 struct ReindexQueueModule;
 
-#[tokio::test]
-async fn a_process_host_the_app_reaches_without_the_worker_is_named_at_run() {
-    let logs = LogCapture::install();
-
-    App::builder()
-        .module::<ReindexQueueModule>()
-        .build()
+/// The app `M` composes, booted with no transport started.
+async fn booted<M: Module>() -> HeadlessApp {
+    HeadlessApp::builder()
+        .module::<M>()
+        .build_headless()
         .await
         .expect("the module boots")
-        .run()
-        .await
-        .expect("an app serving nothing stops cleanly");
+}
 
-    let unserved = logs.expect_one(target::APP, UNSERVED);
-    assert_eq!(unserved.level, "warn");
-    assert_eq!(unserved.field("edge").as_deref(), Some("queue"));
-    assert_eq!(unserved.field("host").as_deref(), Some("ReindexProcessor"));
-    assert_eq!(
-        unserved.field("module").as_deref(),
-        Some("ReindexQueueModule")
+#[tokio::test]
+async fn a_listed_process_host_brings_the_worker_and_reads_its_config() {
+    let app = booted::<ReindexQueueModule>().await;
+
+    assert!(
+        app.container().get::<QueueConfig>().is_some(),
+        "the bare import reads the edge's variables",
     );
-    assert_eq!(
-        unserved.field("import").as_deref(),
-        Some("nest_rs::queue::QueueModule")
+    assert_eq!(app.attached_transports(), ["queue"]);
+}
+
+#[injectable]
+#[derive(Default)]
+struct DisabledProcessor;
+
+#[processor]
+impl DisabledProcessor {
+    #[cfg(any())]
+    #[process(queue = ReindexQueue)]
+    async fn reindex(&self, _job: ReindexCommand) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[module(providers = [DisabledProcessor])]
+struct DisabledQueueModule;
+
+/// A worker with nothing to run would refuse an app binding no backend.
+#[tokio::test]
+async fn a_process_host_whose_methods_are_compiled_out_brings_no_worker() {
+    assert!(
+        booted::<DisabledQueueModule>()
+            .await
+            .attached_transports()
+            .is_empty()
     );
 }
 
-/// The processor's adapter beside the worker.
-#[module(imports = [QueueModule, ReindexQueueModule])]
-struct ServedReindexModule;
-
 #[tokio::test]
-async fn a_process_host_the_worker_serves_is_not_named_at_run() {
+async fn a_listed_process_host_is_served_over_the_bound_backend() {
     let logs = LogCapture::install();
     let memory = Memory::new(&PLAIN, Duration::from_secs(30));
     let producer = Jobs::new(Arc::new(memory.clone()));
     let app = App::builder()
         .provide(BoundConsumer::new(memory.consumer()))
         .provide(producer)
-        .module::<ServedReindexModule>()
+        .module::<ReindexQueueModule>()
         .build()
         .await
         .expect("the module boots over the in-memory backend");
@@ -87,14 +101,11 @@ async fn a_process_host_the_worker_serves_is_not_named_at_run() {
         .get::<AppLifecycle>()
         .expect("every app is seeded its lifecycle");
 
-    // `App::run` names an unserved host before it turns ready, so the run is
-    // dropped there.
     let running = tokio::spawn(app.run());
     assert!(lifecycle.ready().await, "the app serves");
     running.abort();
 
     logs.expect_one(target::APP, "app ready");
-    logs.expect_none(target::APP, UNSERVED);
 }
 
 /// A `#[process]` method the worker serves is one `mounted` line naming its
@@ -106,7 +117,7 @@ async fn a_process_method_the_worker_serves_is_mounted_naming_its_host_and_metho
     let app = App::builder()
         .provide(BoundConsumer::new(memory.consumer()))
         .provide(Jobs::new(Arc::new(memory.clone())))
-        .module::<ServedReindexModule>()
+        .module::<ReindexQueueModule>()
         .build()
         .await
         .expect("the module boots over the in-memory backend");

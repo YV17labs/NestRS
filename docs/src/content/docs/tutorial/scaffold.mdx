@@ -121,8 +121,8 @@ writes it, and `tokio` only for the tests, which write `#[tokio::test]`:
 `#[nest_rs::main]` builds the runtime `main` runs on itself.
 
 The root module lists the edges the app serves. `BlogHttpModule`, the
-feature's HTTP adapter, imports `HttpModule` itself, so the app names no
-transport: it would write `HttpModule::for_root(..)` only to pin a setting in
+feature's HTTP adapter, lists a controller, which brings `HttpModule`, so the app
+names no transport: it would write `HttpModule::for_root(..)` only to pin a setting in
 code. Every `<PREFIX>_HTTP__*` setting comes from the environment — the listen
 port from the app's own `.env`:
 

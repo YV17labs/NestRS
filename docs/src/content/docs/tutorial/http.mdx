@@ -187,21 +187,20 @@ narrows it down to what a given caller may actually touch.
 ## The HTTP module
 
 The feature's HTTP adapter is a separate module. It imports the port
-(`PostsModule`), `AuthzModule`, which is what makes the ability guard
-reachable — omit it and the access graph fails the boot by name — and
-`HttpModule`, the server its controller is served on, so an app importing the
-adapter serves it.
+(`PostsModule`) and `AuthzModule`, which is what makes the ability guard
+reachable — omit it and the access graph fails the boot by name. The controller
+brings `HttpModule`, the server it is served on, so an app importing the adapter
+serves it.
 
 ```rust title="crates/features/src/posts/http/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
 
 use super::controller::PostsController;
 use crate::authz::AuthzModule;
 use crate::posts::PostsModule;
 
 #[module(
-    imports = [PostsModule, AuthzModule, HttpModule],
+    imports = [PostsModule, AuthzModule],
     providers = [PostsController],
 )]
 pub struct PostsHttpModule;

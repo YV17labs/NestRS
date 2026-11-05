@@ -270,6 +270,7 @@ pub mod __private {
         attached, attached_pending, behind_guards, check_request, denial_to_http_error,
         denial_to_http_response,
     };
+    pub use crate::module::RUNTIME;
     pub use crate::origin::OriginScheme;
     pub use crate::pipe::piped;
     pub use crate::problem::{framework_sentence, method_not_allowed};

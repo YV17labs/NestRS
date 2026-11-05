@@ -91,9 +91,10 @@ impl McpMount {
     ///   step composed;
     /// * the bound `dyn UnitOfWork` each request operation runs its unit of work
     ///   through — without one a `Repo`-backed handler fails **closed**;
-    /// * [`McpConfig`], if `McpModule` was imported, else its defaults, its
-    ///   host allowlist admitting the host a module names the deployment by
-    ///   (`OAuthResourceModule`'s resource) unless the list was emptied;
+    /// * [`McpConfig`], which a listed host's `McpModule` resolves, else its
+    ///   defaults, its host allowlist admitting the host a module names the
+    ///   deployment by (`OAuthResourceModule`'s resource) unless the list was
+    ///   emptied;
     /// * a registered `dyn SessionStore` (rmcp 3.x cross-instance session
     ///   recovery), if the app provides one;
     /// * the access the app declared, `McpAccess`.

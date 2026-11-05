@@ -67,7 +67,7 @@ fn app_port(app: &Path) -> CliResult<Option<u16>> {
 
 /// Whether an app's root `module` imports anything listening on HTTP: a
 /// framework module mounting there, or a feature's adapter of an edge served
-/// over it (`BlogHttpModule`, `ChatWsModule`), which imports the transport.
+/// over it (`BlogHttpModule`, `ChatWsModule`), whose host brings the transport.
 fn listens_on_http(module: &str) -> bool {
     module
         .lines()

@@ -19,7 +19,7 @@ graph from each app's root.
 |---|---|---|
 | `RedisModule` | Opens the Redis connection every Redis binding shares — the queue's producer and consumer, the rate-limit store, the schedule's lock; a [second Valkey](/queue/topologies/#a-second-valkey) is a named instance. A bare import reads `<PREFIX>_REDIS__*`; `for_root(cfg)` pins the base. | Each Redis binding, bare, by the instance it runs on. A root names it to pin it, or for a connection it injects with no binding. |
 | `RedisQueueModule` | Binds the queue port over that connection: `Jobs`, the portable handle a feature injects to enqueue, and the consumer the worker runs jobs through. A bare import reads `<PREFIX>_REDIS__QUEUE__*`; `for_root(RedisQueueConfig { lease })` pins the base — see [Delivery on Redis](/queue/delivery/#configuration). | Every app that enqueues or runs jobs. |
-| `QueueModule` | From `nest_rs::queue`: contributes the port's `QueueWorker` transport, which discovers the reachable `#[process]` methods at boot and runs each over the bound consumer; its own setting is the drain window, `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, which `for_root(cfg)` pins at the app's root. | Each queue adapter (`AudioQueueModule`), bare — so only an app importing one runs a worker. |
+| `QueueModule` | From `nest_rs::queue`: contributes the port's `QueueWorker` transport, which discovers the reachable `#[process]` methods at boot and runs each over the bound consumer; its own setting is the drain window, `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, which `for_root(cfg)` pins at the app's root. | Brought, bare, by each `#[processor]` host (`AudioQueueModule`'s) — so only an app importing a queue adapter runs a worker. |
 
 The `redis-queue` feature compiles all three. Each Redis binding is a feature of
 its own — `redis-queue`, `redis-throttler`, `redis-schedule` — and `redis` is the
@@ -64,8 +64,8 @@ dead".
 
 The worker imports the queue's Redis binding, which opens the connection, and
 each feature's queue adapter. That's it — `AudioQueueModule` pulls in the
-`AudioModule` port and the `QueueModule` that runs its jobs; the backend
-binding is the one line the adapter leaves to the root, which chooses it.
+`AudioModule` port, and its processor the `QueueModule` that runs its jobs; the
+backend binding is the one line the adapter leaves to the root, which chooses it.
 
 ```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
@@ -106,9 +106,9 @@ At boot:
    the Redis consumer as the port's `BoundConsumer`, with its lease read from
    `<PREFIX>_REDIS__QUEUE__*`.
 4. `AudioQueueModule` brings `AudioProcessor` (the `#[processor]` host) and
-   its `#[process]` methods into the reachable set, and imports
+   its `#[process]` methods into the reachable set, and the host brings
    `QueueModule`, which contributes the `QueueWorker` transport — once,
-   however many adapters import it — with its drain window read from
+   however many hosts bring it — with its drain window read from
    `<PREFIX>_QUEUE__*`.
 5. `QueueWorker::configure` discovers `inventory::iter::<ProcessMethod>()`,
    keeps only the methods whose provider is reachable, refuses what the

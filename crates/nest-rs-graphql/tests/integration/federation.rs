@@ -1455,9 +1455,13 @@ mod keyed_outside_a_subgraph {
     /// Built by hand, so no wiring step refuses the keyed schema first.
     #[tokio::test]
     async fn a_pool_refuses_the_sdl_of_a_schema_keyed_outside_a_subgraph() {
-        let builder = Container::builder().import::<CatalogProviders>().provide(
-            nest_rs_core::__private::reachable_providers([TypeId::of::<CatalogResolver>()]),
-        );
+        let builder = Container::builder()
+            .provide(GraphqlConfig::default())
+            .provide(nest_rs_http::HttpConfig::default())
+            .import::<CatalogProviders>()
+            .provide(nest_rs_core::__private::reachable_providers([
+                TypeId::of::<CatalogResolver>(),
+            ]));
         let container = GlobalGuards::<(Closed,)>::register(builder)
             .build()
             .expect("the container builds");

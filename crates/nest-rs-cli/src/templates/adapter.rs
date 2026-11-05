@@ -15,21 +15,19 @@ mod module;
 pub use module::{{tmodule}};
 "#;
 
-/// Adapter `module.rs` — imports the port and the framework modules serving
-/// its edge, provides the handler. `{{runtime_uses}}` / `{{runtime_imports}}`
-/// are [`Transport::runtime`](crate::naming::Transport::runtime), rendered.
+/// Adapter `module.rs` — imports the port, provides the handler, whose edge
+/// decorator brings what serves it, so the app importing the adapter serves it
+/// with no import of its own; only the app pins one.
 ///
 /// **Every adapter imports the port**, the queue's included: a processor
 /// handing the job to the port service would otherwise fail the access graph.
-/// **And what serves its edge**, bare, so the app importing the adapter serves
-/// it with no import of its own; only the app pins one.
 pub(crate) const MODULE: &str = r#"use nest_rs::core::module;
-{{runtime_uses}}
+
 use super::{{handler_mod}}::{{handler}};
 use crate::{{snake}}::{{module}};
 
 #[module(
-    imports = [{{module}}{{runtime_imports}}],
+    imports = [{{module}}],
     providers = [{{handler}}],
 )]
 pub struct {{tmodule}};

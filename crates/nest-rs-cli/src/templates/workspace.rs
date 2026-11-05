@@ -123,8 +123,8 @@ async fn main() -> Result<()> {
 /// Composition only — the app's own module name and the feature module it
 /// serves share a snake name, in two different crates (`BlogModule` in
 /// `apps/blog/src/module.rs`, `BlogModule` in `crates/features/src/blog/`).
-/// It lists the edges the app serves; each adapter imports what serves its
-/// edge, so the root names one only to pin it.
+/// It lists the edges the app serves; each adapter's handler brings what serves
+/// its edge, so the root names one only to pin it.
 pub(crate) const APP_MODULE: &str = r#"use nest_rs::core::module;
 
 use features::{{snake}}::{{http_module}};

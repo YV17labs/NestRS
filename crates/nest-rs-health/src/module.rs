@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::__private::{EdgeHosts, ModuleDescriptor, ProbeRuntime};
+use nest_rs_core::__private::{ModuleDescriptor, ProbeHosts, ProbeRuntime};
 use nest_rs_core::{Container, ContainerBuilder, Module, ReachableProviders, Registering, module};
 use nest_rs_http::HttpModule;
 
@@ -55,7 +55,7 @@ fn serves_probes(container: &Container) -> bool {
 
 /// Every `#[indicators]` host this binary links, named as the module listing
 /// it names it.
-fn indicator_hosts(_: &Container) -> EdgeHosts {
+fn indicator_hosts(_: &Container) -> ProbeHosts {
     nest_rs_core::inventory::iter::<HealthIndicator>()
         .filter_map(|indicator| {
             let host = indicator.provider_type_id();

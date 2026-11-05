@@ -16,7 +16,7 @@ use nest_rs_codegen::__private::{
     Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta, Posture,
     PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs, concrete_signature,
     declared_handler, exception_filter_specs, force_guard_typeids, guard_capability_bounds,
-    handler_const, handler_ref, impl_self_ident, injected_methods_with_layers,
+    handler_const, handler_ref, host_runtime_entry, impl_self_ident, injected_methods_with_layers,
     injected_per_request_method, interceptor_specs, layer_deps, one_role_per_method, piped_input,
     reject_meta_on_operations, returns_unit, scoped_specs, shared_receiver, tail_param,
     takes_value, ungrouped_expr, validate_argument,
@@ -537,6 +537,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
     };
+    let host_runtime = host_runtime_entry(&self_ty, &quote!(::nest_rs_ws::__private::RUNTIME), &[]);
 
     quote! {
         #item
@@ -612,6 +613,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
             #(#hooks)*
         }
+
+        #host_runtime
 
         impl ::nest_rs_core::Discoverable for #self_ty {
             #injected_methods

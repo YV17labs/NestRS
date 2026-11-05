@@ -1,15 +1,12 @@
 //! Covers `src/module.rs` — a setup imported twice mounts `/graphql` once,
-//! the module attaches the HTTP transport it mounts on, a resolver the app
-//! reaches without it is named at run, even beside the transport, and one it
-//! serves is not, and a container no app sealed mounts no schema.
+//! the module attaches the HTTP transport it mounts on, a listed resolver
+//! brings it, even beside the transport alone, and a container no app sealed
+//! mounts no schema.
 
-use nest_rs_core::{App, AppLifecycle, Discovery, Module, TransportContribution, module, target};
+use nest_rs_core::{Discovery, module};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::{HttpConfig, HttpEndpointMeta, HttpModule};
-use nest_rs_testing::{LogCapture, TestApp};
-
-/// What `App::run` files for a host whose edge's transport the app does not attach.
-const UNSERVED: &str = "host not served: its edge's transport is not attached";
+use nest_rs_testing::{HeadlessApp, TestApp};
 
 #[resolver]
 struct PingResolver;
@@ -72,112 +69,38 @@ async fn a_bare_import_beside_the_configured_one_mounts_the_endpoint_once() {
 
 #[tokio::test]
 async fn the_module_attaches_the_http_transport_it_mounts_on() {
-    let app = App::builder()
+    let app = HeadlessApp::builder()
         .module::<ConfiguringPingModule>()
-        .build()
+        .build_headless()
         .await
         .expect("the module boots");
 
-    let transports: Vec<String> = Discovery::new(app.container())
-        .meta::<TransportContribution>()
-        .iter()
-        .map(|contribution| contribution.meta.name().to_owned())
-        .collect();
-    assert_eq!(transports, ["http"]);
+    assert_eq!(app.attached_transports(), ["http"]);
 }
 
-/// A hand-written adapter that forgets the endpoint.
+/// An adapter as a developer writes it: the resolver, and nothing of the edge's.
 #[module(providers = [PingResolver])]
 struct PingGraphqlModule;
 
+/// The transport pinned, and the resolver's adapter beside it.
+#[module(imports = [HttpModule::for_root(HttpConfig::default()), PingGraphqlModule])]
+struct TransportBesideApp;
+
 #[tokio::test]
-async fn a_resolver_the_app_reaches_without_the_endpoint_is_named_at_run() {
-    let logs = LogCapture::install();
-
-    App::builder()
+async fn a_listed_resolver_brings_the_endpoint_and_the_transport_it_mounts_on() {
+    mounts_once::<PingGraphqlModule>().await;
+    let app = HeadlessApp::builder()
         .module::<PingGraphqlModule>()
-        .build()
-        .await
-        .expect("the module boots")
-        .run()
-        .await
-        .expect("an app serving nothing stops cleanly");
-
-    let unserved = logs.expect_one(target::APP, UNSERVED);
-    assert_eq!(unserved.level, "warn");
-    assert_eq!(unserved.field("edge").as_deref(), Some("graphql"));
-    assert_eq!(unserved.field("host").as_deref(), Some("PingResolver"));
-    assert_eq!(
-        unserved.field("module").as_deref(),
-        Some("PingGraphqlModule")
-    );
-    assert_eq!(
-        unserved.field("import").as_deref(),
-        Some("nest_rs::graphql::GraphqlModule")
-    );
-}
-
-/// The resolver's adapter beside the transport, on a free loopback port.
-#[module(imports = [HttpModule::for_root(loopback()), BarePingModule])]
-struct ServedPingModule;
-
-/// The transport attached, and the adapter forgetting the endpoint.
-#[module(imports = [HttpModule::for_root(loopback()), PingGraphqlModule])]
-struct EndpointlessPingModule;
-
-fn loopback() -> HttpConfig {
-    HttpConfig {
-        host: "127.0.0.1".into(),
-        port: 0,
-        ..HttpConfig::default()
-    }
-}
-
-/// Runs the app `M` composes until it serves: `App::run` names an unserved
-/// host before it turns ready, so the run is dropped there.
-async fn run_until_ready<M: Module + 'static>() {
-    let app = App::builder()
-        .module::<M>()
-        .build()
+        .build_headless()
         .await
         .expect("the module boots");
-    let lifecycle = app
-        .container()
-        .get::<AppLifecycle>()
-        .expect("every app is seeded its lifecycle");
-    let running = tokio::spawn(app.run());
-    assert!(lifecycle.ready().await, "the app serves");
-    running.abort();
+
+    assert_eq!(app.attached_transports(), ["http"]);
 }
 
 #[tokio::test]
-async fn a_resolver_the_endpoint_serves_is_not_named_at_run() {
-    let logs = LogCapture::install();
-
-    run_until_ready::<ServedPingModule>().await;
-
-    logs.expect_one(target::APP, "app ready");
-    logs.expect_none(target::APP, UNSERVED);
-}
-
-#[tokio::test]
-async fn a_resolver_reached_beside_the_transport_without_the_endpoint_is_named_at_run() {
-    let logs = LogCapture::install();
-
-    run_until_ready::<EndpointlessPingModule>().await;
-
-    logs.expect_one(target::APP, "app ready");
-    let unserved = logs.expect_one(target::APP, UNSERVED);
-    assert_eq!(unserved.field("edge").as_deref(), Some("graphql"));
-    assert_eq!(unserved.field("host").as_deref(), Some("PingResolver"));
-    assert_eq!(
-        unserved.field("module").as_deref(),
-        Some("PingGraphqlModule")
-    );
-    assert_eq!(
-        unserved.field("import").as_deref(),
-        Some("nest_rs::graphql::GraphqlModule")
-    );
+async fn a_listed_resolver_brings_the_endpoint_beside_the_transport_alone() {
+    mounts_once::<TransportBesideApp>().await;
 }
 
 /// A mount has no `Result`: the schema's discovery files its refusal on the

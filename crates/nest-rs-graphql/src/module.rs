@@ -1,19 +1,15 @@
 //! `GraphqlModule` — import it to serve the auto-discovered schema over HTTP.
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use nest_rs_config::{ConfigModule, ConfigSetup, Namespaced as _};
-use nest_rs_core::__private::{
-    EdgeHosts, EdgeRuntime, RequestScopes, attaches_transport, refuse_site,
-};
+use nest_rs_core::__private::{RequestScopes, RuntimeModule, refuse_site};
 use nest_rs_core::anyhow;
 use nest_rs_core::{
-    Collecting, Container, ContainerBuilder, Discovery, Edge, Module, ReachableProviders,
-    Registering, Unnamed, inventory,
+    Collecting, Container, ContainerBuilder, Module, ReachableProviders, Registering, Unnamed,
 };
 use nest_rs_http::__private::{OriginCheck, OriginRefused, checks_origin};
-use nest_rs_http::{DetachedWork, HttpEndpointMeta, HttpModule, HttpRoutes, HttpTransport, Method};
+use nest_rs_http::{DetachedWork, HttpEndpointMeta, HttpModule, HttpRoutes, Method};
 
 use crate::config::GraphqlConfig;
 use crate::context::{ENDPOINT, OperationBridge};
@@ -30,10 +26,9 @@ use crate::view::GraphqlView;
 /// it is enabled. The schema composes itself from the resolver registry.
 ///
 /// It imports [`HttpModule`] bare, so the endpoint is served wherever it is
-/// imported. A GraphQL adapter imports `GraphqlModule` bare beside the
-/// resolvers it lists, and the endpoint mounts once however many do; the app
-/// imports [`GraphqlModule::for_root`] only to pin a [`GraphqlConfig`]. A
-/// resolver the app reaches without it is named at `warn` when the app runs.
+/// imported. A listed resolver brings `GraphqlModule` bare, and the endpoint
+/// mounts once however many do; the app imports [`GraphqlModule::for_root`]
+/// only to pin a [`GraphqlConfig`].
 ///
 /// The bare import, and a pin over [`GraphqlConfig::default`], serve the
 /// playground and answer introspection under a declared development or test
@@ -235,31 +230,9 @@ fn check_membership(reachable: &ReachableProviders, strict: bool) -> anyhow::Res
     Ok(())
 }
 
-nest_rs_core::inventory::submit! {
-    EdgeRuntime {
-        edge: Edge::Graphql,
-        import: "nest_rs::graphql::GraphqlModule",
-        attached: serves_graphql,
-        hosts: resolver_hosts,
-    }
-}
-
-/// Whether the app `container` was booted for mounts `/graphql` on a served
-/// HTTP transport.
-fn serves_graphql(container: &Container) -> bool {
-    attaches_transport::<HttpTransport>(container)
-        && Discovery::new(container)
-            .meta::<HttpEndpointMeta>()
-            .iter()
-            .any(|endpoint| std::ptr::eq(endpoint.meta.handler(), &ENDPOINT))
-}
-
-/// Every `#[resolver]` this binary links.
-fn resolver_hosts(_: &Container) -> EdgeHosts {
-    inventory::iter::<crate::resolver::ResolverDescriptor>()
-        .map(|resolver| ((resolver.resolver)(), Cow::Borrowed(resolver.name)))
-        .collect()
-}
+/// What a `#[resolver]` runs on, which `#[operations]` brings: the module
+/// mounting the endpoint, which imports the transport it mounts on.
+pub const RUNTIME: &[RuntimeModule] = &[RuntimeModule::of::<GraphqlModule>()];
 
 /// A graphql-ws upgrade from a browser origin the transport's policy refuses,
 /// filed on this edge's target.

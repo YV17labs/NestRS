@@ -2,23 +2,21 @@
 //! attaches the [`QueueWorker`] that runs every reachable
 //! `#[process]` method over the queue backend a binding bound.
 
-use std::borrow::Cow;
-
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::__private::{EdgeHosts, EdgeRuntime, attaches_transport};
-use nest_rs_core::{
-    Collecting, Container, ContainerBuilder, Edge, Module, Registering, Unnamed, inventory,
-};
+use nest_rs_core::__private::RuntimeModule;
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, Unnamed};
 
-use crate::{ProcessMethod, QueueConfig, QueueWorker};
+use crate::{QueueConfig, QueueWorker};
 
-/// Attaches the [`QueueWorker`] to a worker app. A queue adapter imports it
-/// bare beside the processor it lists, so the app importing the adapter runs
-/// its jobs, and a producer-only app, which imports no adapter, attaches no
-/// worker; a backend binding at the app's root (Redis's `RedisQueueModule`)
-/// supplies the consumer the worker runs. A `#[process]` host the app reaches
-/// without it is named at `warn` when the app runs.
+/// Attaches the [`QueueWorker`] to a worker app. A listed `#[process]` host
+/// brings it, so the app importing a queue adapter runs its jobs, and a
+/// producer-only app, which imports no adapter, attaches no worker; a backend
+/// binding at the app's root (Redis's `RedisQueueModule`) supplies the consumer
+/// the worker runs.
 pub struct QueueModule;
+
+/// What a `#[process]` method runs on, which `#[processor]` brings.
+pub const RUNTIME: &[RuntimeModule] = &[RuntimeModule::of::<QueueModule>()];
 
 impl QueueModule {
     /// Pin `config` as the base `<PREFIX>_QUEUE__*` overlays, per field; the
@@ -43,26 +41,6 @@ impl Module for QueueModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder.provide_transport(|_| Ok(QueueWorker::new()))
     }
-}
-
-nest_rs_core::inventory::submit! {
-    EdgeRuntime {
-        edge: Edge::Queue,
-        import: "nest_rs::queue::QueueModule",
-        attached: attaches_transport::<QueueWorker>,
-        hosts: process_hosts,
-    }
-}
-
-/// Every `#[process]` host this binary links, named off its `Provider::method`.
-fn process_hosts(_: &Container) -> EdgeHosts {
-    inventory::iter::<ProcessMethod>()
-        .map(|method| {
-            let name = method.name();
-            let host = name.rsplit_once("::").map_or(name, |(host, _)| host);
-            (method.provider_type_id(), Cow::Borrowed(host))
-        })
-        .collect()
 }
 
 #[cfg(test)]

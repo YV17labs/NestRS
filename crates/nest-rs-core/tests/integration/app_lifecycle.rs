@@ -242,7 +242,7 @@ async fn a_run_with_no_transport_says_so_once_and_stops_for_that_cause_after_its
     assert!(
         nothing
             .field("hint")
-            .is_some_and(|hint| hint.contains("imports its transport")),
+            .is_some_and(|hint| hint.contains("brings its transport")),
         "{:?}",
         nothing.fields,
     );

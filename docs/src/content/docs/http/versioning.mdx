@@ -89,14 +89,13 @@ When the two versions share nothing but a URL, a controller each is clearer:
 
 ```rust title="crates/features/src/posts/http/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
 
 use super::controller::{PostsV1Controller, PostsV2Controller};
 use crate::authz::AuthzModule;
 use crate::posts::PostsModule;
 
 #[module(
-    imports = [PostsModule, AuthzModule, HttpModule],
+    imports = [PostsModule, AuthzModule],
     providers = [PostsV1Controller, PostsV2Controller],
 )]
 pub struct PostsHttpModule;

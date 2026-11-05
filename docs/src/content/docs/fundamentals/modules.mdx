@@ -32,28 +32,24 @@ At the smallest scale, handlers live in the app itself:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
 use features::blog::BlogController;
 use features::blog::BlogService;
 
-#[module(
-    imports = [HttpModule],
-    providers = [BlogService, BlogController],
-)]
+#[module(providers = [BlogService, BlogController])]
 pub struct BlogModule;
 ```
 
-`BlogModule` serves its controller over HTTP, so it imports `HttpModule`, which
-starts the server, and registers its own service and controller.
+`BlogModule` registers its own service and controller, and the controller brings
+`HttpModule`, which starts the server: the decorator already says the edge.
 Providers in the same module share its name prefix — here, `BlogService`
 and `BlogController`.
 
 ```mermaid
 flowchart TB
-  BM[BlogModule] --> HM[HttpModule]
-  BM --> BS[BlogService]
+  BM[BlogModule] --> BS[BlogService]
   BM --> BC[BlogController]
   BC -. "injects" .-> BS
+  BC -. "brings" .-> HM[HttpModule]
 ```
 
 ## Two lists, one purpose
@@ -88,15 +84,15 @@ the app-root `Blog*` prefix anymore.
   - dto.rs
   - error.rs
   - http/
-    - module.rs (PostsHttpModule — imports PostsModule and HttpModule)
+    - module.rs (PostsHttpModule — imports PostsModule)
     - controller.rs (PostsController)
 </FileTree>
 
 One feature, several modules — never one umbrella import. The port
 (`PostsModule`) holds the data layer — `PostsService`, entity, repo wiring.
 It registers **no** controller, resolver, or gateway. Each transport
-adapter (`PostsHttpModule`, …) imports the port and the transport its edge
-runs on, and mounts **its** edge only.
+adapter (`PostsHttpModule`, …) imports the port and mounts **its** edge only,
+and the decorator on its provider brings the transport that edge runs on.
 
 ### Why not put the controller in `PostsModule`?
 
@@ -110,7 +106,7 @@ Splitting keeps transport **opt-in per binary**:
 | Root imports | What activates |
 |--------------|----------------|
 | `PostsModule` only | Data layer — `PostsService` injectable, **no HTTP routes** |
-| `PostsHttpModule` | HTTP adapter — imports `PostsModule` and `HttpModule`, mounts `PostsController` and serves it |
+| `PostsHttpModule` | HTTP adapter — imports `PostsModule`, mounts `PostsController`, which brings `HttpModule`, and serves it |
 
 `BlogModule` lists `PostsHttpModule`, not `PostsModule`. The adapter
 already imports the port; listing both would be redundant. A
@@ -121,9 +117,9 @@ without ever pulling in HTTP.
 flowchart TB
   PM[PostsModule] --> PS[PostsService]
   PHM[PostsHttpModule] --> PM
-  PHM --> HM[HttpModule]
   PHM --> PC[PostsController]
   PC -. "injects" .-> PS
+  PC -. "brings" .-> HM[HttpModule]
 ```
 
 <Aside type="note">
@@ -211,11 +207,11 @@ providers — it only composes imports:
 pub struct BlogModule;
 ```
 
-`PostsHttpModule` registers `PostsController` and imports `HttpModule`, which
-starts the transport, and `PostsModule`, the port. The root lists the adapter
-and nothing it brings: it never lists the port when it only wants this
-transport, never a transport it does not serve, and names `HttpModule` only
-to pin its config (`HttpModule::for_root(HttpConfig { .. })`) — same pattern
+`PostsHttpModule` imports `PostsModule`, the port, and registers
+`PostsController`, which brings `HttpModule`, which starts the transport. The
+root lists the adapter and nothing it brings: it never lists the port when it
+only wants this transport, never a transport it does not serve, and names
+`HttpModule` only to pin its config (`HttpModule::for_root(HttpConfig { .. })`) — same pattern
 for every edge.
 
 Each import contributes its providers. HTTP mounts only what the import
@@ -226,14 +222,12 @@ tree reaches into the container; a container built by hand with
 from it refuses with `UngatedDiscoveryError`, naming what it discovers, rather
 than activating everything linked.
 
-A module that lists a controller, a gateway, a resolver, an `#[mcp]`,
-`#[process]` or `#[scheduled]` host and imports nothing attaching its edge's
-transport — a hand-written adapter that forgot it — leaves the host inert, so
-`App::run` names it once the transports are attached:
-
-```text frame="terminal"
- WARN nest_rs::app: host not served: its edge's transport is not attached edge="http" host="PostsController" module="PostsHttpModule" import="nest_rs::http::HttpModule"
-```
+A module listing a controller, a gateway, a resolver, an `#[mcp]`, `#[process]`
+or `#[scheduled]` host imports what that edge runs on, bare, because the
+decorator on the host says so; a module the app does not reach brings nothing, so
+the root's import of the adapter is still the one line opening the edge. A
+module listing no host, such as an adapter holding only an interceptor, imports
+its transport itself.
 
 An app run with no transport at all says `app serves nothing: no transport is
 attached`, runs its init hooks and stops.
@@ -258,7 +252,7 @@ Solid arrows from `BlogModule` are **direct** imports. `PostsModule` and
 
 <Aside type="note" title="What to remember">
 - **`#[module]` = two lists** — `providers` you build, `imports` you depend on.
-- **Port vs adapter** — data in `PostsModule`, routes in `PostsHttpModule`, which imports the transport it serves on; import the adapter at the root when you want that edge.
+- **Port vs adapter** — data in `PostsModule`, routes in `PostsHttpModule`, whose controller brings the transport it serves on; import the adapter at the root when you want that edge.
 - **Opt-in per binary** — import only the modules your deploy serves; everything else stays inert.
 </Aside>
 
@@ -339,11 +333,11 @@ flowchart TB
 
 `Common`'s providers are registered once, not twice.
 
-The same holds for a framework module you configure. Every adapter serving
-over HTTP imports a bare `HttpModule`, and an app pinning it with
+The same holds for a framework module you configure. Every controller brings a
+bare `HttpModule`, and an app pinning it with
 `HttpModule::for_root(...)` still runs one server; `GraphqlModule`, which
-every GraphQL adapter imports, mounts `/graphql` once, and `McpModule`, which
-every MCP adapter imports, reads `<PREFIX>_MCP__*` once. What a setup wires per
+every resolver brings, mounts `/graphql` once, and `McpModule`, which
+every `#[mcp]` host brings, reads `<PREFIX>_MCP__*` once. What a setup wires per
 app — its transport, its mount, the close of what it opened — sits in the
 module it imports by type, and an app runs one transport of each type.
 

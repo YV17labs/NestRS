@@ -172,8 +172,8 @@ nest-rs = { workspace = true, features = [
 In a fresh project the same step is
 `cargo add nest-rs --features <capability>` — exactly what each module's
 adoption page shows. Then import the matching **modules** — for example
-`SeaOrmDatabaseModule` and `AuthzModule` in `AppModule`, and
-`HttpModule` or `GraphqlModule` in the adapter that serves on it. The [Publish workspace](/publish/) and
+`SeaOrmDatabaseModule` and `AuthzModule` in `AppModule`; a controller or a
+resolver brings `HttpModule` or `GraphqlModule` itself. The [Publish workspace](/publish/) and
 [Getting started](/getting-started/) walk through a full composition.
 
 ### Why one entry is enough

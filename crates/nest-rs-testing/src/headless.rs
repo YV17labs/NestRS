@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use nest_rs_core::{App, AppLifecycle, Container, Transport};
+use nest_rs_core::{App, AppLifecycle, Container, Discovery, Transport, TransportContribution};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -82,6 +82,16 @@ impl HeadlessApp {
     /// The app's [`AppLifecycle`].
     pub fn lifecycle(&self) -> &Arc<AppLifecycle> {
         self.app.lifecycle()
+    }
+
+    /// The name of each transport the app's modules attach, as [`App::run`]
+    /// names them: which edges a composition would serve, none of them started.
+    pub fn attached_transports(&self) -> Vec<String> {
+        Discovery::new(self.container())
+            .meta::<TransportContribution>()
+            .iter()
+            .map(|contribution| contribution.meta.name().to_owned())
+            .collect()
     }
 
     /// Run the app's init phases — once, as [`App::init`] does. An init that

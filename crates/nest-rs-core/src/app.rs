@@ -416,13 +416,10 @@ impl App {
     /// the stop is abandoned, named at `error`, and is the app's error. A
     /// signal received once the way down has begun exits at once (130 / 143).
     ///
-    /// Transports come only from imported modules, an edge adapter importing
-    /// the one its edge runs on. Once they are attached, each host the app
-    /// reaches whose edge's transport no imported module attaches — a
-    /// controller, a gateway, a resolver, an `#[mcp]`, `#[process]` or
-    /// `#[scheduled]` host — is named at `warn` with its module and the import
-    /// serving it, and a run with no transport at all says so at `warn`, runs
-    /// its init hooks and stops for [`StopCause::NoTransport`], never turning
+    /// Transports come only from imported modules, an edge's host bringing the
+    /// one it runs on to the module listing it. A run with no transport at all
+    /// says so at `warn`, runs its init hooks and stops for
+    /// [`StopCause::NoTransport`], never turning
     /// [`Ready`](crate::AppState::Ready).
     pub async fn run(self) -> Result<()> {
         let served = self.boot_and_serve().await;
@@ -457,7 +454,7 @@ impl App {
             );
             transports.push((name, transport));
         }
-        crate::edge_runtime::report_unserved(&self.container)?;
+        crate::probe_runtime::report_unserved(&self.container)?;
         if transports.is_empty() {
             tracing::warn!(
                 target: crate::target::APP,
@@ -630,7 +627,7 @@ impl App {
 /// The remedy the line of a run with no transport names.
 const NO_TRANSPORT_HINT: &str = "an app serves the edges its modules attach a transport for: \
      import the adapter of each edge it serves (`<Feature>HttpModule`, `<Feature>QueueModule`), \
-     which imports its transport, or run one-shot work through `App::init` and `App::close`";
+     whose host brings its transport, or run one-shot work through `App::init` and `App::close`";
 
 /// What a transport's boot step returned, or, when it panicked, the panic filed
 /// once at `error` and the boot's error naming the transport.

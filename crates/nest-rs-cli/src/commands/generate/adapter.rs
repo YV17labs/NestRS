@@ -1,8 +1,8 @@
 //! `nestrs g http|graphql|ws|queue|schedule|mcp|events <feature>` — bolt one
 //! transport adapter onto an existing port. One uniform generator parameterised
-//! by [`Transport`]: it picks the right templates, imports what serves the edge
-//! into the adapter (an event's bus into the port), ensures the transport's
-//! crates, wires the feature `mod.rs`, and (inside an app) the app's imports.
+//! by [`Transport`]: it picks the right templates, imports an event's bus into
+//! the port, ensures the transport's crates, wires the feature `mod.rs`, and
+//! (inside an app) the app's imports.
 //!
 //! A `g resource` port exposes a `CrudService` rather than `g feature`'s
 //! `count()` stand-in, and its rows are reachable only behind the app's guards:
@@ -271,13 +271,10 @@ pub(crate) fn adapter_renderer(
     crud_port: bool,
     port_entity: bool,
 ) -> Renderer {
-    let (runtime_uses, runtime_imports) = runtime_vars(transport);
     let mut r = Renderer::new(names)
         .with("handler", names.handler_for(transport))
         .with("handler_mod", transport.handler_mod())
-        .with("tmodule", names.module_for(transport))
-        .with("runtime_uses", runtime_uses)
-        .with("runtime_imports", runtime_imports);
+        .with("tmodule", names.module_for(transport));
     for (key, value) in crate::templates::crud::crud_vars(crud_port, transport) {
         r = r.with(key, value);
     }
@@ -342,21 +339,6 @@ pub(crate) fn templates_for(transport: Transport, crud_port: bool) -> (&'static 
         (Transport::Mcp, _) => (adapter::MCP_TOOL, adapter::MODULE),
         (Transport::Events, _) => (adapter::EVENTS_LISTENER, adapter::MODULE),
     }
-}
-
-/// [`Transport::runtime`] as the `MODULE` template writes it: its `use` lines,
-/// and its entries after the port's in `imports`.
-pub(crate) fn runtime_vars(transport: Transport) -> (String, String) {
-    let runtime = transport.runtime();
-    let uses = runtime
-        .iter()
-        .map(|path| format!("use {path};\n"))
-        .collect();
-    let imports = runtime
-        .iter()
-        .map(|path| format!(", {}", path.rsplit("::").next().unwrap_or(path)))
-        .collect();
-    (uses, imports)
 }
 
 /// What an app binds at its root to run a queue adapter's jobs: the backend

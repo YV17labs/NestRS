@@ -169,7 +169,7 @@ So pin only what the code means. A setting that varies by machine or by app —
 a port, an origin list, a certificate path — belongs in a `.env` file, the
 app's own when it identifies one app of a workspace
 ([an app's own files](/configuration/env-cascade/#an-apps-own-files)), and
-the module is imported with nothing pinned: bare, as every HTTP adapter imports
+the module is imported with nothing pinned: bare, as every controller brings
 `HttpModule`. That is what `nestrs new` scaffolds, and what every demo app does.
 
 The full precedence chain, highest first:

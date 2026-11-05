@@ -81,3 +81,8 @@ an app's root lists the adapters it serves and names a transport only to pin it.
 The opening is still the import: a binary that imports no adapter of an edge
 attaches no transport for it, and `WsModule`, which a port may import to push,
 attaches none.
+
+Kept (2026-11-05): an adapter's host now brings its transport rather than the
+adapter importing it (`adapter-imports-its-transport.md`, the owner's "Tout faire
+(Recommandé)" of 2026-10-31). The opening is still the root's import of the
+adapter, and a host no module the app reaches lists brings nothing.

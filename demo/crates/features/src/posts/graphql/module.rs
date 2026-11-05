@@ -1,5 +1,4 @@
 use nest_rs::core::module;
-use nest_rs::graphql::GraphqlModule;
 
 use super::resolver::PostsResolver;
 use crate::authz::graphql::AuthzGraphqlModule;
@@ -13,7 +12,6 @@ use crate::users::UsersModule;
         OrgsModule,
         UsersModule,
         AuthzGraphqlModule,
-        GraphqlModule,
     ],
     providers = [PostsResolver],
 )]

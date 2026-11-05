@@ -102,7 +102,7 @@ fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
 Its `register` imports `RedisModule<I>` too: a binding imports the module opening
 what it runs on, bare, from both phases, so an app writes the binding alone. Every
 app that runs such a job imports it at its root, beside the schedule adapters,
-which import `ScheduleModule`.
+whose hosts bring `ScheduleModule`.
 
 ## Budget and net
 

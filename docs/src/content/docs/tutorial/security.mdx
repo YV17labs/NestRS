@@ -160,16 +160,15 @@ tenant.
 The HTTP adapter imports the authz module, as `blog`'s `PostsHttpModule` has
 since `nestrs g resource` wrote it:
 
-```rust title="crates/features/src/users/http/module.rs (from the demo)" {5, 9}
+```rust title="crates/features/src/users/http/module.rs (from the demo)" {4, 8}
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
 
 use super::controller::UsersController;
 use crate::authz::AuthzModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, AuthzModule, HttpModule],
+    imports = [UsersModule, AuthzModule],
     providers = [UsersController],
 )]
 pub struct UsersHttpModule;

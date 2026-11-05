@@ -92,18 +92,17 @@ WARN nest_rs::layers: no guard at the request surface="mcp" path="/mcp" then="de
 A `#[public]` operation there could open nothing, so the boot refuses it and names
 the opening below, which `HelloTool` takes.
 
-The feature's MCP adapter lists its tool like any provider, and imports
-`McpModule` bare: it reads the endpoint's settings from `<PREFIX>_MCP__*`
+The feature's MCP adapter lists its tool like any provider. `#[mcp]` brings
+`McpModule` bare, which reads the endpoint's settings from `<PREFIX>_MCP__*`
 ([MCP configuration](/mcp/configuration/)) and brings `HttpModule`, the server
 the endpoint mounts on:
 
 ```rust title="crates/features/src/hello/mcp/module.rs"
 use nest_rs::core::module;
-use nest_rs::mcp::McpModule;
 
 use super::tool::HelloTool;
 
-#[module(imports = [McpModule], providers = [HelloTool])]
+#[module(providers = [HelloTool])]
 pub struct HelloMcpModule;
 ```
 

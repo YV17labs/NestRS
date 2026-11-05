@@ -22,6 +22,7 @@ mod error_message;
 mod exception_filter;
 #[cfg(feature = "logging")]
 mod export;
+mod host_runtime;
 mod instance;
 mod interceptor;
 mod layer_chain;

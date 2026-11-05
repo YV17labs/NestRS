@@ -1,15 +1,11 @@
-//! Covers `src/module.rs` — an `#[mcp]` host the app reaches without the HTTP
-//! transport is named at run, with the import that serves it, and one the
-//! transport serves is not; an adapter importing `McpModule` bare reads
-//! `<PREFIX>_MCP__*` for a root that names nothing of MCP's.
+//! Covers `src/module.rs` — a listed `#[mcp]` host brings `McpModule`, which
+//! reads `<PREFIX>_MCP__*` and attaches the HTTP transport, for a root that
+//! names nothing of MCP's and for an adapter that names `HttpModule` alone.
 
 use nest_rs_core::{App, AppLifecycle, module, target};
 use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_mcp::{McpConfig, McpError, McpIdentity, McpModule, mcp, tools};
-use nest_rs_testing::{LogCapture, TestApp};
-
-/// What `App::run` files for a host whose edge's transport the app does not attach.
-const UNSERVED: &str = "host not served: its edge's transport is not attached";
+use nest_rs_testing::{HeadlessApp, LogCapture, TestApp};
 
 #[mcp]
 #[derive(Clone, Default)]
@@ -23,38 +19,26 @@ impl ReportsTool {
     }
 }
 
-/// A hand-written adapter that forgets the transport.
+/// An adapter as a developer writes it: the tool, and nothing of the edge's.
 #[module(providers = [ReportsTool])]
 struct ReportsMcpModule;
 
 #[tokio::test]
-async fn an_mcp_host_the_app_reaches_without_the_transport_is_named_at_run() {
-    let logs = LogCapture::install();
-
-    App::builder()
+async fn a_listed_mcp_host_brings_its_module_and_the_transport_it_mounts_on() {
+    let app = HeadlessApp::builder()
         .module::<ReportsMcpModule>()
-        .build()
+        .build_headless()
         .await
-        .expect("the module boots")
-        .run()
-        .await
-        .expect("an app serving nothing stops cleanly");
+        .expect("the module boots");
 
-    let unserved = logs.expect_one(target::APP, UNSERVED);
-    assert_eq!(unserved.level, "warn");
-    assert_eq!(unserved.field("edge").as_deref(), Some("mcp"));
-    assert_eq!(unserved.field("host").as_deref(), Some("ReportsTool"));
-    assert_eq!(
-        unserved.field("module").as_deref(),
-        Some("ReportsMcpModule")
+    assert!(
+        app.container().get::<McpConfig>().is_some(),
+        "the bare import reads the edge's variables",
     );
-    assert_eq!(
-        unserved.field("import").as_deref(),
-        Some("nest_rs::mcp::McpModule")
-    );
+    assert_eq!(app.attached_transports(), ["http"]);
 }
 
-/// The tool's adapter beside the transport, on a free loopback port.
+/// The tool's adapter beside the pinned transport, on a free loopback port.
 #[module(imports = [HttpModule::for_root(loopback()), ReportsMcpModule])]
 struct ServedReportsModule;
 
@@ -67,7 +51,7 @@ fn loopback() -> HttpConfig {
 }
 
 #[tokio::test]
-async fn an_mcp_host_the_transport_serves_is_not_named_at_run() {
+async fn a_pinned_transport_serves_a_listed_mcp_host() {
     let logs = LogCapture::install();
     let app = App::builder()
         .module::<ServedReportsModule>()
@@ -79,24 +63,24 @@ async fn an_mcp_host_the_transport_serves_is_not_named_at_run() {
         .get::<AppLifecycle>()
         .expect("every app is seeded its lifecycle");
 
-    // `App::run` names an unserved host before it turns ready, so the run is
-    // dropped there.
     let running = tokio::spawn(app.run());
     assert!(lifecycle.ready().await, "the app serves");
     running.abort();
 
     logs.expect_one(target::APP, "app ready");
-    logs.expect_none(target::APP, UNSERVED);
 }
 
-/// The tool's adapter as `nestrs g mcp` writes it: `McpModule` bare, which
-/// brings the HTTP transport the endpoint mounts on.
-#[module(imports = [McpModule], providers = [ReportsTool])]
-struct ReportsAdapterModule;
+/// An adapter naming only the transport, the shape a hand-written one kept.
+#[module(imports = [HttpModule], providers = [ReportsTool])]
+struct HttpOnlyMcpModule;
 
 /// A root importing the adapter, and nothing of MCP's own.
-#[module(imports = [ReportsAdapterModule])]
+#[module(imports = [ReportsMcpModule])]
 struct AdapterOnlyRoot;
+
+/// A root importing the transport-only adapter, and nothing of MCP's own.
+#[module(imports = [HttpOnlyMcpModule])]
+struct HttpOnlyRoot;
 
 /// A root pinning only the app's identity beside the adapter, as the demo's
 /// assistant does: the pin and the adapter's bare import are one module.
@@ -105,13 +89,13 @@ struct AdapterOnlyRoot;
         title: Some("Reports".into()),
         ..Default::default()
     }),
-    ReportsAdapterModule,
+    ReportsMcpModule,
 ])]
 struct IdentityRoot;
 
-/// The deployment's Host allowlist reaches the mount through the adapter's
-/// bare import, whatever the root says of MCP: the variable the refusal's
-/// hint names is the one the app reads.
+/// The deployment's Host allowlist reaches the mount through what the host
+/// brings, whatever its adapter or the root says of MCP: the variable the
+/// refusal's hint names is the one the app reads.
 #[test]
 #[expect(
     clippy::result_large_err,
@@ -134,19 +118,22 @@ fn an_app_reads_the_mcp_variables_through_its_adapter() {
             let adapter_only = TestApp::for_module::<AdapterOnlyRoot>()
                 .await
                 .expect("the adapter's root boots");
+            let http_only = TestApp::for_module::<HttpOnlyRoot>()
+                .await
+                .expect("the transport-only adapter's root boots");
             let identity = TestApp::for_module::<IdentityRoot>()
                 .await
                 .expect("the identity's root boots");
 
-            for app in [&adapter_only, &identity] {
+            for app in [&adapter_only, &http_only, &identity] {
                 let config = app
                     .container()
                     .get::<McpConfig>()
-                    .expect("the adapter's bare import resolves the config");
+                    .expect("the host's bare import resolves the config");
                 assert_eq!(config.allowed_hosts, ["mcp.example.com"]);
             }
             let resolved = logs.find(nest_rs_mcp::TARGET, "mcp host allowlist resolved");
-            assert_eq!(resolved.len(), 2, "one mount per app: {resolved:?}");
+            assert_eq!(resolved.len(), 3, "one mount per app: {resolved:?}");
             for event in resolved {
                 assert_eq!(
                     event.field("allowed_hosts").as_deref(),

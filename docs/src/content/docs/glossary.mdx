@@ -199,7 +199,7 @@ deep on each.
   handle WS events; self-mounts on `HttpTransport`.
 - **[Processor (queue)](/queue/)** — a provider whose `#[processor]` impl
   block holds `#[process(queue = …)]` methods that consume jobs; run by
-  the port's `QueueWorker` transport, attached by importing `QueueModule`.
+  the port's `QueueWorker` transport, attached by the `QueueModule` it brings.
 - **[Scheduler](/schedule/)** — the transport that drains
   `#[scheduled]` orchestrators; each method tagged with exactly one of
   `#[every]` / `#[cron]` / `#[after]`.

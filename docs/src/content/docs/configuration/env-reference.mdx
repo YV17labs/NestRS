@@ -180,7 +180,8 @@ reads them with the instance between the two: `<PREFIX>_REDIS__CACHE__QUEUE__*`.
 
 ## `queue` — `<PREFIX>_QUEUE__*`
 
-The queue port's worker settings, read once `QueueModule` is imported, and
+The queue port's worker settings, read once a `#[processor]` host brings
+`QueueModule` or an app imports it, and
 pinned through `QueueModule::for_root`. The port's own word, so the window
 survives a swap of the backend underneath.
 

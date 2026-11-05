@@ -30,9 +30,9 @@ to register, and no separate mount.
 
 ## Wire it in
 
-Nothing beyond what a query needs. `GraphqlModule` mounts the graphql-ws
-socket on the same path as the POST endpoint the moment a `#[subscription]
-` is discovered:
+Nothing beyond what a query needs. `GraphqlModule`, which a resolver brings,
+mounts the graphql-ws socket on the same path as the POST endpoint the moment a
+`#[subscription]` is discovered:
 
 ```rust title="apps/api/src/module.rs"
 #[module(imports = [PostsGraphqlModule])]

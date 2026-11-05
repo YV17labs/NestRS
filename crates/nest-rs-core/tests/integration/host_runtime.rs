@@ -1,0 +1,273 @@
+//! Covers `src/host_runtime.rs` — what a listed host's decorator brings is
+//! imported in both phases of the module listing it, and walked by the access
+//! graph like an import; what no module the app reaches lists brings nothing.
+
+use std::any::TypeId;
+use std::sync::Arc;
+
+use nest_rs_core::__private::{HostRuntime, RuntimeModule};
+use nest_rs_core::{
+    App, Collecting, Composition, Container, ContainerBuilder, ContainerError, Module,
+    ReachableProviders, Registering, injectable, inventory, module,
+};
+
+use crate::refused_boot;
+
+/// What a host injects, listed by a module its adapter never names.
+#[injectable]
+#[derive(Default)]
+struct Registry;
+
+#[module(providers = [Registry])]
+struct RegistryModule;
+
+/// What the factory a runtime's `collect` queues makes.
+struct Collected;
+
+/// What a runtime's `register` provides: registered twice, the boot refuses it.
+struct Registered;
+
+/// A runtime as an edge's is written: a factory in its collect, its wiring in
+/// its register.
+struct PhasesModule;
+
+impl Module for PhasesModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.provide_factory(|_| async { Ok(Collected) })
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide(Registered)
+    }
+}
+
+const RUNTIME: &[RuntimeModule] = &[
+    RuntimeModule::of::<RegistryModule>(),
+    RuntimeModule::of::<PhasesModule>(),
+];
+
+#[injectable]
+struct Host {
+    #[inject]
+    registry: Arc<Registry>,
+}
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<Host>(),
+        modules: RUNTIME,
+    }
+}
+
+/// An adapter naming nothing of what its host runs on.
+#[module(providers = [Host])]
+struct HostModule;
+
+#[tokio::test]
+async fn a_listed_host_brings_what_it_runs_on_through_both_phases() {
+    let app = App::builder()
+        .module::<HostModule>()
+        .build()
+        .await
+        .expect("the access graph follows what the host brings");
+    let container = app.container();
+
+    let host = container.get::<Host>().expect("the host is built");
+    assert!(Arc::ptr_eq(
+        &host.registry,
+        &container.get::<Registry>().expect("its module is imported"),
+    ));
+    assert!(container.get::<Collected>().is_some(), "its collect ran");
+    assert!(container.get::<Registered>().is_some(), "its register ran");
+}
+
+#[tokio::test]
+async fn what_a_host_brings_is_reached_by_every_reader_of_the_composition() {
+    let app = App::builder()
+        .module::<HostModule>()
+        .build()
+        .await
+        .expect("the module boots");
+    let container = app.container();
+
+    let reachable = ReachableProviders::of(container, "a test").expect("the boot seals the set");
+    assert!(reachable.reaches(TypeId::of::<Registry>()));
+    let composition = container.get::<Composition>().expect("the boot records it");
+    assert!(composition.reaches(TypeId::of::<RegistryModule>()));
+    assert!(composition.reaches(TypeId::of::<PhasesModule>()));
+}
+
+/// An app that links the adapter and does not import it.
+#[module]
+struct ElsewhereModule;
+
+#[tokio::test]
+async fn a_host_of_a_module_the_app_does_not_import_brings_nothing() {
+    let app = App::builder()
+        .module::<ElsewhereModule>()
+        .build()
+        .await
+        .expect("the module boots");
+    let container = app.container();
+
+    assert!(container.get::<Registry>().is_none());
+    assert!(container.get::<Registered>().is_none());
+    let reachable = ReachableProviders::of(container, "a test").expect("the boot seals the set");
+    assert!(!reachable.reaches(TypeId::of::<Registry>()));
+}
+
+/// A provider no edge's decorator made a host: its module imports its transport
+/// itself, as one holding only an interceptor does.
+#[injectable]
+#[derive(Default)]
+struct NoHost;
+
+#[module(providers = [NoHost])]
+struct NoHostModule;
+
+#[tokio::test]
+async fn a_provider_no_decorator_made_a_host_brings_nothing() {
+    let app = App::builder()
+        .module::<NoHostModule>()
+        .build()
+        .await
+        .expect("the module boots");
+
+    assert!(app.container().get::<NoHost>().is_some());
+    assert!(app.container().get::<Registered>().is_none());
+}
+
+/// A module writing out what its host brings, as an adapter may.
+#[module(imports = [PhasesModule, RegistryModule], providers = [Host])]
+struct ExplicitHostModule;
+
+#[tokio::test]
+async fn an_import_beside_what_a_host_brings_wires_once() {
+    let app = App::builder()
+        .module::<ExplicitHostModule>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("one registration of each: {refused:#}"));
+
+    assert!(app.container().get::<Registered>().is_some());
+}
+
+trait Bound: Send + Sync {}
+
+impl Bound for Host {}
+
+#[module(providers = [Host as dyn Bound])]
+struct BoundHostModule;
+
+#[tokio::test]
+async fn a_host_bound_under_a_trait_brings_what_it_runs_on() {
+    let app = App::builder()
+        .module::<BoundHostModule>()
+        .build()
+        .await
+        .expect("the binding holds the host under its own type too");
+
+    assert!(app.container().get::<Registered>().is_some());
+}
+
+/// A second edge's runtime, for a host serving two.
+struct SecondEdgeModule;
+
+struct SecondEdge;
+
+impl Module for SecondEdgeModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide(SecondEdge)
+    }
+}
+
+const FIRST_EDGE: &[RuntimeModule] = &[RuntimeModule::of::<PhasesModule>()];
+const SECOND_EDGE: &[RuntimeModule] = &[RuntimeModule::of::<SecondEdgeModule>()];
+
+#[injectable]
+#[derive(Default)]
+struct TwoEdges;
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<TwoEdges>(),
+        modules: FIRST_EDGE,
+    }
+}
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<TwoEdges>(),
+        modules: SECOND_EDGE,
+    }
+}
+
+#[module(providers = [TwoEdges])]
+struct TwoEdgesModule;
+
+#[tokio::test]
+async fn a_host_of_two_edges_brings_what_each_runs_on() {
+    let app = App::builder()
+        .module::<TwoEdgesModule>()
+        .build()
+        .await
+        .expect("the module boots");
+
+    assert!(app.container().get::<Registered>().is_some());
+    assert!(app.container().get::<SecondEdge>().is_some());
+}
+
+/// A host whose runtime fails at the boot fails that boot, listed or imported.
+struct RefusingModule;
+
+impl Module for RefusingModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.provide_factory(|_| async { Err::<Collected, _>(anyhow::anyhow!("no backend")) })
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+    }
+}
+
+const REFUSING: &[RuntimeModule] = &[RuntimeModule::of::<RefusingModule>()];
+
+#[injectable]
+#[derive(Default)]
+struct RefusedHost;
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<RefusedHost>(),
+        modules: REFUSING,
+    }
+}
+
+#[module(providers = [RefusedHost])]
+struct RefusedHostModule;
+
+#[tokio::test]
+async fn a_runtime_failing_fails_the_boot_of_the_app_listing_its_host() {
+    let refused = refused_boot::<RefusedHostModule>().await;
+
+    assert!(format!("{refused:#}").contains("no backend"), "{refused:#}");
+}
+
+/// A container built by hand drains no factory, so a seed stands in for what a
+/// host's runtime reads, as it does for an import written out.
+#[test]
+fn a_container_built_by_hand_is_held_to_what_a_host_brings() {
+    let Err(ContainerError::LateFactory(late)) =
+        Container::builder().import::<HostModule>().build()
+    else {
+        panic!("the factory `PhasesModule` queued would never run");
+    };
+    assert_eq!(late.type_name, std::any::type_name::<Collected>());
+
+    let seeded = Container::builder()
+        .provide(Collected)
+        .import::<HostModule>()
+        .build()
+        .expect("the seed stands in for the factory");
+    assert!(seeded.get::<Registered>().is_some());
+}

@@ -125,26 +125,6 @@ fn generate_ws_adapter_gives_each_gateway_a_distinct_path() {
     );
 }
 
-/// `WsModule` provides the connection registry every default-namespace gateway
-/// reads; without it the app dies at boot.
-#[test]
-fn generate_ws_adapter_imports_the_connection_registry() {
-    let dir = tempfile::tempdir().unwrap();
-    write_fake_workspace(dir.path());
-    let path = dir.path().to_str().unwrap();
-
-    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
-    run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
-
-    let module_rs =
-        fs::read_to_string(dir.path().join("crates/features/src/posts/ws/module.rs")).unwrap();
-    assert!(
-        module_rs.contains("use nest_rs::ws::WsModule;")
-            && module_rs.contains("imports = [PostsModule, HttpModule, WsModule"),
-        "the generated ws module must import WsModule: {module_rs}"
-    );
-}
-
 /// `#[messages]` expands to names behind `nest_rs_guards`' `ws` feature, and the
 /// gateway body logs. Feature unification would hide a miss from
 /// `cargo check --workspace`.
@@ -375,7 +355,7 @@ fn generate_queue_adapter_module_imports_the_port() {
     let module_rs =
         fs::read_to_string(dir.path().join("crates/features/src/posts/queue/module.rs")).unwrap();
     assert!(
-        module_rs.contains("imports = [PostsModule, QueueModule]"),
+        module_rs.contains("imports = [PostsModule]"),
         "the queue adapter module must import its port: {module_rs}"
     );
 
@@ -820,36 +800,29 @@ fn generate_graphql_reuses_an_existing_authz_adapter() {
     );
 }
 
-/// Every adapter imports the modules that serve its edge, bare, and no other
-/// edge's, so the app importing the adapter serves it — its config read — and
-/// is told nothing more to import; an event's bus is imported by the port that
-/// emits it.
+/// An adapter names its port, and the decorator on its handler brings what
+/// serves its edge, so the app importing the adapter serves it and is told
+/// nothing more to import; an event's bus is imported by the port that emits it.
 #[test]
-fn every_adapter_imports_the_modules_that_serve_its_edge() {
-    // (transport, the file importing them, below the feature, each `use` path)
-    const CASES: [(&str, &str, &[&str]); 7] = [
-        ("http", "http/module.rs", &["nest_rs::http::HttpModule"]),
-        (
-            "graphql",
-            "graphql/module.rs",
-            &["nest_rs::graphql::GraphqlModule"],
-        ),
-        (
-            "ws",
-            "ws/module.rs",
-            &["nest_rs::http::HttpModule", "nest_rs::ws::WsModule"],
-        ),
-        ("queue", "queue/module.rs", &["nest_rs::queue::QueueModule"]),
-        (
-            "schedule",
-            "schedule/module.rs",
-            &["nest_rs::schedule::ScheduleModule"],
-        ),
-        ("mcp", "mcp/module.rs", &["nest_rs::mcp::McpModule"]),
-        ("events", "module.rs", &["nest_rs::events::EventsModule"]),
+fn an_adapter_names_no_module_its_edge_runs_on() {
+    const RUNTIME: [&str; 6] = [
+        "HttpModule",
+        "GraphqlModule",
+        "WsModule",
+        "QueueModule",
+        "ScheduleModule",
+        "McpModule",
     ];
 
-    for (transport, file, modules) in CASES {
+    for (transport, file) in [
+        ("http", "http/module.rs"),
+        ("graphql", "graphql/module.rs"),
+        ("ws", "ws/module.rs"),
+        ("queue", "queue/module.rs"),
+        ("schedule", "schedule/module.rs"),
+        ("mcp", "mcp/module.rs"),
+        ("events", "events/module.rs"),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         write_fake_workspace(dir.path());
         let app = write_fake_app(dir.path(), "api");
@@ -860,27 +833,25 @@ fn every_adapter_imports_the_modules_that_serve_its_edge() {
 
         let module_rs =
             fs::read_to_string(dir.path().join("crates/features/src/posts").join(file)).unwrap();
-        for module in modules {
-            let ident = module.rsplit("::").next().unwrap();
-            let imports = module_rs
-                .split("imports = [")
-                .nth(1)
-                .and_then(|rest| rest.split(']').next())
-                .unwrap_or_default();
-            let listed = imports.split([',', ' ', '\n']).any(|token| token == ident);
+        let imports = module_rs
+            .split("imports = [")
+            .nth(1)
+            .and_then(|rest| rest.split(']').next())
+            .unwrap_or_default();
+        assert!(
+            imports
+                .split([',', ' ', '\n'])
+                .any(|token| token == "PostsModule"),
+            "`g {transport}` imports its port in posts/{file}: {module_rs}",
+        );
+        let written: Vec<&str> = module_rs
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .collect();
+        for ident in RUNTIME {
             assert!(
-                module_rs.contains(&format!("use {module};")) && listed,
-                "`g {transport}` imports {ident} in posts/{file}: {module_rs}",
-            );
-        }
-        let others = CASES
-            .iter()
-            .flat_map(|(_, _, serving)| serving.iter())
-            .filter(|other| !modules.contains(other));
-        for other in others {
-            assert!(
-                !module_rs.contains(&format!("use {other};")),
-                "`g {transport}` imports {other}, another edge's, in posts/{file}: {module_rs}",
+                !written.contains(&ident),
+                "`g {transport}` names {ident}, which its handler brings, in posts/{file}: \
+                 {module_rs}",
             );
         }
         assert!(
@@ -888,6 +859,23 @@ fn every_adapter_imports_the_modules_that_serve_its_edge() {
             "`g {transport}` wired what serves its edge itself: {printed}",
         );
     }
+}
+
+#[test]
+fn generate_events_imports_the_bus_into_the_port_that_emits() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let app = write_fake_app(dir.path(), "api");
+    let root = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", root]);
+    run_ok(&app, &["g", "events", "posts"]);
+
+    let port = fs::read_to_string(dir.path().join("crates/features/src/posts/module.rs")).unwrap();
+    assert!(
+        port.contains("use nest_rs::events::EventsModule;") && port.contains("EventsModule"),
+        "{port}"
+    );
 }
 
 /// The queue backend is chosen at the app's root, so `g queue` writes its

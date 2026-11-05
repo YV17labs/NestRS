@@ -73,13 +73,12 @@ pub use module::{{http_module}};
 "#;
 
 pub(crate) const FEATURE_HTTP_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::http::HttpModule;
 
 use super::controller::{{controller}};
 use crate::{{snake}}::{{module}};
 
 #[module(
-    imports = [{{module}}, HttpModule],
+    imports = [{{module}}],
     providers = [{{controller}}],
 )]
 pub struct {{http_module}};

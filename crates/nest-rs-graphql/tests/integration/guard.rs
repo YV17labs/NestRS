@@ -538,6 +538,8 @@ mod unresolvable {
     async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_says_why() {
         // Built by hand, so the access graph does not refuse first.
         let container = Container::builder()
+            .provide(GraphqlConfig::default())
+            .provide(nest_rs_http::HttpConfig::default())
             .import::<OrphanModule>()
             .provide(nest_rs_core::__private::reachable_providers([
                 TypeId::of::<OrphanGuardedResolver>(),

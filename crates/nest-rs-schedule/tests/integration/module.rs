@@ -1,17 +1,13 @@
-//! A `#[scheduled]` provider's method fires inside a real `App::run` once the
-//! app imports `ScheduleModule`, a host the app reaches without it is named at
-//! run, and the decorator's grammar compiles.
+//! A listed `#[scheduled]` provider's method fires inside a real `App::run`,
+//! since the host brings `ScheduleModule`, and the decorator's grammar compiles.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{App, injectable, module, target};
-use nest_rs_schedule::{ScheduleModule, scheduled};
-use nest_rs_testing::LogCapture;
+use nest_rs_core::{App, Module, injectable, module};
+use nest_rs_schedule::scheduled;
+use nest_rs_testing::HeadlessApp;
 use tokio::time::{Duration, sleep};
-
-/// What `App::run` files for a host whose edge's transport the app does not attach.
-const UNSERVED: &str = "host not served: its edge's transport is not attached";
 
 static HITS: AtomicUsize = AtomicUsize::new(0);
 
@@ -36,19 +32,18 @@ impl Tasks {
 #[module(providers = [Tasks])]
 struct TasksModule;
 
-#[module(imports = [TasksModule, ScheduleModule])]
+#[module(imports = [TasksModule])]
 struct AppRoot;
 
 #[tokio::test(start_paused = true)]
-async fn schedule_module_auto_attaches_the_scheduler_and_ticks_the_method() {
-    let logs = LogCapture::install();
+async fn a_listed_scheduled_host_brings_the_scheduler_and_ticks_the_method() {
     let counter = Arc::new(Counter(AtomicUsize::new(0)));
     let app = App::builder()
         .provide_arc(counter.clone())
         .module::<AppRoot>()
         .build()
         .await
-        .expect("AppRoot builds with ScheduleModule");
+        .expect("AppRoot builds");
 
     let handle = tokio::spawn(app.run());
 
@@ -76,7 +71,6 @@ async fn schedule_module_auto_attaches_the_scheduler_and_ticks_the_method() {
         "the scheduled method fired at least twice in 250ms (got {hits})",
     );
     assert_eq!(HITS.load(Ordering::SeqCst), hits);
-    logs.expect_none(target::APP, UNSERVED);
 }
 
 #[injectable]
@@ -96,34 +90,50 @@ impl PurgeTasks {
     }
 }
 
-/// A hand-written adapter that forgets the scheduler.
+/// An adapter as a developer writes it: the tasks, and nothing of the edge's.
 #[module(providers = [PurgeTasks])]
 struct PurgeScheduleModule;
 
-#[tokio::test]
-async fn a_scheduled_host_the_app_reaches_without_the_scheduler_is_named_once_at_run() {
-    let logs = LogCapture::install();
-
-    App::builder()
-        .module::<PurgeScheduleModule>()
-        .build()
+/// The app `M` composes, booted with no transport started.
+async fn booted<M: Module>() -> HeadlessApp {
+    HeadlessApp::builder()
+        .module::<M>()
+        .build_headless()
         .await
         .expect("the module boots")
-        .run()
-        .await
-        .expect("an app serving nothing stops cleanly");
+}
 
-    let unserved = logs.expect_one(target::APP, UNSERVED);
-    assert_eq!(unserved.level, "warn");
-    assert_eq!(unserved.field("edge").as_deref(), Some("schedule"));
-    assert_eq!(unserved.field("host").as_deref(), Some("PurgeTasks"));
+#[tokio::test]
+async fn a_listed_scheduled_host_attaches_one_scheduler_for_its_methods() {
     assert_eq!(
-        unserved.field("module").as_deref(),
-        Some("PurgeScheduleModule")
+        booted::<PurgeScheduleModule>().await.attached_transports(),
+        ["schedule"],
     );
-    assert_eq!(
-        unserved.field("import").as_deref(),
-        Some("nest_rs::schedule::ScheduleModule")
+}
+
+#[injectable]
+#[derive(Default)]
+struct DisabledTasks;
+
+#[scheduled]
+impl DisabledTasks {
+    #[cfg(any())]
+    #[every("1h")]
+    async fn purge(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[module(providers = [DisabledTasks])]
+struct DisabledScheduleModule;
+
+#[tokio::test]
+async fn a_scheduled_host_whose_methods_are_compiled_out_brings_no_scheduler() {
+    assert!(
+        booted::<DisabledScheduleModule>()
+            .await
+            .attached_transports()
+            .is_empty()
     );
 }
 

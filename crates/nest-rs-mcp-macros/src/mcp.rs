@@ -11,8 +11,9 @@ use nest_rs_codegen::__private::layers::{
 use nest_rs_codegen::__private::{
     InjectableBody, MCP_GRAMMAR, MountPath, VersionedEdge, build_injectable_body,
     exception_filter_specs, from_container_method, guard_capability_bounds, host_meta_fn,
-    injected_keys_with_layers, injected_names_with_layers, injected_optional_method,
-    injected_optional_names_method, interceptor_specs, layer_deps, reject_path, scoped_specs,
+    host_runtime_entry, injected_keys_with_layers, injected_names_with_layers,
+    injected_optional_method, injected_optional_names_method, interceptor_specs, layer_deps,
+    reject_path, scoped_specs,
 };
 
 use crate::mcp_impl::Role;
@@ -113,6 +114,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         (opt_str(args.name.as_ref()), opt_str(args.title.as_ref()));
 
     let residency = pair::MCP.host_residency(&name, &item.generics);
+    let host_runtime = host_runtime_entry(&name, &quote!(::nest_rs_mcp::__private::RUNTIME), &[]);
 
     quote! {
         #item
@@ -155,6 +157,8 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                 #exception_filter_specs
             }
         }
+
+        #host_runtime
 
         impl #impl_generics ::nest_rs_core::Discoverable for #name #ty_generics #where_clause {
             fn injected() -> ::std::vec::Vec<::core::any::TypeId> {

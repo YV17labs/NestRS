@@ -203,6 +203,7 @@ pub mod __private {
     pub use crate::gateway::{GATEWAY_LABEL, gateway_endpoint, wire_gateway};
     pub use crate::guard::{MessageGuards, message_guard_stage, refused_origin};
     pub use crate::message::{DeclaredMessage, MessageTable};
+    pub use crate::module::RUNTIME;
     pub use crate::namespace::WsNamespaceEntry;
     pub use crate::scope::scoped_parameter;
     pub use nest_rs_pipes::__private::{
@@ -283,7 +284,7 @@ pub use nest_rs_ws_macros::messages;
 ///
 /// ```
 /// use nest_rs_core::module;
-/// use nest_rs_ws::{WsModule, gateway, messages};
+/// use nest_rs_ws::{gateway, messages};
 ///
 /// #[gateway(path = "/ws", version = "1")]
 /// #[derive(Default)]
@@ -298,7 +299,7 @@ pub use nest_rs_ws_macros::messages;
 ///     }
 /// }
 ///
-/// #[module(imports = [WsModule], providers = [ChatGateway])]
+/// #[module(providers = [ChatGateway])]
 /// struct ChatModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> nest_rs_core::anyhow::Result<()> {

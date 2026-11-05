@@ -37,9 +37,9 @@ slice: the port at the feature root, one adapter folder per edge.
 
 The port lives at the feature **root**, never in a `core/` folder.
 
-| Path | Contents | Module | Imports bare, beside the port |
+| Path | Contents | Module | What serves it |
 |---|---|---|---|
-| `users/` | `mod.rs`, `entity.rs`/`entities/`, `service.rs`/`services/`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `config.rs`, `error.rs`, `guard.rs` (only when two adapters bind it), `module.rs` | `UsersModule` (port) | `EventsModule` when it emits |
+| `users/` | `mod.rs`, `entity.rs`/`entities/`, `service.rs`/`services/`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `config.rs`, `error.rs`, `guard.rs` (only when two adapters bind it), `module.rs` | `UsersModule` (port) | nothing, and it imports `EventsModule` when it emits |
 | `users/http/` | `controller.rs` | `UsersHttpModule` | `HttpModule` |
 | `users/graphql/` | `resolver.rs` (field and root operations in one `UsersResolver`) | `UsersGraphqlModule` | `GraphqlModule` |
 | `users/ws/` | `gateway.rs` | `UsersWsModule` | `HttpModule`, `WsModule` |
@@ -49,9 +49,10 @@ The port lives at the feature **root**, never in a `core/` folder.
 | `users/events/` | `listener.rs` | `UsersEventsModule` | — |
 
 **Each adapter imports its port explicitly** — composition, not inheritance —
-**and the module serving its edge**, so importing the adapter serves it and
-reads its edge's config; one whose host binds `ThrottlerGuard` imports
-`ThrottlerModule` too, the port behind that guard.
+**and the module providing its guards**, `ThrottlerModule` when its host binds
+`ThrottlerGuard`; the edge decorator on its provider brings the module serving its
+edge, so importing the adapter serves it and reads its edge's config. A module
+listing no host (`AuditHttpModule`) imports that module itself.
 Importing only the port mounts nothing, and no module re-exports every edge:
 the app lists the edges it serves, so its imports are what the binary exposes;
 a backend binding (the queue's, the rate limiter's store) is the root's, since

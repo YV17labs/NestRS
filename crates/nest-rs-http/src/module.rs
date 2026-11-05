@@ -2,15 +2,20 @@
 //! [`HttpTransport`] at boot, configured through [`HttpModule::for_root`].
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_core::__private::RuntimeModule;
 use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, Unnamed};
 
 use crate::config::HttpConfig;
 use crate::transport::HttpTransport;
 
-/// The HTTP activation seam. The app imports [`HttpModule::for_root`] to
-/// attach the [`HttpTransport`] at boot; a feature that serves over HTTP
-/// imports `HttpModule` bare beside it, and the app still runs one server.
+/// The HTTP activation seam: it attaches the [`HttpTransport`] at boot. A
+/// listed controller brings it, as does every module mounting on HTTP, each
+/// importing it bare, and the app still runs one server; the app imports
+/// [`HttpModule::for_root`] only to pin its config.
 pub struct HttpModule;
+
+/// What a controller runs on, which `#[routes]` brings.
+pub const RUNTIME: &[RuntimeModule] = &[RuntimeModule::of::<HttpModule>()];
 
 impl HttpModule {
     /// Pin `config` as the base `<PREFIX>_HTTP__*` overlays, per field; the

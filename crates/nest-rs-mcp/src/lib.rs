@@ -1,9 +1,9 @@
 //! MCP — `#[mcp]` mounts a Model Context Protocol server on the HTTP transport,
 //! and `#[tools]` declares the operations it serves.
 //!
-//! An app activates MCP by importing an adapter that lists an `#[mcp]` provider
-//! and imports [`McpModule`] bare, which reads the streamable-HTTP server's
-//! [`McpConfig`] and brings the HTTP transport; the root's `for_root` names the
+//! An app activates MCP by importing an adapter that lists an `#[mcp]` provider,
+//! which brings [`McpModule`] bare, reading the streamable-HTTP server's
+//! [`McpConfig`] and bringing the HTTP transport; the root's `for_root` names the
 //! app ([`McpIdentity`]). A host's `path` is the whole URL path,
 //! [`DEFAULT_PATH`] (`/mcp`) when omitted; nothing nests under it, and hosts
 //! writing the same path share one endpoint.
@@ -117,6 +117,7 @@ pub mod __private {
         resource_not_found,
     };
     pub use crate::identity::declared_identity;
+    pub use crate::module::RUNTIME;
     pub use crate::operation::{
         OPERATION_LAYERS, OperationGuards, description_is_blank, operation_guard_stage,
         operation_view, run_operation,

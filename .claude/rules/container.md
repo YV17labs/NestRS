@@ -354,7 +354,11 @@ path names is not linked, so a dependency line opens nothing, and the import
 that names the crate is the one visible opening. **Metadata attached from
 `Discoverable::register` is gated by construction**, since `register` runs only
 for an imported module's provider; never bolt a `ReachableProviders` filter
-onto it for symmetry. **Being buildable is not discovery**: a discovered
+onto it for symmetry. **A host brings what its edge runs on**, gated the same
+way: its decorator submits a `HostRuntime` naming the modules its edge's crate
+declares, and the `#[module]` listing the host imports them bare, in both phases,
+after its `imports`, the access graph walking them as imports (held by a test
+per edge; `.claude/decisions/adapter-imports-its-transport.md`). **Being buildable is not discovery**: a discovered
 entry's own config decides its fate — complete is active, absent is inert with
 a boot `warn`, partial or invalid fails the boot naming it. **A registry the
 app's code reads is filled by `provide_wiring`, before any hook — never by a
@@ -371,17 +375,13 @@ imported module lists, one registered outside every imported module — is a
 host the app neither imports nor registers — the framework's, a package's, a
 shared library crate's — is said at `debug` (`cause = "dependency"`). The cause
 is read off the composition, never off a crate's name: a prefix is no evidence
-of who wrote a crate. **A host the app reaches whose edge's transport no
-module attaches is a cause too**, named at `warn` with its module and the
-import serving it, by `App::run` once its transports are attached, never at
-the seal, which `TestApp` and `HeadlessApp` serve with transports they build;
-each edge's crate declares what its hosts run on (`EdgeRuntime`), and
-`nest-rs-health` what its indicators run under (`HealthModule`'s probes),
-held by a test per edge and one for health. A run with no transport at all says so at `warn` and stops for
-`StopCause::NoTransport`.
+of who wrote a crate. **A host the app reaches without the health probes is a
+cause too**, named at `warn` with its module and the import serving it, by
+`App::run`, never at the seal, which `TestApp` and `HeadlessApp` boot without
+them (`ProbeRuntime`, held by `nest-rs-health`'s suite). A run with no transport
+at all says so at `warn` and stops for `StopCause::NoTransport`.
 Neither refuses: a shape a harness serves is no defect, and a refusal would be
-a break (`.claude/decisions/adapter-imports-its-transport.md`). Three
-disciplines bind every boot diagnostic:
+a break. Three disciplines bind every boot diagnostic:
 
 - **Escalate no further than the fact supports** — a shape correct in another
   composition warns or says less; a boot error there refuses working code.

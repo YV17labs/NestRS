@@ -11,8 +11,7 @@ use http::Method;
 use http::header::{HeaderName, HeaderValue, SERVER};
 use nest_rs_config::Namespaced as _;
 use nest_rs_core::__private::{
-    EdgeHosts, EdgeRuntime, GlobalLayers, GuardStage, SiteDeclaration, SiteLayers, UnitChains,
-    attaches_transport, compose_site, registered_hosts,
+    GlobalLayers, GuardStage, SiteDeclaration, SiteLayers, UnitChains, compose_site,
 };
 use nest_rs_core::{Container, Discovery, Edge, Listening, Posture, Transport};
 use nest_rs_database::UnitOfWork;
@@ -906,20 +905,6 @@ impl Transport for HttpTransport {
     fn stop_bound(&self) -> Duration {
         self.shutdown_timeout + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
     }
-}
-
-nest_rs_core::inventory::submit! {
-    EdgeRuntime {
-        edge: Edge::Http,
-        import: "nest_rs::http::HttpModule",
-        attached: attaches_transport::<HttpTransport>,
-        hosts: controller_hosts,
-    }
-}
-
-/// Every controller the app's modules registered.
-fn controller_hosts(container: &Container) -> EdgeHosts {
-    registered_hosts::<HttpControllerMeta>(container, |meta| Some(Cow::Borrowed(meta.controller())))
 }
 
 #[cfg(test)]

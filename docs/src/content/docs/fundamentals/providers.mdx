@@ -75,15 +75,15 @@ pub struct PostsModule;
 
 ```rust title="crates/features/src/posts/http/module.rs"
 #[module(
-    imports = [PostsModule, HttpModule],
+    imports = [PostsModule],
     providers = [PostsController],
 )]
 pub struct PostsHttpModule;
 ```
 
-`PostsModule` owns the service. `PostsHttpModule` owns the controller,
-imports the port so `PostsController` can inject `PostsService`, and imports
-`HttpModule`, the server the controller is served on.
+`PostsModule` owns the service. `PostsHttpModule` owns the controller and
+imports the port so `PostsController` can inject `PostsService`. The controller
+brings `HttpModule`, the server it is served on.
 
 ```mermaid
 flowchart TB
@@ -218,7 +218,7 @@ Typical mistake — controller registered without importing the port:
 
 ```rust title="crates/features/src/posts/http/module.rs"
 // ✗ PostsModule not in imports — PostsService unreachable here
-#[module(imports = [HttpModule], providers = [PostsController])]
+#[module(providers = [PostsController])]
 pub struct PostsHttpModule;
 ```
 

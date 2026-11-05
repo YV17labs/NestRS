@@ -114,7 +114,6 @@ mod discoverable;
 mod discovery;
 mod dispatch;
 mod edge;
-mod edge_runtime;
 mod env_flag;
 mod env_prefix;
 mod error;
@@ -124,6 +123,7 @@ mod exception_filter;
 mod export;
 mod factory_inputs;
 mod handler;
+mod host_runtime;
 mod identifier;
 mod injected_factory;
 mod injects;
@@ -144,6 +144,7 @@ pub mod operation_log;
 mod outcome;
 pub mod panic;
 mod param;
+mod probe_runtime;
 mod problem;
 mod process_start;
 mod proof;
@@ -251,9 +252,6 @@ pub mod __private {
     };
     pub use crate::discoverable::__private::Residency;
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
-    pub use crate::edge_runtime::{
-        EdgeHosts, EdgeRuntime, ProbeRuntime, attaches_transport, registered_hosts,
-    };
     pub use crate::env_prefix::__private::RETIRED_VARIABLE;
     pub use crate::error_message::__private::find_in_chain;
     pub use crate::exception_filter::__private::ErasedExceptionFilter;
@@ -261,6 +259,7 @@ pub mod __private {
     pub use crate::handler::{
         HandlerDeclaration, MetaLevels, MetaValue, declare_handler, meta_value,
     };
+    pub use crate::host_runtime::{HostRuntime, RuntimeModule, import_host_runtime};
     pub use crate::injected_factory::InjectedFactory;
     pub use crate::injects::Injects;
     pub use crate::instance::{InstanceDeclaration, InstanceSeal};
@@ -283,6 +282,7 @@ pub mod __private {
     pub use crate::outcome::__private::{caught_problem, settled};
     pub use crate::panic::__private::{Unwound, unwound};
     pub use crate::param::{ParamProbe, ParamProbeFallback, ParamProbeResolves};
+    pub use crate::probe_runtime::{ProbeHosts, ProbeRuntime};
     pub use crate::problem::__private::{Withheld, retry_after_secs, withheld};
     pub use crate::process_start::ProcessStart;
     pub use crate::request_scope::__private::{RequestScopes, nested_continuation};

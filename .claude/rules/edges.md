@@ -54,7 +54,8 @@ contract**: an edge writes what is its own — its units, its view, its tail and
 how it renders a failure — and calls core's pipeline for the rest, never a
 guard, filter or interceptor loop of its own.
 
-1. **A decorator pair** (`macros.md`).
+1. **A decorator pair** (`macros.md`), whose host half brings what the edge
+   runs on: the crate's `__private::RUNTIME`.
 2. **A `unit.rs` and a view.** Each unit the edge opens is a `Unit` constant
    in the edge crate's `unit.rs` (`nest_rs_core::unit!`, named
    `<edge>.<what>` on the crate's target), so its operation line, a layer's
@@ -529,18 +530,18 @@ router parses. The rewrite is skipped when nothing is versioned.
 
 ## Surface decisions
 
-- **A transport is activated by the module that serves on it**: every edge
-  adapter imports its edge's module bare — `HttpModule` for HTTP and
-  WebSocket, plus `WsModule`, `GraphqlModule`, `McpModule`, `QueueModule` or
-  `ScheduleModule`, so the edge's config is read — and every framework module
-  mounting on HTTP imports `HttpModule` bare, so an app imports what it serves
-  and nothing more; events' bus is imported by the port that emits.
-  `WsModule`, the registry a port may import to push, attaches no transport.
-  The root names a transport only to pin it (`for_root(cfg)`),
-  and a backend binding (`RedisQueueModule`) where it chooses the backend; no
-  public `.transport(...)`. A host the app reaches whose edge's transport no
-  module attaches is named at run (`container.md`, *Discovery and its gate*;
-  `.claude/decisions/adapter-imports-its-transport.md`).
+- **A transport is activated by the host that serves on it**: a listed host
+  brings its edge's module bare (`container.md`, *Discovery and its gate*) —
+  `HttpModule` for HTTP, both it and `WsModule` for a gateway, `GraphqlModule`,
+  `McpModule`, `QueueModule` or `ScheduleModule`, so the edge's config is read —
+  and every framework module mounting on HTTP imports `HttpModule` bare, so an
+  app imports what it serves and nothing more; a module listing no host
+  (`AuditHttpModule`'s interceptor) imports its transport itself, and events' bus
+  is imported by the port that emits. `WsModule`, the registry a port may import
+  to push, attaches no transport. The root names a transport only to pin it
+  (`for_root(cfg)`), and a backend binding (`RedisQueueModule`) where it chooses
+  the backend; no public `.transport(...)`
+  (`.claude/decisions/adapter-imports-its-transport.md`).
 - **`#[sse]` is a verb, not an edge.** It collapses to `GET` before the route
   table is built and carries the route's guards, pipes, posture and document; it
   owns only the response. It refuses `#[authorize]` on an entity (a

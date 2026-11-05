@@ -177,11 +177,11 @@ use super::service::PostsService;
 pub struct PostsModule;
 ```
 
-The HTTP adapter sits in its own folder and imports the port and the HTTP
-transport it serves on:
+The HTTP adapter sits in its own folder and imports the port; its controller
+brings the HTTP transport it serves on:
 
 ```rust title="crates/features/src/posts/http/module.rs"
-#[module(imports = [PostsModule, HttpModule], providers = [PostsController])]
+#[module(imports = [PostsModule], providers = [PostsController])]
 pub struct PostsHttpModule;
 ```
 

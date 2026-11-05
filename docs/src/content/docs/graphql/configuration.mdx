@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-A bare `GraphqlModule` import — the one every GraphQL adapter writes — reads
+A bare `GraphqlModule` import — the one every resolver brings — reads
 `<PREFIX>_GRAPHQL__*` from the environment; `GraphqlModule::for_root(config)`
 at the app's root pins a *base* those variables still overlay, field by field. Every field is settable both ways —
 pin host behaviour in code, leave secrets and per-environment toggles to env.
@@ -96,12 +96,11 @@ Every module's config follows this rule (framework-wide):
 
 ```rust title="crates/features/src/posts/graphql/module.rs — env-driven"
 use nest_rs::core::module;
-use nest_rs::graphql::GraphqlModule;
 
 use super::resolver::PostsResolver;
 use crate::posts::PostsModule;
 
-#[module(imports = [PostsModule, GraphqlModule], providers = [PostsResolver])]
+#[module(imports = [PostsModule], providers = [PostsResolver])]
 pub struct PostsGraphqlModule;
 ```
 

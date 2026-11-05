@@ -76,23 +76,6 @@ impl Transport {
         self.handler_file().trim_end_matches(".rs")
     }
 
-    /// The framework modules this transport's adapter imports bare, so the app
-    /// importing the adapter serves it and reads its edge's config: its
-    /// transport, or the module mounting on it (which imports the transport),
-    /// and the registry a gateway needs. None for events, whose bus the
-    /// emitting port imports.
-    pub(crate) fn runtime(self) -> &'static [&'static str] {
-        match self {
-            Self::Http => &["nest_rs::http::HttpModule"],
-            Self::Mcp => &["nest_rs::mcp::McpModule"],
-            Self::Graphql => &["nest_rs::graphql::GraphqlModule"],
-            Self::Ws => &["nest_rs::http::HttpModule", "nest_rs::ws::WsModule"],
-            Self::Queue => &["nest_rs::queue::QueueModule"],
-            Self::Schedule => &["nest_rs::schedule::ScheduleModule"],
-            Self::Events => &[],
-        }
-    }
-
     /// Whether this transport's generated handler emits an event, on the log
     /// target its feature declares.
     pub(crate) fn logs(self) -> bool {

@@ -94,14 +94,10 @@ tagline is open on purpose, so it says so;
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
 use features::blog::BlogController;
 use features::blog::BlogService;
 
-#[module(
-    imports = [HttpModule],
-    providers = [BlogService, BlogController],
-)]
+#[module(providers = [BlogService, BlogController])]
 pub struct BlogModule;
 ```
 

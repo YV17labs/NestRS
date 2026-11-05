@@ -472,7 +472,9 @@ Drive non-HTTP transports through `HeadlessApp::spawn_transport` — the queue's
 is `nest_rs::queue::QueueWorker`. It runs a transport the way `App::run` does:
 configured, held to a stop bound the kernel accepts, listening, then serving —
 so once it returns, what the transport listens on accepts, and a client needs
-no retry loop.
+no retry loop. `attached_transports()` names what the composition attaches
+without starting any of it, the way to hold that a binary serves the edges you
+meant: `["queue"]` for a worker, and no `http`.
 
 ### A worker drains its whole Redis database
 

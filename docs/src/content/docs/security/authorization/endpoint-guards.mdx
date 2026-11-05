@@ -118,8 +118,8 @@ feature modules, in import order.
 linked crate never adds a guard to an app that did not ask for it — and an app
 with no global pool at all, such as an assistant serving `/mcp` alone, is
 authenticated by the feature module it imports. A declaration for an endpoint
-the app does not mount — `EndpointGuards<GraphqlView, _>` where no
-`GraphqlModule` is imported — fails the boot, naming it: its guards would run
+the app does not mount — `EndpointGuards<GraphqlView, _>` where nothing brings
+`GraphqlModule` — fails the boot, naming it: its guards would run
 nowhere.
 
 **The browser origin is checked first.** A foreign `Origin` on `/mcp`, or on a
@@ -203,7 +203,7 @@ providing them, as an HTTP adapter does:
 
 ```rust title="crates/features/src/users/ws/module.rs (from the demo)"
 #[module(
-    imports = [UsersModule, AuthzModule, HttpModule, WsModule],
+    imports = [UsersModule, AuthzModule],
     providers = [UsersGateway],
 )]
 pub struct UsersWsModule;

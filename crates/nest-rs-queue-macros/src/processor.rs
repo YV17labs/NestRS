@@ -9,10 +9,10 @@ use nest_rs_codegen::__private::pair;
 use nest_rs_codegen::__private::{
     HandlerSite, HostMeta, JobDecorator, JobKey, ProviderSite, SitePosture, VersionedEdge,
     await_if_async, cfg_attrs, concrete_signature, generic_args, handler_const, host_layers_entry,
-    impl_self_ident, job_key, job_returns_a_result, job_timeout, job_transaction, missing_argument,
-    one_role_per_method, payload_arg_type, piped_input, returns_unit, site_const, site_ref,
-    takes_value, timeout_value, transactional_value, ungrouped_expr, unread_job_key,
-    validate_argument,
+    host_runtime_entry, impl_self_ident, job_key, job_returns_a_result, job_timeout,
+    job_transaction, missing_argument, one_role_per_method, payload_arg_type, piped_input,
+    returns_unit, site_const, site_ref, takes_value, timeout_value, transactional_value,
+    ungrouped_expr, unread_job_key, validate_argument,
 };
 use nest_rs_codegen::{Grammar, Refusals, duration_millis, snake_case};
 use proc_macro::TokenStream;
@@ -142,6 +142,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         };
         handler_consts.push(site_const(&site));
         emissions.push(host_layers_entry(&site));
+        emissions.push(host_runtime_entry(
+            &self_ty,
+            &quote!(::nest_rs_queue::__private::RUNTIME),
+            &cfgs,
+        ));
 
         match emit_method(&self_ty, &provider_ident, method, args) {
             Ok(emitted) => emissions.push(emitted),

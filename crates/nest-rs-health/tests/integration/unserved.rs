@@ -39,7 +39,6 @@ async fn an_indicator_the_app_reaches_without_the_health_module_is_named_at_run(
 
     let unserved = logs.expect_one(target::APP, UNSERVED);
     assert_eq!(unserved.level, "warn");
-    assert_eq!(unserved.field("edge"), None, "health is no edge");
     assert_eq!(unserved.field("host").as_deref(), Some("CacheProbe"));
     assert_eq!(
         unserved.field("module").as_deref(),

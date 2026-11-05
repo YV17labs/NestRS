@@ -309,7 +309,8 @@ the entity becomes a GraphQL object at the moment something asks for one.
 
 Each adapter delegates to the port's service, so a freshly-generated port plus
 any adapter compiles immediately — the handler is the seam you fill in. Its
-`module.rs` imports what serves its edge (`HttpModule`, `GraphqlModule`,
+`module.rs` imports the port and the module providing its guards, and the
+handler's decorator brings what serves its edge (`HttpModule`, `GraphqlModule`,
 `WsModule`, `McpModule`, `QueueModule`, `ScheduleModule`), so an app importing
 the adapter serves it, reads its edge's configuration and imports nothing
 more; `g events` imports `EventsModule` into the
@@ -610,10 +611,10 @@ Then the edits a move cannot do:
    A single crate needs none, because `main.rs` declares its modules.
 3. **`crates/features/src/posts/http/mod.rs`** (new) — `mod controller; mod
    module;` plus its `pub use` lines, and a `http/module.rs` holding
-   `#[module(imports = [PostsModule, HttpModule], providers = [PostsController])]`.
+   `#[module(imports = [PostsModule], providers = [PostsController])]`.
 4. **`crates/features/src/posts/module.rs`** — drop `HttpModule::for_root(…)`
-   and the controller from `providers`. In a workspace the transport is the
-   **adapter's** import, and the port module provides only the service:
+   and the controller from `providers`. In a workspace the transport comes with
+   the **adapter's** controller, and the port module provides only the service:
    `#[module(providers = [PostsService])]`.
 5. **Imports** — `crate::service::PostsService` becomes
    `crate::posts::PostsService`; the app's `module.rs` adds

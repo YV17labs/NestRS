@@ -18,7 +18,6 @@ re-implemented per transport.
 ```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
-        McpModule,
         SeaOrmDatabaseModule,
         AuthzMcpModule,
     ],
@@ -27,8 +26,8 @@ re-implemented per transport.
 pub struct AssistantModule;
 ```
 
-With `AuthzMcpModule` imported you drop the opening — leave `McpModule` bare,
-gated by default: the module's guards are the endpoint's, so the
+With `AuthzMcpModule` imported you drop the opening — no
+`McpModule::for_root(McpAccess::Public)`, gated by default: the module's guards are the endpoint's, so the
 closed default is met, not silenced, and a module declaring guards beside an
 opening fails the boot. They join the app's global guard pool rather than
 replacing it: every guard the app's `GlobalGuards<(...)>` lists still runs at the

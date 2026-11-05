@@ -98,6 +98,10 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 /// listed once: a bare `Foo` beside its binding, or an entry written twice, is
 /// a compile error.
 ///
+/// A provider an edge's decorator made a host brings what the edge runs on: the
+/// module imports it bare (`HttpModule` for a `#[controller]`), so an adapter
+/// writes its port and the module providing its guards.
+///
 /// A diamond import builds its providers once; a dynamic import is not
 /// deduplicated, and its expression is evaluated once. Providers register in
 /// dependency order, whatever their order in the list. A missing dependency

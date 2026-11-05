@@ -480,6 +480,7 @@ struct GhostGatedModule;
 async fn a_controller_guard_no_module_provides_fails_the_boot_naming_it_and_the_controller() {
     // Built by hand, so the access graph does not refuse first.
     let container = nest_rs_core::Container::builder()
+        .provide(nest_rs_http::HttpConfig::default())
         .import::<GhostGatedModule>()
         .build()
         .expect("the container builds");

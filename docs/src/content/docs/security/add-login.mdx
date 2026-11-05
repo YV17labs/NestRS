@@ -139,7 +139,7 @@ And the feature's HTTP module imports the authz adapter:
 
 ```rust title="crates/features/src/users/http/module.rs (from the demo, abridged)"
 #[module(
-    imports = [UsersModule, AuthzModule, HttpModule],
+    imports = [UsersModule, AuthzModule],
     providers = [UsersController],
 )]
 pub struct UsersHttpModule;

@@ -73,40 +73,21 @@ Wire it in like any other provider:
 
 ```rust title="crates/features/src/chat/ws/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
-use nest_rs::ws::WsModule;
 
 use super::gateway::PingGateway;
 
-#[module(
-    imports = [HttpModule, WsModule],
-    providers = [PingGateway],
-)]
+#[module(providers = [PingGateway])]
 pub struct ChatWsModule;
 ```
 
-`HttpModule` for the transport the upgrade arrives on, `WsModule` for the
-connection registry (`WsServer`); the app imports `ChatWsModule`. The gateway
-itself is listed in `providers` — no `.transport(...)` call, no second port.
+The gateway is listed in `providers` — no `.transport(...)` call, no second port —
+and brings what it runs on: `HttpModule` for the transport the upgrade arrives
+on, `WsModule` for the connection registry (`WsServer`) every `WsClient` a
+handler touches reads, [`namespace`](/websockets/namespaces/)d registries
+included. The app imports `ChatWsModule`.
 `WsModule` attaches no transport of its own: a service that pushes to
 clients imports it at its port, and a binary reaching that port opens no
 listener unless an adapter serving on HTTP is imported too.
-
-`WsModule` is **not optional** for a default-namespace gateway: every
-`WsClient` a handler touches reads that registry. A gateway declares the
-dependency, so leaving it out fails the boot through the access graph, naming
-both the missing type and the module that provides it:
-
-```text frame="terminal"
-Error: module access violation: `PingGateway` (in module `ChatWsModule`) depends on
-`WsServer`, but `ChatWsModule` imports no module that provides it. `WsServer` is
-provided by `WsModule` — add `WsModule` to `#[module(imports = [...])]` …
-```
-
-Import it in whichever module lists the gateway — `nestrs g ws` writes it into
-the generated adapter module. `WsModule` owns the
-[`namespace`](/websockets/namespaces/)d registries too, so the import is the
-same one step whichever registry a gateway uses.
 
 ## Run it
 

@@ -636,10 +636,11 @@ lists what the boot, a log or the wire shows when one is missed.
    | a module filling a registry the app reads from an `OnApplicationBootstrap` hook | `ContainerBuilder::provide_wiring("<crate>::<registry>", wire)` in its `register` |
    | `builder.provide_meta(TransportContribution { name: "MyTransport", build: \|c\| Ok(Box::new(MyTransport::new(c)?)) })` | `builder.provide_transport(\|c\| MyTransport::new(c))` — named `MyTransport`, read off the type |
    | a feature module importing `HttpModule` (or GraphQL's, OpenAPI's) to declare it serves over HTTP | a bare `HttpModule` (`GraphqlModule`, `OpenApiModule`) in its `imports`; the app keeps a `for_root` only to pin a config |
-   | an edge adapter importing its port alone, and the app root importing `HttpModule`, `GraphqlModule`, `QueueModule` or `ScheduleModule` beside it | the adapter imports what serves its edge, bare — `HttpModule` (HTTP, WebSocket), plus `WsModule`, `GraphqlModule`, `McpModule`, `QueueModule` or `ScheduleModule` — and the root drops the line unless it pins a value (`McpModule::for_root` stays where it declares the identity or the opening); the queue's backend binding (`RedisQueueModule`) stays at the root. Nothing refuses the old shape: it still runs one transport of each type |
+   | an edge adapter importing its port alone, and the app root importing `HttpModule`, `GraphqlModule`, `QueueModule` or `ScheduleModule` beside it, or an adapter importing them itself (`WsModule` and `HttpModule` for a gateway, `McpModule` or `HttpModule` for a tool) | drop the line, unless the root pins a value (`McpModule::for_root` stays where it declares the identity or the opening): a host a module lists brings what serves its edge, bare, so a controller reads `<PREFIX>_HTTP__*`, a gateway `<PREFIX>_WS__*` and a tool `<PREFIX>_MCP__*`. A module listing no host, an interceptor's, keeps its import, and the queue's backend binding (`RedisQueueModule`) stays at the root. Nothing refuses the old shape: it still runs one transport of each type |
    | `SeaOrmModule` beside `SeaOrmDatabaseModule`, or `RedisModule` beside a Redis binding, neither pinned | delete the resource's line: a binding imports the resource it runs on, by its instance. The pair still boots, and a root names the resource only to pin it (`RedisModule::for_root(cfg)`) or for a connection it injects with no binding |
    | `ThrottlerModule` at the root for a controller binding `ThrottlerGuard` | `ThrottlerModule`, bare, in that controller's adapter, and the root drops the line unless it pins a policy; a root's `RedisThrottlerModule` still supersedes the in-process store |
    | a container built by hand importing `GraphqlModule`, `HealthModule`, `OpenApiModule`, `McpModule`, `StaticFilesModule` or `OAuthResourceModule`, seeding the module's config | seed `HttpConfig::default()` beside it: each imports `HttpModule` |
+   | a container built by hand importing a module that lists a controller, a gateway, a resolver, an `#[mcp]` or `#[process]` host | seed what its edge's module reads beside it (`HttpConfig`, `WsConfig`, `GraphqlConfig`, `McpConfig`, `QueueConfig`): the host brings that module, and a container built by hand drains no factory |
    | `McpModule::for_root(..)` declaring an identity or `McpAccess::Public` at two imports | declare each at one; the other imports leave it out, or import `McpModule` bare |
    | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` |
    | `App::new::<AppModule>()?`, and a match on `UnresolvedFactoryError` | `App::builder().module::<AppModule>().build().await?`, the one boot: every module owning a config queues a factory, which the synchronous boot refused |
@@ -698,8 +699,8 @@ lists what the boot, a log or the wire shows when one is missed.
     `nest_rs::database::UnitOfWork`, which `SeaOrmDatabaseModule` binds. Delete
     the data contexts from your authz modules first: `WsDataContext as dyn
     SocketContext` leaves `authz/ws/module.rs` — and `nestrs g ws` now writes
-    none: a gateway's adapter imports `AuthzModule`, `HttpModule` and
-    `WsModule` itself, as an HTTP adapter does — and `McpDataContext as dyn
+    none: a gateway's adapter imports `AuthzModule` itself, as an HTTP adapter
+    does — and `McpDataContext as dyn
     McpToolContext` leaves `authz/mcp/module.rs`; the edges open their units
     themselves. An
     app reaching a `#[crud]` host, a route or field under `#[authorize(A, bind
@@ -1213,13 +1214,10 @@ lists what the boot, a log or the wire shows when one is missed.
     `<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`, a refused login fails at once naming
     the host and the SQLSTATE; a bucket that does not exist fails the boot
     naming `<PREFIX>_STORAGE__URL`, and credentials the store refuses leave one
-    `warn`. A host the app reaches whose edge's transport no module attaches is
-    a `warn` too — `host not served: its edge's transport is not attached`, with
-    the host, its module and the import that serves it; so is a provider
-    declaring a `#[liveness]`, `#[readiness]` or `#[startup]` indicator in an
-    app that does not import `HealthModule` — `host not served: the health
-    probes are not mounted`, with the same fields but `edge`, since health is
-    no edge. A host the app links but never reaches — a scheduled method, a
+    `warn`. A provider declaring a `#[liveness]`, `#[readiness]` or `#[startup]`
+    indicator in an app that does not import `HealthModule` is a `warn` too —
+    `host not served: the health probes are not mounted`, with the host, its
+    module and the import that serves it. A host the app links but never reaches — a scheduled method, a
     `#[process]` method, a listener, a lifecycle hook, a health indicator — is a
     `warn` naming its `cause` and the remedy when it is this app's own code, and
     a `debug` line when it belongs to a dependency (`cause="dependency"`). A
@@ -1701,21 +1699,16 @@ lists what the boot, a log or the wire shows when one is missed.
   report, and what it leaves silent, is
   described under
   [A variable nothing reads](/configuration/env-reference/#a-variable-nothing-reads).
-- **A hand-written adapter importing its port alone**, in an app whose root no
-  longer imports the transport, serves nothing on that edge: `App::run` names
-  each such host at `warn` on `nest_rs::app` (`host not served: its edge's
-  transport is not attached`, with `edge`, `host`, `module` and the `import`
-  that serves it). Import that module in the adapter. An app run with no
-  transport at all files `app serves nothing: no transport is attached` at
-  `warn` and stops once its init hooks ran, for `StopCause::NoTransport`, where
-  it said `app ready transports=""` then drained for `TransportFailed`.
-- **An MCP adapter importing `HttpModule` instead of `McpModule`**, in an app
-  whose root imports nothing of MCP's, serves its tools on `McpConfig`'s
-  defaults: no `<PREFIX>_MCP__*` variable is read and nothing warns, so a
-  deployment's `<PREFIX>_MCP__ALLOWED_HOSTS` goes unread and the loopback
-  default refuses its public `Host` with `403` (`mcp request refused: its Host
-  is outside the allowlist`, on `nest_rs::mcp`). Import `McpModule` in the
-  adapter.
+- **A module listing an edge's host, in a binary not meant to serve that edge**,
+  now serves it, because the host brings what its edge runs on: a binary reaching
+  a module that lists a controller listens on `<PREFIX>_HTTP__PORT`, and one
+  reaching a `#[process]` host with no queue backend bound fails the boot naming
+  `RedisQueueModule`. Keep a host in its adapter (`users/http/`), never in the port
+  (`users/`), and import the adapter only in the binary serving that edge. An app
+  run with no transport at all files `app serves nothing: no transport is
+  attached` at `warn` and stops once its init hooks ran, for
+  `StopCause::NoTransport`, where it said `app ready transports=""` then drained
+  for `TransportFailed`.
 - **An app importing `GraphqlModule`, `HealthModule`, `OpenApiModule`,
   `McpModule`, `StaticFilesModule` or `OAuthResourceModule` without `HttpModule`**
   now serves HTTP: each imports it, so the binary listens on

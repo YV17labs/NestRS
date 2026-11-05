@@ -2,7 +2,6 @@
 //! seam between the container and anything that accepts inbound requests on
 //! the app's behalf.
 
-use std::any::TypeId;
 use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -110,7 +109,6 @@ type Build = Box<dyn Fn(&Container) -> Result<Box<dyn Transport>> + Send + Sync>
 /// ```
 pub struct TransportContribution {
     name: String,
-    transport: TypeId,
     build: Build,
 }
 
@@ -118,7 +116,6 @@ impl TransportContribution {
     pub(crate) fn new<T: Transport>(build: fn(&Container) -> Result<T>) -> Self {
         Self {
             name: T::name().into_owned(),
-            transport: TypeId::of::<T>(),
             build: Box::new(move |container| Ok(Box::new(build(container)?))),
         }
     }
@@ -126,11 +123,6 @@ impl TransportContribution {
     /// The transport, as the boot lines name it (`"http"`).
     pub fn name(&self) -> &str {
         &self.name
-    }
-
-    /// Whether the transport this contribution builds is a `T`.
-    pub(crate) fn is<T: Transport>(&self) -> bool {
-        self.transport == TypeId::of::<T>()
     }
 
     /// Build the transport from the assembled `container`.

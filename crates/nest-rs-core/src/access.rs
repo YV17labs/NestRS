@@ -20,6 +20,7 @@ use crate::error::{
     AccessError, AccessGraphError, MissingDependencyError, ProviderCycleError, ScopeViolationError,
     ScopedLayerError, UnbuiltCause, UngatedDiscoveryError,
 };
+use crate::host_runtime::runtime_modules;
 
 pub(crate) use self::__private::{HostLayers, HostRequires, ModuleDescriptor, ProviderDescriptor};
 
@@ -154,6 +155,22 @@ inventory::collect!(ModuleDescriptor);
 inventory::collect!(HostLayers);
 inventory::collect!(HostRequires);
 inventory::collect!(DependencyRemedy);
+
+/// Every module `module` imports: those its `imports = [...]` names, in order,
+/// then what each of its providers' decorators brings.
+fn imported_by(module: &ModuleDescriptor) -> Vec<TypeId> {
+    module
+        .imports
+        .iter()
+        .map(|import| import())
+        .chain(
+            module
+                .providers
+                .iter()
+                .flat_map(|provider| runtime_modules((provider.provider)())),
+        )
+        .collect()
+}
 
 /// What a decorator declares of each host, by host, with the labels: the
 /// layers its sites bind, or the keys its generated code requires.
@@ -366,8 +383,8 @@ pub(crate) fn positions(order: impl IntoIterator<Item = TypeId>) -> HashMap<Type
 /// Validate the access graph: every provider's dependency must be reachable
 /// from its module's import closure or be global infrastructure.
 ///
-/// Pure over its inputs (no link-time registry access). `roots` without a
-/// descriptor terminate a branch, making a hand-written root a no-op. A
+/// Pure over its inputs, but for what a host's decorator brings. `roots` without
+/// a descriptor terminate a branch, making a hand-written root a no-op. A
 /// provider in `overridden` is never built, so what it injects is not checked;
 /// `linked` holds what each host's decorators declare of it, and the remedy a
 /// crate names for a key no module provides.
@@ -787,7 +804,7 @@ fn import_path(
         let Some(desc) = by_id.get(&id) else {
             continue;
         };
-        for import in desc.imports.iter().map(|import| import()) {
+        for import in imported_by(desc) {
             if import != from && !came_from.contains_key(&import) {
                 came_from.insert(import, id);
                 queue.push_back(import);
@@ -815,7 +832,7 @@ fn reachable_in_order(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescripto
         }
         order.push(id);
         if let Some(desc) = by_id.get(&id) {
-            stack.extend(desc.imports.iter().rev().map(|import| import()));
+            stack.extend(imported_by(desc).into_iter().rev());
         }
     }
     order
@@ -945,8 +962,8 @@ fn modules_imports_first(
             return;
         }
         if let Some(desc) = by_id.get(&id) {
-            for import in desc.imports {
-                visit(import(), by_id, seen, order);
+            for import in imported_by(desc) {
+                visit(import, by_id, seen, order);
             }
         }
         order.push(id);

@@ -10,10 +10,11 @@ use std::str::FromStr;
 use nest_rs_codegen::__private::{
     HandlerSite, HostBorrow, HostMeta, JobDecorator, JobKey, ProviderSite, Replicas, SitePosture,
     VersionedEdge, await_if_async, cfg_attrs, concrete_signature, handler_const, host_layers_entry,
-    impl_self_ident, invalid_time_zone, job_key, job_keys, job_returns_a_result, job_timeout,
-    job_transaction, key_as_written, key_value, key_without_replicas_one, one_role_per_method,
-    replicas_value, require_str_lit, returns_unit, shared_receiver, site, site_const, site_ref,
-    takes_value, timeout_value, transactional_value, ungrouped_expr, unread_job_key,
+    host_runtime_entry, impl_self_ident, invalid_time_zone, job_key, job_keys,
+    job_returns_a_result, job_timeout, job_transaction, key_as_written, key_value,
+    key_without_replicas_one, one_role_per_method, replicas_value, require_str_lit, returns_unit,
+    shared_receiver, site, site_const, site_ref, takes_value, timeout_value, transactional_value,
+    ungrouped_expr, unread_job_key,
 };
 use nest_rs_codegen::{Refusals, duration_millis};
 use proc_macro::TokenStream;
@@ -139,6 +140,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         };
         handler_consts.push(site_const(&site));
         submissions.push(host_layers_entry(&site));
+        submissions.push(host_runtime_entry(
+            &self_ty,
+            &quote!(::nest_rs_schedule::__private::RUNTIME),
+            &cfgs,
+        ));
         let site_ref = site_ref(&self_ty, &method_ident);
         let key_tokens = match key {
             Some(key) => quote! { ::std::option::Option::Some(#key) },

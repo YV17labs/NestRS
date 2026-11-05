@@ -19,7 +19,7 @@
 //! `nest-rs` with `default-features = false` and the `queue` feature. It
 //! implements the two seams below and binds both in one module,
 //! `<Vendor>QueueModule`, beside the `<Vendor>Module::for_root` opening its
-//! connection. The worker is the port's: an app runs jobs by importing
+//! connection. The worker is the port's: a listed `#[process]` host brings
 //! [`QueueModule`], which attaches the [`QueueWorker`] to whichever backend is
 //! bound.
 //!
@@ -158,6 +158,7 @@ pub mod __private {
         HandlerContext, JobHandler, decode, process_method, required_capabilities,
     };
     pub use crate::jobs::__private::producer_of;
+    pub use crate::module::RUNTIME;
     pub use crate::outbox::arm_outbox;
     pub use crate::queue::IsJob;
     pub use crate::queue_name::is_valid_queue_name;

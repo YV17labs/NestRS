@@ -1,15 +1,15 @@
 ---
 title: Schedule
-description: In-process cron and interval jobs — declared as methods on any provider, activated by the schedule adapter that imports their scheduler.
+description: In-process cron and interval jobs — declared as methods on any provider, activated by the schedule adapter that lists it.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 A scheduled job is **a method** on any `#[injectable]` provider, tagged with
 `#[every]`, `#[cron]`, or `#[after]` inside a `#[scheduled]` impl block.
-The schedule adapter listing the provider imports `ScheduleModule`, which
-attaches the scheduler at boot, so an app importing the adapter runs its
-ticks.
+The decorator brings `ScheduleModule` to the schedule adapter listing the
+provider, which attaches the scheduler at boot, so an app importing the adapter
+runs its ticks.
 
 Triggers are validated **at compile time** (string literals, the IANA
 timezone included) or **at boot** (`CronExpression` presets); a bad preset
@@ -217,12 +217,11 @@ The provider goes in its feature module like any other `#[injectable]`:
 
 ```rust title="crates/features/src/audio/schedule/module.rs (from the demo)"
 use nest_rs::core::module;
-use nest_rs::schedule::ScheduleModule;
 
 use super::tasks::AudioTasks;
 use crate::audio::AudioModule;
 
-#[module(imports = [AudioModule, ScheduleModule], providers = [AudioTasks])]
+#[module(imports = [AudioModule], providers = [AudioTasks])]
 pub struct AudioScheduleModule;
 ```
 
@@ -230,9 +229,9 @@ The module imports `AudioModule` because `AudioTasks` injects
 `Arc<AudioService>`; the `AudioConfig` it injects too loads itself. Forget
 the import and the access graph fails the
 boot with a clear message naming `AudioService` as the missing
-dependency — the same Rust-visibility rule every other adapter follows. It
-imports `ScheduleModule` because that is what runs its ticks: the scheduler
-attaches once however many adapters import it.
+dependency — the same Rust-visibility rule every other adapter follows.
+`#[scheduled]` brings `ScheduleModule`, which runs its ticks: the scheduler
+attaches once however many hosts bring it.
 
 The app imports the adapter and, since the seed fires once across replicas,
 the occurrence lock it claims through: `RedisScheduleModule`, which imports
@@ -283,18 +282,12 @@ async fn main() -> Result<()> {
 ```
 
 `main` carries no transport at all — every transport (`HttpModule` and
-`ScheduleModule` here, `QueueModule` in the worker) is imported by the adapter
-that serves on it and attaches itself at boot.
+`ScheduleModule` here, `QueueModule` in the worker) comes with the host that
+serves on it and attaches itself at boot.
 
 **An app ticks the methods its own modules reach, and no others**: an
 HTTP-only app that links the `features` crate imports no schedule adapter, so
-it never runs a worker's schedule. A module listing a `#[scheduled]` provider
-without importing `ScheduleModule` — a hand-written one — is named when the
-app runs:
-
-```text frame="terminal"
- WARN nest_rs::app: host not served: its edge's transport is not attached edge="schedule" host="AudioTasks" module="AudioScheduleModule" import="nest_rs::schedule::ScheduleModule"
-```
+it never runs a worker's schedule.
 
 ## Run it
 

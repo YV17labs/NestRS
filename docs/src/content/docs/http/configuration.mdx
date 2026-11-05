@@ -5,22 +5,20 @@ sidebar:
   order: 2
 ---
 
-`HttpModule` attaches the HTTP transport at boot, and every module serving on
-it imports it bare — each HTTP and WebSocket adapter, and the framework's own
-mounts (`GraphqlModule`, `McpModule`, `HealthModule`, `OpenApiModule`, …) — so
-the app imports what it serves and the transport attaches once. A bare import
-reads every option from the environment — what `nestrs new` scaffolds, the port
-in the app's own `.env`:
+`HttpModule` attaches the HTTP transport at boot. Every controller and gateway
+brings it bare, and the framework's own mounts (`GraphqlModule`, `McpModule`,
+`HealthModule`, `OpenApiModule`, …) import it — so the app imports what it serves
+and the transport attaches once. A bare import reads every option from the
+environment — what `nestrs new` scaffolds, the port in the app's own `.env`:
 
 ```rust title="crates/features/src/hello/http/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
 
 use super::controller::HelloController;
 use crate::hello::HelloModule;
 
 #[module(
-    imports = [HelloModule, HttpModule],
+    imports = [HelloModule],
     providers = [HelloController],
 )]
 pub struct HelloHttpModule;
@@ -52,9 +50,10 @@ examples on this page reach an app that pins nothing — the scaffold's —
 and a pinning app reads them from the real environment alone.
 
 The app configures HTTP once. A feature crate that serves over HTTP — one
-another app may compose — declares the dependency with a bare `HttpModule`
-in its own `imports`: it reads the same `<PREFIX>_HTTP__*`, and the app still
-runs one server, configured by its `for_root`.
+another app may compose — gets a bare `HttpModule` from its controllers, or, in
+a module listing none, from its own `imports`: it reads the same
+`<PREFIX>_HTTP__*`, and the app still runs one server, configured by its
+`for_root`.
 
 Default values: host `0.0.0.0`, port `3000`, no TLS (plain HTTP), no CORS,
 no framework `Server` header, a `2 MiB` request-body cap, a `20`-second

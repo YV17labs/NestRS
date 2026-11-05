@@ -2,23 +2,22 @@
 //! server ([`McpConfig`]), who the app is ([`McpIdentity`]) and who may call it
 //! ([`McpAccess`]).
 //!
-//! Listing an `#[mcp]` provider mounts the endpoint on the HTTP transport. Its
-//! adapter imports this module bare, which reads `<PREFIX>_MCP__*` and imports
+//! Listing an `#[mcp]` provider mounts the endpoint on the HTTP transport, and
+//! brings this module bare, which reads `<PREFIX>_MCP__*` and imports
 //! `HttpModule` bare in turn, so the app importing the adapter serves it on the
 //! deployment's config; the root's [`McpModule::for_root`] pins a base over
 //! it. Identity and access have no `<PREFIX>_MCP__*` twin, so `for_root` takes
 //! them beside the config, before it.
 
 use std::any::TypeId;
-use std::borrow::Cow;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::__private::{EdgeHosts, EdgeRuntime, attaches_transport, registered_hosts};
+use nest_rs_core::__private::RuntimeModule;
 use nest_rs_core::{
-    Collecting, Container, ContainerBuilder, DynamicModule, Edge, Posture, Registering, module,
+    Collecting, Container, ContainerBuilder, DynamicModule, Posture, Registering, module,
 };
 use nest_rs_http::__private::EndpointPosture;
-use nest_rs_http::{HttpModule, HttpTransport};
+use nest_rs_http::HttpModule;
 
 use crate::access::McpAccess;
 use crate::config::McpConfig;
@@ -237,19 +236,9 @@ impl DynamicModule for McpSetup {
     }
 }
 
-nest_rs_core::inventory::submit! {
-    EdgeRuntime {
-        edge: Edge::Mcp,
-        import: "nest_rs::mcp::McpModule",
-        attached: attaches_transport::<HttpTransport>,
-        hosts: mcp_hosts,
-    }
-}
-
-/// Every `#[mcp]` host the app's modules registered.
-fn mcp_hosts(container: &Container) -> EdgeHosts {
-    registered_hosts::<registry::McpHostMeta>(container, |meta| Some(Cow::Borrowed(meta.host())))
-}
+/// What an `#[mcp]` host runs on, which `#[mcp]` brings: the module reading
+/// the endpoint's config, which imports the transport it mounts on.
+pub const RUNTIME: &[RuntimeModule] = &[RuntimeModule::of::<McpModule>()];
 
 #[cfg(test)]
 mod tests {

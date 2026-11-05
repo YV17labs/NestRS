@@ -70,14 +70,13 @@ the module serving its edge:
 
 ```rust title="crates/features/src/posts/http/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
 use nest_rs::throttler::ThrottlerModule;
 
 use super::controller::PostsController;
 use crate::posts::PostsModule;
 
 #[module(
-    imports = [PostsModule, HttpModule, ThrottlerModule],
+    imports = [PostsModule, ThrottlerModule],
     providers = [PostsController],
 )]
 pub struct PostsHttpModule;

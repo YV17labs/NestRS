@@ -7,7 +7,7 @@ sidebar:
 
 `McpConfig` carries the streamable-HTTP options, dual-path like every
 `nest-rs-*` config: `<PREFIX>_MCP__*` env vars over an optional pinned base.
-The MCP adapter's bare `McpModule` import resolves it, so an app reads it
+The bare `McpModule` an `#[mcp]` host brings resolves it, so an app reads it
 wherever it serves a tool; the root's `for_root` pins a base those variables
 overlay.
 

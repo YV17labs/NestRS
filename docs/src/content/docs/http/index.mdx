@@ -10,10 +10,10 @@ NestRS's HTTP layer accepts connections and routes requests itself, on
 [hyper](https://docs.rs/hyper); a handler reads its
 request through nestrs's own [extractors](/http/extractors/) and answers with
 nestrs's response types. A controller is a struct, routes come from
-`#[routes]`, and the transport activates by importing
-[`HttpModule`](/http/configuration/) in the module that serves on it — the
-feature's HTTP adapter — with `HttpModule::for_root(cfg)` at the app's root
-only to pin its config: `main` never holds a transport.
+`#[routes]`, and the transport activates with the module listing the controller
+— the feature's HTTP adapter — since `#[routes]` brings
+[`HttpModule`](/http/configuration/), with `HttpModule::for_root(cfg)` at the
+app's root only to pin its config: `main` never holds a transport.
 
 Other HTTP-shaped surfaces — GraphQL, OpenAPI, MCP, WebSocket gateways —
 all mount on the same `HttpTransport` via `HttpEndpointMeta`, so a single

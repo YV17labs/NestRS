@@ -1,8 +1,9 @@
 //! GraphQL support, mirroring HTTP's `#[controller]`/`#[routes]` model.
 //! `#[resolver]` builds from the container and registers `#[query]` /
 //! `#[mutation]` / `#[subscription]` in a link-time registry; the schema
-//! composes itself at boot. Import [`GraphqlModule`] to serve it over HTTP,
-//! subscriptions included: the same path carries `POST` and the graphql-ws socket.
+//! composes itself at boot. A listed resolver brings [`GraphqlModule`], which
+//! serves it over HTTP, subscriptions included: the same path carries `POST` and
+//! the graphql-ws socket.
 //!
 //! # Pinned async-graphql version
 //!
@@ -65,6 +66,7 @@ pub mod __private {
         GraphqlLoaderRegistration, GraphqlRelationRegistration, LoaderOwner, batch_spawner,
         seeded_loader,
     };
+    pub use crate::module::RUNTIME;
     pub use crate::operation::{
         FieldGuards, GraphqlSite, IsStreamReturn, ROOT_FIELD, answers_a_stream, field_guard_stage,
         field_name, run_field, run_nested,
@@ -172,7 +174,7 @@ pub use nest_rs_graphql_macros::operations;
 /// ```
 /// use std::sync::Arc;
 /// use nest_rs_core::{injectable, module};
-/// use nest_rs_graphql::{GraphqlModule, operations, resolver};
+/// use nest_rs_graphql::{operations, resolver};
 ///
 /// #[injectable]
 /// #[derive(Default)]
@@ -199,10 +201,7 @@ pub use nest_rs_graphql_macros::operations;
 ///     }
 /// }
 ///
-/// #[module(
-///     imports = [GraphqlModule],
-///     providers = [GreetingService, GreetingResolver],
-/// )]
+/// #[module(providers = [GreetingService, GreetingResolver])]
 /// struct AppModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> nest_rs_core::anyhow::Result<()> {

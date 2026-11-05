@@ -1,6 +1,4 @@
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
-use nest_rs::ws::WsModule;
 
 use super::gateway::ChatGateway;
 use super::request_seq::RequestSeq;
@@ -10,7 +8,7 @@ use crate::authz::AuthzModule;
 use crate::chat::ChatModule;
 
 #[module(
-    imports = [ChatModule, AuthnModule, AuthzModule, HttpModule, WsModule],
+    imports = [ChatModule, AuthnModule, AuthzModule],
     providers = [ChatGateway, SeqSource, RequestSeq],
 )]
 pub struct ChatWsModule;

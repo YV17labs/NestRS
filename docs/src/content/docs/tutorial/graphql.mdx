@@ -95,14 +95,13 @@ did not authenticate.
 ## The GraphQL module
 
 The adapter imports the port (`UsersModule`), the authz module
-(`AuthzGraphqlModule`), the org and post ports, whose services host the
+(`AuthzGraphqlModule`) and the org and post ports, whose services host the
 auto-emitted loaders — the entity exposes relations, a `belongs_to` org (next
-section) and a `has_many` of posts — and `GraphqlModule`, the endpoint its
-operations are served on:
+section) and a `has_many` of posts. The resolver brings `GraphqlModule`, the
+endpoint its operations are served on:
 
 ```rust title="crates/features/src/users/graphql/module.rs (from the demo)"
 use nest_rs::core::module;
-use nest_rs::graphql::GraphqlModule;
 
 use super::resolver::UsersResolver;
 use crate::authz::graphql::AuthzGraphqlModule;
@@ -111,7 +110,7 @@ use crate::posts::PostsModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, OrgsModule, PostsModule, AuthzGraphqlModule, GraphqlModule],
+    imports = [UsersModule, OrgsModule, PostsModule, AuthzGraphqlModule],
     providers = [UsersResolver],
 )]
 pub struct UsersGraphqlModule;
@@ -143,8 +142,8 @@ pub use http::UsersHttpModule;
 
 ## Wire the adapter
 
-The app root imports the feature's GraphQL adapter, which brings the endpoint
-with it: `GraphqlModule` mounts once however many adapters import it.
+The app root imports the feature's GraphQL adapter, whose resolver brings the
+endpoint with it: `GraphqlModule` mounts once however many resolvers bring it.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
         UsersGraphqlModule,
@@ -265,7 +264,7 @@ $ nestrs g graphql posts --app blog
 ```
 
 That writes `crates/features/src/posts/graphql/{resolver.rs,module.rs,mod.rs}`
-— the `#[crud]` resolver, and the module importing `GraphqlModule` — and the
+— the `#[crud]` resolver, and the module listing it — and the
 GraphQL authz module under `authz/graphql/`, flags the entity
 `#[expose(graphql)]`, and wires `PostsGraphqlModule` into `blog`. Restart, and
 `POST /graphql`, carrying the same bearer your `curl`s do, answers through the

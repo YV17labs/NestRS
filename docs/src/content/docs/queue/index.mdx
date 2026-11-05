@@ -10,9 +10,9 @@ import { Aside } from '@astrojs/starlight/components';
 Background work shares the rest of the framework's shape. A queue
 handler is a method on any `#[injectable]` provider, tagged
 `#[process(queue = <Name>Queue, retries)]` inside a
-`#[processor]` impl block. The queue adapter listing it imports
-`QueueModule`, which attaches the port's worker at boot; the worker discovers
-the reachable methods and runs each with permits of its own. A producer-only
+`#[processor]` impl block. The decorator brings `QueueModule` to the queue
+adapter listing it, which attaches the port's worker at boot; the worker
+discovers the reachable methods and runs each with permits of its own. A producer-only
 app imports no queue adapter and only pushes — same crate, same types, no
 worker.
 
@@ -317,8 +317,8 @@ Two modules, two roles:
 - **`QueueModule`** — from `nest_rs::queue`, attaches the port's
   `QueueWorker` transport. At boot it discovers the reachable `#[process]`
   methods, runs each over the bound consumer, and drains them with the app.
-  Each queue adapter imports it bare, so the app importing the adapter runs
-  its jobs and a producer-only app, which imports none, runs no worker;
+  Each `#[processor]` host brings it bare, so the app importing a queue adapter
+  runs its jobs and a producer-only app, which imports none, runs no worker;
   `QueueModule::for_root(cfg)` at the root only pins the drain window.
 
 ```rust title="apps/worker/src/module.rs (from the demo, abridged)"
@@ -345,8 +345,8 @@ pub struct WorkerModule;
 The demo's worker also opens the database — its notifications job writes a
 row — runs the notifications purge on a schedule, and serves health probes on
 HTTP. `AudioQueueModule` imports the
-`AudioModule` port and `QueueModule` itself, so the app lists only the adapter
-and the backend binding it chooses — registration is idempotent.
+`AudioModule` port and its processor brings `QueueModule`, so the app lists only
+the adapter and the backend binding it chooses — registration is idempotent.
 
 `main` is the universal skeleton:
 

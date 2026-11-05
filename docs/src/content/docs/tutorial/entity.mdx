@@ -153,8 +153,8 @@ The crate this page builds on is
 [**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) —
 it provides the `#[expose]` macro, which also writes the round trip the
 masking layer reads a row through when a feature adds authorization — so the
-`Model` derives no serde (`#[expose]` refuses one), and serializes nowhere but
-as `Post`. SeaORM itself
+`Model` takes no serde (`#[expose]` refuses one, derived or written by hand), and
+serializes nowhere but as `Post`. SeaORM itself
 is the source of truth for entities, columns, and migrations.
 
 ## What `#[expose]` decides

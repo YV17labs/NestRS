@@ -666,6 +666,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `masked_item_for::<A, E, _>(ctx, item)` | `masked_item_for::<A, E, _>(ctx, &nest_rs::authz::graphql::ability()?, item)` |
    | `model_attrs(derive(PartialEq, Serialize, Deserialize))` — or a `Serialize` or `Deserialize` in the entity's `#[derive]` — and `use serde::{Deserialize, Serialize}` on an `#[expose]`d entity | refused at the derive: delete both, and the features crate's `serde` line if nothing else names serde. `#[expose]` writes the round trip a mask reads a row through, so the `Model` derives no serde. Keep `model_attrs(derive(PartialEq))` only where your code compares rows |
    | `Json(model)`, `WsReply::reply(&model)` answering a row | its exposed type, `Json(User::from(&model))`: once the derive goes, a raw `Model` answers nowhere, and its hidden columns with it |
+   | a `Serialize` or `Deserialize` written by hand on an `#[expose]`d `Model` or `ModelEx`, or derived above `#[expose]`; `#[output]` or `#[input]` on one; a `JsonSchema` on one; a `SimpleObject`, `InputObject` or `#[Object]` on one | refused, each writing or reading columns no mask shapes: answer the exposed type, `User::from(&model)`, and take the inputs `#[expose(input(..))]` declares. A row kept in a cache or a queue payload is its exposed type too, or a DTO of its own that lists what it holds |
    | a hidden column of a type with no placeholder — a `Uuid`, a timestamp, a `Decimal`, a custom enum, a `Secret<Vec<u8>>` — with no `#[wire_default]` | refused at the field, where a masked reply carrying its row answered `500`: `#[wire_default]` (its type's `Default`), `#[wire_default(expr)]`, or `#[expose]` it |
    | a primary key with no `#[expose]` | `#[expose]` it: a masked reply reads a row's identity off the wire and never invents one |
    | `#[derive(Default)]` and `#[wire_enum]` on an enum a hidden column alone holds, there for the mask | optional: drop both and write `#[wire_default(Role::User)]` on the column — a hidden column's type needs no serde |
@@ -2117,8 +2118,16 @@ lists what the boot, a log or the wire shows when one is missed.
   hidden ones included, onto a wire no mask shapes — a reply answers `User`
   (`Json(User::from(&model))`): drop the derive``, and the same for
   `Deserialize`, naming the entity's inputs. Once it goes, a handler answering
-  the row — `Json(model)`, `WsReply::reply(&model)` — fails with `E0277`,
-  `Model: Serialize` not satisfied: answer `Json(User::from(&model))` (step 9).
+  the row — `Json(model)`, `WsReply::reply(&model)`, a `Vec<Model>` in a DTO — fails
+  with `E0277`, ``a row crosses no wire: `fn(Model) -> User` builds what a reply
+  answers, and a write takes the input `#[expose(input(..))]` declares``: answer
+  `Json(User::from(&model))` (step 9).
+- **A serde impl written by hand on an `#[expose]`d row, or a derive above the
+  decorator**, fails with `E0119`, `conflicting implementations of trait
+  Serialize for type Model`, its note naming `AModelCrossesNoWire`: the same goes
+  for `Deserialize`, `JsonSchema`, `#[output]`, `#[input]`, and for async-graphql's
+  `SimpleObject`, `InputObject` and `#[Object]`, which write or read columns no
+  mask shapes. Delete it and answer the exposed type (step 9).
 - **A hidden column of a type with no placeholder** — a tenant `Uuid`, a
   timestamp, a custom enum — fails to compile at the field, where 6.x answered
   every masked reply carrying its row `500`: ``#[expose]: `org_id: Uuid` is not

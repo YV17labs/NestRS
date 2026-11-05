@@ -78,10 +78,11 @@ types and the `#[sea_orm(...)]` attributes — `#[expose]` only **reads**
 them and decides what crosses the wire. The two decorators compose:
 `#[sea_orm::model]` builds the `Entity`, `Column`, `ActiveModel`, and
 `Relation` machinery; `#[expose]` builds the transport surface on top. The
-`Model` derives no serde: `#[expose]` writes the wire type and the round
-trip a mask reads a row through, and refuses a `Serialize` or `Deserialize`
-derived on the row, so it serializes nowhere but as `Post`, and a hidden
-column has no way onto a wire.
+`Model` crosses no wire: `#[expose]` writes the wire type and the round
+trip a mask reads a row through, and refuses a `Serialize`, `Deserialize`,
+`JsonSchema`, `SimpleObject` or `InputObject` on the row, derived or written by
+hand, so it serializes nowhere but as `Post`, and a hidden column has no way
+onto a wire.
 For everything about columns, types, relations, and migrations, the
 [official SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/)
 is the source of truth.

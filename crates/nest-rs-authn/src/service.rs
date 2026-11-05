@@ -2,13 +2,16 @@
 
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jsonwebtoken::{
     DecodingKey, EncodingKey, Header, Validation, decode, decode_header, encode, errors::ErrorKind,
     get_current_timestamp,
 };
 use nest_rs_config::{Namespaced, endpoint_shown};
 use nest_rs_core::Secret;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::de::{DeserializeOwned, IgnoredAny};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
@@ -709,6 +712,10 @@ impl JwtService {
     /// [`JWKS_FETCH_TIMEOUT`](crate::JWKS_FETCH_TIMEOUT); a set that cannot be
     /// had is [`AuthError::Unavailable`], never a verdict on the token. Against
     /// a static key it never waits.
+    ///
+    /// A token its issuer bound to a key (`cnf`, RFC 7800 §3) is
+    /// [`AuthError::SenderConstrained`]: this service reads a bearer token,
+    /// which proves no key, so honouring it as one would drop the binding.
     pub async fn verify<C: DeserializeOwned>(&self, token: &str) -> Result<C, AuthError> {
         let data = match &self.verifier {
             Verifier::Static {
@@ -739,6 +746,9 @@ impl JwtService {
             if !typ.eq_ignore_ascii_case(AT_JWT) && !typ.eq_ignore_ascii_case(AT_JWT_LONG) {
                 return Err(AuthError::InvalidToken);
             }
+        }
+        if confirms_a_key(token) {
+            return Err(AuthError::SenderConstrained);
         }
         Ok(data.claims)
     }
@@ -856,6 +866,25 @@ fn naming_its_subject<C: Serialize + PrincipalIdentity>(
         payload.insert("sub".to_owned(), actor.into());
     }
     Ok(payload)
+}
+
+/// The one claim a bearer token's verification reads besides what the claims
+/// type does.
+#[derive(Deserialize)]
+struct Confirmation {
+    cnf: Option<IgnoredAny>,
+}
+
+/// Whether `token`, whose signature already held, carries `cnf`. Read off the
+/// payload, as the claims type may not name it; what does not read as one is
+/// no token to serve.
+fn confirms_a_key(token: &str) -> bool {
+    token
+        .split('.')
+        .nth(1)
+        .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
+        .and_then(|payload| serde_json::from_slice::<Confirmation>(&payload).ok())
+        .is_none_or(|payload| payload.cnf.is_some())
 }
 
 /// The validation every token meets, for one `algorithm`, its `iss` one of

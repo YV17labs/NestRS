@@ -1279,3 +1279,92 @@ mod rejected_credential {
         assert_eq!(body["detail"], "unauthenticated", "{body}");
     }
 }
+
+/// A token bound to a key reaches the caller as any refused token, and the
+/// operator as what it is, on the guard's one line.
+mod sender_constrained {
+    use std::sync::Arc;
+
+    use nest_rs_authn::__private::sign_unchecked;
+    use nest_rs_authn::{JwtService, JwtStrategy};
+    use nest_rs_core::Ambient;
+    use nest_rs_http::{StatusCode, controller, header, routes};
+    use nest_rs_testing::{LogCapture, TestApp};
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+
+    const SECRET: &str = "sender-constrained-secret-padded-32";
+
+    #[derive(Clone, Debug, Serialize, Deserialize, PrincipalIdentity)]
+    struct Claims {
+        #[principal(actor)]
+        sub: String,
+    }
+
+    type Authenticated = AuthnGuard<JwtStrategy<Claims>>;
+
+    #[controller(path = "/")]
+    #[use_guards(Authenticated)]
+    struct ProfileController;
+
+    #[routes]
+    impl ProfileController {
+        #[get("/me")]
+        async fn me(&self, claims: Ambient<Claims>) -> String {
+            claims.sub.clone()
+        }
+    }
+
+    #[module(
+        imports = [HttpModule, nest_rs_authn::AuthnModule::for_root(nest_rs_authn::AuthnConfig {
+            secret: Some(SECRET.into()),
+            ..nest_rs_authn::AuthnConfig::default()
+        })],
+        providers = [JwtStrategy<Claims>, Authenticated, ProfileController],
+    )]
+    struct ProfileApp;
+
+    #[tokio::test]
+    async fn a_bound_token_is_a_401_invalid_token_on_one_warn_naming_it() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<ProfileApp>().await.expect("boots");
+        let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
+        let bound = sign_unchecked(
+            &jwt,
+            &serde_json::json!({ "sub": "alice", "cnf": { "jkt": "thumbprint" } }),
+        )
+        .expect("sign");
+
+        let response = app
+            .http()
+            .get("/me")
+            .header("authorization", format!("Bearer {bound}"))
+            .send()
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+        let challenge = response.0.headers()[header::WWW_AUTHENTICATE]
+            .to_str()
+            .expect("ASCII");
+        assert!(
+            challenge.contains(r#"error="invalid_token""#),
+            "{challenge}"
+        );
+        assert!(!challenge.contains("cnf"), "{challenge}");
+        let warns = logs.events_at(tracing::Level::WARN);
+        assert_eq!(warns.len(), 1, "{warns:#?}");
+        assert_eq!(
+            warns[0].field("reason").as_deref(),
+            Some("sender_constrained")
+        );
+
+        let unbound = sign_unchecked(&jwt, &serde_json::json!({ "sub": "alice" })).expect("sign");
+        app.http()
+            .get("/me")
+            .header("authorization", format!("Bearer {unbound}"))
+            .send()
+            .await
+            .assert_status_is_ok();
+    }
+}

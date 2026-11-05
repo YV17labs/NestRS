@@ -259,7 +259,8 @@ route.
 
 `AuthError` covers the failure modes a strategy hits:
 `MissingCredentials`, `InvalidToken`, `InvalidSignature`,
-`InvalidAlgorithm`, `UnknownKey`, `NotYetValid`, `Expired`, `Failed` — each
+`InvalidAlgorithm`, `UnknownKey`, `NotYetValid`, `Expired`,
+`SenderConstrained`, `Failed` — each
 a **401** — plus `Unavailable`, which is a **503**. `Failed` collapses to a
 generic `"authentication failed"` on the wire so the message never leaks
 configuration detail.

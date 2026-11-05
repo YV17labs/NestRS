@@ -314,6 +314,15 @@ response, so no `jwks_uri`; no `cnf`-claim handling, so no DPoP binding; a `Stra
 never sees the TLS handshake, so no mTLS binding. `signed_metadata` is not advertised
 either.
 
+A token your issuer bound to a key anyway — one carrying `cnf`, DPoP's `jkt` or a
+certificate's `x5t#S256` — is refused, `401 invalid_token`, on the guard's one `warn`
+with the reason `sender_constrained`: read as a bearer it would pass with no proof,
+and a stolen copy with it. [RFC 9449 §7.2](https://datatracker.ietf.org/doc/html/rfc9449#section-7.2)
+requires that of a resource taking both schemes and expects a `Bearer`-only one to
+accept such a token; the framework refuses it all the same, so a binding your issuer
+asked for is never dropped in silence. Have the issuer mint this audience a plain
+bearer token.
+
 The discovery walk, from a client that knows only one URL:
 
 ```bash

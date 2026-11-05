@@ -151,6 +151,9 @@ with `WWW-Authenticate: Bearer error="invalid_token"`:
   after the refetch it earned.
 - **An algorithm `ALGORITHMS` leaves out** — `reason="invalid_algorithm"`,
   before anything is fetched.
+- **A token the provider bound to a key** — DPoP or mutual TLS, `cnf` in the token
+  — is `reason="sender_constrained"`: this server reads a bearer token, which proves
+  no key. Have the provider mint this audience a plain one.
 
 An unreachable provider is not a `401`: the request answers `503` with
 `Retry-After`, the line is a `warn` naming the endpoint in its `error` chain, and a `#[public]`

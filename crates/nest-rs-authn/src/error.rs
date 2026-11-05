@@ -220,6 +220,12 @@ pub enum AuthError {
     /// other token failures because it is the routine "log in again" case.
     #[error("token expired")]
     Expired,
+    /// The token carries `cnf` (RFC 7800 §3): its issuer bound it to a key its
+    /// presenter must prove it holds, and this server reads a bearer token
+    /// alone, which proves none. The caller reads `invalid token`; the operator
+    /// reads `sender_constrained`.
+    #[error("token bound to a key this server verifies no proof of")]
+    SenderConstrained,
     /// A strategy-specific or configuration failure. Rendered as a 401
     /// challenge and logged at `warn`; it displays `"authentication failed"`,
     /// the body every caller reads. Built by [`failed`](Self::failed) or, with
@@ -356,6 +362,7 @@ impl AuthError {
             Self::UnknownKey => "unknown_key",
             Self::NotYetValid => "not_yet_valid",
             Self::Expired => "expired",
+            Self::SenderConstrained => "sender_constrained",
             Self::Failed { .. } => "failed",
             Self::Unavailable { .. } => "unavailable",
         }

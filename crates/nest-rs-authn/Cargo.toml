@@ -37,7 +37,8 @@ jsonwebtoken.workspace = true
 # verified TLS, on the workspace's one HTTP client, private to this crate.
 reqwest.workspace = true
 # Decoding `Authorization: Basic` for the `basic_credentials` helper, symmetric
-# to `bearer_token` — the two credential forms a `Strategy` reads off a request.
+# to `bearer_token` — the two credential forms a `Strategy` reads off a request —
+# and the payload `JwtService::verify` reads `cnf` off.
 base64.workspace = true
 serde.workspace = true
 # Claim stamping in `JwtService` — a caller's claims type is serialized to a

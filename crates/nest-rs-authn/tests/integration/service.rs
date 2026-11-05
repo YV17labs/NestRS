@@ -916,6 +916,38 @@ fn a_claims_type_naming_no_actor_mints_no_token() {
     }
 }
 
+/// RFC 7800 §3's `cnf` binds the token to a key the presenter proves it holds:
+/// read as a plain bearer, a stolen one would pass with no proof. Any
+/// confirmation member is refused, whichever method it names (RFC 9449 §6.1's
+/// `jkt`, RFC 8705 §3.1's `x5t#S256`); a `null` confirms nothing.
+#[tokio::test]
+async fn a_token_bound_to_a_key_is_refused_as_a_bearer() {
+    let jwt = service("sender-constrained");
+    for confirmation in [
+        serde_json::json!({ "jkt": "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I" }),
+        serde_json::json!({ "x5t#S256": "bwcK0esc3ACC3DB2Y5_lESsXE8o9ltc05O89jdN-dg2" }),
+        serde_json::json!({}),
+    ] {
+        let token = sign_unchecked(
+            &jwt,
+            &serde_json::json!({ "sub": "alice", "cnf": confirmation }),
+        )
+        .expect("sign");
+
+        let refused = jwt.verify::<serde_json::Value>(&token).await;
+
+        assert!(
+            matches!(refused, Err(AuthError::SenderConstrained)),
+            "{confirmation}: {refused:?}"
+        );
+    }
+    let token =
+        sign_unchecked(&jwt, &serde_json::json!({ "sub": "alice", "cnf": null })).expect("sign");
+    jwt.verify::<serde_json::Value>(&token)
+        .await
+        .expect("a `null` confirms no key");
+}
+
 /// What the signer stamps sits in a JSON object: claims serializing to
 /// anything else cannot carry one, and are refused rather than signed bare.
 #[test]

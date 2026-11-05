@@ -958,6 +958,12 @@ lists what the boot, a log or the wire shows when one is missed.
     | `input: Valid<T>` on a GraphQL argument, a WebSocket payload or a job; `Parameters<Valid<T>>` on MCP; `nest_rs::mcp::Valid` | `input: T`, `Parameters<T>`: each edge validates what it decodes |
     | `Piped<P, T>` on a GraphQL argument, a WebSocket payload or a job, `Parameters<Piped<P, T>>` on MCP; `nest_rs::mcp::Piped` | `Piped<P>` from `nest_rs::pipes`, whose wire value is the pipe's `In`, bound `Piped(value)` |
 
+    An app-wide exception filter or `#[interceptor(stage = unit)]` now also runs
+    around a WebSocket frame no handler reads, an event none serves or a frame no
+    envelope holds, as it runs around a route's `404`; `WsView::event` reads
+    `_OTHER` there. One assuming a handler stood behind every message narrows itself
+    on that word. No compile error says so.
+
 13. **Push through the queue's type, on the port's handle.** A feature injects
     `Arc<nest_rs::queue::Jobs>`, which the backend's binding registers, where it
     injected the backend's producer. `push_to::<Q>(job)` and the string-taking
@@ -1314,6 +1320,12 @@ lists what the boot, a log or the wire shows when one is missed.
       `service error surfaced as 500` and `token request failed` read
       `request failed` / `request unavailable` on `nest_rs::http`, a handler's
       `503` at `warn`. See the table in [Logs](/opentelemetry/logs/).
+    - **A span says `Error` for the server's own failure alone.** A `ws.message`,
+      a `graphql.operation`, a `graphql.field` and a `graphql.subscription` record
+      no `error.type` and no status for a failure their caller earned, as an HTTP
+      `4xx` does not; their line still files `outcome="error"`. An alert counting
+      those spans in `Error` reads the server's failures alone, and one meant to
+      count every failure reads the line. No compile error says so.
     - **A library's own lines are clamped.** rmcp's, h2's, rustls's,
       tungstenite's, sqlx-postgres's and the OTLP exporter's lines are written
       only once `RUST_LOG` names the library (`info,rmcp=info`), and that
@@ -2398,8 +2410,8 @@ folder; what a 6.1 project most often meets:
   server identity on a host, which goes in `McpIdentity`. A host written by hand meets rmcp's own:
   an empty `#[tool_router]`, which takes `#[tool_router(allow_empty)]`.
 - **`#[subscribe_message]`, `#[on_connect]`:** an event that is no string literal, a hook repeated,
-  a hook returning a value, a reply that does not serialize under `#[authorize]`, and any layer on a
-  connection hook.
+  a hook returning a value, a reply that does not serialize under `#[authorize]`, and any layer or
+  `#[meta]` on a connection hook.
 - **`#[queue]`, `#[process]`:** `#[queue]` on anything but a unit struct, no `name` or `job`, a name
   outside the rule; `#[process]` with no queue, a queue that is no marker, a job that is not the
   queue's, keys outside a list, `concurrency` or `throttle` below one, a `timeout` past `"24h"`,

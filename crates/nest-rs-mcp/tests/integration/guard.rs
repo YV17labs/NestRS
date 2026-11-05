@@ -102,6 +102,70 @@ async fn an_empty_pool_and_no_endpoint_guards_deny_initialize() {
     assert_eq!(denied.field("path").as_deref(), Some("/mcp"));
 }
 
+/// A guard an `#[mcp]` host binds runs at its operations, which no request
+/// reaches through a stage that denies: the endpoint stays closed, and the
+/// line's hint names what lifts the stage.
+mod a_hosts_own_guards {
+    use nest_rs_mcp::tools;
+
+    use super::*;
+
+    #[injectable]
+    #[derive(Default)]
+    struct Pass;
+
+    impl Layer for Pass {}
+
+    #[async_trait]
+    impl Guard for Pass {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<McpView> for Pass {}
+
+    #[mcp]
+    #[derive(Default)]
+    #[use_guards(Pass)]
+    struct ScopedTool;
+
+    #[tools]
+    impl ScopedTool {
+        #[tool(description = "ping")]
+        async fn ping(&self) -> Result<String, McpError> {
+            Ok("pong".into())
+        }
+    }
+
+    #[module(providers = [Pass, ScopedTool])]
+    struct ScopedToolModule;
+
+    #[tokio::test]
+    async fn lift_nothing_at_the_request_and_the_hint_names_what_does() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<ScopedToolModule>()
+            .await
+            .expect("boots");
+
+        post_message(app.http(), "/mcp", None, None, &initialize_request())
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+
+        let line = logs.expect_one("nest_rs::layers", "no guard at the request");
+        assert_eq!(line.field("then").as_deref(), Some("denies every unit"));
+        let hint = line.field("hint").unwrap_or_default();
+        assert!(
+            hint.contains("`EndpointGuards<View, (...)>` on an endpoint carrying units"),
+            "{hint}",
+        );
+        assert!(
+            !hint.contains("on the host"),
+            "a host's guards lift no request stage: {hint}",
+        );
+    }
+}
+
 /// The `check_http` calls of the recording guards below, in the order they ran.
 #[injectable]
 #[derive(Default)]

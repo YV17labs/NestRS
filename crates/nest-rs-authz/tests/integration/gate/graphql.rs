@@ -3,7 +3,7 @@
 //! role. `/graphql` is an `InBand` mount, so an anonymous request reaches the
 //! gate, which refuses it.
 
-use nest_rs_authz::{AbilityBuilder, Action, Read};
+use nest_rs_authz::{AbilityBuilder, Action, Read, Update};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
@@ -206,5 +206,77 @@ async fn non_admin_is_forbidden_by_the_resolver_gate() {
         Some("no_class_grant"),
         "and why, which is what separates a missing grant from a missing \
          principal when the two render the same to the caller: {event:?}",
+    );
+}
+
+/// A unit's own guard, with nothing at the `/graphql` request: it builds the
+/// ability the posture reads, a Read grant on widgets and nothing else.
+#[injectable]
+#[derive(Default)]
+struct UnitAbility;
+
+impl Layer for UnitAbility {}
+
+#[async_trait]
+impl Guard for UnitAbility {
+    async fn check(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Read, widget::Entity);
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+            b.build().expect("valid test ability"),
+        ));
+        Ok(())
+    }
+}
+
+impl GuardFor<GraphqlView> for UnitAbility {}
+
+#[resolver]
+#[use_guards(UnitAbility)]
+struct ScopedResolver;
+
+#[operations]
+impl ScopedResolver {
+    #[query]
+    #[authorize(Read, widget::Entity)]
+    async fn scoped_name(&self) -> GqlResult<String> {
+        Ok("ada".into())
+    }
+
+    #[query]
+    #[authorize(Update, widget::Entity)]
+    async fn scoped_write(&self) -> GqlResult<String> {
+        Ok("written".into())
+    }
+}
+
+#[module(imports = [GraphqlModule], providers = [UnitAbility, ScopedResolver])]
+struct ScopedModule;
+
+/// No guard at the request is no `#[public]`-only surface: a gated operation
+/// whose resolver binds its guards runs, and refuses what they do not grant, so
+/// the boot's line says each unit decides alone.
+#[tokio::test]
+async fn where_no_guard_runs_at_the_request_each_unit_decides_alone() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::builder()
+        .module::<ScopedModule>()
+        .build()
+        .await
+        .expect("a resolver binding its guards boots with nothing at the request");
+
+    let read = query(&app, "", "{ scopedName }").await;
+    assert_eq!(read["data"]["scopedName"], "ada", "{read}");
+    let write = query(&app, "", "{ scopedWrite }").await;
+    assert_eq!(
+        write["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{write}"
+    );
+
+    let line = logs.expect_one("nest_rs::layers", "no guard at the request");
+    assert_eq!(line.field("surface").as_deref(), Some("graphql"));
+    assert_eq!(
+        line.field("then").as_deref(),
+        Some("each unit decides alone")
     );
 }

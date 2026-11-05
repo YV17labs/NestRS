@@ -187,7 +187,9 @@ Omit the module and there is nothing to read — the schema is anonymous because
 it was never authenticated, not because a guard was left out of a list. With
 no guard at the request at all, the boot says so once, on `nest_rs::layers`:
 `no guard at the request`, with `surface="graphql"`,
-`then="runs #[public] units only"` and what to write in its `hint`.
+`then="each unit decides alone"` and what to write in its `hint`: a `#[public]`
+operation answers, and any other answers to the guards its resolver binds, or is
+refused for want of an ability.
 
 A dataloader batch carries what its request carries, so relations that fan out
 across batches run under the same ability, on the pool — scoped without the

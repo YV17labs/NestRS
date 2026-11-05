@@ -162,7 +162,7 @@ mod an_unguarded_schema_announces_itself {
         assert_eq!(event.field("path").as_deref(), Some("/graphql"));
         assert_eq!(
             event.field("then").as_deref(),
-            Some("runs #[public] units only")
+            Some("each unit decides alone")
         );
         assert_eq!(event.field("hint").as_deref(), Some(NO_GUARD_REMEDY));
     }

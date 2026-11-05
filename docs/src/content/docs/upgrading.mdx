@@ -1602,7 +1602,7 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A route 6.x served unguarded** stops the boot:
 
   ```text frame="terminal"
-  Error: routes no guard covers and none marks `#[public]`: POST /thing (create), GET /thing (read) — a route runs a guard or is open on purpose; bind a guard with `#[use_guards(...)]` on the controller or the route, or declare the app's global pool (`GlobalGuards<(...)>` in the providers of the module the app boots), or mark a route open on purpose with `#[public]`
+  Error: routes no guard covers and none marks `#[public]`: POST /thing (create), GET /thing (read) — a route runs a guard or is open on purpose; list `GlobalGuards<(...)>` in the providers of the module the app boots, bind `#[use_guards(...)]` on a controller or a gateway, `EndpointGuards<View, (...)>` on an endpoint carrying units, or open it on purpose: `#[public]` on a route, a message or a GraphQL operation, `McpModule::for_root(McpAccess::Public)` on an MCP endpoint
   ```
 
   Bind a guard where the route should be closed, and write `#[public]` where it

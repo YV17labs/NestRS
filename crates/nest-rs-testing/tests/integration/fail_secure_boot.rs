@@ -546,6 +546,15 @@ async fn a_route_with_no_guard_and_no_public_refuses_the_boot_naming_every_such_
         chain.contains(nest_rs_http::__private::NO_GUARD_REMEDY),
         "the one remedy of a surface no guard runs at: {chain}",
     );
+    for named in [
+        "`GlobalGuards<(...)>`",
+        "`#[use_guards(...)]` on a controller or a gateway",
+        "`EndpointGuards<View, (...)>` on an endpoint carrying units",
+        "`#[public]`",
+        "`McpModule::for_root(McpAccess::Public)`",
+    ] {
+        assert!(chain.contains(named), "the remedy names {named}: {chain}");
+    }
 }
 
 #[module(imports = [OpenModule, GuardOnlyModule], providers = [GlobalGuards<(WiredGuard,)>])]

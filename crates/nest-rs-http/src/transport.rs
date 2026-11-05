@@ -684,7 +684,7 @@ impl Transport for HttpTransport {
                     Some(Arc::new(DeniedStage::new(served)))
                 }
                 RequestStage::InBand => {
-                    no_guard_at_the_request(d.meta.label(), &served, "runs #[public] units only");
+                    no_guard_at_the_request(d.meta.label(), &served, "each unit decides alone");
                     None
                 }
             };

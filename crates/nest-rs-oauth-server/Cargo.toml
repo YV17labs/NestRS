@@ -50,6 +50,8 @@ tracing.workspace = true
 # A token endpoint in an app that is a resource server too: its RFC 9728
 # interceptor must leave a client's refusal as §5.2 words it.
 nest-rs-oauth-resource = { path = "../nest-rs-oauth-resource" }
+# The token endpoint's document reads what the wire answers.
+nest-rs-openapi = { path = "../nest-rs-openapi" }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
 base64 = { workspace = true }
 tokio = { workspace = true }

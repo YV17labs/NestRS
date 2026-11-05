@@ -4,9 +4,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use nest_rs_config::Namespaced as _;
-use nest_rs_core::{Container, Discovery};
+use nest_rs_core::{ChallengeScheme, Container, DenialDocument, Discovery};
 use nest_rs_http::__private::{
-    VersionLocation, declared_versions, join_path, route_denial_statuses, version_location,
+    VersionLocation, declared_versions, join_path, route_denials, version_location,
 };
 use nest_rs_http::{
     HttpConfig, HttpControllerMeta, HttpRouteMeta, MEDIA_TYPE_PARAM, RouteTemplate,
@@ -59,6 +59,7 @@ pub(crate) fn build_document(
     let mut described: HashMap<(String, &str), Option<&'static str>> = HashMap::new();
     let mut operation_ids: HashMap<String, (String, &str)> = HashMap::new();
     let mut paths: Map<String, Value> = Map::new();
+    let mut challenged: BTreeSet<ChallengeScheme> = BTreeSet::new();
     for (meta, version) in &entries {
         let version = *version;
         if let Some(selection) = &selection
@@ -106,6 +107,7 @@ pub(crate) fn build_document(
             };
             let id = operation_id(meta.token(), route.handler(), version);
             let denials = guard_denials(container, meta, route);
+            challenged.extend(challenges(&denials));
             let operation = operation_object(
                 route,
                 &full,
@@ -178,6 +180,16 @@ pub(crate) fn build_document(
             },
         },
     });
+    if let Some(schemes) = document
+        .pointer_mut("/components/securitySchemes")
+        .and_then(Value::as_object_mut)
+    {
+        for scheme in challenged {
+            schemes.entry(security_scheme_name(scheme)).or_insert_with(
+                || json!({ "type": "http", "scheme": scheme.as_str().to_ascii_lowercase() }),
+            );
+        }
+    }
 
     // Stated even at the origin root, OpenAPI's default: a generator reads its
     // base URL off `servers` and has none to read otherwise.
@@ -427,14 +439,14 @@ fn problem_details_schema() -> Value {
     })
 }
 
-/// The statuses `route`'s guards declare, read off the chain it runs: the
+/// The refusals `route`'s guards declare, read off the chain it runs: the
 /// app's pool, its controller's and its own, composed once when it mounted.
 fn guard_denials(
     container: &Container,
     meta: &HttpControllerMeta,
     route: &HttpRouteMeta,
-) -> Vec<u16> {
-    route_denial_statuses(container, route).unwrap_or_else(|refused| {
+) -> Vec<(u16, DenialDocument)> {
+    route_denials(container, route).unwrap_or_else(|refused| {
         tracing::warn!(
             target: crate::TARGET,
             controller = meta.controller(),
@@ -446,14 +458,13 @@ fn guard_denials(
     })
 }
 
-/// `denials` are the statuses the route's guards declare
-/// ([`guard_denials`]).
+/// `denials` are the refusals the route's guards declare ([`guard_denials`]).
 fn operation_object(
     route: &HttpRouteMeta,
     full_path: &RouteTemplate,
     operation_id: &str,
     generator: &mut SchemaGenerator,
-    denials: &[u16],
+    denials: &[(u16, DenialDocument)],
     version_parameter: Option<Value>,
 ) -> Value {
     let mut op = Map::new();
@@ -501,12 +512,17 @@ fn operation_object(
         );
     }
 
-    if route.public() {
+    let challenged = challenges(denials);
+    if !challenged.is_empty() {
+        let requirements: Vec<Value> = challenged
+            .iter()
+            .map(|scheme| json!({ security_scheme_name(*scheme): [] }))
+            .collect();
+        op.insert("security".into(), Value::Array(requirements));
+    } else if route.public() {
         // OpenAPI 3.1 §4.8.10.1: an empty list removes any requirement, the
         // `#[public]` opening stated in the document as in the code.
         op.insert("security".into(), json!([]));
-    } else if denials.contains(&401) {
-        op.insert("security".into(), json!([{ "bearerAuth": [] }]));
     }
 
     let mut responses = Map::new();
@@ -547,11 +563,20 @@ fn operation_object(
     }
     responses.insert(status.to_string(), Value::Object(ok));
     for status in error_statuses(route, full_path, denials, requires_parameter) {
-        let mut response = problem_response(&error_title(status));
+        let declared = || denials.iter().filter(|(declared, _)| *declared == status);
+        let own_body = declared().find_map(|(_, document)| document.body);
+        let mut response = if own_body.is_none() || declared().any(|(_, d)| d.body.is_none()) {
+            problem_response(&error_title(status))
+        } else {
+            json!({ "description": error_title(status) })
+        };
+        if let Some(schema_fn) = own_body {
+            add_json_body(&mut response, schema_fn(generator).to_value());
+        }
         if let Value::Object(map) = &mut response {
             match status {
                 401 => {
-                    map.insert("headers".into(), challenge_header());
+                    map.insert("headers".into(), challenge_header(&challenged));
                 }
                 429 | 503 => {
                     map.insert("headers".into(), retry_after_header(status));
@@ -568,14 +593,7 @@ fn operation_object(
         let response = responses
             .entry(status.to_string())
             .or_insert_with(|| json!({ "description": reason_phrase(*status) }));
-        if let Value::Object(response) = response {
-            let content = response
-                .entry("content")
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Value::Object(content) = content {
-                content.insert(JSON_MEDIA_TYPE.into(), json!({ "schema": schema }));
-            }
-        }
+        add_json_body(response, schema);
     }
     op.insert("responses".into(), Value::Object(responses));
 
@@ -648,15 +666,42 @@ fn resolve_ref(schema: &Value, defs: &Map<String, Value>) -> Value {
     schema.clone()
 }
 
+/// The schemes `denials` challenge a `401` with, each once: what a route
+/// requires of a client, and what its document's `securitySchemes` defines.
+fn challenges(denials: &[(u16, DenialDocument)]) -> BTreeSet<ChallengeScheme> {
+    denials
+        .iter()
+        .filter(|(status, _)| *status == 401)
+        .map(|(_, document)| document.challenge)
+        .collect()
+}
+
+/// The name `scheme` is defined and required under: `bearerAuth`, `basicAuth`.
+fn security_scheme_name(scheme: ChallengeScheme) -> String {
+    format!("{}Auth", scheme.as_str().to_ascii_lowercase())
+}
+
+/// `schema` beside what else `response` documents for its status.
+fn add_json_body(response: &mut Value, schema: Value) {
+    if let Value::Object(response) = response {
+        let content = response
+            .entry("content")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Value::Object(content) = content {
+            content.insert(JSON_MEDIA_TYPE.into(), json!({ "schema": schema }));
+        }
+    }
+}
+
 /// The error statuses an operation can actually produce, ascending: what the
 /// edge answers on the route's behalf, and the `denials` its guards declare.
 fn error_statuses(
     route: &HttpRouteMeta,
     full_path: &RouteTemplate,
-    denials: &[u16],
+    denials: &[(u16, DenialDocument)],
     requires_parameter: bool,
 ) -> BTreeSet<u16> {
-    let mut out: BTreeSet<u16> = denials.iter().copied().collect();
+    let mut out: BTreeSet<u16> = denials.iter().map(|(status, _)| *status).collect();
     // Edge validation answers `400`, never `422` (`nest_rs_http::pipe_error`),
     // and a list linking its next page refuses a cursor no page issued.
     if route.request_body().is_some() || requires_parameter || route.sets_next_link() {
@@ -737,12 +782,21 @@ fn problem_response(title: &str) -> Value {
     })
 }
 
-/// The `WWW-Authenticate` challenge every `401` carries (RFC 9110 §15.5.2).
-fn challenge_header() -> Value {
+/// The `WWW-Authenticate` challenge every `401` carries (RFC 9110 §15.5.2),
+/// naming the schemes the route's guards challenge with.
+fn challenge_header(schemes: &BTreeSet<ChallengeScheme>) -> Value {
+    let said: Vec<String> = schemes
+        .iter()
+        .map(|scheme| match scheme {
+            ChallengeScheme::Bearer => "`Bearer`, with RFC 6750's `error` when a credential \
+                                        arrived and was refused"
+                .to_owned(),
+            other => format!("`{}`", other.as_str()),
+        })
+        .collect();
     json!({
         "WWW-Authenticate": {
-            "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential \
-                            arrived and was refused.",
+            "description": format!("The challenge: {}.", said.join(", or ")),
             "required": true,
             "schema": { "type": "string" }
         }
@@ -1066,7 +1120,7 @@ mod tests {
         route: &HttpRouteParts,
         full_path: &str,
         generator: &mut SchemaGenerator,
-        denials: &[u16],
+        statuses: &[u16],
         version_parameter: Option<Value>,
     ) -> Value {
         operation_object(
@@ -1074,9 +1128,79 @@ mod tests {
             &template(full_path),
             &operation_id(HOST_TOKEN, route.handler, None),
             generator,
-            denials,
+            &problems(statuses),
             version_parameter,
         )
+    }
+
+    /// `statuses`, each a refusal rendered as a problem document.
+    fn problems(statuses: &[u16]) -> Vec<(u16, DenialDocument)> {
+        statuses
+            .iter()
+            .map(|status| (*status, DenialDocument::PROBLEM))
+            .collect()
+    }
+
+    fn own_words(generator: &mut SchemaGenerator) -> schemars::Schema {
+        <String as schemars::JsonSchema>::json_schema(generator)
+    }
+
+    /// A guard answering in its own words documents them on its statuses, and
+    /// its scheme on the route; a status another guard of the chain answers with
+    /// a problem document lists both.
+    #[test]
+    fn a_guard_answering_in_its_own_words_documents_them_beside_a_problem_a_sibling_answers() {
+        let mut g = generator();
+        let own = DenialDocument::answering(ChallengeScheme::Basic, own_words);
+        let op = operation_object(
+            &http_route_meta(route("token", "/token")),
+            &template("/token"),
+            "token",
+            &mut g,
+            &[
+                (400, own),
+                (401, own),
+                (503, DenialDocument::PROBLEM),
+                (503, own),
+            ],
+            None,
+        );
+
+        assert_eq!(op["security"], json!([{ "basicAuth": [] }]), "{op}");
+        let own_only = &op["responses"]["400"]["content"];
+        assert!(own_only.get(JSON_MEDIA_TYPE).is_some(), "{own_only}");
+        assert!(
+            own_only.get("application/problem+json").is_none(),
+            "{own_only}"
+        );
+        let both = &op["responses"]["503"]["content"];
+        assert!(both.get(JSON_MEDIA_TYPE).is_some(), "{both}");
+        assert!(both.get("application/problem+json").is_some(), "{both}");
+        let challenge = op["responses"]["401"]["headers"]["WWW-Authenticate"]["description"]
+            .as_str()
+            .expect("a 401 names its challenge");
+        assert!(challenge.contains("`Basic`"), "{challenge}");
+    }
+
+    /// `#[public]` opens what the chain does not hold shut: a guard declaring
+    /// its `401` on a public route still requires its scheme.
+    #[test]
+    fn a_public_route_a_guard_still_challenges_states_the_requirement() {
+        let mut g = generator();
+        let mut r = route("token", "/token");
+        r.public = true;
+        let own = DenialDocument::answering(ChallengeScheme::Basic, own_words);
+
+        let op = operation_object(
+            &http_route_meta(r),
+            &template("/token"),
+            "token",
+            &mut g,
+            &[(401, own)],
+            None,
+        );
+
+        assert_eq!(op["security"], json!([{ "basicAuth": [] }]), "{op}");
     }
 
     #[test]
@@ -1257,7 +1381,7 @@ mod tests {
         let statuses = error_statuses(
             &http_route_meta(route("list", "/audio")),
             &template("/audio"),
-            &[401, 403],
+            &problems(&[401, 403]),
             false,
         );
         assert!(

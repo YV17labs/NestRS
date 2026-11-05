@@ -49,3 +49,11 @@ a contract its readers silently truncate is not the contract. utoipa 6 made
 Reopened when Hey API and openapi-typescript read 3.2 — then the document
 moves to 3.2 whole, typed event streams and `oauth2MetadataUrl` with it — or
 when an RFC fixes the rate-limit fields.
+
+## 2026-11-05 — a guard names the scheme it challenges with
+
+`bearerAuth` was written for every route whose guards can answer `401`, which was false of a
+token endpoint's `Basic`. A guard now says its scheme (`Guard::denial_document`), defaulting to
+`Bearer`, and the document defines and requires each scheme a route's chain challenges with.
+This moves nothing the refusal above decides: `basicAuth` is exactly what that guard checks, as
+`bearerAuth` is what the others do, and neither scheme is invented.

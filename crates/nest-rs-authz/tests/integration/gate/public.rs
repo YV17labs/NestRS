@@ -11,7 +11,7 @@ use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
-use nest_rs_http::__private::route_denial_statuses;
+use nest_rs_http::__private::route_denials;
 use nest_rs_http::{
     EndpointGuards, HttpControllerMeta, HttpView, Json, StatusCode, controller, routes,
 };
@@ -317,10 +317,12 @@ async fn a_route_naming_its_read_documents_a_public_masked_operation() {
         .find(|route| route.handler() == "feed")
         .expect("the route is discovered");
     assert!(feed.public() && feed.masked());
-    assert_eq!(
-        route_denial_statuses(app.container(), feed).expect("the site composed"),
-        [403],
-    );
+    let statuses: Vec<u16> = route_denials(app.container(), feed)
+        .expect("the site composed")
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    assert_eq!(statuses, [403]);
 }
 
 #[tokio::test]

@@ -250,7 +250,7 @@ pub mod __private {
     pub use crate::ambient::RejectedCredential;
     pub use crate::canonical_host::CanonicalHost;
     pub use crate::controller::{
-        HttpRouteParts, http_controller_meta, http_route_meta, route_denial_statuses, schema_of,
+        HttpRouteParts, http_controller_meta, http_route_meta, route_denials, schema_of,
     };
     pub use crate::deadline::RequestDeadline;
     pub use crate::deprecation::{deprecated_route, deprecation_meta};

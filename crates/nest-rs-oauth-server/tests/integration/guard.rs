@@ -8,13 +8,17 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use nest_rs_authn::{AuthError, AuthnConfig, AuthnModule, Strategy, basic_credentials};
+use nest_rs_config::Surface;
 use nest_rs_core::{Ambient, async_trait, injectable, module};
 use nest_rs_http::{HttpModule, Request, StatusCode, controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule};
 use nest_rs_oauth_server::{
-    AuthenticatedClient, ClientAuthenticationGuard, RegisteredClient, authenticate_against_registry,
+    AuthenticatedClient, ClientAuthenticationGuard, RegisteredClient, TokenError,
+    authenticate_against_registry,
 };
+use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_testing::{LogCapture, TestApp, TestResponse};
+use serde_json::Value;
 
 const CLIENT_ID: &str = "ci-registered-client";
 const SECRET: &str = "s3cret-never-logged";
@@ -73,6 +77,7 @@ struct TokenController;
 impl TokenController {
     #[post("/token")]
     #[use_guards(Authenticated)]
+    #[api(error(500 = TokenError))]
     async fn token(&self, client: Ambient<Client>) -> nest_rs_http::Result<String> {
         let actor = nest_rs_core::current_actor_id().unwrap_or_default();
         Ok(format!("{} {} {actor}", client.client_id, client.payload))
@@ -347,6 +352,78 @@ async fn each_refusal_files_one_warn_naming_neither_the_client_nor_its_secret() 
             assert!(!printed.contains(secret), "{printed}");
         }
     }
+}
+
+/// The same endpoint, documented: its document reads what the wire answers.
+#[module(
+    imports = [
+        HttpModule,
+        OpenApiModule::for_root(OpenApiConfig {
+            enabled: Surface::Open,
+            ..OpenApiConfig::default()
+        }),
+    ],
+    providers = [TokenController, Registry, Outage, Authenticated, Unavailable],
+)]
+struct DocumentedTokenApp;
+
+/// RFC 6749 §2.3.1 and §5.2 in the document: a generated client authenticates
+/// with `Basic` and reads the `error` member of every refusal the guard writes.
+#[tokio::test]
+async fn the_document_says_basic_and_the_body_every_refusal_answers() {
+    let app = TestApp::for_module::<DocumentedTokenApp>()
+        .await
+        .expect("boots");
+
+    let response = app.http().get("/api-json").send().await;
+
+    response.assert_status_is_ok();
+    let doc: Value = response.json().await.value().deserialize();
+    let operation = &doc["paths"]["/token"]["post"];
+    assert_eq!(
+        operation["security"],
+        serde_json::json!([{ "basicAuth": [] }]),
+        "{operation}",
+    );
+    let scheme = &doc["components"]["securitySchemes"]["basicAuth"];
+    assert_eq!(scheme["type"], "http", "{scheme}");
+    assert_eq!(scheme["scheme"], "basic", "{scheme}");
+    for status in ["400", "401", "503"] {
+        let answer = &operation["responses"][status]["content"];
+        assert!(
+            answer.get("application/problem+json").is_none(),
+            "{status}: {answer}"
+        );
+        let schema = &answer["application/json"]["schema"];
+        let reference = schema["$ref"].as_str().expect("a named schema");
+        let name = reference.rsplit('/').next().expect("its name");
+        let body = &doc["components"]["schemas"][name];
+        assert_eq!(body["required"], serde_json::json!(["error"]), "{body}");
+        let codes = body["properties"]["error"]["enum"]
+            .as_array()
+            .expect("the codes §5.2 registers");
+        assert!(codes.contains(&Value::from("invalid_client")), "{body}");
+        assert!(codes.contains(&Value::from("server_error")), "{body}");
+    }
+    let challenge = operation["responses"]["401"]["headers"]["WWW-Authenticate"]["description"]
+        .as_str()
+        .expect("a 401 names its challenge");
+    assert!(challenge.contains("Basic"), "{challenge}");
+    assert!(!challenge.contains("Bearer"), "{challenge}");
+    let server_error = &operation["responses"]["500"]["content"];
+    assert!(
+        server_error.get("application/json").is_some(),
+        "what the handler declares sits beside the opaque 500: {server_error}"
+    );
+    assert!(
+        server_error.get("application/problem+json").is_some(),
+        "{server_error}"
+    );
+    assert_eq!(
+        doc["paths"]["/token/public"]["post"]["security"],
+        serde_json::json!([{ "basicAuth": [] }]),
+        "`#[public]` opens nothing the guard holds shut",
+    );
 }
 
 /// In an app that is also a resource server, a client's refusal stays §5.2's:

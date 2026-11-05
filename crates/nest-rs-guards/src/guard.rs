@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nest_rs_core::{Layer, UnitContext, UnitView};
+use nest_rs_core::{DenialDocument, Layer, UnitContext, UnitView};
 
 use crate::denial::Denial;
 
@@ -204,6 +204,16 @@ pub trait Guard: Layer {
         if public { &[] } else { &[401, 403] }
     }
 
+    /// How a route's document states this guard's
+    /// [`denial_statuses`](Self::denial_statuses). The default,
+    /// [`DenialDocument::PROBLEM`], is what a [`Denial`] renders: a problem
+    /// document, and a `Bearer` challenge on a `401`. A guard answering in its
+    /// protocol's own words says so, as a client refused at a token endpoint is
+    /// answered RFC 6749 §5.2's body and a `Basic` challenge.
+    fn denial_document(&self) -> DenialDocument {
+        DenialDocument::PROBLEM
+    }
+
     /// The target the edge files this guard's denials on: the target constant
     /// of the crate owning the concern the guard decides. The default is
     /// `nest_rs::layers`.
@@ -268,6 +278,10 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
 
     fn denial_statuses(&self, public: bool) -> &'static [u16] {
         (**self).denial_statuses(public)
+    }
+
+    fn denial_document(&self) -> DenialDocument {
+        (**self).denial_document()
     }
 
     fn target(&self) -> &'static str {

@@ -110,6 +110,7 @@ mod close;
 mod container;
 pub(crate) mod cycle_guard;
 mod decode_path;
+mod denial_document;
 mod discoverable;
 mod discovery;
 mod dispatch;
@@ -175,6 +176,7 @@ pub use backoff::{Backoff, Retries, process_seed};
 pub use budget::Budget;
 pub use close::CloseContribution;
 pub use container::{Container, ContainerBuilder, ContainerId, ProviderScope};
+pub use denial_document::{ChallengeScheme, DenialDocument};
 pub use discoverable::{
     Discoverable, INERT_HOST_HINT, InertHost, ProviderResidency, inert_host, unresolved_host,
 };

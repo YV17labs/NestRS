@@ -7,6 +7,7 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError, Weak};
 
 use crate::container::__private::site_chains;
 use crate::container::{Container, ContainerId};
+use crate::denial_document::DenialDocument;
 use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory};
 use crate::exception_filter::__private::ErasedExceptionFilter;
 use crate::exception_filter::ExceptionFilterSpec;
@@ -238,12 +239,12 @@ impl UnitChains {
         self.shape
     }
 
-    /// The statuses the site's guard stage declares
-    /// ([`GuardStage::denial_statuses`]); none without one.
-    pub fn denial_statuses(&self, public: bool) -> Vec<u16> {
+    /// The refusals the site's guard stage declares ([`GuardStage::denials`]);
+    /// none without one.
+    pub fn denials(&self, public: bool) -> Vec<(u16, DenialDocument)> {
         self.guard_stage
             .as_ref()
-            .map_or_else(Vec::new, |stage| stage.denial_statuses(public))
+            .map_or_else(Vec::new, |stage| stage.denials(public))
     }
 
     /// Whether the site's guard stage decides who reaches its units

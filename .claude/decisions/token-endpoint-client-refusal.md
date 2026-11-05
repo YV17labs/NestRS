@@ -145,10 +145,22 @@ grant's refusals too.
   `GrantType` gains as each is built, with `unauthorized_client` and
   `invalid_grant` raised by whichever reads them.
 
-## 2026-11-05 — the registry's shape holds
+## 2026-11-05 — the document reads what the wire answers, and the registry's shape holds
 
 On the owner's mandate of 2026-11-05. Each seen run first.
 
+- **The OpenAPI document is closed from the 2026-10-26 entry's *Not covered*.** `/token`
+  promised problem documents and `bearerAuth`, so a generated client mistyped every
+  refusal and Swagger UI sent the wrong scheme. `Guard::denial_document`, a provided method
+  whose default is what a `Denial` renders, declares the scheme a `401` challenges with and
+  the body the guard answers instead; `ClientAuthenticationGuard` declares `Basic` and
+  `TokenError`, which implements `JsonSchema` by hand, its codes held to its variants by a
+  unit test. The guard says two facts a generator reads, and no route restates them. Its one
+  neighbour, the `server_error`
+  a handler answers at `500`, is `#[api(error(500 = TokenError))]`, the existing seam for a
+  body a handler writes; a guard does not declare `500` (`Guard::denial_statuses`).
+- **A guard declaring `401` on a `#[public]` route keeps the route's requirement**: `#[public]`
+  opens nothing here (§3.2.1), and `security: []` said it did.
 - **`RegisteredClient::client_secret` is `pub(crate)`.** Nothing outside the crate reads it, and a
   client with no secret (`none`, `private_key_jwt`, `tls_client_auth`, each named above) would
   otherwise need it `Option`, a break, or an empty string as a state, which the boot refuses.
@@ -157,4 +169,6 @@ On the owner's mandate of 2026-11-05. Each seen run first.
   The resource server's `scopes_supported` already held the same grammar.
 - **Not covered:** `OAuthClientConfig::scopes` and each social provider's, which a provider
   reads and this server never grants; a refusal there would refuse what works today, so it
-  waits for a caller it harms.
+  waits for a caller it harms. A route reading `AccessTokenRequest` with no
+  `ClientAuthenticationGuard` documents its `400` as a problem document while the request answers
+  §5.2's body: every client authenticates at a token endpoint, so no such route is taught.

@@ -408,7 +408,11 @@ pub struct SignInModule;
 #[post("/token")]
 #[use_guards(ThrottlerGuard, ClientGuard<ClientPayload>)]
 #[meta(Throttle::per_minute(10))]
-// …
+#[api(
+    summary = "OAuth2 token endpoint (client_credentials)",
+    tags("OAuth2"),
+    error(500 = TokenError)
+)]
 async fn token(
     &self,
     client: Ambient<AuthenticatedClient>,
@@ -474,6 +478,13 @@ authenticates at a token endpoint (§3.2.1). Each refusal files one `warn`,
 the edge's `guard denied the request` on `nest_rs::oauth::server`, its
 `reason` the strategy's and its `error` chain naming the method attempted,
 never the client.
+
+The route's [OpenAPI document](/openapi/) says the same: `security` names
+`basicAuth`, and each status the guard answers carries `TokenError`'s body,
+`error` and its `error_description`, so a generated client authenticates with the
+right scheme and reads the refusal it is sent. The `server_error` your handler
+answers at `500` sits beside the opaque one with
+`#[api(error(500 = TokenError))]`.
 
 ### The request
 

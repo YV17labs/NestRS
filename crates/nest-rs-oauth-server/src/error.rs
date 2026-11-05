@@ -1,8 +1,11 @@
 //! RFC 6749 §5.2's token-endpoint error vocabulary, and the refusal of a
 //! token request that does not parse.
 
+use std::borrow::Cow;
+
 use nest_rs_http::challenge::NoBearerChallenge;
 use nest_rs_http::{HeaderValue, Response, ResponseError, StatusCode, header};
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 
 /// The challenge a client refused over HTTP Basic is answered with (RFC 7617
 /// §2): the scheme it used, and the protection space every endpoint taking
@@ -153,6 +156,39 @@ impl ResponseError for TokenError {
     }
 }
 
+/// RFC 6749 §5.2's document, which [`ClientAuthenticationGuard`](crate::ClientAuthenticationGuard)
+/// declares for its refusals and a route names for the `server_error` its
+/// handler answers: `#[api(error(500 = TokenError))]`.
+impl JsonSchema for TokenError {
+    fn schema_name() -> Cow<'static, str> {
+        "TokenError".into()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "RFC 6749 §5.2 — the token endpoint's error response.",
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "enum": [
+                        "invalid_request",
+                        "invalid_client",
+                        "invalid_grant",
+                        "unauthorized_client",
+                        "unsupported_grant_type",
+                        "invalid_scope",
+                        "invalid_target",
+                        "server_error",
+                    ],
+                },
+                "error_description": { "type": "string" },
+            },
+            "required": ["error"],
+        })
+    }
+}
+
 /// A token request refused before its grant is read — a parameter missing,
 /// repeated or of the wrong kind, a body that is no form, a client
 /// authenticating by two mechanisms: [`TokenError::InvalidRequest`]'s answer,
@@ -225,8 +261,17 @@ mod tests {
             TokenError::Sign(anyhow::anyhow!("signing key unusable")),
             TokenError::Server(anyhow::anyhow!("identity store unreachable")),
         ];
+        let schema = TokenError::json_schema(&mut SchemaGenerator::default());
+        let documented = schema
+            .get("properties")
+            .and_then(|properties| properties["error"]["enum"].as_array())
+            .expect("the codes the document lists");
         let mut unauthorized = 0;
         for refusal in refusals {
+            assert!(
+                documented.contains(&refusal.to_string().into()),
+                "{refusal:?} answers a code the document does not list"
+            );
             let response = refusal.as_response();
             let challenge = response.headers().get(header::WWW_AUTHENTICATE);
             if response.status() == StatusCode::UNAUTHORIZED {

@@ -10,8 +10,8 @@ use std::task::Poll;
 use nest_rs_authn::__private::{Verdict, authenticate};
 use nest_rs_authn::{AUTHENTICATE_TIMEOUT, Strategy};
 use nest_rs_core::{
-    Container, ContainerBuilder, Discoverable, Layer, Net, ProviderResidency, UnitContext,
-    async_trait,
+    ChallengeScheme, Container, ContainerBuilder, DenialDocument, Discoverable, Layer, Net,
+    ProviderResidency, UnitContext, async_trait,
 };
 use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
 use nest_rs_http::{HeaderMap, HeaderValue, HttpView, Response, ResponseError, header};
@@ -215,6 +215,14 @@ impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {
     /// (§5.2), and `503`, one the strategy could not evaluate.
     fn denial_statuses(&self, _public: bool) -> &'static [u16] {
         &[400, 401, 503]
+    }
+
+    /// §5.2's words: [`TokenError`]'s body, and the `Basic` challenge §2.3.1
+    /// makes the method every authorization server reads.
+    fn denial_document(&self) -> DenialDocument {
+        DenialDocument::answering(ChallengeScheme::Basic, |generator| {
+            generator.subschema_for::<TokenError>()
+        })
     }
 
     /// Every refusal is filed on `nest_rs::oauth::server`, its reason the

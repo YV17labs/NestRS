@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use nest_rs::core::Ambient;
 use nest_rs::http::{Json, Path, Query, Result, controller, routes};
-use nest_rs::oauth::server::{AccessTokenRequest, AccessTokenResponse, ClientGuard};
+use nest_rs::oauth::server::{AccessTokenRequest, AccessTokenResponse, ClientGuard, TokenError};
 use nest_rs::pipes::{Lowercase, Piped};
 use nest_rs::social::SocialRedirect;
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
@@ -23,7 +23,11 @@ impl SignInController {
     #[post("/token")]
     #[use_guards(ThrottlerGuard, ClientGuard<ClientPayload>)]
     #[meta(Throttle::per_minute(10))]
-    #[api(summary = "OAuth2 token endpoint (client_credentials)", tags("OAuth2"))]
+    #[api(
+        summary = "OAuth2 token endpoint (client_credentials)",
+        tags("OAuth2"),
+        error(500 = TokenError)
+    )]
     async fn token(
         &self,
         client: Ambient<AuthenticatedClient>,

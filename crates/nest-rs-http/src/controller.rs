@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use http::Method;
 use nest_rs_core::__private::Site;
-use nest_rs_core::Container;
+use nest_rs_core::{Container, DenialDocument};
 
 use crate::deprecation::DeprecationMeta;
 use crate::routes::HttpRoutes;
@@ -133,16 +133,16 @@ pub fn http_route_meta(parts: HttpRouteParts) -> HttpRouteMeta {
     HttpRouteMeta { parts }
 }
 
-/// The statuses `route`'s guards declare they can refuse a request with: its
-/// site's guard stage, the chain the route runs, as `container` composed it
-/// when the route mounted. A site that does not compose refuses the boot
-/// before any document reads it.
-pub fn route_denial_statuses(
+/// The statuses `route`'s guards declare they can refuse a request with, each
+/// with how its guard's refusal reads: its site's guard stage, the chain the
+/// route runs, as `container` composed it when the route mounted. A site that
+/// does not compose refuses the boot before any document reads it.
+pub fn route_denials(
     container: &Container,
     route: &HttpRouteMeta,
-) -> anyhow::Result<Vec<u16>> {
+) -> anyhow::Result<Vec<(u16, DenialDocument)>> {
     let chains = route.parts.site.chains(container)?;
-    Ok(chains.denial_statuses(route.parts.public))
+    Ok(chains.denials(route.parts.public))
 }
 
 /// Whether `route` leaves who reaches it unsaid: it is not `#[public]`, and no

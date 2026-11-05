@@ -440,10 +440,10 @@ adds no line to the root, and writing it is the visible opening.
   (`.claude/decisions/in-band-phase-validation.md`); **MCP discovery is gated at
   the transport**, where the specification places it
   (`.claude/decisions/mcp-discovery-at-transport.md`).
-- **A document generator reads the statuses the composed chain declares**
-  (`Guard::denial_statuses`, through the site's guard stage), never a guard's
-  name, so an alias, a wrapper or the global pool is listed as it runs; held
-  by the OpenAPI suite.
+- **A document generator reads the refusals the composed chain declares**
+  (`Guard::denial_statuses` and `Guard::denial_document`, through the site's
+  guard stage), never a guard's name, so an alias, a wrapper or the global pool
+  is listed as it runs; held by the OpenAPI suite.
 
 **The edge-neutral pipeline is in core** (`.claude/decisions/one-execution-pipeline.md`):
 `nest_rs::core::{Interceptor, ExceptionFilter}`, `GlobalInterceptors` (handler

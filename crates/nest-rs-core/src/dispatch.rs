@@ -13,6 +13,7 @@ use std::task::{Context, Poll, ready};
 
 use crate::ambient::install_pending;
 use crate::container::Container;
+use crate::denial_document::DenialDocument;
 use crate::exception_filter::catch;
 use crate::handler::Handler;
 use crate::interceptor::{Next, Rest, run_handler_stage};
@@ -72,10 +73,10 @@ pub trait GuardStage: Send + Sync {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>>;
 
     /// The HTTP statuses the stage's guards declare they can refuse a unit
-    /// with, at a public site (`public`) or a gated one, each once and in
-    /// ascending order: what a document generator lists for the site. None
-    /// by default.
-    fn denial_statuses(&self, public: bool) -> Vec<u16> {
+    /// with, at a public site (`public`) or a gated one, each with how its
+    /// guard's refusal reads, ascending by status and in chain order within
+    /// one: what a document generator lists for the site. None by default.
+    fn denials(&self, public: bool) -> Vec<(u16, DenialDocument)> {
         let _ = public;
         Vec::new()
     }

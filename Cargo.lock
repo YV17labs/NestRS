@@ -3083,6 +3083,7 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-oauth-resource",
+ "nest-rs-openapi",
  "nest-rs-testing",
  "schemars",
  "serde",

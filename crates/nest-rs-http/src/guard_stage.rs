@@ -16,7 +16,7 @@ use nest_rs_core::__private::{
     GuardStage, Pending, ResolvedLayer, install_pending, new_unit_context, pending_of,
     take_pending, withhold_from_reads,
 };
-use nest_rs_core::{AmbientValue, Failure, Handler, UnitContext};
+use nest_rs_core::{AmbientValue, DenialDocument, Failure, Handler, UnitContext};
 use nest_rs_guards::__private::{
     RefusalMark, Refused, denial_code, denial_of, identifying_guard, required_principal_absent,
 };
@@ -159,25 +159,27 @@ impl GuardStage for HttpGuardStage {
         })
     }
 
-    /// The union of what each guard declares, the chain the stage runs, and
-    /// what its class gates refuse: a caller no principal backs at a gated
-    /// site, one whose ability lacks the grant or its scope anywhere.
-    fn denial_statuses(&self, public: bool) -> Vec<u16> {
-        let mut statuses: Vec<u16> = self
+    /// What each guard declares, the chain the stage runs, and what its class
+    /// gates refuse: a caller no principal backs at a gated site, one whose
+    /// ability lacks the grant or its scope anywhere.
+    fn denials(&self, public: bool) -> Vec<(u16, DenialDocument)> {
+        let mut denials: Vec<(u16, DenialDocument)> = self
             .guards
             .iter()
-            .flat_map(|entry| entry.layer.denial_statuses(public))
-            .copied()
+            .flat_map(|entry| {
+                let document = entry.layer.denial_document();
+                let statuses = entry.layer.denial_statuses(public);
+                statuses.iter().map(move |status| (*status, document))
+            })
             .collect();
         if !self.gates.is_empty() {
-            statuses.push(403);
+            denials.push((403, DenialDocument::PROBLEM));
             if !public {
-                statuses.push(401);
+                denials.push((401, DenialDocument::PROBLEM));
             }
         }
-        statuses.sort_unstable();
-        statuses.dedup();
-        statuses
+        denials.sort_by_key(|(status, _)| *status);
+        denials
     }
 
     fn covers(&self) -> bool {
@@ -665,13 +667,21 @@ mod tests {
         }
     }
 
+    fn statuses(stage: &HttpGuardStage, public: bool) -> Vec<u16> {
+        stage
+            .denials(public)
+            .into_iter()
+            .map(|(status, _)| status)
+            .collect()
+    }
+
     #[test]
-    fn a_stage_declares_each_status_its_guards_do_once_and_in_order() {
+    fn a_stage_declares_what_each_guard_does_in_ascending_order() {
         let mut guards = chain(Witness);
         guards.extend(chain(Busy));
         let stage = HttpGuardStage::new(guards, Vec::new(), StageKind::Route { unmasked: true });
-        assert_eq!(stage.denial_statuses(false), [401, 403, 503]);
-        assert_eq!(stage.denial_statuses(true), [403, 503]);
+        assert_eq!(statuses(&stage, false), [401, 403, 403, 503]);
+        assert_eq!(statuses(&stage, true), [403, 503]);
     }
 
     #[test]
@@ -680,12 +690,12 @@ mod tests {
         let stage =
             HttpGuardStage::new(Vec::new(), vec![admit], StageKind::Route { unmasked: true });
         assert_eq!(
-            stage.denial_statuses(false),
+            statuses(&stage, false),
             [401, 403],
             "an anonymous caller, and one without the grant or its scope"
         );
         assert_eq!(
-            stage.denial_statuses(true),
+            statuses(&stage, true),
             [403],
             "a public site reads the visitor's grants"
         );

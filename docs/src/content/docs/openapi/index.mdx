@@ -150,16 +150,18 @@ The document composes from the route table, so everything in it is derived:
 - its request body, and the media type that body arrives as;
 - a shared `components.schemas` holding every type an operation reaches and
   nothing else, an id keeping `format: uuid` and a timestamp `format: date-time`;
-- a `bearerAuth` entry in `components.securitySchemes`, per-operation
-  `security` on a route whose guards can answer `401`, and `security: []` on a
-  `#[public]` one;
+- a `bearerAuth` entry in `components.securitySchemes`, beside the scheme of any
+  other a guard challenges with (a token endpoint's `basicAuth`), per-operation
+  `security` naming it on a route whose guards can answer `401`, and
+  `security: []` on a `#[public]` one no guard still challenges;
 - the error statuses an operation can actually produce — `400`, `404`, `409`,
   `413` and `500` where the route can answer them, `403` where a mask's
   ability can be refused, and every status the route's guards
   [declare](/fundamentals/guards/#what-a-routes-document-lists), the app's
   pool included: `401` with its `WWW-Authenticate` challenge, `429` and `503`
-  with their `Retry-After` — as RFC 9457 `ProblemDetails`, beside any body
-  `#[api(error(...))]` declares;
+  with their `Retry-After` — as RFC 9457 `ProblemDetails`, or the body the guard
+  answers in its protocol's own words, beside any body `#[api(error(...))]`
+  declares;
 - the response headers the framework sends: the `Location` of a `Created`
   answer or a `#[redirect]`, the `Link` of a `Paginated` answer's next page,
   `Deprecation` on a deprecated route,

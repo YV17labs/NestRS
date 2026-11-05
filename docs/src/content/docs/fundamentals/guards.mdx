@@ -121,6 +121,7 @@ pub trait Guard: Layer {
     fn produced_principal(&self) -> Option<PrincipalClaim> { None }
     fn expected_principal(&self) -> Option<PrincipalClaim> { None }
     fn denial_statuses(&self, public: bool) -> &'static [u16] { /* … */ }
+    fn denial_document(&self) -> DenialDocument { DenialDocument::PROBLEM }
     fn target(&self) -> &'static str { "nest_rs::layers" }
 }
 ```
@@ -207,6 +208,21 @@ and a `401` off a `#[public]` one, `ClientAuthenticationGuard` a `400`, a
 `401` and a `503` on every route, `ThrottlerGuard` a `429`, the ability guard
 none — the `403` an ability earns is answered where it is read, and a masked
 route lists it. A `500` is never declared: every route lists it.
+
+A refusal through `Denial` reads as a problem document, its `401` challenged
+`Bearer`, and that is what the document says unless the guard answers in another
+protocol's words. `denial_document` says which, in `nest_rs::core`'s
+`DenialDocument`: `ClientAuthenticationGuard` declares the `Basic` challenge and
+RFC 6749 §5.2's body, so a token endpoint's route requires `basicAuth` and lists
+that body on each status the guard declares.
+
+```rust title="nest_rs::oauth::server::ClientAuthenticationGuard"
+fn denial_document(&self) -> DenialDocument {
+    DenialDocument::answering(ChallengeScheme::Basic, |generator| {
+        generator.subschema_for::<TokenError>()
+    })
+}
+```
 
 ## Secure the post API
 

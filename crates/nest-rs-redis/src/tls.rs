@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use nest_rs_config::ClientTls;
-use redis::aio::MultiplexedConnection;
+use redis::aio::{ConnectionLike, MultiplexedConnection};
 
 use crate::RedisError;
 use crate::instance::RedisInstance;
@@ -105,17 +105,36 @@ pub(crate) fn observe_refusal<T>(
 /// the client's certificate lands right there: TLS 1.3 settles the
 /// certificate after the client's side of the handshake, and `redis` drops a
 /// refusal that lands before a command is in flight, so `HELLO` would meet a
-/// closed connection. A handshake of its own then hears the refusal.
+/// closed connection. A handshake of its own, within `budget`, then hears the
+/// refusal.
 pub(crate) async fn hello(
     client: &redis::Client,
     connection: &mut MultiplexedConnection,
     budget: Duration,
 ) -> Result<Hello, redis::RedisError> {
-    match Hello::ask(connection).await {
+    match asked(connection, budget).await {
         Err(dropped) if dropped.is_connection_dropped() => {
             Err(refusal(client, budget).await.unwrap_or(dropped))
         }
         answered => answered,
+    }
+}
+
+/// What `HELLO` says on `connection`, asked again at each quarter of `budget`
+/// it waits unanswered; the caller bounds the whole wait.
+///
+/// `redis` sends a command through a Tokio channel whose reserved send succeeds
+/// after the receiver is gone (`mpsc::Permit::send`), so one sent as the
+/// connection's driver ends waits on an answer nothing will give, and only the
+/// next meets the closed connection.
+async fn asked(
+    connection: &mut impl ConnectionLike,
+    budget: Duration,
+) -> Result<Hello, redis::RedisError> {
+    loop {
+        if let Ok(answered) = tokio::time::timeout(budget / 4, Hello::ask(&mut *connection)).await {
+            return answered;
+        }
     }
 }
 
@@ -270,5 +289,94 @@ mod tests {
             remedy(&unnamed(), &refused).contains("requires a client certificate"),
             "{refused}"
         );
+    }
+
+    /// A connection whose every command is answered by `answer`, told how many
+    /// commands it was asked before this one.
+    struct Answering<F>(u32, F);
+
+    impl<F> ConnectionLike for Answering<F>
+    where
+        F: FnMut(u32) -> redis::RedisFuture<'static, redis::Value> + Send,
+    {
+        fn req_packed_command<'a>(
+            &'a mut self,
+            _: &'a redis::Cmd,
+        ) -> redis::RedisFuture<'a, redis::Value> {
+            let answer = (self.1)(self.0);
+            self.0 += 1;
+            answer
+        }
+
+        fn req_packed_commands<'a>(
+            &'a mut self,
+            _: &'a redis::Pipeline,
+            _: usize,
+            _: usize,
+        ) -> redis::RedisFuture<'a, Vec<redis::Value>> {
+            unreachable!("`HELLO` is one command")
+        }
+
+        fn get_db(&self) -> i64 {
+            0
+        }
+    }
+
+    /// A `HELLO` sent as the connection's driver ended waits on an answer
+    /// nothing will give, and the next command meets the closed connection.
+    #[tokio::test(start_paused = true)]
+    async fn a_hello_stranded_as_its_connection_ended_hears_the_drop_within_its_budget() {
+        let budget = Duration::from_secs(8);
+        let mut connection = Answering(0, |asked_before| -> redis::RedisFuture<'static, _> {
+            if asked_before == 0 {
+                Box::pin(std::future::pending())
+            } else {
+                Box::pin(std::future::ready(Err(std::io::Error::from(
+                    std::io::ErrorKind::BrokenPipe,
+                )
+                .into())))
+            }
+        });
+        let started = tokio::time::Instant::now();
+
+        let Ok(Err(dropped)) = tokio::time::timeout(budget, asked(&mut connection, budget)).await
+        else {
+            panic!("the stranded `HELLO` waits out the budget nothing else ends");
+        };
+
+        assert!(dropped.is_connection_dropped(), "{dropped}");
+        assert_eq!(started.elapsed(), budget / 4, "asked again at each quarter");
+    }
+
+    /// Asked again, a server that is slow answers all the same, and within the
+    /// whole budget its caller gave it.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_servers_hello_is_answered_past_each_time_it_is_asked_again() {
+        let budget = Duration::from_secs(8);
+        let answers_at = tokio::time::Instant::now() + budget - Duration::from_millis(1);
+        let mut connection = Answering(0, move |_| -> redis::RedisFuture<'static, _> {
+            Box::pin(async move {
+                tokio::time::sleep_until(answers_at).await;
+                Ok(redis::Value::Map(vec![
+                    (
+                        redis::Value::SimpleString("mode".to_owned()),
+                        redis::Value::SimpleString("standalone".to_owned()),
+                    ),
+                    (
+                        redis::Value::SimpleString("role".to_owned()),
+                        redis::Value::SimpleString("master".to_owned()),
+                    ),
+                ]))
+            })
+        });
+
+        let hello = tokio::time::timeout(budget, asked(&mut connection, budget))
+            .await
+            .expect("answered within the budget")
+            .expect("a server that answers is heard");
+
+        assert_eq!(hello.serves, crate::RedisTopology::Standalone);
+        assert!(hello.primary);
+        assert_eq!(connection.0, 4, "asked once per quarter of the budget");
     }
 }

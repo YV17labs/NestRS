@@ -129,7 +129,6 @@ impl RelatedPredicate {
     }
 }
 
-/// The single column of an [`Identity`], or `None` for a composite key.
 /// The always-false clause a denial renders.
 #[expect(
     clippy::disallowed_methods,
@@ -139,6 +138,7 @@ pub(crate) fn no_row() -> Condition {
     Condition::all().add(Expr::cust("1 = 0"))
 }
 
+/// The single column of an [`Identity`], or `None` for a composite key.
 fn unary_iden(id: &Identity) -> Option<DynIden> {
     match id {
         Identity::Unary(col) => Some(col.clone()),
@@ -157,8 +157,6 @@ impl<E: EntityTrait> Predicate<E> {
         }
         match self {
             Predicate::Always => Condition::all(),
-            // The same always-false clause `Repo::scope_for` renders on a denied
-            // request (`nest-rs-seaorm/src/repo.rs`).
             Predicate::Deny => no_row(),
             Predicate::Eq(col, value) => Condition::all().add(col.eq(value.clone())),
             Predicate::In(col, values) => Condition::all().add(col.is_in(values.clone())),

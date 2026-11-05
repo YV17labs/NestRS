@@ -1,7 +1,7 @@
 use std::any::TypeId;
 use std::marker::PhantomData;
 
-use nest_rs_authz::{Action, current_ability};
+use nest_rs_authz::{Action, Predicate, current_ability};
 use nest_rs_database::{ExecutorScope, atomic, current_executor_scope};
 use sea_orm::sea_query::{Condition, Expr, ExprTrait, OnConflict};
 use sea_orm::{
@@ -40,17 +40,13 @@ pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
 }
 
 /// The ambient ability's condition for `action` on `E`, alone.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a constant holding no value: the always-false clause every denial renders"
-)]
 pub(crate) fn ability_scope<E: EntityTrait>(action: Action) -> Condition {
     match current_ability() {
         Some(ability) => ability.condition_for::<E>(action),
         None if current_executor_scope() == Some(ExecutorScope::Job) => Condition::all(),
         None => {
             denying_for_want_of_an_ability::<E>(action);
-            Condition::all().add(Expr::cust("1 = 0"))
+            Predicate::<E>::Deny.to_condition()
         }
     }
 }

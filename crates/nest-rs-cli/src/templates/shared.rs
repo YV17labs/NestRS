@@ -527,9 +527,8 @@ filters every read by the caller's ambient `Ability`; with none installed a read
 denies every row rather than returning them unscoped. A `Repo` select hands out no
 statement, and raw SQL in its filter (`Expr::cust` and its family) is the one way
 past it, which `clippy.toml` refuses where `nestrs run lint` runs: write the condition
-with sea-query's typed builders. A
-scaffolded HTTP route or
-WebSocket gateway is guarded already — `nestrs g http` and `g ws` bind the two
+with sea-query's typed builders. A scaffolded HTTP route or WebSocket gateway is
+guarded already — `nestrs g http` and `g ws` bind the two
 guards and write the auth adapter they come from — a GraphQL operation or an
 MCP tool `nestrs g graphql|mcp` writes over a port with no entity is gated on
 the `#[subject]` it writes beside the service, and an operation that declares a

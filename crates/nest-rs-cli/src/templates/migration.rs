@@ -25,8 +25,6 @@ sea-orm-migration.workspace = true
 // `lib.rs` and `migrator.rs` are derived from the migration module list
 // (`render_lib` / `render_migrator` in the generator).
 
-/// The binary behind every `nestrs run db <verb>`. `connect_from_env` resolves
-/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use.
 /// The `migrations` crate's `clippy.toml`, which replaces the workspace's for this
 /// crate alone: clippy reads the nearest file upwards, so raw DDL needs no `#[expect]`.
 pub(crate) const CRATE_CLIPPY: &str = r#"# Empty on purpose: this replaces the workspace's `clippy.toml` for this crate. A
@@ -34,6 +32,8 @@ pub(crate) const CRATE_CLIPPY: &str = r#"# Empty on purpose: this replaces the w
 # such as `uuidv7()` has no typed builder, so raw SQL stays its own to write.
 "#;
 
+/// The binary behind every `nestrs run db <verb>`. `connect_from_env` resolves
+/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use.
 pub(crate) const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
 use migrations::Migrator;
 use nest_rs::core::logging::{LogSettings, install_console};

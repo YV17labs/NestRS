@@ -165,10 +165,6 @@ const RANKED_ALIAS: &str = "__nest_rs_ranked";
 
 /// Wrap an already-scoped child select so each parent keeps only its own first
 /// `limit + 1` rows: rank within the partition, then filter on the rank.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a constant holding no value: a window function sea-query has no typed call for"
-)]
 fn rank_per_parent<E: EntityTrait>(
     scoped: sea_orm::Select<E>,
     fk: E::Column,
@@ -180,9 +176,14 @@ fn rank_per_parent<E: EntityTrait>(
         Some(after) => scoped.filter(pk.gt(after.key())),
         None => scoped,
     };
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a constant holding no value: a window function sea-query has no typed call for"
+    )]
+    let row_number = Expr::cust("ROW_NUMBER()");
     let mut ranked = scoped.into_query();
     ranked.expr_window_as(
-        Expr::cust("ROW_NUMBER()"),
+        row_number,
         WindowStatement::partition_by(fk)
             .order_by(pk, Order::Asc)
             .take(),

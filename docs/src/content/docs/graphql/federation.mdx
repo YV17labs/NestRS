@@ -155,15 +155,15 @@ overlaps `@key(fields: "id")`.
 emits inside a resolver body is not where they are gated. **Guards run in front of
 both**, once per field, through a schema extension `GraphqlModule` installs on a
 subgraph and wherever the app lists a pool: on `_entities` the app-wide pool, and on
-`_service` every guard the `/graphql` request ran, its `EndpointGuards` included. Each
-field is a `graphql.field` unit of role `federation`, inside the app's exception
-filters and interceptors. `/graphql` admits an anonymous request, so this is where one
+`_service` that pool and each guard of its `EndpointGuards` that identifies or authorizes
+a caller. Each field is a `graphql.field` unit of role `federation`, inside the app's
+exception filters and interceptors. `/graphql` admits an anonymous request, so this is where one
 is refused: a `GlobalGuards<(AuthnGuard,)>` answers `_service` and `_entities` as it
 answers a gated `#[query]`, `UNAUTHENTICATED` in the same native GraphQL error frame,
 and a router presents the token a caller would. An `AuthzGuard` with no `AuthnGuard`
 beside it refuses them too, a visitor's ability having no posture to answer to there.
 
-Four consequences worth reading twice:
+Five consequences worth reading twice:
 
 - **The pool is the whole chain on `_entities`, because a federation field belongs to
   no resolver.** The router calls it on the schema, so there is no `#[use_guards]`
@@ -174,10 +174,48 @@ Four consequences worth reading twice:
   mandatory, so what one opens is a line you read; `_service` has none, and refuses.
 - **A guard of your own decides in its `check`.** One admitting the anonymous
   `/graphql` request reads `Posture::Gated`, the posture of both fields, to refuse them.
+- **A guard `EndpointGuards` lists that reads the request decides in `check_http`.**
+  `GuardPhase::Authentication` or `Authorization` puts its `check` on `_service`, a unit
+  holding no HTTP request, so one reading the request there answers `INTERNAL` to every
+  caller, a router with a valid key included, and its `error` line says this edit. A guard
+  identifying no one, a rate limit, decided at the request and is not asked again.
 - **A pooled guard runs once per `_entities` operation, not once per
   representation.** The gate runs it at the field; the `#[entity]` bodies
   reached through it compose everything *except* the pool, precisely so the
   multiplier on a pooled check is not a number the caller picks.
+
+A router's API key is that shape: the decision reads the request, and the units it
+carries are admitted in one visible line.
+
+```rust title="crates/features/src/api_key/guard.rs"
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, GuardPhase};
+use nest_rs::http::HttpView;
+
+#[injectable]
+#[derive(Layer)]
+pub struct RequireApiKey;
+
+#[async_trait]
+impl Guard for RequireApiKey {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        match HttpView::of(cx)?.request().header("x-api-key") {
+            Some(key) if known(key) => Ok(()),
+            _ => Err(Denial::unauthorized("an unknown API key")),
+        }
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for RequireApiKey {}
+```
 
 <Aside type="danger" title="A subgraph sits behind a router, not on the internet">
 **`_service` is not covered by `<PREFIX>_GRAPHQL__INTROSPECTION`** — that

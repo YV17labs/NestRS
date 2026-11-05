@@ -269,12 +269,15 @@ pub fn host_chain(
 /// [`Other`](GuardPhase::Other) guards — a rate limit — identifies no one, so it
 /// covers nothing and still admits a visitor.
 pub fn identifying_guard(chain: &[ResolvedLayer<dyn Guard>]) -> Option<&ResolvedLayer<dyn Guard>> {
-    chain.iter().find(|entry| {
-        matches!(
-            entry.layer.phase(),
-            GuardPhase::Authentication | GuardPhase::Authorization
-        )
-    })
+    chain.iter().find(|entry| identifies(entry))
+}
+
+/// Whether `entry` declares that it establishes or reads who the caller is.
+pub fn identifies(entry: &ResolvedLayer<dyn Guard>) -> bool {
+    matches!(
+        entry.layer.phase(),
+        GuardPhase::Authentication | GuardPhase::Authorization
+    )
 }
 
 #[cfg(test)]

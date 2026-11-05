@@ -172,8 +172,8 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         }
     }
 
-    /// A unit reaches this check only from the pool, whose `check_http` already
-    /// authenticated the request carrying it, so it reads what that found.
+    /// A unit reaches this check from the pool or a subgraph's `_service`, its
+    /// request's `check_http` having authenticated it, so it reads what that found.
     fn check<'s, 'c, 'u, 'fut>(
         &'s self,
         cx: &'c mut UnitContext<'u>,

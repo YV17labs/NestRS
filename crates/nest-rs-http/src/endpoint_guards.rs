@@ -41,6 +41,11 @@ pub trait CarriedView: UnitView {}
 /// guard's place, the first one they name, so a pooled guard reading the
 /// principal still runs after the authentication they carry; otherwise after
 /// the pool. Declared by several modules, they run in import order, each once.
+///
+/// What runs is each guard's `check_http`, at the request. A subgraph's `_service`,
+/// which no posture answers for, also runs the `check` of each one declaring
+/// `GuardPhase::Authentication` or `Authorization`, so one of those reading the
+/// request decides in `check_http` and admits in `check`.
 pub struct EndpointGuards<V: CarriedView, G: GuardList>(PhantomData<fn() -> (V, G)>);
 
 /// A tuple of guards that check an HTTP request — `(AuthnGuard,)` to eight of

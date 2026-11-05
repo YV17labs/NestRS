@@ -155,11 +155,18 @@ red, under a pooled `AuthnGuard` and under `EndpointGuards` alike.
 `ClientAuthenticationGuard` run one function, so neither restates it. A `Public` or
 `InBand` unit states its own posture and is admitted as before. **`AbilityGuard`
 refuses a visitor's ability on a federation root field**, read off `FieldRole`, the one
-unit a visitor's ability reaches with no posture after it. **`_service` runs every
-guard its request ran**, the pool and `EndpointGuards`, since the reference composition
-lists no pool and no member's posture stands behind its answer. `_entities` keeps the
-pool alone: each `#[entity]` states its posture, so what one opens beneath
-`EndpointGuards` is a line a reviewer reads.
+unit a visitor's ability reaches with no posture after it. **`_service` runs the pool and
+each guard of `EndpointGuards` identifying or authorizing a caller**, since the reference
+composition lists no pool and no member's posture stands behind its answer; a guard
+identifying no one decided at the request all it decides, and would charge a rate limit
+twice. `_entities` keeps the pool alone: each `#[entity]` states its posture, so what one
+opens beneath `EndpointGuards` is a line a reviewer reads.
+
+**A listed guard's `check` therefore runs on one unit, and the 2026-10-29 reach of the
+pool holds there**: one reading the request in `check` answers `INTERNAL` on `_service`
+for every caller, its router with a valid key included, its line naming the guard and the
+edit. Its decision goes in `check_http` and `check` admits, the shape the 2026-10-30 entry
+gives a decision that is the request's alone.
 
 What it costs: one ambient read on each gated unit a pool runs this guard on. The
 admitting future stays zero-sized, so it still allocates nothing.
@@ -175,8 +182,17 @@ admitting future stays zero-sized, so it still allocates nothing.
   way to the guard's.
 - **Moving the field resolver to `InBand`** to make that sentence true: its posture is
   its operation's, and the line is still lost.
+- **Admitting a listed guard whose `check` could not read the request**, its request
+  having admitted it: one `check` admitting `InBand` and reading the request at `Gated`,
+  or a `check_http` admitting in band ahead of a `check` reading the request, would serve
+  the SDL to anyone. Nothing tells those from a key read at the request, as the 2026-10-30
+  entry says of overriding, so `check` runs and fails closed.
+- **Carrying the request's head to the field** for `HttpView::of` to read: a copy on every
+  `/graphql` request for a field a router alone calls, and the body is gone by then.
 
 What it leaves: a subgraph whose guards identify no one publishes its SDL to whoever
 reaches it, as the federation page warns; `federation: true` is the line that opens it.
 A guard of one's own that admits an in-band request decides these units in its own
-`check`, where `Posture::Gated` is what it reads.
+`check`, where `Posture::Gated` is what it reads. A listed guard identifying a caller and
+reading the request in `check` costs its author the edit above, found at the router's
+first read.

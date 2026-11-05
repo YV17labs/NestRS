@@ -50,8 +50,9 @@ pub enum GraphqlSite {
     /// runs the pool once per field; folding it here would run it once per
     /// representation.
     Entity,
-    /// `_service` or `_entities`, which no resolver declares: the pool is its
-    /// whole chain.
+    /// `_service` or `_entities`, which no resolver declares: `_entities`' whole
+    /// chain is the pool, `_service`'s adds what else its request ran that
+    /// identifies a caller.
     Federation,
 }
 

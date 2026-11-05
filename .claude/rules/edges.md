@@ -513,8 +513,10 @@ schema's under a guard pool, the condition an `#[entity]`'s site reads to skip
 it — dispatches each through its own `Site`, a `graphql.field` unit of role `federation`, the
 app's filters and interceptors around it. `_entities`' guard stage is the app-wide pool,
 since the field belongs to no resolver and each `#[entity]` states its posture;
-`_service`'s is every guard its request ran, since no member's posture stands behind
-its answer. An `#[entity]` body therefore composes everything but the pool, and a
+`_service`'s adds what else its request ran that identifies or authorizes a caller,
+since no member's posture stands behind its answer, so such a guard reading the request
+decides in `check_http`, its `check` failing closed on a unit holding none. An
+`#[entity]` body therefore composes everything but the pool, and a
 `#[field_resolver]` too, naming where the pool ran (the root field that produced
 its parent) — never once per parent row; its resolver's own `#[use_guards]` still
 run. No site subtracts a bucket without naming where it ran. A guard's `check`

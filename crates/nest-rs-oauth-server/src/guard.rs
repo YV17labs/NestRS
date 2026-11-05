@@ -185,9 +185,9 @@ impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {
         }
     }
 
-    /// A unit reaches this check only from the pool, whose `check_http` already
-    /// authenticated the request carrying it, and a request running no guard
-    /// (`McpAccess::Public`) carries a gated unit no principal reached.
+    /// A unit reaches this check from the pool or a subgraph's `_service`, its
+    /// request's `check_http` having authenticated it, and a request running no
+    /// guard (`McpAccess::Public`) carries a gated unit no principal reached.
     fn check<'s, 'c, 'u, 'fut>(
         &'s self,
         cx: &'c mut UnitContext<'u>,

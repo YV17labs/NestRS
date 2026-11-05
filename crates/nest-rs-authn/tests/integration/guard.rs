@@ -781,12 +781,15 @@ impl Strategy for BearerStrategy {
 type BearerAuthn = AuthnGuard<BearerStrategy>;
 
 mod graphql {
-    use nest_rs_core::module;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use nest_rs_core::{Layer, UnitContext, injectable, module};
     use nest_rs_graphql::async_graphql::{Result as GraphqlResult, SimpleObject};
     use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
-
-    use nest_rs_http::{EndpointGuards, HttpModule, StatusCode, header};
-    use nest_rs_testing::{LogCapture, TestApp};
+    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase};
+    use nest_rs_http::{EndpointGuards, HeaderName, HttpModule, HttpView, StatusCode, header};
+    use nest_rs_testing::{LogCapture, TestApp, TestResponse};
 
     use super::{
         BearerAuthn, BearerStrategy, REACHED, StalledAuthn, StalledStrategy,
@@ -998,6 +1001,197 @@ mod graphql {
 
         let anonymous = subgraph_answer(&app, REFERENCE, None).await;
         assert_eq!(anonymous["data"]["_entities"][0]["id"], 7, "{anonymous}");
+    }
+
+    /// `x-router-key` on the request `cx` dispatches: a `500` on a unit with no request.
+    fn keyed(cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        match HttpView::of(cx)?.request().header("x-router-key") {
+            Some(_) => Ok(()),
+            None => Err(Denial::unauthorized("missing router key")),
+        }
+    }
+
+    /// A router's key, decided at the request, the units it carries admitted.
+    #[injectable]
+    #[derive(Layer)]
+    struct RouterKey;
+
+    #[async_trait]
+    impl Guard for RouterKey {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for RouterKey {}
+
+    /// The same key, read in `check`, the one entry a guard on a route writes.
+    #[injectable]
+    #[derive(Layer)]
+    struct RouterKeyInCheck;
+
+    #[async_trait]
+    impl Guard for RouterKeyInCheck {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+    }
+
+    impl GuardFor<HttpView> for RouterKeyInCheck {}
+
+    /// How many requests [`RateLimit`] charged, once each by the process's one test.
+    static CHARGED: AtomicUsize = AtomicUsize::new(0);
+
+    /// A rate limit reading the request in `check`, identifying no one.
+    #[injectable]
+    #[derive(Layer)]
+    struct RateLimit;
+
+    #[async_trait]
+    impl Guard for RateLimit {
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            HttpView::of(cx)?;
+            CHARGED.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for RateLimit {}
+
+    #[module(
+        imports = [subgraph()],
+        providers = [RouterKey, WidgetsResolver, EndpointGuards<GraphqlView, (RouterKey,)>],
+    )]
+    struct RouterKeySubgraphApp;
+
+    #[module(
+        imports = [subgraph()],
+        providers = [
+            RouterKeyInCheck,
+            WidgetsResolver,
+            EndpointGuards<GraphqlView, (RouterKeyInCheck,)>,
+        ],
+    )]
+    struct RouterKeyInCheckSubgraphApp;
+
+    #[module(
+        imports = [BearerSubgraphModule],
+        providers = [RateLimit, EndpointGuards<GraphqlView, (RateLimit, BearerAuthn)>],
+    )]
+    struct RateLimitedSubgraphApp;
+
+    #[module(
+        imports = [subgraph()],
+        providers = [RateLimit, WidgetsResolver, EndpointGuards<GraphqlView, (RateLimit,)>],
+    )]
+    struct RateLimitAloneSubgraphApp;
+
+    /// `SDL` over `/graphql`, under `key` when the router presents one.
+    async fn read_sdl_with_key(app: &TestApp, key: Option<&str>) -> TestResponse {
+        let mut request = app.http().post("/graphql");
+        if let Some(key) = key {
+            request = request.header(HeaderName::from_static("x-router-key"), key);
+        }
+        request
+            .body_json(&serde_json::json!({ "query": SDL }))
+            .send()
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_listed_guard_deciding_at_the_request_lets_its_router_read_the_sdl() {
+        let app = TestApp::for_module::<RouterKeySubgraphApp>()
+            .await
+            .expect("a subgraph under EndpointGuards boots");
+
+        let keyed = read_sdl_with_key(&app, Some("k")).await;
+        keyed.assert_status(StatusCode::OK);
+        let body: serde_json::Value = keyed.json().await.value().deserialize();
+        assert!(
+            body["data"]["_service"]["sdl"].is_string(),
+            "the router presented its key: {body}",
+        );
+
+        read_sdl_with_key(&app, None)
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    /// A guard saying it identifies its caller is asked on `_service`, whose unit holds
+    /// no request: it fails closed for every caller, and its line says the edit.
+    #[tokio::test]
+    async fn a_listed_guard_reading_the_request_in_check_fails_closed_on_the_sdl() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<RouterKeyInCheckSubgraphApp>()
+            .await
+            .expect("a subgraph under EndpointGuards boots");
+
+        let refused = read_sdl_with_key(&app, Some("k")).await;
+        refused.assert_status(StatusCode::OK);
+        let body: serde_json::Value = refused.json().await.value().deserialize();
+        assert!(body["data"].is_null(), "no SDL past a failed guard: {body}");
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "INTERNAL",
+            "{body}"
+        );
+
+        let viewless = logs.expect_one(
+            "nest_rs::http",
+            "a guard read the HTTP request of a unit with no HTTP view",
+        );
+        assert_eq!(viewless.field("guard").as_deref(), Some("RouterKeyInCheck"));
+        assert!(
+            viewless
+                .field("hint")
+                .is_some_and(|hint| hint.contains("decide the request in `check_http`")),
+            "{viewless:?}",
+        );
+    }
+
+    /// A rate limit decided what it decides at the request: asked again, it would read a
+    /// request `_service` does not hold, and charge the caller twice. The guard beside it
+    /// that identifies a caller is still asked.
+    #[tokio::test]
+    async fn a_listed_guard_identifying_no_one_is_not_asked_again_on_the_sdl() {
+        let app = TestApp::for_module::<RateLimitedSubgraphApp>()
+            .await
+            .expect("a subgraph under EndpointGuards boots");
+
+        let router = subgraph_answer(&app, SDL, Some("good")).await;
+        assert!(
+            router["data"]["_service"]["sdl"].is_string(),
+            "the rate limit admitted it at the request: {router}",
+        );
+        assert_eq!(CHARGED.load(Ordering::SeqCst), 1, "one request, one charge");
+
+        let anonymous = subgraph_answer(&app, SDL, None).await;
+        assert_anonymous_refused(&anonymous, "_service");
+    }
+
+    /// With no guard identifying anyone, `federation: true` is the line that opens the SDL.
+    #[tokio::test]
+    async fn a_subgraph_whose_guards_identify_no_one_serves_the_sdl_past_them() {
+        let app = TestApp::for_module::<RateLimitAloneSubgraphApp>()
+            .await
+            .expect("a subgraph under EndpointGuards boots");
+
+        let anonymous = subgraph_answer(&app, SDL, None).await;
+        assert!(
+            anonymous["data"]["_service"]["sdl"].is_string(),
+            "{anonymous}"
+        );
     }
 
     /// `/graphql` is in band: an anonymous caller reaches a `#[public]` query,

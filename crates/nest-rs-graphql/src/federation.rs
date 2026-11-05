@@ -10,7 +10,7 @@
 //! A federation field belongs to no resolver. `_entities`' guard stage is the
 //! app-wide pool alone, which an `#[entity]`'s own site therefore stops
 //! composing; `_service` states no posture and has no member stating one, so its
-//! stage is every guard the `/graphql` request ran.
+//! stage adds what else the `/graphql` request ran that identifies a caller.
 
 use std::any::TypeId;
 use std::sync::{Arc, Mutex};
@@ -31,7 +31,7 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::anyhow;
 use nest_rs_core::{Container, Handler, Posture};
-use nest_rs_guards::__private::{global_guards_active, resolve_global_chain};
+use nest_rs_guards::__private::{global_guards_active, identifies, resolve_global_chain};
 use nest_rs_http::__private::carried_request_chain;
 
 use crate::config::GraphqlConfig;
@@ -88,14 +88,20 @@ const fn federation_field(field: &'static str) -> Handler {
     })
 }
 
-/// Every guard the `/graphql` request ran, the pool and its `EndpointGuards`:
-/// `_service` answers the whole SDL and no member's posture stands behind it, so
-/// a guard admitting the anonymous request is the one thing left to refuse it.
+/// The pool, as on every unit, and each other guard the `/graphql` request ran that
+/// identifies a caller: `_service` answers the whole SDL and no member's posture stands
+/// behind it, so one of them admitting the anonymous request is the one thing left to
+/// refuse it. A guard identifying no one decided at the request all it decides.
 fn service_guard_stage(
     container: &Container,
     _: &Handler,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
-    let chain = carried_request_chain::<GraphqlView>(container, "POST /graphql (_service)")?;
+    const SITE: &str = "POST /graphql (_service)";
+    let pool = resolve_global_chain(container, SITE);
+    let mut chain = carried_request_chain::<GraphqlView>(container, SITE)?;
+    chain.retain(|guard| {
+        identifies(guard) || pool.iter().any(|pooled| pooled.type_id == guard.type_id)
+    });
     Ok(FieldGuardStage::of(chain, DENIED_FEDERATION_FIELD))
 }
 

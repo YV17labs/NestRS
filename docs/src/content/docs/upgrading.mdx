@@ -1699,9 +1699,15 @@ lists what the boot, a log or the wire shows when one is missed.
   its own. List the authentication guard first, or declare the phase of a guard of your
   own that attaches no principal as what it is.
 - **A router answered `UNAUTHENTICATED` on `_service` or `_entities`**: an anonymous caller
-  no longer reads them under an `AuthnGuard`. Present a token. `_service` runs the guards
-  of `/graphql`'s request now, `EndpointGuards` included; `_entities` under `EndpointGuards`
-  alone is still each `#[entity]`'s posture.
+  no longer reads them under an `AuthnGuard`. Present a token. `_service` runs the pool and
+  now each guard of `EndpointGuards<GraphqlView, _>` that identifies or authorizes a caller;
+  `_entities` under `EndpointGuards` alone is still each `#[entity]`'s posture.
+- **A router answered `INTERNAL` on `_service`**, with `a guard read the HTTP request of a
+  unit with no HTTP view` at `error` on `nest_rs::http`: a guard your
+  `EndpointGuards<GraphqlView, _>` lists declares `GuardPhase::Authentication` or
+  `Authorization` and reads the request in `check`, which now runs there. Move the decision
+  to `check_http`, and write `Ok(())` in `check`
+  ([Federation](/graphql/federation/#what-guards-the-two-fields-a-router-calls)).
 - **A `#[public]` read answering nothing**, `200 []` on HTTP and an empty value in band,
   with `no ambient Ability outside a worker job — denying all rows` at `warn` on
   `nest_rs::orm`: the unit names no read. Write `#[public(Read, Entity)]`:

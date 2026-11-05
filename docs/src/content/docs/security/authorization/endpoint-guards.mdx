@@ -105,7 +105,9 @@ lists up to eight guards, run in the order written. No other view compiles
 there: `EndpointGuards<WsView, _>` is refused, because a gateway's messages take
 their guards from its `#[use_guards]`. Each checks an HTTP request, so each
 declares `GuardFor<HttpView>`; the boot refuses a list out of phase order
-(authorization before authentication) the way it refuses a route's.
+(authorization before authentication) the way it refuses a route's. What runs is
+its `check_http`, and one identifying or authorizing a caller also
+[runs its `check` on a subgraph's `_service`](/graphql/federation/#what-guards-the-two-fields-a-router-calls).
 
 **It joins the app's global guard pool, never replaces it.** The transport runs
 every guard the app's `GlobalGuards<(...)>` lists at the request, then the

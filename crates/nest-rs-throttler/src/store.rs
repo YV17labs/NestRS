@@ -5,7 +5,7 @@
 //! so a short-window route cannot purge a long-window route's counter.
 //!
 //! **Scope is per-process**: N replicas give a client up to N× the configured
-//! limit; a shared store bound beside the module counts across them.
+//! limit; a shared store the app binds counts across them.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};

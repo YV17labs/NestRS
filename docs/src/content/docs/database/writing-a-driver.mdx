@@ -246,9 +246,14 @@ impl Module for SeaOrmDatabaseModule {
         let builder = budgets(BudgetReach::Ambient)
             .into_iter()
             .fold(builder, ContainerBuilder::provide_meta);
-        // …
         let builder = provide_unit_of_work::<UnitInputs, _, _>(builder, |container| async move {
-            Ok(Arc::new(unit_of_work(&container)?) as Arc<dyn UnitOfWork>)
+            let db = present::<DatabaseConnection>(&container)?;
+            let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;
+            let settles = present::<Settles>(&container)?;
+            let unit_of_work =
+                SeaOrmUnitOfWork::draining_into(Arc::clone(&db), &config, (*settles).clone());
+            // …
+            Ok(Arc::new(unit_of_work) as Arc<dyn UnitOfWork>)
         })
         // Installed after the pool, so its close drains every settle still
         // running before the pool's closes.

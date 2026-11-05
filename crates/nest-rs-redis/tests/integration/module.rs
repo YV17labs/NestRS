@@ -210,7 +210,7 @@ struct LockAlone;
 #[module(imports = [RedisThrottlerModule])]
 struct StoreAlone;
 
-/// The shape an app wrote before its binding imported the connection.
+/// A binding beside the resource it imports.
 #[module(imports = [RedisModule, RedisQueueModule])]
 struct QueueBesideItsResource;
 

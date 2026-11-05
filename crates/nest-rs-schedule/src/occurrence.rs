@@ -110,6 +110,6 @@ pub const LOCK_TIMEOUT: Duration = MIN_HOLD.saturating_sub(MAX_SKEW);
 
 /// The remedy the boot names when a job needs a lock and none is bound, or when
 /// two backends bind one.
-pub const BACKEND_REMEDY: &str = "Import exactly one occurrence lock binding beside \
-     `ScheduleModule` — `nest_rs::redis::RedisScheduleModule` claims each occurrence in Redis — \
-     or let every replica fire the job with `replicas = \"each\"`, the default.";
+pub const BACKEND_REMEDY: &str = "Import exactly one occurrence lock binding: \
+     `nest_rs::redis::RedisScheduleModule` claims each occurrence in Redis; or let every replica \
+     fire the job with `replicas = \"each\"`, the default.";

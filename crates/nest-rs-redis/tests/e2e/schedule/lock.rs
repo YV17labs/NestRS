@@ -6,8 +6,8 @@
 //! `RedisScheduleModule` and a `#[scheduled]` host — booted through the
 //! harness, with its scheduler started the way the app's run starts it. Each
 //! boot seeds its `RedisConfig`, the hermetic-test hatch: a seed freezes the
-//! namespace, so the `NESTRS_REDIS__URL` the suite runs under cannot move an app
-//! off the database or the proxy the test chose. All of them claim on
+//! namespace, so the `<PREFIX>_REDIS__URL` the suite runs under cannot move an
+//! app off the database or the proxy the test chose. All of them claim on
 //! [`crate::DB_SCHEDULE`], which holds nothing but claims, so the key layout is
 //! asserted over the whole database.
 //!

@@ -226,9 +226,8 @@ impl<I: Instance> RedisConnection<I> {
     }
 
     /// The connection's [`Budget`](nest_rs_core::Budget), declared by
-    /// [`RedisModule`](crate::RedisModule) and by each binding beside its net,
-    /// so a connection seeded without the module is held too. Its setting is
-    /// the instance's own variable.
+    /// [`RedisModule`](crate::RedisModule) and by each binding beside its net.
+    /// Its setting is the instance's own variable.
     pub(crate) fn declared_budget() -> nest_rs_core::Budget {
         nest_rs_core::Budget::of::<Self>(
             "the Redis connection",

@@ -53,8 +53,8 @@ impl GithubSocialConfig {
             &self.redirect_url,
             &spellings_or_field(
                 Self::NAMESPACE,
-                "REDIRECT_URL",
-                "GithubSocialConfig::redirect_url",
+                Self::REDIRECT_URL.key(),
+                Self::REDIRECT_URL.path(),
             ),
         )?;
         Ok(OAuthClientConfig {

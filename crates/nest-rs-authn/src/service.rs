@@ -38,8 +38,8 @@ fn prove_one_pair(
     Err(AuthError::failed(format!(
         "{}, and {}, are not one pair: tokens this service signed would be refused, and tokens \
          the other pair's private key signed accepted",
-        crate::config::spellings("PRIVATE_KEY", "private_key"),
-        crate::config::spellings("PUBLIC_KEY", "public_key"),
+        crate::config::spellings(AuthnConfig::PRIVATE_KEY),
+        crate::config::spellings(AuthnConfig::PUBLIC_KEY),
     )))
 }
 
@@ -437,14 +437,17 @@ impl JwtService {
             if options.audience.is_some() {
                 return Err(AuthError::failed(format!(
                     "{} contradicts {}: an audience-agnostic verifier cannot also require an audience",
-                    var_name(AuthnConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
-                    var_name(AuthnConfig::NAMESPACE, "AUDIENCE"),
+                    var_name(
+                        AuthnConfig::NAMESPACE,
+                        AuthnConfig::ALLOW_ANY_AUDIENCE.key()
+                    ),
+                    var_name(AuthnConfig::NAMESPACE, AuthnConfig::AUDIENCE.key()),
                 )));
             }
             // Not silent: named once per boot, so the opt-out is actionable.
             tracing::warn!(
                 target: crate::TARGET,
-                var = %var_name(AuthnConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
+                var = %var_name(AuthnConfig::NAMESPACE, AuthnConfig::ALLOW_ANY_AUDIENCE.key()),
                 "audience validation is disabled — a token minted for another service verifies here",
             );
         }
@@ -498,7 +501,7 @@ impl JwtService {
                     AuthError::failed_because(
                         format!(
                             "{}, is not an EdDSA public key in PEM form",
-                            crate::config::spellings("PUBLIC_KEY", "public_key"),
+                            crate::config::spellings(AuthnConfig::PUBLIC_KEY),
                         ),
                         e,
                     )
@@ -510,7 +513,7 @@ impl JwtService {
                                 AuthError::failed_because(
                                     format!(
                                         "{}, is not an EdDSA private key in PEM form",
-                                        crate::config::spellings("PRIVATE_KEY", "private_key"),
+                                        crate::config::spellings(AuthnConfig::PRIVATE_KEY),
                                     ),
                                     e,
                                 )

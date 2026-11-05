@@ -220,35 +220,44 @@ fn algorithms(
 /// A PEM key's setting, every way it can be given: which spelling supplied a
 /// field is unknown once an [`AuthnConfig`] is judged. A sentence continuing
 /// past it sets it off with commas.
-pub(crate) fn spellings(key: &str, field: &str) -> String {
+pub(crate) fn spellings(field: Field) -> String {
     format!(
-        "{}, or `{field}` in an AuthnConfig or JwtOptions built in code",
-        nest_rs_config::spellings(AuthnConfig::NAMESPACE, key),
+        "{}, or `{}` in an AuthnConfig or JwtOptions built in code",
+        nest_rs_config::spellings(AuthnConfig::NAMESPACE, field.key()),
+        bare(field),
     )
+}
+
+/// `field`'s name alone: a sentence naming it speaks of two types, so it names
+/// neither path.
+fn bare(field: Field) -> &'static str {
+    let path = field.path();
+    path.rsplit("::").next().unwrap_or(path)
 }
 
 /// The secret's setting, every way it can be given, `_FILE` spelling included.
 pub(crate) fn secret_setting() -> String {
-    spellings("SECRET", "secret")
+    spellings(AuthnConfig::SECRET)
 }
 
 /// The JWK Set URI's setting, every way it can be given.
 pub(crate) fn jwks_uri_setting() -> String {
-    spellings("JWKS_URI", "jwks_uri")
+    spellings(AuthnConfig::JWKS_URI)
 }
 
 /// The accepted algorithms' setting, every way it can be given.
 pub(crate) fn algorithms_setting() -> String {
-    spellings("ALGORITHMS", "algorithms")
+    spellings(AuthnConfig::ALGORITHMS)
 }
 
 /// The JWK Set endpoint's TLS settings, every way they can be given.
 pub(crate) fn tls_setting() -> String {
     format!(
-        "{}, {} and {}, or `tls` in an AuthnConfig or JwtOptions built in code",
+        "{}, {} and {}, or `{}` in an AuthnConfig or JwtOptions built in code",
         nest_rs_config::spellings(AuthnConfig::NAMESPACE, "TLS_CA_CERT"),
         nest_rs_config::spellings(AuthnConfig::NAMESPACE, "TLS_CERT"),
         nest_rs_config::spellings(AuthnConfig::NAMESPACE, "TLS_KEY"),
+        bare(AuthnConfig::TLS),
     )
 }
 
@@ -265,10 +274,8 @@ fn static_key(
             let keys = [
                 private
                     .as_ref()
-                    .map(|_| spellings("PRIVATE_KEY", "private_key")),
-                public
-                    .as_ref()
-                    .map(|_| spellings("PUBLIC_KEY", "public_key")),
+                    .map(|_| spellings(AuthnConfig::PRIVATE_KEY)),
+                public.as_ref().map(|_| spellings(AuthnConfig::PUBLIC_KEY)),
             ]
             .into_iter()
             .flatten()
@@ -287,15 +294,15 @@ fn static_key(
         }),
         (None, Some(_), None) => Err(AuthError::failed(format!(
             "{}, is set without {}",
-            spellings("PRIVATE_KEY", "private_key"),
-            spellings("PUBLIC_KEY", "public_key"),
+            spellings(AuthnConfig::PRIVATE_KEY),
+            spellings(AuthnConfig::PUBLIC_KEY),
         ))),
         (None, None, None) => Err(AuthError::failed(format!(
             "no JWT key configured: set {} for HS256, {} for EdDSA, or {} for an external \
              issuer's keys — or the same field in an AuthnConfig or JwtOptions built in code",
-            nest_rs_config::spellings(AuthnConfig::NAMESPACE, "SECRET"),
-            nest_rs_config::spellings(AuthnConfig::NAMESPACE, "PUBLIC_KEY"),
-            nest_rs_config::spellings(AuthnConfig::NAMESPACE, "JWKS_URI"),
+            nest_rs_config::spellings(AuthnConfig::NAMESPACE, AuthnConfig::SECRET.key()),
+            nest_rs_config::spellings(AuthnConfig::NAMESPACE, AuthnConfig::PUBLIC_KEY.key()),
+            nest_rs_config::spellings(AuthnConfig::NAMESPACE, AuthnConfig::JWKS_URI.key()),
         ))),
     }
 }
@@ -317,10 +324,10 @@ impl AuthnConfig {
                     self.secret.as_ref().map(|_| secret_setting()),
                     self.private_key
                         .as_ref()
-                        .map(|_| spellings("PRIVATE_KEY", "private_key")),
+                        .map(|_| spellings(AuthnConfig::PRIVATE_KEY)),
                     self.public_key
                         .as_ref()
-                        .map(|_| spellings("PUBLIC_KEY", "public_key")),
+                        .map(|_| spellings(AuthnConfig::PUBLIC_KEY)),
                 ]
                 .into_iter()
                 .flatten()

@@ -89,12 +89,13 @@ impl EphemeralDatabase {
     pub async fn create<M: MigratorTrait>() -> Result<Self> {
         load_project_env();
         // Through the reader, so `<PREFIX>_SEAORM__URL_FILE` answers too.
+        let key = nest_rs_seaorm::SeaOrmConfig::URL.key();
         let env = nest_rs_config::ConfigService::for_namespace("seaorm");
-        let admin_url = env.get("URL")?.ok_or_else(|| {
+        let admin_url = env.get(key)?.ok_or_else(|| {
             anyhow!(
                 "{} is unset in the environment and the `.env` cascade — point it at a \
                  reachable Postgres for e2e",
-                env.spellings("URL"),
+                env.spellings(key),
             )
         })?;
         Self::create_with::<M>(&admin_url).await

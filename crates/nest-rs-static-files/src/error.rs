@@ -43,8 +43,8 @@ pub enum StaticFilesError {
 fn root_setting() -> String {
     nest_rs_config::spellings_or_field(
         <StaticFilesConfig as nest_rs_config::Namespaced>::NAMESPACE,
-        "ROOT",
-        "StaticFilesConfig::root",
+        StaticFilesConfig::ROOT.key(),
+        StaticFilesConfig::ROOT.path(),
     )
 }
 

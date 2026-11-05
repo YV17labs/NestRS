@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use nest_rs_config::__private::RetiredKey;
-use nest_rs_config::{Config, ConfigService, config};
+use nest_rs_config::{Config, ConfigService, Field, config};
 use serde::de::DeserializeOwned;
 use validator::{Validate, ValidationError, ValidationErrors, ValidationErrorsKind};
 
@@ -61,10 +61,16 @@ impl<P> Default for OAuthServerConfig<P> {
     }
 }
 
+impl<P> OAuthServerConfig<P> {
+    /// [`clients`](Self::clients)' key and path, bound as `#[config]` binds a
+    /// field: the overlay is written by hand.
+    pub const CLIENTS: Field = Field::new("CLIENTS", "OAuthServerConfig::clients");
+}
+
 impl<P: DeserializeOwned + Clone + Send + Sync + 'static> Config for OAuthServerConfig<P> {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            clients: env.json("CLIENTS")?.unwrap_or(base.clients),
+            clients: env.json(Self::CLIENTS.key())?.unwrap_or(base.clients),
         })
     }
 }

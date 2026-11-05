@@ -1481,6 +1481,10 @@ lists what the boot, a log or the wire shows when one is missed.
   `CountBounds` on the `Option<usize>`; `ConfigService::count` is gone with it,
   and an `Option<usize>` pinned at `Some(0)` with its variable unset fails the
   boot: unlimited in code is `None`.
+- **An associated constant of your own named for a field** — `const PORT` on a
+  `#[config]` with a field `port` — fails to compile, `duplicate definitions with
+  name PORT`: `#[config]` binds every field to the constant named for it. Rename
+  yours.
 - **A count past its ceiling fails the boot naming the variable and the range**,
   from the environment or pinned in code, never quoting the value: a deployment
   setting one past it has to move, or turn the limit off where `0` does that.

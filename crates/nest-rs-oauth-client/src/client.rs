@@ -769,7 +769,7 @@ impl OAuthClient {
         let endpoint = Endpoint {
             role: TOKEN_ENDPOINT,
             url: &self.config.token_url,
-            setting: self.setting("TOKEN_URL"),
+            setting: self.setting(OAuthClientConfig::TOKEN_URL.key()),
         };
         // `oauth2` drops the answer's status, without which a provider's `503`
         // would read as the caller's failure.
@@ -833,7 +833,7 @@ impl OAuthClient {
         let endpoint = Endpoint {
             role: USERINFO_ENDPOINT,
             url: &self.config.userinfo_url,
-            setting: self.setting("USERINFO_URL"),
+            setting: self.setting(OAuthClientConfig::USERINFO_URL.key()),
         };
         self.read(&endpoint, access_token).await
     }

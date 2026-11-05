@@ -50,7 +50,7 @@ impl RedisInstance {
 
     /// The URL's variable, both spellings: what most refusals send a reader to.
     pub(crate) fn url_var(&self) -> String {
-        self.spellings("URL")
+        self.spellings(RedisConfig::URL.key())
     }
 
     /// The connect budget's variable.

@@ -1,6 +1,6 @@
 //! The overlay `#[config]` writes: `Config::from_env`, one field at a time, each
 //! key the field's name and each reader chosen by the field's type — and, per
-//! bounded or `with` field, the binding it is read through, named for the field.
+//! field, the binding it is read through, named for the field.
 
 use nest_rs_codegen::Grammar;
 use proc_macro2::{Group, Span, TokenStream as TokenStream2, TokenTree};
@@ -187,9 +187,9 @@ fn take_reader(attrs: &mut Vec<syn::Attribute>) -> syn::Result<Reader> {
     Ok(reader)
 }
 
-/// `impl Config`, its `from_env` the overlay of every field; then, per field
-/// read through its binding — a bounded one's `BoundedSetting`, a `with` one's
-/// `Field` — that binding, an associated constant named for the field.
+/// `impl Config`, its `from_env` the overlay of every field; then, per field,
+/// the binding it is read through — a bounded one's `BoundedSetting`, any other's
+/// `Field` — an associated constant named for the field.
 pub(crate) fn overlay(item: &ItemStruct, fields: &Fields) -> TokenStream2 {
     let name = &item.ident;
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
@@ -238,49 +238,45 @@ pub(crate) fn overlay(item: &ItemStruct, fields: &Fields) -> TokenStream2 {
         };
         quote! { #ident: #read? }
     });
-    let bindings: Vec<TokenStream2> = fields
-        .0
-        .iter()
-        .filter_map(|field| {
-            let (vis, ty, binding) = (&field.vis, &field.ty, binding_ident(field));
-            let ident = field.ident.unraw();
-            match &field.reader {
-                Reader::Bounds(bounds) => {
-                    // A `let`, not a nested `const`, whose type rustc would also
-                    // normalize at the range's span, saying a type no range holds
-                    // twice; the range keeps its spans, so its own mistake is said
-                    // where it is written.
-                    let at = ty.span();
-                    let doc = format!(
-                        "`{ident}`'s range, bound to the variable it is read from and the field \
-                         that pins it: a `BoundedSetting` over the field's type."
-                    );
-                    let field = relocated(field_of(field), at);
-                    let range = Ident::new("range", Span::mixed_site().located_at(at));
-                    Some(quote_spanned! {at=>
-                        #[doc = #doc]
-                        #vis const #binding: <#ty as ::nest_rs_config::BoundedField>::Setting = {
-                            let #range: <#ty as ::nest_rs_config::BoundedField>::Bounds = #bounds;
-                            ::nest_rs_config::BoundedSetting::new(#range, #field)
-                        };
-                    })
+    let bindings = fields.0.iter().map(|field| {
+        let (vis, ty, binding) = (&field.vis, &field.ty, binding_ident(field));
+        let ident = field.ident.unraw();
+        match &field.reader {
+            Reader::Bounds(bounds) => {
+                // A `let`, not a nested `const`, whose type rustc would also
+                // normalize at the range's span, saying a type no range holds
+                // twice; the range keeps its spans, so its own mistake is said
+                // where it is written.
+                let at = ty.span();
+                let doc = format!(
+                    "`{ident}`'s range, bound to the variable it is read from and the field \
+                     that pins it: a `BoundedSetting` over the field's type."
+                );
+                let field = relocated(field_of(field), at);
+                let range = Ident::new("range", Span::mixed_site().located_at(at));
+                quote_spanned! {at=>
+                    #[doc = #doc]
+                    #vis const #binding: <#ty as ::nest_rs_config::BoundedField>::Setting = {
+                        let #range: <#ty as ::nest_rs_config::BoundedField>::Bounds = #bounds;
+                        ::nest_rs_config::BoundedSetting::new(#range, #field)
+                    };
                 }
-                Reader::With(_) => {
-                    let doc = format!(
-                        "`{ident}`'s key and the path code pins it through, as its reader is \
-                         handed them: a `Field`."
-                    );
-                    let field = field_of(field);
-                    Some(quote! {
-                        #[doc = #doc]
-                        #vis const #binding: ::nest_rs_config::Field = #field;
-                    })
-                }
-                Reader::Typed | Reader::Json => None,
             }
-        })
-        .collect();
-    let bindings = (!bindings.is_empty()).then(|| {
+            Reader::Typed | Reader::Json | Reader::With(_) => {
+                let doc = format!(
+                    "`{ident}`'s key and the path code pins it through, which every sentence \
+                     naming it reads: a `Field`."
+                );
+                let field = field_of(field);
+                quote! {
+                    #[doc = #doc]
+                    #[allow(dead_code, reason = "a field no sentence names is bound all the same")]
+                    #vis const #binding: ::nest_rs_config::Field = #field;
+                }
+            }
+        }
+    });
+    let bindings = (!fields.0.is_empty()).then(|| {
         quote! {
             impl #impl_generics #name #ty_generics #where_clause {
                 #(#bindings)*

@@ -400,7 +400,10 @@ fn contested_path_remedy() -> String {
     format!(
         "read the per-version document at /api-json/v{{n}}, or name the version /api-json \
          describes with {}",
-        nest_rs_config::var_name("http", "DEFAULT_VERSION"),
+        nest_rs_config::var_name(
+            <nest_rs_http::HttpConfig as nest_rs_config::Namespaced>::NAMESPACE,
+            nest_rs_http::HttpConfig::DEFAULT_VERSION.key(),
+        ),
     )
 }
 

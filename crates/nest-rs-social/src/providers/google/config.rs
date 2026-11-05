@@ -53,8 +53,8 @@ impl GoogleSocialConfig {
             &self.redirect_url,
             &spellings_or_field(
                 Self::NAMESPACE,
-                "REDIRECT_URL",
-                "GoogleSocialConfig::redirect_url",
+                Self::REDIRECT_URL.key(),
+                Self::REDIRECT_URL.path(),
             ),
         )?;
         Ok(OAuthClientConfig {

@@ -273,7 +273,10 @@ arbitrates between variables or tiers.
 - **A `#[config]`'s overlay is derived from its struct**, each key its
   field's name, each reader its type's (`ConfigField`), so no field is
   reachable from code alone (`.claude/decisions/config-overlay-derived.md`);
-  `from_env = "manual"` is for fields that depend on each other. **`None` is
+  `from_env = "manual"` is for fields that depend on each other. Every field is
+  bound to the struct as the constant named for it, and a sentence naming a field
+  reads that binding, never types its key or its path; a hand-written overlay binds
+  its own once. **`None` is
   off and nothing else**: a duration is a `Duration`, or an `Option<Duration>`
   only where an off exists; a count the same, `0` from the environment its
   `None`; a default sits in `Default`, never behind a `None`, and no field

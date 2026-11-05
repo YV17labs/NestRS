@@ -90,7 +90,7 @@ impl OAuthResourceConfig {
     fn metadata_in(self, environment: Environment) -> Result<ProtectedResourceMetadata, AuthError> {
         let resource = self.resource.unwrap_or_default();
         let resource = resource.trim();
-        let resource_setting = nest_rs_config::spellings(Self::NAMESPACE, "RESOURCE");
+        let resource_setting = nest_rs_config::spellings(Self::NAMESPACE, Self::RESOURCE.key());
         if resource.is_empty() {
             return Err(AuthError::failed(format!(
                 "{resource_setting} must name this deployment's canonical URI \
@@ -109,11 +109,15 @@ impl OAuthResourceConfig {
             return Err(AuthError::failed(format!(
                 "{} must list at least one issuer — RFC 9728 metadata without \
                  `authorization_servers` tells a client nothing",
-                nest_rs_config::spellings(Self::NAMESPACE, "AUTHORIZATION_SERVERS"),
+                nest_rs_config::spellings(Self::NAMESPACE, Self::AUTHORIZATION_SERVERS.key()),
             )));
         }
         for (index, issuer) in authorization_servers.iter().enumerate() {
-            validate_canonical_uri(issuer, &entry(index, "AUTHORIZATION_SERVERS"), environment)?;
+            validate_canonical_uri(
+                issuer,
+                &entry(index, Self::AUTHORIZATION_SERVERS.key()),
+                environment,
+            )?;
         }
 
         // `scope` is space-delimited: a space or a quote would split a scope or
@@ -124,7 +128,7 @@ impl OAuthResourceConfig {
                     "{} is not a valid OAuth scope token (RFC 6749 §3.3): the grammar is \
                      `1*( %x21 / %x23-5B / %x5D-7E )` — printable ASCII excluding space, `\"` \
                      and `\\`",
-                    entry(index, "SCOPES_SUPPORTED"),
+                    entry(index, Self::SCOPES_SUPPORTED.key()),
                 )));
             }
         }
@@ -139,7 +143,7 @@ impl OAuthResourceConfig {
                     return Err(AuthError::failed(format!(
                         "{} is not an RFC 9728 §2 bearer method: the defined values are \
                          {BEARER_METHODS_DEFINED:?}",
-                        entry(index, "BEARER_METHODS_SUPPORTED"),
+                        entry(index, Self::BEARER_METHODS_SUPPORTED.key()),
                     )));
                 }
                 // `bearer_token` reads only the `Authorization` header, and a client acts
@@ -149,7 +153,7 @@ impl OAuthResourceConfig {
                         "{} is the RFC 9728 bearer method `{method}`, but this framework reads a \
                          bearer token only from the `Authorization` header — advertising it \
                          would tell clients to use a form this server refuses",
-                        entry(index, "BEARER_METHODS_SUPPORTED"),
+                        entry(index, Self::BEARER_METHODS_SUPPORTED.key()),
                     )));
                 }
             }
@@ -157,9 +161,12 @@ impl OAuthResourceConfig {
         };
 
         for (uri, key) in [
-            (&self.resource_documentation, "RESOURCE_DOCUMENTATION"),
-            (&self.resource_policy_uri, "RESOURCE_POLICY_URI"),
-            (&self.resource_tos_uri, "RESOURCE_TOS_URI"),
+            (
+                &self.resource_documentation,
+                Self::RESOURCE_DOCUMENTATION.key(),
+            ),
+            (&self.resource_policy_uri, Self::RESOURCE_POLICY_URI.key()),
+            (&self.resource_tos_uri, Self::RESOURCE_TOS_URI.key()),
         ] {
             if uri.as_deref().is_some_and(carries_userinfo) {
                 return Err(AuthError::failed(format!(

@@ -311,8 +311,8 @@ impl Probe {
                 store = %shown,
                 credentials = %format!(
                     "{} and {}",
-                    env.var_name("ACCESS_KEY"),
-                    env.var_name("SECRET_KEY")
+                    env.var_name(StorageConfig::ACCESS_KEY.key()),
+                    env.var_name(StorageConfig::SECRET_KEY.key())
                 ),
                 error = %nest_rs_core::error_message(&error),
                 "the object store refused to list its bucket — its credentials are refused, or \
@@ -360,7 +360,7 @@ fn classify(
     let reason = match answered {
         Some(StatusCode::NOT_FOUND) => format!(
             "the bucket {} names does not exist — create it, or name one that does",
-            env.var_name("URL")
+            env.var_name(StorageConfig::URL.key())
         ),
         Some(StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED) => {
             return Ok(Listed::Forbidden(error));
@@ -368,20 +368,23 @@ fn classify(
         Some(status) if status.is_redirection() => format!(
             "the store answered {status}, sending the bucket elsewhere — set {} to the bucket's \
              region, or {} and {} to the store that serves it",
-            env.var_name("REGION"),
-            env.var_name("ENDPOINT"),
-            env.var_name("FORCE_PATH_STYLE"),
+            env.var_name(StorageConfig::REGION.key()),
+            env.var_name(StorageConfig::ENDPOINT.key()),
+            env.var_name(StorageConfig::FORCE_PATH_STYLE.key()),
         ),
         Some(status) if !(status.is_success() || may_clear(status)) => format!(
             "the store answered {status}, as it would every attempt — check that {}, {} and {} \
              are the store's",
-            env.var_name("REGION"),
-            env.var_name("ENDPOINT"),
-            env.var_name("FORCE_PATH_STYLE"),
+            env.var_name(StorageConfig::REGION.key()),
+            env.var_name(StorageConfig::ENDPOINT.key()),
+            env.var_name(StorageConfig::FORCE_PATH_STYLE.key()),
         ),
-        None if ClientTls::negotiation_failed(&error) => {
-            ClientTls::remedy(env, "the object store", "ENDPOINT", &error)
-        }
+        None if ClientTls::negotiation_failed(&error) => ClientTls::remedy(
+            env,
+            "the object store",
+            StorageConfig::ENDPOINT.key(),
+            &error,
+        ),
         _ => return Err(Attempt::Failed(error)),
     };
     Err(Attempt::Refused(StorageError::Refused {

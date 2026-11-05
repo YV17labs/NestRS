@@ -33,7 +33,10 @@ pub enum StorageError {
         "refusing to address {endpoint} over plain HTTP: {allow_http_var} is false, or unset \
          outside a declared development or test profile, so credentials must not travel \
          unencrypted",
-        allow_http_var = ::nest_rs_config::var_name("storage", "ALLOW_HTTP"),
+        allow_http_var = ::nest_rs_config::var_name(
+            <crate::StorageConfig as ::nest_rs_config::Namespaced>::NAMESPACE,
+            crate::StorageConfig::ALLOW_HTTP.key(),
+        ),
     )]
     PlaintextEndpoint {
         /// The offending endpoint, as

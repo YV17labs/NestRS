@@ -187,8 +187,11 @@ fn wire_schema(container: &Container) -> anyhow::Result<()> {
     if let Some(resolver) = check_operations(&reachable).map_err(anyhow::Error::msg)?
         && !config.federation
     {
-        let introspection = nest_rs_config::var_name("graphql", "INTROSPECTION");
-        let federation_var = nest_rs_config::var_name("graphql", "FEDERATION");
+        let namespace = <GraphqlConfig as nest_rs_config::Namespaced>::NAMESPACE;
+        let introspection = nest_rs_config::var_name(namespace, GraphqlConfig::INTROSPECTION.key());
+        let federation = GraphqlConfig::FEDERATION;
+        let federation_var = nest_rs_config::var_name(namespace, federation.key());
+        let federation_field = federation.path();
         anyhow::bail!(
             "`{resolver}` keys an entity — an `#[entity]`, or an object it returns carrying \
              `#[graphql(entity)]` — but this schema is not configured as a subgraph. An \
@@ -196,7 +199,7 @@ fn wire_schema(container: &Container) -> anyhow::Result<()> {
              `_entities` the moment one exists, so the endpoint would publish its own SDL — \
              `_service` is not covered by `{introspection}` — while the committed SDL carried \
              the federation plumbing without the `@key` a router needs. Set \
-             `GraphqlConfig::federation = true` (or `{federation_var}=true`) and serve it \
+             `{federation_field} = true` (or `{federation_var}=true`) and serve it \
              behind a router, or remove the key."
         );
     }
@@ -212,12 +215,17 @@ fn check_membership(reachable: &ReachableProviders, strict: bool) -> anyhow::Res
         return Ok(());
     }
     if strict {
-        let var = nest_rs_config::var_name("graphql", "STRICT_RESOLVER_MEMBERSHIP");
+        let strict = GraphqlConfig::STRICT_RESOLVER_MEMBERSHIP;
+        let var = nest_rs_config::var_name(
+            <GraphqlConfig as nest_rs_config::Namespaced>::NAMESPACE,
+            strict.key(),
+        );
+        let field = strict.path();
         anyhow::bail!(
             "strict resolver-membership check failed: {unreachable:?} linked into the binary but \
              in no reachable module. Add each to a reachable feature module's \
              `#[module(providers = [...])]`, or clear \
-             `GraphqlConfig::strict_resolver_membership` (`{var}=false`) if the link is \
+             `{field}` (`{var}=false`) if the link is \
              intentional — a workspace shipping several apps over one feature library \
              legitimately links resolvers a given binary does not serve."
         );

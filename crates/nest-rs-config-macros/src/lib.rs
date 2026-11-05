@@ -20,7 +20,8 @@ mod overlay;
 /// by hand. A field's own `#[config(…)]` names its reader: `bounds = RANGE` for a
 /// duration or a count, which binds the range to the field as the associated
 /// `BoundedSetting` named for it, `json`, or `with = path`, handed the field's
-/// key and path as the associated `Field` named for it.
+/// binding. Every other field is bound too, as the associated `Field` named for
+/// it, its key and its path, so a sentence naming a field reads them.
 #[proc_macro_attribute]
 pub fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(config::config(args, input).into()).into()

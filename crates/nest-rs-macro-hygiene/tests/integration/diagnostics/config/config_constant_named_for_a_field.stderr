@@ -1,0 +1,10 @@
+error[E0592]: duplicate definitions with name `PORT`
+  --> tests/integration/diagnostics/config/config_constant_named_for_a_field.rs:6:1
+   |
+ 6 | #[config(namespace = "kiln")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ duplicate definitions for `PORT`
+...
+13 |     pub const PORT: u16 = 3000;
+   |     ------------------- other definition for `PORT`
+   |
+   = note: this error originates in the attribute macro `config` (in Nightly builds, run with -Z macro-backtrace for more info)

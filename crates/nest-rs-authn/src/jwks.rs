@@ -362,7 +362,12 @@ impl Inner {
             format!(
                 "{} could not be fetched: {}",
                 self.endpoint,
-                ClientTls::remedy(&names(), "the JWK Set endpoint", "JWKS_URI", &error),
+                ClientTls::remedy(
+                    &names(),
+                    "the JWK Set endpoint",
+                    AuthnConfig::JWKS_URI.key(),
+                    &error
+                ),
             )
         } else {
             format!("{} could not be fetched", self.endpoint)

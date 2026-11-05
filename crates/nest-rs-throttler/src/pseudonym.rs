@@ -42,9 +42,13 @@ impl PseudonymStore {
                 "`{}` keeps the rate limiter's counters outside this process, so it counts each \
                  bucket under an HMAC of its subject — never the client's address or identity — \
                  keyed alike on every replica: set {} to the same 32 bytes or more on each \
-                 (`openssl rand -base64 32`), or `ThrottlerConfig::pseudonym_key` in code",
+                 (`openssl rand -base64 32`), or `{}` in code",
                 store.name(),
-                nest_rs_config::spellings("throttler", "PSEUDONYM_KEY"),
+                nest_rs_config::spellings(
+                    <crate::ThrottlerConfig as nest_rs_config::Namespaced>::NAMESPACE,
+                    crate::ThrottlerConfig::PSEUDONYM_KEY.key(),
+                ),
+                crate::ThrottlerConfig::PSEUDONYM_KEY.path(),
             );
         };
         Ok(Arc::new(Self {

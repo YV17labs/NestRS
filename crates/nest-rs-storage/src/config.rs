@@ -119,7 +119,7 @@ impl Default for StorageConfig {
 impl Config for StorageConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         let d = base;
-        let url = env.setting("URL")?;
+        let url = env.setting(Self::URL.key())?;
         let backend = match &url {
             Some(setting) => Backend::parse(&setting.value).map_err(|why| setting.refuse(why)),
             None => Backend::parse(&d.url).map_err(|why| refuse_url(env, why)),
@@ -137,26 +137,26 @@ impl Config for StorageConfig {
                 ..d
             });
         }
-        let allow_http = Surface::overlay(env, "ALLOW_HTTP", d.allow_http)?;
-        let access_key = env.setting("ACCESS_KEY")?;
-        let secret_key = env.setting("SECRET_KEY")?;
+        let allow_http = Surface::overlay(env, Self::ALLOW_HTTP.key(), d.allow_http)?;
+        let access_key = env.setting(Self::ACCESS_KEY.key())?;
+        let secret_key = env.setting(Self::SECRET_KEY.key())?;
         refuse_half_a_credential(env, &d, access_key.as_ref(), secret_key.as_ref())?;
         let endpoint = resolve_endpoint(
             env,
-            env.setting("ENDPOINT")?,
+            env.setting(Self::ENDPOINT.key())?,
             d.endpoint,
             allow_http.is_open(),
         )?;
-        let tls = ClientTls::overlay(env, "TLS", d.tls)?;
+        let tls = ClientTls::overlay(env, Self::TLS.key(), d.tls)?;
         refuse_tls(env, endpoint.as_deref(), &tls)?;
         Ok(Self {
             url,
             tls,
             endpoint,
-            region: env.get("REGION")?.unwrap_or(d.region),
-            access_key: resolve_credential("ACCESS_KEY", access_key, d.access_key)?,
-            secret_key: resolve_credential("SECRET_KEY", secret_key, d.secret_key)?,
-            force_path_style: env.flag("FORCE_PATH_STYLE", d.force_path_style)?,
+            region: env.get(Self::REGION.key())?.unwrap_or(d.region),
+            access_key: resolve_credential(Self::ACCESS_KEY.key(), access_key, d.access_key)?,
+            secret_key: resolve_credential(Self::SECRET_KEY.key(), secret_key, d.secret_key)?,
+            force_path_style: env.flag(Self::FORCE_PATH_STYLE.key(), d.force_path_style)?,
             allow_http,
             operation_timeout,
             read_timeout,
@@ -165,10 +165,28 @@ impl Config for StorageConfig {
 }
 
 impl StorageConfig {
+    /// [`url`](Self::url)'s key and path.
+    pub const URL: Field = Field::new("URL", "StorageConfig::url");
+    /// [`endpoint`](Self::endpoint)'s key and path.
+    pub const ENDPOINT: Field = Field::new("ENDPOINT", "StorageConfig::endpoint");
+    /// [`region`](Self::region)'s key and path.
+    pub const REGION: Field = Field::new("REGION", "StorageConfig::region");
+    /// [`force_path_style`](Self::force_path_style)'s key and path.
+    pub const FORCE_PATH_STYLE: Field =
+        Field::new("FORCE_PATH_STYLE", "StorageConfig::force_path_style");
+    /// [`access_key`](Self::access_key)'s key and path.
+    pub const ACCESS_KEY: Field = Field::new("ACCESS_KEY", "StorageConfig::access_key");
+    /// [`secret_key`](Self::secret_key)'s key and path.
+    pub const SECRET_KEY: Field = Field::new("SECRET_KEY", "StorageConfig::secret_key");
+    /// [`allow_http`](Self::allow_http)'s key and path.
+    pub const ALLOW_HTTP: Field = Field::new("ALLOW_HTTP", "StorageConfig::allow_http");
+    /// [`tls`](Self::tls)'s key and path.
+    pub const TLS: Field = Field::new("TLS", "StorageConfig::tls");
+
     /// The operation budget, bound to
     /// [`operation_timeout`](Self::operation_timeout) as `#[config(bounds = …)]`
     /// binds a field — the overlay here is written by hand.
-    pub(crate) const OPERATION_TIMEOUT: BoundedSetting<Duration> = BoundedSetting::new(
+    pub const OPERATION_TIMEOUT: BoundedSetting<Duration> = BoundedSetting::new(
         DurationBounds::secs(
             Floor::AboveZero("a zero budget gives up on every call before the store is asked"),
             Bound::new(
@@ -181,7 +199,7 @@ impl StorageConfig {
     );
 
     /// The read bound, bound to [`read_timeout`](Self::read_timeout).
-    pub(crate) const READ_TIMEOUT: BoundedSetting<Duration> = BoundedSetting::new(
+    pub const READ_TIMEOUT: BoundedSetting<Duration> = BoundedSetting::new(
         DurationBounds::secs(
             Floor::AboveZero("a zero bound cuts every transfer before its first bytes"),
             Bound::new(
@@ -212,8 +230,8 @@ impl StorageConfig {
         }
         refuse_tls(&env, self.endpoint.as_deref(), &self.tls)?;
         for (key, value) in [
-            ("ACCESS_KEY", &self.access_key),
-            ("SECRET_KEY", &self.secret_key),
+            (Self::ACCESS_KEY.key(), &self.access_key),
+            (Self::SECRET_KEY.key(), &self.secret_key),
         ] {
             if value.expose_secret().trim().is_empty() {
                 return Err(ConfigError::unset(Self::NAMESPACE, key, PAIR_WHY));
@@ -225,7 +243,7 @@ impl StorageConfig {
 
 /// A URL that names no store, refused naming the variable, never quoting it.
 fn refuse_url(env: &ConfigService, why: Unopened) -> ConfigError {
-    ConfigError::parse(env.var_name("URL"), why.to_string())
+    ConfigError::parse(env.var_name(StorageConfig::URL.key()), why.to_string())
 }
 
 /// Refuse the in-process store outside a declared development or test
@@ -236,7 +254,7 @@ fn refuse_memory_deployed(env: &ConfigService) -> nest_rs_config::Result<()> {
         return Ok(());
     }
     Err(ConfigError::parse(
-        env.var_name("URL"),
+        env.var_name(StorageConfig::URL.key()),
         format!(
             "names memory, a store in this process that loses every object at a restart — \
              refused in a {} profile, and in one {} does not declare: name an s3:// store",
@@ -248,12 +266,12 @@ fn refuse_memory_deployed(env: &ConfigService) -> nest_rs_config::Result<()> {
 
 /// The settings an `s3://` store reads and the in-process one does not.
 const S3_ONLY: [&str; 9] = [
-    "ENDPOINT",
-    "REGION",
-    "FORCE_PATH_STYLE",
-    "ACCESS_KEY",
-    "SECRET_KEY",
-    "ALLOW_HTTP",
+    StorageConfig::ENDPOINT.key(),
+    StorageConfig::REGION.key(),
+    StorageConfig::FORCE_PATH_STYLE.key(),
+    StorageConfig::ACCESS_KEY.key(),
+    StorageConfig::SECRET_KEY.key(),
+    StorageConfig::ALLOW_HTTP.key(),
     "TLS_CA_CERT",
     "TLS_CERT",
     "TLS_KEY",
@@ -267,7 +285,7 @@ fn refuse_s3_settings(env: &ConfigService) -> nest_rs_config::Result<()> {
             return Err(set.refuse(format!(
                 "is set beside {}, which names memory, a store that reads no S3 setting — \
                  unset it, or name an s3:// store",
-                env.var_name("URL"),
+                env.var_name(StorageConfig::URL.key()),
             )));
         }
     }
@@ -283,7 +301,7 @@ fn resolve_endpoint(
     base: Option<String>,
     allow_http: bool,
 ) -> nest_rs_config::Result<Option<String>> {
-    let allow_http_var = env.var_name("ALLOW_HTTP");
+    let allow_http_var = env.var_name(StorageConfig::ALLOW_HTTP.key());
     let reason = |endpoint: &str| {
         format!(
             "the plain-http endpoint {} is refused because {allow_http_var} is false, or unset \
@@ -300,9 +318,10 @@ fn resolve_endpoint(
         }
         Some(setting) => Ok(Some(setting.value)),
         None => match base {
-            Some(base) if is_plaintext(&base) && !allow_http => {
-                Err(ConfigError::parse(env.var_name("ENDPOINT"), reason(&base)))
-            }
+            Some(base) if is_plaintext(&base) && !allow_http => Err(ConfigError::parse(
+                env.var_name(StorageConfig::ENDPOINT.key()),
+                reason(&base),
+            )),
             base => Ok(base.filter(|endpoint| !endpoint.trim().is_empty())),
         },
     }
@@ -317,8 +336,8 @@ fn refuse_half_a_credential(
     secret_key: Option<&Setting>,
 ) -> nest_rs_config::Result<()> {
     let (set, other, other_value) = match (access_key, secret_key) {
-        (Some(set), None) => (set, "SECRET_KEY", &base.secret_key),
-        (None, Some(set)) => (set, "ACCESS_KEY", &base.access_key),
+        (Some(set), None) => (set, StorageConfig::SECRET_KEY.key(), &base.secret_key),
+        (None, Some(set)) => (set, StorageConfig::ACCESS_KEY.key(), &base.access_key),
         _ => return Ok(()),
     };
     let (set_var, other_file_var) = (set.var(), env.var_name(&format!("{other}_FILE")));
@@ -349,7 +368,7 @@ fn refuse_tls(
     tls: &ClientTls,
 ) -> nest_rs_config::Result<()> {
     if endpoint.is_some_and(is_plaintext) {
-        tls.refuse_beside_plaintext(env, &env.var_name("ENDPOINT"))?;
+        tls.refuse_beside_plaintext(env, &env.var_name(StorageConfig::ENDPOINT.key()))?;
     }
     tls.refuse_identity(env, OBJECT_STORE)?;
     tls.check(env)

@@ -278,14 +278,18 @@ fn refuse_oversized_entity_calls(
     if total <= max {
         return Ok(());
     }
-    let key = nest_rs_config::var_name("graphql", "MAX_REPRESENTATIONS");
+    let setting = GraphqlConfig::MAX_REPRESENTATIONS;
+    let (field, key) = (
+        setting.field().path(),
+        setting.var(<GraphqlConfig as nest_rs_config::Namespaced>::NAMESPACE),
+    );
     Err(ServerError::new(
         format!(
             "this operation carries {total} `_entities` representations, over this \
              schema's ceiling of {max}. Each one is resolved on its own — body, \
              posture gate and mask — so the total list length is the fan-out, \
              however many `_entities` fields it is spread across. Split the call, \
-             or raise `GraphqlConfig::max_representations` (`{key}`; `0` ⇒ \
+             or raise `{field}` (`{key}`; `0` ⇒ \
              unlimited).",
         ),
         position,

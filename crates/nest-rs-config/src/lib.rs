@@ -83,9 +83,10 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 /// `None` off — and binds it to the field as the associated [`BoundedSetting`]
 /// named for it (`ReportsConfig::WINDOW`), its key the field's name with a
 /// duration's unit after it; `json` decodes a structured value; `with = path`
-/// names a `fn(&ConfigService, Field, T) -> Result<T>`, handed the field's key
-/// and path as the associated [`Field`] named for it, which a check of a value
-/// set in code reads too. On the struct, `validate = "manual"` leaves the
+/// names a `fn(&ConfigService, Field, T) -> Result<T>`, handed the field's
+/// binding. Every other field is bound too, as the associated [`Field`] named for
+/// it (`ReportsConfig::RECIPIENTS`), so a sentence naming a field or a check of a
+/// value set in code reads its key and path, never types them. On the struct, `validate = "manual"` leaves the
 /// `Validate` derive to a hand-written impl, and `from_env = "manual"` the
 /// whole `impl Config`, for an overlay whose fields depend on each other.
 ///
@@ -125,6 +126,8 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 ///
 /// assert_eq!(<ReportsConfig as Namespaced>::NAMESPACE, "reports");
 /// assert_eq!(ReportsConfig::WINDOW.key(), "WINDOW_SECS");
+/// assert_eq!(ReportsConfig::RECIPIENTS.key(), "RECIPIENTS");
+/// assert_eq!(ReportsConfig::RECIPIENTS.path(), "ReportsConfig::recipients");
 /// let env = ConfigService::with_vars(
 ///     "reports",
 ///     [("PAGE_SIZE", "20"), ("RECIPIENTS", "ops@example.com"), ("WINDOW_SECS", "300")],

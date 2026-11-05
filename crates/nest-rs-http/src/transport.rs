@@ -356,7 +356,7 @@ fn template_of(path: &str, controller: &str) -> Result<RouteTemplate, RouteError
 fn global_prefix_owner() -> String {
     format!(
         "the global prefix ({})",
-        nest_rs_config::var_name("http", "GLOBAL_PREFIX"),
+        crate::config::var(crate::HttpConfig::GLOBAL_PREFIX),
     )
 }
 
@@ -575,7 +575,7 @@ impl Transport for HttpTransport {
         {
             let declared = crate::versioning::declared_versions(container);
             if !declared.iter().any(|v| v == default) {
-                let var = nest_rs_config::var_name("http", "DEFAULT_VERSION");
+                let var = crate::config::var(crate::HttpConfig::DEFAULT_VERSION);
                 anyhow::bail!(match declared.is_empty() {
                     true => format!(
                         "{var} names API version {default:?}, and no controller declares a \

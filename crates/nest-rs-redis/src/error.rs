@@ -76,8 +76,9 @@ pub enum RedisError {
     /// trusted by configuring it.
     #[error(
         "the Redis URL for {endpoint} asks to skip certificate verification (`#insecure`), which is \
-         refused: remove it from the URL — {url_var}, or `RedisConfig::url` pinned in code — and \
-         trust the authority that signed Redis's certificate with {tls_ca_cert_var}"
+         refused: remove it from the URL — {url_var}, or `{}` pinned in code — and \
+         trust the authority that signed Redis's certificate with {tls_ca_cert_var}",
+        crate::RedisConfig::URL.path(),
     )]
     UnverifiedTls {
         /// The address the client dials, never the URL.
@@ -95,8 +96,8 @@ pub enum RedisError {
         "TLS material is configured for Redis at {endpoint}, but the URL's scheme does not \
          encrypt, so the material would go unused and the connection unencrypted: point {url_var} \
          at ports serving TLS with `rediss://`, `rediss-sentinel://` or `rediss-cluster://`, or \
-         remove the material — {tls_vars}, their _FILE forms, or `RedisConfig::tls` pinned in \
-         code"
+         remove the material — {tls_vars}, their _FILE forms, or `{}` pinned in code",
+        crate::RedisConfig::TLS.path(),
     )]
     PlaintextUrl {
         /// The address the client dials, never the URL.

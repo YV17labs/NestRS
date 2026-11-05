@@ -223,3 +223,26 @@ Refused:
   6.0 retired the first, so "since 7.0" would be false of it; the second is a
   product's own key, which the framework's registry has no business naming.
 
+### A sentence naming a field reads the field's binding
+
+The derive bound a bounded or `with` field and left the rest typed, so a sentence
+naming a typed field had nothing else to read, and six sentences typed a bound one
+anyway. Every field is bound now: a `Field` for one holding no range, at the price of
+one public constant per field. The values decide it: the constant costs nothing at
+runtime and a line of rustdoc, nothing to write, and it is what makes "a sentence reads
+the binding" a rule with no exception to remember, a rename moving every sentence with
+it (correctness, elegance); the alternative left the typed half typed forever.
+
+What stays typed, and why: a vocabulary's own keys (`CORS_*`, `TLS_*`, `CONTACT_*`,
+`LICENSE_*`), whose members are no field of the `#[config]` and whose reader is the one
+place naming them, `ClientTls`'s three being fixed by the 2026-10-30 entry; and
+`OpenTelemetryConfig`'s paths, a struct no `#[config]` declares, its variables the
+specification's.
+
+Refused:
+
+- **The binding for `from_env = "manual"`.** A hand-written overlay may read a field
+  under another key (a duration's unit, a vocabulary), and the bound `BoundedSetting`
+  it writes takes the same name, so the derive cannot tell what to bind; storage binds
+  its own beside its budgets, as it did for those, and the OAuth server its one.
+

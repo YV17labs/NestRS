@@ -2,7 +2,7 @@
 
 use nest_rs_authn::AuthError;
 use nest_rs_config::__private::{RetiredKey, is_loopback};
-use nest_rs_config::{ClientTls, ConfigService, Environment, config, endpoint_shown};
+use nest_rs_config::{ClientTls, ConfigService, Environment, Field, config, endpoint_shown};
 use nest_rs_core::Secret;
 use oauth2::url::Url;
 
@@ -112,35 +112,32 @@ impl OAuthClientConfig {
         let endpoints = [
             (
                 &self.auth_url,
-                "AUTH_URL",
-                "auth_url",
+                Self::AUTH_URL,
                 "RFC 6749 §3.1 requires TLS at the authorization endpoint, where the user signs \
                  in",
             ),
             (
                 &self.token_url,
-                "TOKEN_URL",
-                "token_url",
+                Self::TOKEN_URL,
                 "RFC 6749 §3.2 requires TLS at the token endpoint, which receives the client \
                  secret and the authorization code",
             ),
             (
                 &self.userinfo_url,
-                "USERINFO_URL",
-                "userinfo_url",
+                Self::USERINFO_URL,
                 "RFC 6750 §5.3 sends a bearer token over TLS alone, and the userinfo endpoint \
                  receives one",
             ),
         ];
-        for (raw, key, field, why) in endpoints {
-            let setting = setting(variables, key, field);
+        for (raw, field, why) in endpoints {
+            let setting = setting(variables, field);
             if parsed(raw, &setting)?.scheme() != "https" {
                 return Err(refused(&setting, &format!("must be an https URL — {why}")));
             }
         }
         refuse_plaintext_redirect_in(
             &self.redirect_url,
-            &setting(variables, "REDIRECT_URL", "redirect_url"),
+            &setting(variables, Self::REDIRECT_URL),
             environment,
         )
     }
@@ -203,14 +200,12 @@ fn refuse_plaintext_redirect_in(
 
 /// How a refusal names `field`: both ways it is set when the config was read
 /// under `variables`, by the field alone when its caller composed it.
-fn setting(variables: Option<&ConfigService>, key: &str, field: &str) -> String {
+fn setting(variables: Option<&ConfigService>, field: Field) -> String {
     match variables {
-        Some(variables) => nest_rs_config::spellings_or_field(
-            variables.namespace(),
-            key,
-            &format!("OAuthClientConfig::{field}"),
-        ),
-        None => format!("`OAuthClientConfig::{field}`"),
+        Some(variables) => {
+            nest_rs_config::spellings_or_field(variables.namespace(), field.key(), field.path())
+        }
+        None => format!("`{}`", field.path()),
     }
 }
 

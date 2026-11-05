@@ -128,7 +128,7 @@ impl McpMount {
                 hint = %format!(
                     "a Host outside this list is refused with 403; set {} to this \
                      deployment's own hostnames",
-                    nest_rs_config::var_name("mcp", "ALLOWED_HOSTS"),
+                    nest_rs_config::var_name(<McpConfig as nest_rs_config::Namespaced>::NAMESPACE, McpConfig::ALLOWED_HOSTS.key()),
                 ),
                 "mcp host allowlist resolved",
             );
@@ -344,7 +344,7 @@ fn host_refused() {
         reason = "host_not_allowed",
         hint = %format!(
             "set {} to this deployment's own hostnames",
-            nest_rs_config::var_name("mcp", "ALLOWED_HOSTS"),
+            nest_rs_config::var_name(<McpConfig as nest_rs_config::Namespaced>::NAMESPACE, McpConfig::ALLOWED_HOSTS.key()),
         ),
         "mcp request refused: its Host is outside the allowlist",
     );

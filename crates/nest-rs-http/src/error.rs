@@ -1117,7 +1117,7 @@ impl OriginRefused {
             _ => Some(format!(
                 "list the page's origin in {origins}, or the proxy in front of this server \
                  in {}",
-                nest_rs_config::var_name("http", "TRUSTED_PROXIES"),
+                crate::config::var(crate::HttpConfig::TRUSTED_PROXIES),
             )),
         }
     }

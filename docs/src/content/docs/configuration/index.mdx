@@ -109,6 +109,13 @@ three lines saying what a refused value was expected to be.
 | `json` | A structured value — a list of records, a map — written as JSON |
 | `with = path` | Through a function of yours, `fn(&ConfigService, Field, T) -> Result<T>`, handed the field — its key and the path code pins it through, bound to the struct the way a range is — and its base |
 
+**Every field is bound to the struct**, as the associated constant named for it:
+a `BoundedSetting` for a bounded one (`PostsConfig::CACHE_TTL`), a
+`nest_rs::config::Field` for any other (`PostsConfig::FEATURED_TAGS`), its `key()`
+and its `path()`. A sentence naming a field reads them, so no sentence types a key
+or a path, and renaming the field moves them all. A constant of your own by that
+name is a compile error: rename it.
+
 **A duration is a `Duration`; `None` is off and nothing else.** A field never
 names its unit — the key does, through its bounds — and its default sits in
 `Default`, never behind a `None` the code would read as "the default". A

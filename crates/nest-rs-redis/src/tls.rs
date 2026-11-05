@@ -167,7 +167,12 @@ pub(crate) fn remedy(
     instance: &RedisInstance,
     error: &(dyn std::error::Error + 'static),
 ) -> String {
-    ClientTls::remedy(&instance.reader(), "Redis", "URL", error)
+    ClientTls::remedy(
+        &instance.reader(),
+        "Redis",
+        crate::RedisConfig::URL.key(),
+        error,
+    )
 }
 
 #[cfg(test)]

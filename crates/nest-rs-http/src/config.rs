@@ -542,6 +542,11 @@ impl HttpConfig {
     }
 }
 
+/// The variable `field` is read from, for a sentence naming it.
+pub(crate) fn var(field: Field) -> String {
+    nest_rs_config::var_name(HttpConfig::NAMESPACE, field.key())
+}
+
 /// The server's own certificate, its vocabulary's `TLS_*` keys; a reading
 /// failure that names no variable is named under them, its I/O source kept.
 fn tls(env: &ConfigService, field: Field, base: Option<HttpTls>) -> Result<Option<HttpTls>> {

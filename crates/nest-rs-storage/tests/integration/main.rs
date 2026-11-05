@@ -9,6 +9,7 @@
 )]
 
 mod client;
+mod config;
 mod health;
 mod module;
 

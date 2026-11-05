@@ -331,6 +331,22 @@ fn a_count_is_held_to_its_range_from_either_side() {
     );
 }
 
+/// Every field is bound, whichever reader it takes, so no sentence naming one
+/// types its key or its path: a typed one, a raw one, a JSON one.
+#[test]
+fn every_field_is_bound_to_its_key_and_its_path() {
+    for (field, key, path) in [
+        (KilnConfig::HOST, "HOST", "KilnConfig::host"),
+        (KilnConfig::TOKEN, "TOKEN", "KilnConfig::token"),
+        (KilnConfig::TYPE, "TYPE", "KilnConfig::type"),
+        (KilnConfig::SHELVES, "SHELVES", "KilnConfig::shelves"),
+        (KilnConfig::HEAT, "HEAT", "KilnConfig::heat"),
+    ] {
+        assert_eq!(field.key(), key);
+        assert_eq!(field.path(), path);
+    }
+}
+
 /// A field's own reader is handed its key and the path it is pinned through,
 /// bound once by the derive for every site that refuses a value set in code.
 #[test]

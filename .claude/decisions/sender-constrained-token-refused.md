@@ -27,7 +27,13 @@ closed tells the deployment at once, where accepting would drop the binding in s
 - **Read off the payload again, not through a claims wrapper.** A `#[serde(flatten)]` wrapper
   around `C` buffers every claim and changes what `C` may deserialize from. Decoding the
   payload once more and reading one key measured 340 ns for a 334-byte payload (host, release),
-  beside a signature check of tens of microseconds on EdDSA.
+  beside a signature check of tens of microseconds on EdDSA. On HS256, what one variable selects
+  and what the JWT page opens with, it is a visible share: 257 to 287 ns beside a decode of 1586
+  to 1734 ns, six rounds on a claims struct over the same shape of payload, about 16 % of
+  verification. Security comes first, so the refusal stands at that price. `jsonwebtoken`'s
+  `dangerous::insecure_decode_claims` does the same work and measured 440 ns beside the first
+  figure, a third more on every verified request for five lines saved, so the read stays this
+  crate's.
 - **Refused: a config key accepting bound tokens as bearers**, the phased upgrade §7.2
   describes. A deployment that wants it asked for no opening a caller holds; it can mint plain
   bearer tokens for this audience. No caller asks.

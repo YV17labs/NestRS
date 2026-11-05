@@ -20,9 +20,7 @@ use validator::{Validate, ValidationErrors};
 
 use crate::config::OAuthClientConfig;
 use crate::redirect::AuthorizationRedirect;
-use nest_rs_authn::AuthError;
-use nest_rs_authn::JwtService;
-use nest_rs_authn::SignError;
+use nest_rs_authn::{AuthError, JwtService, SignError};
 
 /// Outcome of the Authorization-Code exchange: three bearer credentials, so
 /// each is a [`Secret`].

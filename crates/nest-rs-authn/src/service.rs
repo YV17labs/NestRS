@@ -579,13 +579,7 @@ impl JwtService {
     /// ```
     pub fn sign<C: Serialize + PrincipalIdentity>(&self, claims: &C) -> Result<String, SignError> {
         let signer = self.signer()?;
-        self.encode_with(
-            signer,
-            &signer.header,
-            naming_its_subject(claims)?,
-            None,
-            Lifetime::Signer,
-        )
+        self.encode_access_token(signer, naming_its_subject(claims)?, None)
     }
 
     /// Sign `claims` into a compact JWT for `resource`, the RFC 8707 §2
@@ -609,13 +603,7 @@ impl JwtService {
             ));
         }
         let signer = self.signer()?;
-        self.encode_with(
-            signer,
-            &signer.header,
-            naming_its_subject(claims)?,
-            Some(resource),
-            Lifetime::Signer,
-        )
+        self.encode_access_token(signer, naming_its_subject(claims)?, Some(resource))
     }
 
     /// The signing half, or the refusal a verify-only service answers.
@@ -623,6 +611,17 @@ impl JwtService {
         self.signer.as_ref().ok_or_else(|| {
             SignError::new("this JwtService is verify-only — no signing key configured")
         })
+    }
+
+    /// [`encode_with`](Self::encode_with) for an access token: the signer's own
+    /// header, and its lifetime unless `claims` name their own.
+    fn encode_access_token(
+        &self,
+        signer: &Signer,
+        claims: Map<String, Value>,
+        resource: Option<&str>,
+    ) -> Result<String, SignError> {
+        self.encode_with(signer, &signer.header, claims, resource, Lifetime::Signer)
     }
 
     /// Sign `claims` under `header` for `resource` — this service itself when
@@ -826,13 +825,7 @@ impl JwtService {
 /// written: what a suite forges for a verifier to refuse.
 pub fn sign_unchecked<C: Serialize>(jwt: &JwtService, claims: &C) -> Result<String, SignError> {
     let signer = jwt.signer()?;
-    jwt.encode_with(
-        signer,
-        &signer.header,
-        payload_of(claims)?,
-        None,
-        Lifetime::Signer,
-    )
+    jwt.encode_access_token(signer, payload_of(claims)?, None)
 }
 
 /// `claims` as what a JWT's payload is: a JSON object (RFC 7519 §7.2).
@@ -850,14 +843,11 @@ fn naming_its_subject<C: Serialize + PrincipalIdentity>(
     claims: &C,
 ) -> Result<Map<String, Value>, SignError> {
     let mut payload = payload_of(claims)?;
-    let named = match payload.get("sub") {
-        None | Some(Value::Null) => false,
-        Some(Value::String(sub)) => !sub.is_empty(),
-        Some(_) => true,
-    };
+    let named = payload
+        .get("sub")
+        .is_some_and(|sub| !sub.is_null() && sub != "");
     if !named {
-        let actor = claims.actor_id().filter(|actor| !actor.is_empty());
-        let Some(actor) = actor else {
+        let Some(actor) = claims.actor_id().filter(|actor| !actor.is_empty()) else {
             return Err(SignError::new(
                 "the claims name no subject: RFC 9068 §2.2 requires `sub`, which their \
                  `actor_id` supplies when they carry none",

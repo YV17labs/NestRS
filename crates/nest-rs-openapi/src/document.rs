@@ -162,6 +162,19 @@ pub(crate) fn build_document(
     let mut schemas = generator.take_definitions(true);
     schemas.insert("ProblemDetails".into(), problem_details_schema());
 
+    let mut security_schemes = Map::new();
+    security_schemes.insert(
+        security_scheme_name(ChallengeScheme::Bearer),
+        json!({ "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }),
+    );
+    for scheme in challenged {
+        security_schemes
+            .entry(security_scheme_name(scheme))
+            .or_insert_with(
+                || json!({ "type": "http", "scheme": scheme.as_str().to_ascii_lowercase() }),
+            );
+    }
+
     let info = info_object(config);
 
     // Paths stay prefix-free; `global_prefix` becomes the `server` base URL clients prepend.
@@ -171,25 +184,9 @@ pub(crate) fn build_document(
         "paths": Value::Object(paths),
         "components": {
             "schemas": Value::Object(schemas),
-            "securitySchemes": {
-                "bearerAuth": {
-                    "type": "http",
-                    "scheme": "bearer",
-                    "bearerFormat": "JWT",
-                }
-            },
+            "securitySchemes": Value::Object(security_schemes),
         },
     });
-    if let Some(schemes) = document
-        .pointer_mut("/components/securitySchemes")
-        .and_then(Value::as_object_mut)
-    {
-        for scheme in challenged {
-            schemes.entry(security_scheme_name(scheme)).or_insert_with(
-                || json!({ "type": "http", "scheme": scheme.as_str().to_ascii_lowercase() }),
-            );
-        }
-    }
 
     // Stated even at the origin root, OpenAPI's default: a generator reads its
     // base URL off `servers` and has none to read otherwise.
@@ -514,11 +511,10 @@ fn operation_object(
 
     let challenged = challenges(denials);
     if !challenged.is_empty() {
-        let requirements: Vec<Value> = challenged
+        let requirements = challenged
             .iter()
-            .map(|scheme| json!({ security_scheme_name(*scheme): [] }))
-            .collect();
-        op.insert("security".into(), Value::Array(requirements));
+            .map(|scheme| json!({ security_scheme_name(*scheme): [] }));
+        op.insert("security".into(), requirements.collect());
     } else if route.public() {
         // OpenAPI 3.1 §4.8.10.1: an empty list removes any requirement, the
         // `#[public]` opening stated in the document as in the code.
@@ -563,7 +559,7 @@ fn operation_object(
     }
     responses.insert(status.to_string(), Value::Object(ok));
     for status in error_statuses(route, full_path, denials, requires_parameter) {
-        let declared = || denials.iter().filter(|(declared, _)| *declared == status);
+        let declared = || denials.iter().filter(|(denied, _)| *denied == status);
         let own_body = declared().find_map(|(_, document)| document.body);
         let mut response = if own_body.is_none() || declared().any(|(_, d)| d.body.is_none()) {
             problem_response(&error_title(status))

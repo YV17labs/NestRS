@@ -98,9 +98,6 @@ const FAILED: &str = "authentication failed";
 #[error("invalid credentials")]
 pub struct CredentialError;
 
-/// What a failed signing path displays, whatever failed.
-const SIGN_FAILED: &str = "the token could not be signed";
-
 /// Why this server could not mint a token: it holds no signing key, or the
 /// claims it was handed name no subject or are no JSON object. The failure is
 /// the server's, never a verdict on the caller: a handler returning it answers
@@ -132,7 +129,7 @@ const SIGN_FAILED: &str = "the token could not be signed";
 /// assert_eq!(HttpError::from(error).status(), StatusCode::INTERNAL_SERVER_ERROR);
 /// ```
 #[derive(Debug, thiserror::Error)]
-#[error("{}", SIGN_FAILED)]
+#[error("the token could not be signed")]
 pub struct SignError {
     #[source]
     cause: OpaqueCause,

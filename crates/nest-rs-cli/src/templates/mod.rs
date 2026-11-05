@@ -94,6 +94,16 @@ mod tests {
         );
     }
 
+    /// A suite's console holds what went wrong, whichever level development reads.
+    #[test]
+    fn the_test_file_keeps_a_suite_to_warnings() {
+        assert!(
+            super::shared::ENV_TEST.contains("\nRUST_LOG=warn\n"),
+            "{}",
+            super::shared::ENV_TEST
+        );
+    }
+
     /// `container.md`, *Every wait the framework owns is bounded*: a scaffolded
     /// binary's `main` is `#[nest_rs::main]`, never `#[tokio::main]`.
     #[test]

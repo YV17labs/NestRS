@@ -199,6 +199,9 @@ RUST_LOG=debug
 pub(crate) const ENV_TEST: &str = r#"# nestrs workspace — test-profile overrides, read only under {{env_prefix}}_ENV=test,
 # which the test harness declares for every suite.
 # Committed; layered on top of `.env`, below `.env.test.local` and the real environment.
+
+# A suite's console holds what went wrong. A real RUST_LOG outranks this line.
+RUST_LOG=warn
 "#;
 
 /// `compose.yml`'s services, in plaintext, appended to the two profiles that

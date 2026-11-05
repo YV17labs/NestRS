@@ -34,6 +34,7 @@ pub struct Model {
     #[expose(input(create, update), validate(length(min = 1)))]
     pub title: String,
     #[expose(input(create, update), validate(length(min = 1)))]
+    #[sea_orm(column_type = "Text")]
     pub body: String,
     #[expose(default = PostStatus::Draft)]
     pub status: PostStatus,

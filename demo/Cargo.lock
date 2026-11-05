@@ -399,7 +399,6 @@ dependencies = [
  "features",
  "migrations",
  "nest-rs",
- "reqwest",
  "sea-orm",
  "serde_json",
  "tokio",

@@ -126,9 +126,14 @@ impl OpenApiConfig {
 /// The contact, its vocabulary's `CONTACT_*` keys; none when every part is unset.
 fn contact(
     env: &ConfigService,
-    _: Field,
+    field: Field,
     base: Option<OpenApiContact>,
 ) -> Result<Option<OpenApiContact>> {
+    debug_assert_eq!(
+        field.key(),
+        "CONTACT",
+        "OpenApiContact reads its fields' names under `contact`"
+    );
     let base = base.unwrap_or_default();
     let contact = OpenApiContact {
         name: env.get("CONTACT_NAME")?.or(base.name),
@@ -143,9 +148,14 @@ fn contact(
 /// stand without one; it is known by its SPDX identifier or its URL, never both.
 fn license(
     env: &ConfigService,
-    _: Field,
+    field: Field,
     base: Option<OpenApiLicense>,
 ) -> Result<Option<OpenApiLicense>> {
+    debug_assert_eq!(
+        field.key(),
+        "LICENSE",
+        "OpenApiLicense reads its fields' names under `license`"
+    );
     let identifier = env.get("LICENSE_IDENTIFIER")?;
     let url = env.get("LICENSE_URL")?;
     let license = match (env.get("LICENSE_NAME")?, base) {

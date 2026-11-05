@@ -37,7 +37,8 @@ pub trait ExceptionFilter: Layer {
 **Every edge runs them**: HTTP on a route, a self-mount's request (`/graphql`,
 `/mcp`, a WS upgrade) and what the router answers itself, and
 [GraphQL fields](#on-a-graphql-field),
-[WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes),
+[WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes), the
+app's around one no handler reads,
 [MCP tool calls and prompt fetches](/mcp/#layers-around-an-operation),
 [jobs](/queue/#layers-around-a-job), [ticks](/schedule/#layers-around-a-tick)
 and [listener calls](/events/dispatch/#layers-around-a-listener-call). A

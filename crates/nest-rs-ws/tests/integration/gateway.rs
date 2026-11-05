@@ -3063,3 +3063,50 @@ async fn every_message_reads_what_the_app_wide_pool_attached_at_the_upgrade() {
     );
     app.shutdown().await.expect("the transport stops cleanly");
 }
+
+#[gateway(path = "/opens-a-unit")]
+pub(crate) struct OpensAUnitGateway;
+
+#[messages]
+impl OpensAUnitGateway {
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [OpensAUnitGateway, RecordingUnitOfWork as dyn nest_rs_database::UnitOfWork],
+)]
+struct OpensAUnitModule;
+
+/// What no handler reads opens no unit of work, as a route's `404` opens none:
+/// the only message of the socket to open one is the one a handler serves.
+#[tokio::test]
+async fn a_frame_no_handler_reads_opens_no_unit_of_work() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<OpensAUnitModule>()
+        .build_ws()
+        .await
+        .expect("a gateway over a unit-of-work binding boots");
+
+    let mut socket = app.socket("/opens-a-unit").connect().await;
+    socket.send("nope", serde_json::Value::Null).await;
+    socket.next_envelope().await;
+    socket.send_text("no envelope").await;
+    socket.next_envelope().await;
+    socket.send_binary(vec![1, 2, 3]).await;
+    socket.next_envelope().await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    socket.next_envelope().await;
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let messages: Vec<UnitEnd> = units_ended()
+        .into_iter()
+        .filter(|(unit, _)| *unit == nest_rs_ws::unit::MESSAGE.name())
+        .map(|(_, end)| end)
+        .collect();
+    assert_eq!(messages, [UnitEnd::Settled { ok: true }], "{messages:?}");
+}

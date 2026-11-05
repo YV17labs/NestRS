@@ -391,3 +391,20 @@ layer table refuses, so its cell is a named refusal rather than `Built`. A hook 
 comes to run a layer flips the cell with the change that builds it, which adds
 what a refusal withheld. **Refused:** keeping the value for that day: nothing it
 declares could be told from a typo until then.
+
+**2026-11-05 — a frame no handler reads runs one site, the
+`feat/websocket-on-pipeline` entry's "runs no site" reversed.** Its reason was "it
+has no handler to declare one", and HTTP's fallback has since shown a unit needs
+none: one site at no address of its own. The docs promised the unit stage "on every
+WebSocket message" and call such a frame a message all the same, while a unit-stage
+interceptor read nothing of it and an app's catch-all shaped nothing. So an event no
+handler serves, a frame no envelope holds, a binary frame and one past the cap run
+one edge-wide site under `_OTHER`, folding the unit stage and the app's exception
+filters around the edge's own refusal, as a route's `404` does: no guard, there
+being no decision to take; no handler stage, there being no handler; no unit of
+work, nothing there writing but a layer that brought its own. Its deadline is the
+message's, and a panic is contained where a message's is. **Refused:** a site per
+gateway folding the gateway's own layers: a controller's layers do not run at a
+`404` either, and what a gateway binds is for the messages it declares. **Refused:**
+the client's event in `WsView::event`: a layer reads `_OTHER`, the word its line
+reads, and `data()` is there for one that means to look.

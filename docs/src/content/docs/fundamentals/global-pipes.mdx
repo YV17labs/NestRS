@@ -102,8 +102,8 @@ an edge may hand a new kind in a minor release.
 - MCP tool arguments and queue payloads take no global pipe: bind a
   per-argument pipe there (`Piped<P>`); a type declaring rules is validated
   there all the same.
-- A WebSocket message whose event no handler serves meets no pipe: nothing
-  would read what it made.
+- A WebSocket message no handler reads, an event none serves or a frame no
+  envelope holds, meets no pipe: nothing would read what it made.
 - A pipe reads and writes a `serde_json::Value`, the one place the framework
   passes one through: the input is not decoded yet, so there is no type to
   hand. The handler still receives its argument parsed into its own type, and

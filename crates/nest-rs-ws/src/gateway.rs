@@ -222,6 +222,14 @@ struct DispatchWiring {
     disconnect_timeout: Option<Duration>,
 }
 
+impl DispatchWiring {
+    /// How long a message may run, and the instant that lands on.
+    fn message_deadline(&self) -> Option<(Duration, tokio::time::Instant)> {
+        self.message_timeout
+            .map(|timeout| (timeout, tokio::time::Instant::now() + timeout))
+    }
+}
+
 /// Per-socket limits resolved once at upgrade from [`WsConfig`].
 #[derive(Clone, Copy)]
 struct SocketLimits {
@@ -355,13 +363,17 @@ async fn serve_connection<G, N, S>(
                         // The boundary case the protocol-layer cap lets through; framing is
                         // intact, so the socket survives and the refusal goes in band.
                         if text.len() > limits.max_message_bytes {
-                            let frame = refuse_oversize(
+                            let reply = refuse_oversize(
+                                &messages,
                                 &wiring,
-                                conn_id,
+                                &client,
                                 text.len(),
                                 limits.max_message_bytes,
-                            );
-                            if outbox.try_send(frame.into()).is_err() {
+                            )
+                            .await;
+                            if let Some(frame) = reply
+                                && outbox.try_send(frame.into()).is_err()
+                            {
                                 break stalled_outbox(conn_id);
                             }
                             continue;
@@ -379,8 +391,10 @@ async fn serve_connection<G, N, S>(
                     // RFC 6455 §7.4.1's 1003 is the other conformant answer; framing is
                     // intact, so the refusal goes in band.
                     Ok(Message::Binary(data)) => {
-                        let frame = refuse_binary(&wiring, conn_id, data.len());
-                        if outbox.try_send(frame.into()).is_err() {
+                        let reply = refuse_binary(&messages, &wiring, &client, data.len()).await;
+                        if let Some(frame) = reply
+                            && outbox.try_send(frame.into()).is_err()
+                        {
                             break stalled_outbox(conn_id);
                         }
                     }
@@ -569,16 +583,19 @@ where
 
 /// Refuse a message past the per-message cap, telling the client under the
 /// class HTTP's `413` names and, at `debug`, the operator.
-fn refuse_oversize(
+async fn refuse_oversize(
+    messages: &MessageTable,
     wiring: &DispatchWiring,
-    conn_id: ConnId,
+    client: &WsClient,
     bytes: usize,
     max_message_bytes: usize,
-) -> String {
+) -> Option<String> {
+    let conn_id = client.id();
     refuse_unread(
+        messages,
         wiring,
-        conn_id,
-        || {
+        client,
+        move || {
             tracing::debug!(
                 target: crate::TARGET,
                 conn_id,
@@ -589,16 +606,24 @@ fn refuse_oversize(
         },
         &crate::WsError::classed("message too large", code::CONTENT_TOO_LARGE),
     )
+    .await
 }
 
 /// Refuse a Binary frame (RFC 6455 §5.6), which carries no JSON envelope,
 /// telling the client under the class HTTP's `415` names and, at `debug`, the
 /// operator.
-fn refuse_binary(wiring: &DispatchWiring, conn_id: ConnId, bytes: usize) -> String {
+async fn refuse_binary(
+    messages: &MessageTable,
+    wiring: &DispatchWiring,
+    client: &WsClient,
+    bytes: usize,
+) -> Option<String> {
+    let conn_id = client.id();
     refuse_unread(
+        messages,
         wiring,
-        conn_id,
-        || {
+        client,
+        move || {
             tracing::debug!(
                 target: crate::TARGET,
                 conn_id,
@@ -611,37 +636,43 @@ fn refuse_binary(wiring: &DispatchWiring, conn_id: ConnId, bytes: usize) -> Stri
             code::UNSUPPORTED_MEDIA_TYPE,
         ),
     )
+    .await
 }
 
 /// Refuse a frame no handler could read — no envelope, a binary frame, one
-/// past the cap — as the message it is: its `ws.message` line files `error`
-/// under `_OTHER`, never what the client sent, with its span; `report` says
-/// why at `debug` inside it, and the client reads `refusal` on the `error`
-/// event. Nothing ran, so no unit of work opens.
-fn refuse_unread(
+/// past the cap — as the message it is: its `ws.message` line and span, under
+/// `_OTHER`, never what the client sent; the site of what no handler reads;
+/// `report` saying why at `debug` inside it. The client reads `refusal` on the
+/// `error` event, or what a layer answered in its place.
+async fn refuse_unread(
+    messages: &MessageTable,
     wiring: &DispatchWiring,
-    conn_id: ConnId,
-    report: impl FnOnce(),
+    client: &WsClient,
+    report: impl FnOnce() + Send,
     refusal: &crate::WsError,
-) -> String {
-    let correlation = wiring.connection.child();
-    let span = nest_rs_core::operation_span!(
-        crate::unit::MESSAGE,
-        &correlation,
-        ws.event = operation_log::OTHER,
-        ws.connection_id = conn_id,
-    );
-    let line = UnitLine::open(
-        Unit::Message {
-            event: operation_log::OTHER,
-        },
-        conn_id,
-        correlation.clone(),
-        span.clone(),
-    );
-    RequestContinuation::new(None, correlation).enter(|| span.in_scope(report));
-    line.file(operation_log::ERROR);
-    error_frame("error", refusal)
+) -> Option<String> {
+    let deadline = wiring.message_deadline();
+    let body = async move {
+        report();
+        crate::message::unserved(
+            messages,
+            client,
+            serde_json::Value::Null,
+            refusal,
+            deadline.map(|(_, at)| at),
+        )
+        .await
+    };
+    let reply = in_message_unit(
+        wiring,
+        client.id(),
+        operation_log::OTHER,
+        None,
+        deadline,
+        body,
+    )
+    .await;
+    reply_frame(reply, "error", operation_log::OTHER)
 }
 
 /// Run one connection-lifecycle hook under the connection's identity, as a
@@ -894,7 +925,9 @@ impl Drop for UnitLine<'_> {
 /// Decode one text message and answer it as one unit of work: its site's
 /// chains around its handler, inside the unit of work it runs, cut at its
 /// deadline — the guards inside the unit, so they see the ambient values the
-/// handler does, and a denied message opens no transaction.
+/// handler does, and a denied message opens no transaction. What no handler
+/// serves runs the site of it instead, and, as a route's `404`, opens no unit
+/// of work.
 async fn handle_text<G: Gateway>(
     gateway: &G,
     messages: &MessageTable,
@@ -906,9 +939,10 @@ async fn handle_text<G: Gateway>(
     let WsEnvelope { event, data } = match crate::envelope::decode_envelope(text) {
         Ok(envelope) => envelope,
         Err(refused) => {
-            return Some(refuse_unread(
+            return refuse_unread(
+                messages,
                 wiring,
-                conn_id,
+                client,
                 || {
                     tracing::debug!(
                         target: crate::TARGET,
@@ -918,33 +952,44 @@ async fn handle_text<G: Gateway>(
                     );
                 },
                 &refused,
-            ));
+            )
+            .await;
         }
     };
     let served = messages.get(&event);
     // What the lines and the span name: the event a handler declares, never
     // one only the client named.
     let named = served.map_or(operation_log::OTHER, |(event, _)| event);
-    let deadline = wiring
-        .message_timeout
-        .map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
+    let deadline = wiring.message_deadline();
+    let at = deadline.map(|(_, at)| at);
     let body = async move {
         match served {
             Some((event, Some(message))) => {
-                crate::message::answer(
-                    gateway,
-                    message,
-                    client,
-                    event,
-                    data,
-                    deadline.map(|(_, at)| at),
-                )
-                .await
+                crate::message::answer(gateway, message, client, event, data, at).await
             }
             Some((_, None)) => crate::message::refused(),
-            None => Answered::failed(WsReply::unknown()),
+            None => {
+                let refusal = crate::WsError::unknown_event();
+                crate::message::unserved(messages, client, data, &refusal, at).await
+            }
         }
     };
+    let unit_of_work = served.and(wiring.unit_of_work.as_ref());
+    let reply = in_message_unit(wiring, conn_id, named, unit_of_work, deadline, body).await;
+    reply_frame(reply, &event, named)
+}
+
+/// Run `body` as the message `named` names: its span and line, a request scope
+/// of its own, a panic contained so the socket goes on serving, inside
+/// `unit_of_work` when it opens one, its body cut at `deadline`.
+async fn in_message_unit<B: Future<Output = Answered> + Send>(
+    wiring: &DispatchWiring,
+    conn_id: ConnId,
+    named: &'static str,
+    unit_of_work: Option<&Arc<dyn UnitOfWork>>,
+    deadline: Option<(Duration, tokio::time::Instant)>,
+    body: B,
+) -> WsReply {
     // The body alone is cut: the unit settles outside it, so a commit never is.
     let cut = async move {
         match deadline {
@@ -956,7 +1001,7 @@ async fn handle_text<G: Gateway>(
     };
     let spec = unit_spec(Unit::Message { event: named }, deadline.map(|(_, at)| at));
     let unit = run_unit(
-        wiring.unit_of_work.as_ref(),
+        unit_of_work,
         spec,
         cut,
         |answered| !answered.failed,
@@ -976,7 +1021,6 @@ async fn handle_text<G: Gateway>(
         correlation.clone(),
         span.clone(),
     );
-    // A panic is contained at the message, so the socket goes on serving.
     let ran = nest_rs_core::with_request_scope(
         Some(wiring.scopes.open()),
         correlation,
@@ -984,7 +1028,7 @@ async fn handle_text<G: Gateway>(
     )
     .instrument(span)
     .await;
-    let reply = match ran {
+    match ran {
         Ok(answered) => {
             line.file(if answered.failed {
                 operation_log::ERROR
@@ -997,25 +1041,27 @@ async fn handle_text<G: Gateway>(
             line.unwound(&*payload);
             WsReply::Error(crate::WsError::internal())
         }
-    };
+    }
+}
+
+/// The frame `reply` puts on the wire under `event`, none for silence; `named`
+/// is what the operator's line calls the message.
+fn reply_frame(reply: WsReply, event: &str, named: &str) -> Option<String> {
     match reply {
-        WsReply::Reply(data) => {
-            let envelope = WsEnvelope { event, data };
-            match serde_json::to_string(&envelope) {
-                Ok(frame) => Some(frame),
-                Err(err) => {
-                    tracing::warn!(
-                        target: crate::TARGET,
-                        event = %named,
-                        error = %nest_rs_core::error_message(&err),
-                        "failed to serialize reply",
-                    );
-                    Some(error_frame(&envelope.event, &crate::WsError::internal()))
-                }
+        WsReply::Reply(data) => match WsEnvelope::encode(event, &data) {
+            Ok(frame) => Some(frame),
+            Err(err) => {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    event = %named,
+                    error = %nest_rs_core::error_message(&err),
+                    "failed to serialize reply",
+                );
+                Some(error_frame(event, &crate::WsError::internal()))
             }
-        }
+        },
         WsReply::None => None,
-        WsReply::Error(error) => Some(error_frame(&event, &error)),
+        WsReply::Error(error) => Some(error_frame(event, &error)),
     }
 }
 
@@ -1133,8 +1179,11 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let wiring = wiring();
         let trace_id = wiring.connection.trace_id().to_string();
+        let client = WsClient::for_test();
 
-        let frame = refuse_oversize(&wiring, 7, 4096, 1024);
+        let frame = refuse_oversize(&no_message(), &wiring, &client, 4096, 1024)
+            .await
+            .expect("a frame");
 
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&frame).expect("a frame"),
@@ -1151,7 +1200,7 @@ mod tests {
             Some(trace_id.as_str()),
             "the refusal joins the connection's conversation: {event:#?}",
         );
-        assert_eq!(event.field("conn_id").as_deref(), Some("7"));
+        assert_eq!(event.field("conn_id"), Some(client.id().to_string()));
         assert_eq!(event.field("bytes").as_deref(), Some("4096"));
         assert_eq!(event.field("max_message_bytes").as_deref(), Some("1024"));
     }
@@ -1241,6 +1290,11 @@ mod tests {
         }
     }
 
+    /// The table of a gateway serving no message.
+    fn no_message() -> MessageTable {
+        MessageTable::new(&Container::default())
+    }
+
     /// The table of a gateway serving `moderated`, whose guard refuses every
     /// message, and `open`, which runs nothing around its handler.
     fn moderated() -> MessageTable {
@@ -1248,7 +1302,7 @@ mod tests {
             .provide(DenyAll)
             .build()
             .expect("the container builds");
-        let mut messages = MessageTable::new();
+        let mut messages = MessageTable::new(&container);
         messages.mount(&container, "moderated", &MODERATED_SITE, &[], &[]);
         messages
     }
@@ -1289,7 +1343,7 @@ mod tests {
     async fn an_event_no_handler_serves_is_answered_unknown_and_runs_no_handler() {
         let frame = handle_text(
             &Echo,
-            &MessageTable::new(),
+            &no_message(),
             &wiring(),
             &WsClient::for_test(),
             r#"{"event":"open","data":"hi"}"#,
@@ -1341,7 +1395,7 @@ mod tests {
             let logs = nest_rs_testing::LogCapture::install();
             let frame = handle_text(
                 &Echo,
-                &MessageTable::new(),
+                &no_message(),
                 &wiring(),
                 &WsClient::for_test(),
                 &text,
@@ -1418,7 +1472,9 @@ mod tests {
     #[tokio::test]
     async fn a_binary_frame_is_refused_to_the_client_and_files_its_line() {
         let logs = nest_rs_testing::LogCapture::install();
-        let frame = refuse_binary(&wiring(), 7, 3);
+        let frame = refuse_binary(&no_message(), &wiring(), &WsClient::for_test(), 3)
+            .await
+            .expect("a frame");
 
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&frame).expect("a frame"),
@@ -1484,7 +1540,7 @@ mod tests {
     /// What a message's whole path — its unit, its pipeline, its frame — weighs
     /// around a handler holding `N` bytes.
     fn a_message_around_a_handler_holding<const N: usize>() -> usize {
-        let mut messages = MessageTable::new();
+        let mut messages = no_message();
         messages.mount(&Container::default(), "held", &HELD_SITE, &[], &[]);
         let (gateway, wiring, client) = (Holding::<N>, wiring(), WsClient::for_test());
         size_of_val(&handle_text(
@@ -1529,7 +1585,7 @@ mod tests {
         let serving = tokio::spawn(serve_connection(
             Arc::new(Echo),
             Arc::clone(&server),
-            Arc::new(MessageTable::new()),
+            Arc::new(no_message()),
             wiring(),
             SocketLimits {
                 max_lifetime: None,

@@ -203,8 +203,8 @@ impl Interceptor for Timing {
 
 It runs on every HTTP unit — a route, a self-mount's request (`/graphql`,
 `/mcp`, a gateway's upgrade, the OpenAPI document) and what the router answers
-itself (a `404`, a `405`) — on every WebSocket message, once around every
-operation an `/mcp` request carries, and around every job's attempt, tick and
+itself (a `404`, a `405`) — on every WebSocket message, one no handler reads
+among them, once around every operation an `/mcp` request carries, and around every job's attempt, tick and
 listener call; it observes what the guards refused. It is the
 place for what must see every answer: `Server-Timing` and the RFC 9728
 challenge `nest-rs-oauth-resource` adds to a `401` sit there. Writing

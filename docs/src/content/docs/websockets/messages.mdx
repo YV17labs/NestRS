@@ -44,6 +44,14 @@ under `event="_OTHER"`, since no handler declared what it named. An event no
 handler serves is answered on the event it sent, `unknown event` under the
 `NOT_FOUND` class.
 
+What a route's `404` runs, each of these runs too: the
+[unit stage](/fundamentals/interceptors/) and the app's exception filters, around
+that answer and under the message's deadline, so an audit interceptor reads the
+frame that goes out and a catch-all shapes it. Nothing there is a handler's, so no
+guard, no handler-stage interceptor and no unit of work run, nor what the gateway
+binds for its messages. A layer reads `_OTHER` as the event, never the client's
+word.
+
 ## A handler signature
 
 `#[subscribe_message("event")]` binds a method to that event name in the

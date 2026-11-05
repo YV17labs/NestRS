@@ -234,6 +234,21 @@ impl WsError {
         Self::from_problem(&Problem::new(500, code::INTERNAL))
     }
 
+    /// The frame an event no handler serves answers, so a client can tell a
+    /// typo from an auth failure: the `NOT_FOUND` class HTTP's `404` names.
+    /// The frame answers on the event it sent, and neither its text nor the
+    /// report repeats it, the event being only the client's word. The report
+    /// is at `debug`: the client's error, which the message's line files under
+    /// `_OTHER`.
+    pub(crate) fn unknown_event() -> Self {
+        tracing::debug!(
+            target: crate::TARGET,
+            event = nest_rs_core::operation_log::OTHER,
+            "subscribe_message dispatched to an unknown event",
+        );
+        Self::classed(UNKNOWN_EVENT, code::NOT_FOUND)
+    }
+
     /// The frame a value that does not decode answers: `sentence`, under the
     /// `INVALID_ARGUMENT` code HTTP's `400` names for a body that does not.
     pub(crate) fn invalid_argument(sentence: impl Into<String>) -> Self {
@@ -347,19 +362,10 @@ impl WsReply {
         WsReply::Error(WsError::invalid_argument(message))
     }
 
-    /// The reply for an event with no registered handler, so a client can tell
-    /// a typo from an auth failure: the `NOT_FOUND` class HTTP's `404` names.
-    /// The frame answers on the event it sent, and neither its text nor the
-    /// report repeats it, the event being only the client's word. The report
-    /// is at `debug`: the client's error, which the message's line files under
-    /// `_OTHER`.
+    /// The reply for an event with no registered handler: the `NOT_FOUND`
+    /// frame, on the event it sent.
     pub fn unknown() -> WsReply {
-        tracing::debug!(
-            target: crate::TARGET,
-            event = nest_rs_core::operation_log::OTHER,
-            "subscribe_message dispatched to an unknown event",
-        );
-        WsReply::Error(WsError::classed(UNKNOWN_EVENT, code::NOT_FOUND))
+        WsReply::Error(WsError::unknown_event())
     }
 
     /// The error frame a handler's `Err` produces, read off the vocabulary its

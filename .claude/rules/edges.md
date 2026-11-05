@@ -345,6 +345,7 @@ every unit, global and scoped together, outermost first:
 | GraphQL root field | — (its request ran it) | pool, resolver, field (`check`) | field, resolver, app | app, resolver, field | per argument |
 | `#[field_resolver]` call | — | resolver's, its own | its own | its own | per argument |
 | WS message | runs | pool, gateway, message (`check`) | message, gateway, app | app, gateway, message | the pool over `data`, `#[use_pipes]`, per argument |
+| WS frame no handler reads (`_OTHER`) | runs | — | app | — | — |
 | WS connection hook | — | — (the upgrade's) | pending | pending | — |
 | MCP request (`mcp.operation`) | runs | — (the `/mcp` request's) | — | — | — |
 | its `#[tool]`, `#[prompt]`, `#[resource]` or `#[resources]` | — | pool, host, operation (`check`) | operation, host, app | app, host, operation | per argument, inside `Parameters` (none on a resource role) |
@@ -352,7 +353,8 @@ every unit, global and scoped together, outermost first:
 
 Every unit is one `Site` dispatched through core's pipeline inside `run_unit`
 (`.claude/decisions/one-execution-pipeline.md`), its stages in the table's
-order and the tail last; the fallback opens no unit of work. A route a
+order and the tail last; the fallback and a WS frame no handler reads open no
+unit of work. A route a
 controller registers on `HttpRoutes` by hand is a route all the same, on one
 site for every such route: the app's guard pool, filters and interceptors,
 inside a unit of work. The view holds the request for the whole unit, so a

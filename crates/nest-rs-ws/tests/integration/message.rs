@@ -7,11 +7,12 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use nest_rs_core::{
-    Caught, DuplicateMetaError, ExceptionFilter, GlobalInterceptors, Interceptor, Layer, Next,
-    Outcome, Problem, Scoped, UnitContext, WiringFailedError, injectable, module,
+    Caught, DuplicateMetaError, ExceptionFilter, GlobalExceptionFilters, GlobalInterceptors,
+    Interceptor, Layer, Next, Outcome, Problem, Scoped, UnitContext, WiringFailedError, injectable,
+    module,
 };
 use nest_rs_core::{async_trait, code};
-use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_testing::{LogCapture, TestApp};
 use nest_rs_ws::{CloseCode, WsConfig, WsModule, WsReply, WsView, gateway, messages};
 
@@ -213,6 +214,9 @@ async fn a_filter_answers_a_typed_error_with_a_frame_carrying_its_code() {
 /// What a unit-stage interceptor read of the reply once the message ran.
 static READ_AT_THE_UNIT_STAGE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// The event it read beside it.
+static EVENTS_AT_THE_UNIT_STAGE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 /// Reads the reply the client is about to get.
 #[nest_rs_core::interceptor(stage = unit)]
 #[derive(Default)]
@@ -232,6 +236,10 @@ impl Interceptor for ReadsTheReply {
                 Some(other) => format!("{other:?}"),
                 None => "nothing".to_owned(),
             };
+            EVENTS_AT_THE_UNIT_STAGE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(view.event().to_owned());
             READ_AT_THE_UNIT_STAGE
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -860,4 +868,326 @@ async fn a_refusal_a_handler_answers_files_its_line_alone() {
         ],
         "{beside:#?}",
     );
+}
+
+/// A frame no handler reads is a message all the same: a unit-stage interceptor
+/// reads what an event no handler serves, a frame that is no envelope and a
+/// binary frame are answered, under `_OTHER`, never the client's word.
+#[tokio::test]
+async fn the_unit_stage_reads_what_a_frame_no_handler_reads_is_answered() {
+    let app = TestApp::builder()
+        .module::<ReadModule>()
+        .build_ws()
+        .await
+        .expect("a module bringing a unit-stage interceptor boots");
+
+    let mut socket = app.socket("/read").connect().await;
+    socket.send("marked:nope", serde_json::Value::Null).await;
+    assert_eq!(
+        socket.next_envelope().await["data"]["error"],
+        "unknown event"
+    );
+    socket.send_text("no envelope").await;
+    assert_eq!(socket.next_envelope().await["event"], "error");
+    socket.send_binary(vec![1, 2, 3]).await;
+    assert_eq!(socket.next_envelope().await["event"], "error");
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let read = READ_AT_THE_UNIT_STAGE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(read.len(), 3, "{read:?}");
+    assert_eq!(read[0], "error: unknown event", "{read:?}");
+    assert!(read[1].starts_with("error: invalid envelope"), "{read:?}");
+    assert_eq!(
+        read[2], "error: binary frames are not supported",
+        "{read:?}"
+    );
+    let events = EVENTS_AT_THE_UNIT_STAGE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert_eq!(
+        events,
+        [nest_rs_core::operation_log::OTHER; 3],
+        "a layer reads the server's word for it, never the client's",
+    );
+}
+
+/// Answers every frame an error carries, in place of it.
+#[injectable]
+#[derive(Default)]
+struct Shapes;
+
+impl Layer for Shapes {}
+
+#[async_trait]
+impl ExceptionFilter for Shapes {
+    type Exception = nest_rs_ws::WsError;
+
+    async fn catch(&self, refused: &nest_rs_ws::WsError, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(
+            Problem::new(404, code::NOT_FOUND).with_detail(format!("shaped: {}", refused.error)),
+        )
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [GlobalExceptionFilters<(Shapes,)>, Closed, ReadGateway],
+)]
+struct ShapedModule;
+
+/// As an app's catch-all shapes a route's `404`, it shapes what a frame no
+/// handler reads is answered.
+#[tokio::test]
+async fn an_apps_exception_filter_shapes_what_a_frame_no_handler_reads_is_answered() {
+    let app = TestApp::builder()
+        .module::<ShapedModule>()
+        .build_ws()
+        .await
+        .expect("an app-wide exception filter boots");
+
+    let mut socket = app.socket("/read").connect().await;
+    socket.send("nope", serde_json::Value::Null).await;
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["event"], "nope", "{frame}");
+    assert_eq!(frame["data"]["error"], "shaped: unknown event", "{frame}");
+    socket.send_binary(vec![1, 2, 3]).await;
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["event"], "error", "{frame}");
+    assert_eq!(
+        frame["data"]["error"], "shaped: binary frames are not supported",
+        "{frame}"
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Admits every upgrade and refuses every message it checks.
+#[injectable]
+#[derive(Default)]
+struct ClosedToMessages;
+
+impl Layer for ClosedToMessages {}
+
+#[async_trait]
+impl Guard for ClosedToMessages {
+    async fn check_http(&self, _: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(&self, _: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::forbidden("closed for the night"))
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [GlobalGuards<(ClosedToMessages,)>, Closed, ReadGateway],
+)]
+struct PooledGuardModule;
+
+/// What no handler reads has no decision to take: the pool's guards refuse the
+/// messages a handler serves and run at no other, as they run at no route's
+/// `404`.
+#[tokio::test]
+async fn a_frame_no_handler_reads_runs_no_guard() {
+    let app = TestApp::builder()
+        .module::<PooledGuardModule>()
+        .build_ws()
+        .await
+        .expect("a pooled guard boots");
+
+    let mut socket = app.socket("/read").connect().await;
+    socket.send("open", serde_json::Value::Null).await;
+    assert_eq!(
+        socket.next_envelope().await["data"]["error"],
+        "closed for the night"
+    );
+    socket.send("nope", serde_json::Value::Null).await;
+    assert_eq!(
+        socket.next_envelope().await["data"]["error"],
+        "unknown event"
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Told once [`Stalling`] started waiting.
+static STALLING: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Waits forever around what no handler reads.
+#[nest_rs_core::interceptor(stage = unit)]
+#[derive(Default)]
+struct Stalling;
+
+impl Layer for Stalling {}
+
+#[async_trait]
+impl Interceptor for Stalling {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        if cx
+            .switch_to::<WsView>()
+            .is_some_and(|view| view.event() == nest_rs_core::operation_log::OTHER)
+        {
+            STALLING.notify_one();
+            std::future::pending::<()>().await;
+        }
+        next.run(cx).await
+    }
+}
+
+#[module(
+    imports = [WsModule, WsModule::for_root(WsConfig {
+        message_timeout: Some(Duration::from_secs(1)),
+        ..WsConfig::default()
+    })],
+    providers = [Stalling, Closed, ReadGateway],
+)]
+struct StallingModule;
+
+/// A layer waits on the framework's own bound there too: the message's
+/// deadline cuts it, and the socket goes on.
+#[tokio::test]
+async fn a_layer_stalling_on_a_frame_no_handler_reads_is_cut_at_the_message_deadline() {
+    let app = TestApp::builder()
+        .module::<StallingModule>()
+        .build_ws()
+        .await
+        .expect("a unit-stage interceptor boots");
+
+    let mut socket = app.socket("/read").connect().await;
+    socket.send_binary(vec![1, 2, 3]).await;
+    tokio::time::timeout(Duration::from_secs(5), STALLING.notified())
+        .await
+        .expect("the layer runs around the frame");
+    tokio::time::pause();
+    tokio::time::sleep(Duration::from_millis(1001)).await;
+    tokio::time::resume();
+
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["event"], "error", "{frame}");
+    assert_eq!(frame["data"]["reason"], "timeout", "{frame}");
+    socket.send("open", serde_json::Value::Null).await;
+    assert_eq!(socket.next_envelope().await["data"], "welcome");
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Unwinds around what no handler reads.
+#[nest_rs_core::interceptor(stage = unit)]
+#[derive(Default)]
+struct Exploding;
+
+impl Layer for Exploding {}
+
+#[async_trait]
+impl Interceptor for Exploding {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        assert!(
+            cx.switch_to::<WsView>()
+                .is_none_or(|view| view.event() != nest_rs_core::operation_log::OTHER),
+            "the layer exploded",
+        );
+        next.run(cx).await
+    }
+}
+
+#[module(imports = [WsModule], providers = [Exploding, Closed, ReadGateway])]
+struct ExplodingModule;
+
+/// A panic is contained where a message's is: the frame's line files `panic`,
+/// the client reads the opaque frame, and the socket goes on.
+#[tokio::test]
+async fn a_layer_unwinding_on_a_frame_no_handler_reads_keeps_the_socket() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<ExplodingModule>()
+        .build_ws()
+        .await
+        .expect("a unit-stage interceptor boots");
+
+    let mut socket = app.socket("/read").connect().await;
+    socket.send_binary(vec![1, 2, 3]).await;
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["data"]["code"], code::INTERNAL.as_str(), "{frame}");
+    socket.send("open", serde_json::Value::Null).await;
+    assert_eq!(socket.next_envelope().await["data"], "welcome");
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    assert_eq!(
+        lines[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+        "{lines:#?}",
+    );
+}
+
+/// Answers what no handler reads itself: a reply where the frame carried
+/// `data`, silence where it did not.
+#[nest_rs_core::interceptor(stage = unit)]
+#[derive(Default)]
+struct AnswersInstead;
+
+impl Layer for AnswersInstead {}
+
+#[async_trait]
+impl Interceptor for AnswersInstead {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        if let Some(view) = cx.switch_to_mut::<WsView>()
+            && view.event() == nest_rs_core::operation_log::OTHER
+        {
+            let reply = match view.data() {
+                Some(serde_json::Value::Null) => WsReply::None,
+                _ => WsReply::Reply(serde_json::json!("answered")),
+            };
+            return Ok(view.respond(reply));
+        }
+        next.run(cx).await
+    }
+}
+
+#[module(imports = [WsModule], providers = [AnswersInstead, Closed, ReadGateway])]
+struct AnswersInsteadModule;
+
+/// A layer answers such a frame as it answers a message: on the event the frame
+/// named, or with silence, the next frame the client reads being the next
+/// message's. The unit did not fail, so its line files `ok`.
+#[tokio::test]
+async fn a_layer_answers_a_frame_no_handler_reads_in_place_of_the_edge() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<AnswersInsteadModule>()
+        .build_ws()
+        .await
+        .expect("a unit-stage interceptor boots");
+
+    let mut socket = app.socket("/read").connect().await;
+    socket.send("nope", serde_json::json!("hi")).await;
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["event"], "nope", "{frame}");
+    assert_eq!(frame["data"], "answered", "{frame}");
+    socket.send_binary(vec![1, 2, 3]).await;
+    socket.send("open", serde_json::Value::Null).await;
+    assert_eq!(
+        socket.next_envelope().await["data"],
+        "welcome",
+        "the binary frame was answered with silence",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    assert_eq!(lines.len(), 3, "{lines:#?}");
+    for line in &lines {
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::OK),
+            "{line:#?}",
+        );
+    }
 }

@@ -79,12 +79,14 @@ impl WsView {
         &self.client
     }
 
-    /// The message's event, as its `#[subscribe_message]` declares it.
+    /// The message's event, as its `#[subscribe_message]` declares it; the
+    /// frame no handler reads is `_OTHER`, never what the client named.
     pub fn event(&self) -> &str {
         self.event
     }
 
-    /// The message's `data`, until the handler takes it.
+    /// The message's `data`, until the handler takes it; `null` on a frame no
+    /// envelope holds.
     pub fn data(&self) -> Option<&serde_json::Value> {
         self.data.as_ref()
     }

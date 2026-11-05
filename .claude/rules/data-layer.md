@@ -165,7 +165,8 @@ once it executed with data in its answer, each mutation root field in a
 savepoint of it rolled back when the field answers `null` for an error
 (`.claude/decisions/graphql-transactions.md`);
 a WS message on its success — an error frame fails it, whatever a filter or an
-interceptor then answered — a connection hook unless it unwound or was cut at
+interceptor then answered, and a frame no handler reads opens none — a connection
+hook unless it unwound or was cut at
 its deadline; an MCP operation on `Ok` with no tool error in band (`isError`); a
 queue attempt, a tick, a listener call and a lifecycle hook (system work,
 under the Job scope) on `Ok`. A unit of its own gets a **lazy** transaction —

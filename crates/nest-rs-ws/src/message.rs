@@ -3,17 +3,21 @@
 //! once at mount, with its data pipes and its handler as the tail, its answer
 //! rendered as a frame once it is final.
 
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
 use nest_rs_core::__private::{
-    ResolvedLayer, Site, Tail, UnitChains, caught_problem, compose_chain, dedup_bucket, dispatch,
-    log_effective_chain, new_unit_context, refuse_site, report_unresolved, resolve_global_layers,
-    resolve_scoped,
+    GlobalLayers, HandlerDeclaration, MetaLevels, ResolvedLayer, Site, SiteDeclaration, SiteLayers,
+    Tail, UnitChains, caught_problem, compose_chain, declare_handler, declare_site, dedup_bucket,
+    dispatch, log_effective_chain, new_unit_context, refuse_site, report_unresolved,
+    resolve_global_layers, resolve_scoped,
 };
 use nest_rs_core::LayerSite;
-use nest_rs_core::{Container, Failure, Handler, Outcome, Peer, Settled, UnitContext};
+use nest_rs_core::{
+    Container, Failure, Handler, Outcome, Peer, Posture, Settled, UnitContext, operation_log,
+};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::__private::PipeSpec;
 use nest_rs_pipes::{ArgumentKind, GlobalPipe};
@@ -53,6 +57,34 @@ impl MessagePipes {
     }
 }
 
+/// What the edge answers itself, a frame no handler reads — an event none
+/// serves, a frame no envelope holds — one site, at no event of its own.
+static UNSERVED: Handler = declare_handler(HandlerDeclaration {
+    unit: crate::unit::MESSAGE,
+    host: TypeId::of::<crate::WsModule>(),
+    host_name: "WsModule",
+    method: "",
+    address: operation_log::OTHER,
+    posture: Posture::Public,
+    meta: MetaLevels::default,
+});
+
+/// That site, folding what HTTP's fallback does: the unit stage and the app's
+/// exception filters around what the edge answers.
+static UNSERVED_SITE: Site = declare_site(
+    &UNSERVED,
+    SiteDeclaration {
+        layers: SiteLayers::default,
+        global: GlobalLayers {
+            unit_stage: true,
+            exception_filters: true,
+            handler_stage: false,
+        },
+        guard_stage: None,
+        class_gate: None,
+    },
+);
+
 /// One message a gateway declares, as its boot check composes it.
 pub struct DeclaredMessage {
     /// The message's site.
@@ -63,12 +95,13 @@ pub struct DeclaredMessage {
 
 /// Each of `messages` composes on `container` — its site, and its data pipes
 /// over the gateway's `host_pipes` — or the first that does not refuses,
-/// naming its site.
+/// naming its site; so does the site of what no handler reads.
 pub(crate) fn compose_declared(
     container: &Container,
     host_pipes: &[PipeSpec],
     messages: &[DeclaredMessage],
 ) -> nest_rs_core::anyhow::Result<()> {
+    UNSERVED_SITE.chains(container)?;
     for message in messages {
         Message::compose(container, message.site, host_pipes, &message.pipes)?;
     }
@@ -101,18 +134,32 @@ impl Message {
     }
 }
 
-/// A gateway's messages by event, mounted once by `#[messages]`.
-#[derive(Default)]
+/// A gateway's messages by event, mounted once by `#[messages]`, beside the
+/// site of what no handler reads.
 pub struct MessageTable {
     /// `None` for an event whose site did not compose: every message of it is
     /// refused, opaquely.
     by_event: HashMap<&'static str, Option<Message>>,
+    /// `None` when the site did not compose: every such frame is refused, opaquely.
+    unserved: Option<Arc<UnitChains>>,
 }
 
 impl MessageTable {
-    /// An empty table.
-    pub fn new() -> Self {
-        Self::default()
+    /// A table of no message, the site of what no handler reads composed on
+    /// `container`: one that does not compose is refused through `container`,
+    /// for the boot to fail on.
+    pub fn new(container: &Container) -> Self {
+        let unserved = match UNSERVED_SITE.chains(container) {
+            Ok(chains) => Some(chains),
+            Err(refused) => {
+                refuse_site(container, refused);
+                None
+            }
+        };
+        Self {
+            by_event: HashMap::new(),
+            unserved,
+        }
     }
 
     /// Mount `event`'s message: its `site`'s chains and its data pipes, the
@@ -195,6 +242,29 @@ pub(crate) async fn answer<G: Gateway>(
     rendered(view, outcome, event)
 }
 
+/// Run what the edge answers itself, `refusal`, to a frame no handler reads,
+/// through the one site of it — the unit stage and the app's exception filters,
+/// no guard and no handler stage — under `_OTHER`, then render what the unit
+/// came to as a message's is.
+pub(crate) async fn unserved(
+    messages: &MessageTable,
+    client: &WsClient,
+    data: serde_json::Value,
+    refusal: &WsError,
+    deadline: Option<tokio::time::Instant>,
+) -> Answered {
+    let Some(chains) = &messages.unserved else {
+        return refused();
+    };
+    let mut view = WsView::new(client.clone(), operation_log::OTHER, data);
+    let outcome = {
+        let peer = Peer::new(None, Some(client.id()));
+        let mut cx = new_unit_context(&UNSERVED, &mut view, Some(peer), deadline);
+        dispatch(&mut cx, chains, &mut UnservedTail(refusal)).await
+    };
+    rendered(view, outcome, operation_log::OTHER)
+}
+
 /// The answer `outcome` comes to: the reply the view holds, or, for a failure
 /// nobody answered, the edge's one rule. What the answer withholds is filed
 /// here, once, as it goes out.
@@ -274,6 +344,26 @@ impl<G: Gateway> Tail for MessageTail<'_, G> {
                     Err(failure.answered(view.answer_failed(rendered)))
                 }
             }
+        }
+    }
+
+    fn answer_failure(&mut self, cx: &mut UnitContext<'_>, failure: &Failure) -> Option<Settled> {
+        let rendered = failure_rendered(failure);
+        WsView::of(cx).ok().map(|view| view.answer_failed(rendered))
+    }
+}
+
+/// What a frame no handler reads runs last: the edge's own refusal, written
+/// into its view. It fails the unit, answered: the exception filters still see
+/// it, as they see a route's `404`.
+struct UnservedTail<'a>(&'a WsError);
+
+impl Tail for UnservedTail<'_> {
+    fn call(&mut self, cx: &mut UnitContext<'_>) -> impl Future<Output = Outcome> + Send {
+        let refusal = self.0;
+        async move {
+            let failure = Failure::from(refusal.clone());
+            Err(failure.answered(WsView::of(cx)?.respond(WsReply::Error(refusal.clone()))))
         }
     }
 

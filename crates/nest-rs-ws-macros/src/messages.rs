@@ -626,7 +626,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             );
                             let __server = <#self_ty>::__nestrs_registry(__container);
                             let __host_pipes = <#self_ty>::__nestrs_gateway_pipe_specs();
-                            let mut __messages = ::nest_rs_ws::__private::MessageTable::new();
+                            let mut __messages = ::nest_rs_ws::__private::MessageTable::new(__container);
                             #(#message_mounts)*
                             let __ep = ::nest_rs_ws::__private::gateway_endpoint(
                                 __gw,

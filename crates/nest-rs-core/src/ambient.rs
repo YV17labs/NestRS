@@ -86,7 +86,7 @@ pub fn ambient<T: AmbientValue>() -> Option<Arc<T>> {
 }
 
 /// Whether the running unit carries an ambient value of any type.
-pub fn carries_ambient() -> bool {
+pub(crate) fn carries_ambient() -> bool {
     request_scope::current_request_ctx(|ctx| !ctx.ambient.is_empty()).unwrap_or(false)
 }
 

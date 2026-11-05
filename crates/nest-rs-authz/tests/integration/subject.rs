@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{Ability, AbilityBuilder, Action, Manage, Read, current_ability, subject};
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
@@ -57,6 +56,10 @@ impl Layer for Grants {}
 
 #[async_trait]
 impl Guard for Grants {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let grant = HttpView::of(cx)?
             .request()
@@ -101,11 +104,11 @@ impl ExportsController {
         })
     }
 
-    /// The public-reads spelling on a capability: the parameter reads the
-    /// caller's grant, and shapes nothing.
+    /// The opening on a capability: it reads the caller's grant, and shapes
+    /// nothing.
     #[get("/catalog")]
-    #[public]
-    async fn catalog(&self, _grant: Authorize<Read, Exporting>) -> String {
+    #[public(Read, Exporting)]
+    async fn catalog(&self) -> String {
         "catalog".to_owned()
     }
 
@@ -374,7 +377,7 @@ async fn a_token_without_the_scope_is_challenged_for_it_on_every_edge() {
 }
 
 #[tokio::test]
-async fn a_public_route_naming_the_capability_by_hand_admits_a_grant_and_shapes_nothing() {
+async fn a_public_route_naming_the_capability_admits_a_grant_and_shapes_nothing() {
     let app = app().await;
     let read = |grant: &'static str| {
         app.http()

@@ -1,4 +1,4 @@
-error: `#[authorize]` expands into `nest_rs::authz`, which this build does not enable. Add the feature to Cargo.toml:
+error: `#[authorize]` or `#[public(Action, Subject)]` expands into `nest_rs::authz`, which this build does not enable. Add the feature to Cargo.toml:
 
            nest-rs = { version = "7.0", features = ["authz"] }
   --> tests/integration/diagnostics/graphql/alone/authorize_without_authz.rs:13:1

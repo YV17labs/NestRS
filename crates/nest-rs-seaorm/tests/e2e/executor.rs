@@ -5,7 +5,6 @@
 //! unit of its own beside the transaction the caller opened itself.
 
 use nest_rs_authz::AbilityGuard;
-use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
 use nest_rs_core::module;
 use nest_rs_guards::GlobalGuards;
@@ -102,8 +101,8 @@ impl ItemsController {
     /// Writes a published item in the route's transaction, then streams what
     /// the caller may read once the body is polled — after the commit.
     #[post("/stream")]
-    #[public]
-    async fn stream(&self, _authz: Authorize<Read, item::Entity>) -> Response {
+    #[public(Read, item::Entity)]
+    async fn stream(&self) -> Response {
         nest_rs_seaorm::__private::current_executor()
             .expect("a mutating route runs in a transaction")
             .execute_unprepared(&format!(

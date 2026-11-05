@@ -7,7 +7,7 @@ use std::sync::Arc;
 use nest_rs_core::__private::UnmaskedReply;
 use nest_rs_core::{AmbientValue, UnitContext};
 use nest_rs_database::__private::installed_scope;
-use nest_rs_database::ExecutorScope;
+use nest_rs_database::{ExecutorScope, current_executor_scope};
 
 use crate::Ability;
 
@@ -60,16 +60,25 @@ pub(crate) fn carried(cx: &UnitContext<'_>) -> Option<Arc<Ability>> {
 }
 
 /// The [`Ability`] the running unit's reads run under, or `None` outside a
-/// request, in a request that runs no authorization, and on a route whose reply
-/// no response mask shapes: there the ability the guard attached is withheld,
-/// so a read the mask would have scoped fails closed instead of answering
-/// unmasked.
+/// request, in a request that runs no authorization, on a unit whose reply no
+/// response mask shapes, and for a visitor anywhere but a unit naming what it
+/// reads: there the ability the guard attached is withheld, so a read the mask
+/// would have scoped fails closed instead of answering unmasked. A job withholds
+/// nothing: `None` there reads as system work, wider than what it holds.
 pub fn current_ability() -> Option<Arc<Ability>> {
-    if nest_rs_core::ambient::<UnmaskedReply>().is_some() {
-        return None;
-    }
-    installed()
+    let held = installed()?;
+    let withheld = nest_rs_core::ambient::<UnmaskedReply>().is_some()
+        || (held.is_visitor() && nest_rs_core::ambient::<VisitorReadNamed>().is_none());
+    (!withheld || current_executor_scope() == Some(ExecutorScope::Job)).then_some(held)
 }
+
+/// Ambient on a unit whose `#[public(Action, Entity)]` admitted a visitor: what
+/// that visitor reads is named, so its rows and its fields are its grant's. What
+/// runs off that unit, a nested GraphQL field or a relation's batch, no mask
+/// shapes, and a visitor's ability is withheld there.
+pub(crate) struct VisitorReadNamed;
+
+impl AmbientValue for VisitorReadNamed {}
 
 /// Run `fut` under `ability` narrowed to what the running unit already runs
 /// under, never wider.
@@ -104,18 +113,21 @@ fn narrowed(ability: Arc<Ability>) -> Option<Arc<Ability>> {
     match installed() {
         Some(held) if Arc::ptr_eq(&held, &ability) => Some(held),
         Some(held) => Some(Arc::new(held.intersection(&ability))),
-        None => (nest_rs_database::current_executor_scope() == Some(ExecutorScope::Job))
-            .then_some(ability),
+        None => (current_executor_scope() == Some(ExecutorScope::Job)).then_some(ability),
     }
 }
 
 /// Run `fut` under `ability`, in place of whatever the unit carries: the
-/// testing harness's request unit, and a framework suite's.
+/// testing harness's request unit, and a framework suite's. It stands in for a
+/// unit naming its read, so a visitor's reads are licensed too.
 pub fn install_ability<F: Future>(
     ability: Arc<Ability>,
     fut: F,
 ) -> impl Future<Output = F::Output> {
-    nest_rs_core::with_ambient(Arc::new(AmbientAbility::new(ability)), fut)
+    nest_rs_core::with_ambient(
+        Arc::new(AmbientAbility::new(ability)),
+        nest_rs_core::with_ambient(Arc::new(VisitorReadNamed), fut),
+    )
 }
 
 #[cfg(test)]
@@ -202,6 +214,52 @@ mod tests {
         )
         .await;
         assert!(installed.is_some_and(|installed| Arc::ptr_eq(&installed, &narrowed)));
+    }
+
+    /// A visitor's ability, which reads no widget.
+    fn visitor() -> Arc<Ability> {
+        Arc::new(
+            AbilityBuilder::new()
+                .build_visitor()
+                .expect("an empty rule set builds"),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_job_narrowed_to_a_visitor_reads_under_the_visitor() {
+        let narrowed = visitor();
+        let installed = with_job_executor(
+            Arc::new(Handle),
+            with_ability(Arc::clone(&narrowed), async { current_ability() }),
+        )
+        .await;
+        assert!(
+            installed.is_some_and(|installed| Arc::ptr_eq(&installed, &narrowed)),
+            "none in a job reads as system work, every row",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_unit_handed_a_visitor_by_the_harness_reads_under_the_visitor() {
+        let handed = visitor();
+        let installed = with_request_executor(
+            Arc::new(Handle),
+            install_ability(Arc::clone(&handed), async { current_ability() }),
+        )
+        .await;
+        assert!(installed.is_some_and(|installed| Arc::ptr_eq(&installed, &handed)));
+    }
+
+    #[tokio::test]
+    async fn a_visitor_a_request_holds_outside_a_named_read_is_withheld() {
+        let read = with_request_executor(
+            Arc::new(Handle),
+            nest_rs_core::with_ambient(Arc::new(AmbientAbility::new(visitor())), async {
+                current_ability().is_some()
+            }),
+        )
+        .await;
+        assert!(!read, "no unit named what this visitor reads");
     }
 
     #[tokio::test]
@@ -302,6 +360,57 @@ mod tests {
             captured.scope(async { reads_widgets() }).await,
             Some(true),
             "outside every unit, the capture continues its own",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_capture_re_entered_in_a_job_narrowed_to_a_visitor_reads_under_what_both_allow() {
+        let captured = a_readers_commit().await;
+        let read = with_job_executor(
+            Arc::new(Handle),
+            with_ability(visitor(), captured.scope(async { reads_widgets() })),
+        )
+        .await;
+        assert_eq!(read, Some(false), "the visitor reads no widget");
+    }
+
+    /// Whether a job unit a task opens, carrying `captured`, may read widgets.
+    async fn a_tasks_job_reads_widgets(captured: Option<RequestContinuation>) -> Option<bool> {
+        captured
+            .expect("a unit runs")
+            .scope(with_job_executor(Arc::new(Handle), async {
+                reads_widgets()
+            }))
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_job_a_withholding_units_task_opens_reads_under_what_the_task_carries() {
+        let capture = || async { RequestContinuation::capture(Continuation::Task) };
+
+        let unmasked = with_request_executor(
+            Arc::new(Handle),
+            install_ability(
+                reading(),
+                nest_rs_core::with_ambient(Arc::new(UnmaskedReply), capture()),
+            ),
+        )
+        .await;
+        assert_eq!(
+            a_tasks_job_reads_widgets(unmasked).await,
+            Some(true),
+            "none in a job reads as system work, wider than the unit it came off",
+        );
+
+        let visitor = with_request_executor(
+            Arc::new(Handle),
+            nest_rs_core::with_ambient(Arc::new(AmbientAbility::new(visitor())), capture()),
+        )
+        .await;
+        assert_eq!(
+            a_tasks_job_reads_widgets(visitor).await,
+            Some(false),
+            "none in a job reads as system work, wider than the visitor it came off",
         );
     }
 

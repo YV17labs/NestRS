@@ -4,8 +4,8 @@
 //! `ServerHandler` methods that serve them itself.
 
 use nest_rs_codegen::__private::{
-    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Posture, generic_args, piped_input, spelled,
-    tail_param,
+    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, Posture, PostureGate, generic_args, piped_input,
+    spelled, tail_param,
 };
 use nest_rs_codegen::Grammar;
 use proc_macro2::TokenStream as TokenStream2;
@@ -87,13 +87,13 @@ pub(crate) fn bound_subject(
             "a #[resource] binds one subject, so it takes one `Authorized<Action, E>` parameter",
         ));
     }
-    let bound = match posture {
-        Posture::Authorize {
+    let bound = match posture.gate() {
+        Some(PostureGate {
             action,
             entity,
             bind: Some(service),
             ..
-        } => Some((action, entity, service)),
+        }) => Some((action, entity, service)),
         _ => None,
     };
     let ((parameter, ident), (action, entity, service)) = match (parameter, bound) {

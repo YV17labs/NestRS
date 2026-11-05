@@ -1,18 +1,21 @@
-//! `src/bind.rs`: `#[authorize(A, bind = S)]` on a `#[resource]`, over a service
-//! answering each `Access` itself, so what the edge says of each is pinned with no
-//! database. The load's own SQL is `tests/e2e/mcp.rs`'s.
+//! `src/bind.rs`: `#[authorize(A, bind = S)]` and `#[public(A, bind = S)]` on a
+//! `#[resource]`, over a service answering each `Access` itself, so what the edge
+//! says of each is pinned with no database. The load's own SQL is
+//! `tests/e2e/mcp.rs`'s.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_authz::{AbilityBuilder, Action, Read};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read};
 use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_database::{Executor, OpenUnit, Settlement, Unhonoured, UnitOfWork, UnitSpec};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{EndpointGuards, HttpView};
-use nest_rs_mcp::{Json, McpError, McpView, mcp, tools};
+use nest_rs_mcp::{Json, McpAccess, McpError, McpModule, McpView, mcp, tools};
 use nest_rs_seaorm::{Access, Authorized, CrudService};
-use nest_rs_testing::mcp::{call_method_with, open_session_with, result};
+use nest_rs_testing::mcp::{
+    call_method, call_method_with, open_session, open_session_with, result,
+};
 use nest_rs_testing::{LogCapture, TestApp};
 use sea_orm::DbErr;
 use serde_json::{Value, json};
@@ -102,6 +105,10 @@ impl Layer for RoleGrants {}
 
 #[async_trait]
 impl Guard for RoleGrants {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("caller");
         let role = HttpView::of(cx)?
@@ -421,4 +428,86 @@ async fn a_bound_resource_with_no_unit_of_work_refuses_the_boot() {
     };
     let said = format!("{refused:#}");
     assert!(said.contains("SeaOrmDatabaseModule"), "{said}");
+}
+
+#[injectable]
+#[derive(Default)]
+struct VisitorGrants;
+
+impl AbilityFactory for VisitorGrants {
+    type Actor = crate::Anyone;
+
+    fn define(&self, _actor: &crate::Anyone, _ab: &mut AbilityBuilder) {}
+
+    fn define_visitor(&self, ab: &mut AbilityBuilder) {
+        ab.can(Action::Read, note::Entity)
+            .fields([note::Column::Id, note::Column::Title]);
+    }
+}
+
+type VisitorGuard = AbilityGuard<VisitorGrants>;
+
+const VISITED_PATH: &str = "/mcp/visited";
+
+#[mcp(path = "/mcp/visited")]
+#[derive(Clone, Default)]
+struct VisitedTools;
+
+#[tools]
+impl VisitedTools {
+    /// A note a caller with no credential reads, loaded and masked by its grant.
+    #[resource(template = "note://{id}")]
+    #[public(Read, bind = NotesService)]
+    #[use_guards(VisitorGuard)]
+    async fn note(&self, note: Authorized<Read, note::Entity>) -> Result<Json<NoteDto>, McpError> {
+        BODIES.fetch_add(1, Ordering::SeqCst);
+        Ok(Json(NoteDto::from(note.into_inner())))
+    }
+}
+
+#[module(
+    imports = [McpModule::for_root(McpAccess::Public)],
+    providers = [NotesService, VisitorGrants, VisitorGuard, VisitedTools],
+)]
+struct VisitedModule;
+
+#[tokio::test]
+async fn a_resource_bound_for_a_visitor_loads_and_answers_by_its_grant() {
+    let _serial = SERIAL.lock().await;
+    let app = TestApp::builder()
+        .module::<VisitedModule>()
+        .provide_dyn::<dyn UnitOfWork>(Arc::new(Committing))
+        .build()
+        .await
+        .expect("an opened endpoint boots on its binding");
+    LOADS.store(0, Ordering::SeqCst);
+    BODIES.store(0, Ordering::SeqCst);
+
+    let session = open_session(app.http(), VISITED_PATH, None).await;
+    let body = call_method(
+        app.http(),
+        VISITED_PATH,
+        &session,
+        None,
+        "resources/read",
+        json!({ "uri": format!("note://{FOUND}") }),
+    )
+    .await;
+
+    let answer = result(&body);
+    assert_eq!(
+        (LOADS.load(Ordering::SeqCst), BODIES.load(Ordering::SeqCst)),
+        (1, 1),
+        "{answer}"
+    );
+    let text = answer["result"]["contents"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a text body: {answer}"));
+    let note: Value = serde_json::from_str(text).expect("a JSON body");
+    assert_eq!(note["title"], "seen", "{note}");
+    assert_eq!(
+        note["body"],
+        Value::Null,
+        "the mask strips what the visitor's grant does not read: {note}"
+    );
 }

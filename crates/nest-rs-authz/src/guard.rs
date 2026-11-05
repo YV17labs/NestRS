@@ -19,8 +19,8 @@ use crate::{Ability, AbilityBuilder, AbilityFactory, MalformedRuleError};
 /// operations gate themselves, the guard builds an Ability for the anonymous
 /// (visitor) actor — see the dev's `AbilityFactory` to define visitor rules.
 ///
-/// The ability is attached for the rest of the request: on a route, the reads
-/// it scopes run where the route's response mask arms them, and nowhere else.
+/// The ability is attached for the rest of the request: on every edge, the reads
+/// it scopes run where the unit's response mask arms them, and nowhere else.
 ///
 /// `AuthzGuard` is not a framework type: an app aliases it once at its authz
 /// module root, `pub type AuthzGuard = AbilityGuard<AuthzAbility>;`.

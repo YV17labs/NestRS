@@ -3,7 +3,7 @@
 //! request, a `#[public]` operation reads the visitor's rules and a gated one still
 //! fails closed.
 
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Delete, Read};
 use nest_rs_core::{AmbientValue, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
@@ -43,7 +43,7 @@ struct VisitorResolver;
 #[operations]
 impl VisitorResolver {
     #[query]
-    #[public]
+    #[public(Delete, widget::Entity, unmasked)]
     async fn open(&self) -> GqlResult<String> {
         Ok(rules_read())
     }

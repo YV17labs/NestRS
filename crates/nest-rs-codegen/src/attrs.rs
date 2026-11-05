@@ -174,11 +174,11 @@ fn split_at_commas(tokens: TokenStream) -> Vec<TokenStream> {
     entries
 }
 
-/// Extract and remove a flag attribute (no args, no parens) like `#[public]`.
+/// Extract and remove a flag attribute (no args, no parens) like `#[no_pipes]`.
 /// `Ok(true)` when present (and removed), `Ok(false)` when absent.
 ///
-/// An argument on a flag is a compile error, never a discard: `#[public(x)]`
-/// must not silently declare a public posture.
+/// An argument on a flag is a compile error, never a discard: `#[no_pipes(x)]`
+/// must not silently run no pipe.
 ///
 /// ```
 /// use nest_rs_codegen::take_flag_attr;

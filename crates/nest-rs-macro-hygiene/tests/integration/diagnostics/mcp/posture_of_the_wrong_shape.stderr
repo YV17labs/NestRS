@@ -1,0 +1,17 @@
+error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`, optionally followed by `unmasked`
+  --> tests/integration/diagnostics/mcp/posture_of_the_wrong_shape.rs:20:5
+   |
+20 |     #[public = "x"]
+   |     ^^^^^^^^^^^^^^^
+
+error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`, optionally followed by `unmasked`
+  --> tests/integration/diagnostics/mcp/posture_of_the_wrong_shape.rs:33:5
+   |
+33 |     #[public(Read posts::Entity)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: expected `#[authorize(Action, Subject)]` — e.g. `#[authorize(Read, users::Entity)]`, optionally followed by `unmasked`
+  --> tests/integration/diagnostics/mcp/posture_of_the_wrong_shape.rs:46:5
+   |
+46 |     #[authorize]
+   |     ^^^^^^^^^^^^

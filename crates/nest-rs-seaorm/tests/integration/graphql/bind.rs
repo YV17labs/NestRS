@@ -1,10 +1,12 @@
 //! Covers `src/graphql/bind.rs`: the service `bind = Service` loads through is
 //! inside the access contract the boot checks, as a route's is, and an
 //! operation no guard attaches an ability to answers opaquely, the remedy on
-//! the operator's line.
+//! the operator's line. A visitor's `#[public(A, bind = S)]` loads and masks by
+//! its grant, as `#[authorize]`'s does a principal's.
 
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read, Update};
 use nest_rs_core::{AccessGraphError, async_trait, injectable, module};
+use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_http::EndpointGuards;
 use nest_rs_seaorm::{Access, Authorized, CrudService};
@@ -24,6 +26,10 @@ mod note {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
+        #[expose]
+        pub title: Option<String>,
+        #[expose]
+        pub body: Option<String>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -246,5 +252,115 @@ async fn a_statement_cancelled_at_its_bound_answers_unavailable_filed_at_warn() 
             .is_some_and(|error| error.contains("57014")),
         "{:?}",
         filed.fields,
+    );
+}
+
+/// A load finding a row whose title a visitor may read and whose body it may not.
+#[injectable]
+#[derive(Default)]
+struct VisitedService;
+
+#[async_trait]
+impl CrudService for VisitedService {
+    type Entity = note::Entity;
+
+    async fn access(&self, action: Action, id: uuid::Uuid) -> Result<Access<note::Model>, DbErr> {
+        assert_eq!(
+            action,
+            Action::Read,
+            "the attribute's action reaches the load"
+        );
+        assert!(
+            nest_rs_authz::current_ability().is_some(),
+            "the load reads under the visitor's ability"
+        );
+        Ok(Access::Found(note::Model {
+            id,
+            title: Some("seen".to_owned()),
+            body: Some("masked away".to_owned()),
+        }))
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct VisitorGrants;
+
+impl AbilityFactory for VisitorGrants {
+    type Actor = crate::Anyone;
+
+    fn define(&self, _actor: &crate::Anyone, _ab: &mut AbilityBuilder) {}
+
+    fn define_visitor(&self, ab: &mut AbilityBuilder) {
+        ab.can(Action::Read, note::Entity)
+            .fields([note::Column::Id, note::Column::Title]);
+    }
+}
+
+#[derive(Clone, SimpleObject, serde::Serialize, serde::Deserialize)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct VisitedNote {
+    id: String,
+    title: Option<String>,
+    body: Option<String>,
+}
+
+#[resolver]
+struct VisitedResolver;
+
+#[operations]
+impl VisitedResolver {
+    #[query]
+    #[public(Read, bind = VisitedService)]
+    async fn visited_note(&self, note: Authorized<Read, note::Entity>) -> GqlResult<VisitedNote> {
+        let note = note.into_inner();
+        Ok(VisitedNote {
+            id: note.id.to_string(),
+            title: note.title,
+            body: note.body,
+        })
+    }
+}
+
+#[module(
+    imports = [GraphqlModule, nest_rs_seaorm::SeaOrmDatabaseModule],
+    providers = [
+        VisitedService,
+        VisitorGrants,
+        AbilityGuard<VisitorGrants>,
+        EndpointGuards<GraphqlView, (AbilityGuard<VisitorGrants>,)>,
+        VisitedResolver,
+    ],
+)]
+struct VisitedModule;
+
+#[tokio::test]
+async fn a_query_bound_for_a_visitor_loads_and_answers_by_its_grant() {
+    let app = crate::over_an_unconnected_pool()
+        .module::<VisitedModule>()
+        .build()
+        .await
+        .expect("boots");
+    let query = format!(
+        r#"{{ visitedNote(id: "{}") {{ title body }} }}"#,
+        uuid::Uuid::now_v7()
+    );
+
+    let body: serde_json::Value = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": query }))
+        .send()
+        .await
+        .json()
+        .await
+        .value()
+        .deserialize();
+
+    assert_eq!(body["data"]["visitedNote"]["title"], "seen", "{body}");
+    assert_eq!(
+        body["data"]["visitedNote"]["body"],
+        serde_json::Value::Null,
+        "the mask strips what the visitor's grant does not read: {body}"
     );
 }

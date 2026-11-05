@@ -1,14 +1,14 @@
 //! Per-route, type-directed response shaping.
 //!
 //! A route whose posture declares a masking type (in practice the
-//! `Authorize<_, _>` an `#[authorize]` emits) runs inside a
-//! [`ResponseShaping`]: the extractor's crate captures what it needs off the
-//! request, installs ambient state around the handler, and rewrites the body
+//! `Authorize<_, _>` an `#[authorize]` or a `#[public(Action, Subject)]` emits)
+//! runs inside a [`ResponseShaping`]: the type's crate captures what it needs off
+//! the request, installs ambient state around the handler, and rewrites the body
 //! before it ships.
 //!
-//! `#[routes]` cannot see through a renamed import (`use Authorize as Az`), so
-//! it hands every handler parameter's *type* to [`ShaperProbe`], and the
-//! compiler answers whether that type implements [`RouteResponseShaper`].
+//! `#[routes]` cannot see through a renamed import, so it hands the posture's type
+//! and every handler parameter's to [`ShaperProbe`], and the compiler answers
+//! whether that type implements [`RouteResponseShaper`].
 
 use std::cell::Cell;
 use std::future::Future;

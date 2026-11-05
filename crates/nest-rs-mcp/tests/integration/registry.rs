@@ -1578,6 +1578,10 @@ impl nest_rs_core::Layer for AddressWitness {}
 
 #[nest_rs_core::async_trait]
 impl nest_rs_guards::Guard for AddressWitness {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(
         &self,
         cx: &mut nest_rs_core::UnitContext<'_>,
@@ -2292,6 +2296,11 @@ mod posture {
 
     #[async_trait]
     impl Guard for Authenticate {
+        async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            nest_rs_core::__private::set_actor_id("authenticated");
+            Ok(())
+        }
+
         async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             Ok(())
         }
@@ -2391,23 +2400,38 @@ mod posture {
         );
     }
 
-    #[module(providers = [Throttle, UndeclaredTool])]
+    /// The same operations under an authenticating pool: `stated` says `#[public]`,
+    /// which refuses the boot there, so it stands apart.
+    #[mcp(path = "/mcp/covered")]
+    #[derive(Clone, Default)]
+    struct CoveredTool;
+
+    #[tools]
+    impl CoveredTool {
+        /// Answer.
+        #[tool]
+        async fn answer(&self) -> Result<String, McpError> {
+            Ok("answered".to_owned())
+        }
+    }
+
+    #[module(providers = [Authenticate, CoveredTool])]
     struct PooledModule;
 
-    #[module(imports = [PooledModule], providers = [GlobalGuards<(Throttle,)>])]
+    #[module(imports = [PooledModule], providers = [GlobalGuards<(Authenticate,)>])]
     struct PooledApp;
 
     #[tokio::test]
     async fn an_operation_under_the_pool_needs_no_posture() {
-        answers::<PooledApp>("/mcp/undeclared", "answer", "answered").await;
+        answers::<PooledApp>("/mcp/covered", "answer", "answered").await;
     }
 
-    #[module(providers = [Throttle, UndeclaredTool, EndpointGuards<McpView, (Throttle,)>])]
+    #[module(providers = [Authenticate, CoveredTool, EndpointGuards<McpView, (Authenticate,)>])]
     struct DeclaredModule;
 
     #[tokio::test]
     async fn an_operation_under_the_endpoint_guards_needs_no_posture() {
-        answers::<DeclaredModule>("/mcp/undeclared", "answer", "answered").await;
+        answers::<DeclaredModule>("/mcp/covered", "answer", "answered").await;
     }
 
     #[mcp(path = "/mcp/public")]

@@ -1,18 +1,22 @@
-//! Covers `src/http/authorize.rs` — what the shaper says when the wiring is
-//! wrong. The `500` body is opaque, so the `error` event is the only place the
-//! cause exists.
+//! Covers `src/http/authorize.rs` — what a route's posture says when the wiring
+//! is wrong: the `500` body is opaque, so the `error` event is the only place the
+//! cause exists — and where the class gate it declares runs.
 
-use nest_rs_authz::{Read, http::Authorize};
-use nest_rs_http::{Body, FromRequest, Request, RequestBody, StatusCode, Uri};
-use nest_rs_testing::LogCapture;
+use nest_rs_authz::Read;
+use nest_rs_core::module;
+use nest_rs_http::{Json, StatusCode, controller, routes};
+use nest_rs_testing::{LogCapture, TestApp};
 
 mod widget {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
+    #[expose(name = "Widget")]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "widgets")]
     pub(super) struct Model {
         #[sea_orm(primary_key)]
+        #[expose]
         pub id: i32,
     }
 
@@ -22,21 +26,31 @@ mod widget {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+#[controller(path = "/widgets")]
+#[derive(Default)]
+struct WidgetsController;
+
+#[routes]
+impl WidgetsController {
+    #[get("/")]
+    #[public(Read, widget::Entity)]
+    async fn list(&self) -> Json<Vec<i32>> {
+        Json(Vec::new())
+    }
+}
+
+#[module(providers = [WidgetsController])]
+struct WidgetsModule;
+
 #[tokio::test]
 async fn a_route_whose_ability_guard_never_ran_says_so_at_error_with_the_remedy() {
     let logs = LogCapture::install();
-    // No ambient `Ability`: the shape a route gets when `#[authorize]` is
-    // written but no ability guard runs on it.
-    let req = Request::builder()
-        .uri(Uri::from_static("/widgets/1"))
-        .finish();
-    let mut body = RequestBody::new(Body::empty());
-
-    let err = Authorize::<Read, widget::Entity>::from_request(&req, &mut body)
+    let app = TestApp::for_module::<WidgetsModule>()
         .await
-        .err()
-        .expect("a missing ambient ability is a wiring bug, not a pass");
-    assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        .expect("a public route boots with no guard");
+
+    let refused = app.http().get("/widgets").send().await;
+    refused.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
 
     let event = logs.expect_one("nest_rs::authz", "authorization denied");
     assert_eq!(event.level, "error");
@@ -63,7 +77,6 @@ mod gate_order {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use nest_rs_authz::http::Authorize;
     use nest_rs_authz::{AbilityBuilder, Action, Read};
     use nest_rs_core::async_trait;
     use nest_rs_core::{
@@ -111,6 +124,10 @@ mod gate_order {
 
     #[async_trait]
     impl Guard for Grants {
+        fn phase(&self) -> nest_rs_guards::GuardPhase {
+            nest_rs_guards::GuardPhase::Authorization
+        }
+
         async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
             let mut ab = AbilityBuilder::new();
             if nest_rs_http::HttpView::of(cx)?
@@ -196,12 +213,10 @@ mod gate_order {
             Json(Vec::new())
         }
 
-        // The public-reads spelling: the posture is `#[public]`, and the
-        // parameter is what gates the class and arms the mask.
         #[get("/feed")]
-        #[public]
+        #[public(Read, secret::Entity)]
         #[use_interceptors(Stored)]
-        async fn feed(&self, _authz: Authorize<Read, secret::Entity>) -> Json<Vec<SecretDto>> {
+        async fn feed(&self) -> Json<Vec<SecretDto>> {
             Json(Vec::new())
         }
     }
@@ -270,7 +285,7 @@ mod gate_order {
     }
 
     #[tokio::test]
-    async fn the_public_reads_spelling_is_gated_before_its_interceptor_too() {
+    async fn a_public_read_is_gated_before_its_interceptor_too() {
         let app = app().await;
 
         let refused = app.http().get("/secrets/feed").send().await;

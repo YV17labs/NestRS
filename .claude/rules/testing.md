@@ -94,8 +94,8 @@ nextest prints each test's time: compare before and after.
   is a pool opening its URL.
 - **`TestApp::unit(ability, || …)` / `system_unit(|| …)`** (`authz`,
   `database`) — a service's body run in one unit of the app's bound
-  `UnitOfWork`, as a request granted the ability or as system work,
-  committed on `Ok`: never an executor or an ability installed by hand.
+  `UnitOfWork`, as a request granted the ability, a visitor's too, or as system
+  work, committed on `Ok`: never an executor or an ability installed by hand.
 - **`TestAppBuilder::ephemeral_signing_key()` / `TestApp::bearer(&claims)`**
   (`authn`) — the app verifies the tokens of a key pair the test holds, issued
   in process as `TestAuthority` issues certificates, in place of its configured

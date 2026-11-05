@@ -1,5 +1,5 @@
 use nest_rs::core::{Layer, UnitContext, UnitView, async_trait, injectable};
-use nest_rs::guards::{Denial, Guard, GuardFor, PrincipalClaim};
+use nest_rs::guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
 
 use crate::Claims;
 
@@ -18,6 +18,10 @@ impl Guard for PostAuthorGuard {
                     .with_reason("not_a_user"),
             ),
         }
+    }
+
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authorization
     }
 
     fn expected_principal(&self) -> Option<PrincipalClaim> {

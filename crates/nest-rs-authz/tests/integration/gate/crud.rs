@@ -48,6 +48,10 @@ impl Layer for OrgManager {}
 
 #[async_trait]
 impl Guard for OrgManager {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let denied = match HttpView::of(cx)?.request().header(DENY) {
             Some("read") => Action::Read,

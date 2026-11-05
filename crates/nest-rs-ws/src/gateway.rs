@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use futures_util::FutureExt as _;
 use futures_util::future::Either;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use nest_rs_core::__private::{ClassGate, RequestScopes};
+use nest_rs_core::__private::{ClassGate, Pending, RequestScopes, install_pending};
 use nest_rs_core::code;
 use nest_rs_core::{
     Container, Continuation, Correlation, Handler, RequestContinuation, operation_log,
@@ -44,7 +44,8 @@ pub trait Gateway: Send + Sync + 'static {
     ) -> Result<WsReply, HandlerFailed>;
 
     /// The class gate the posture of the handler `event` names declares, with
-    /// that handler: `None` for a `#[public]` handler, or an event none serves.
+    /// that handler: `None` for a posture naming no subject, or an event none
+    /// serves.
     #[doc(hidden)]
     fn __nestrs_gate(&self, event: &str) -> Option<(&'static Handler, ClassGate)>;
 
@@ -55,14 +56,14 @@ pub trait Gateway: Send + Sync + 'static {
     /// arriving on a socket runs them around the handler, the class gate after
     /// its guards.
     async fn dispatch(&self, client: &WsClient, event: &str, data: serde_json::Value) -> WsReply {
-        let data = match self.__nestrs_gate(event) {
+        let (data, attached) = match self.__nestrs_gate(event) {
             Some((handler, gate)) => match crate::guard::gate_alone(client, handler, gate, data) {
-                Ok(data) => data,
+                Ok(passed) => passed,
                 Err(refused) => return WsReply::Error(refused),
             },
-            None => data,
+            None => (data, Pending::default()),
         };
-        match self.__nestrs_handle(client, event, data).await {
+        match install_pending(attached, self.__nestrs_handle(client, event, data)).await {
             Ok(reply) => reply,
             Err(failed) => failed.into_reply(event),
         }
@@ -1196,6 +1197,7 @@ mod tests {
                 method: vec![nest_rs_guards::__private::guard::<DenyAll>()],
                 force: Vec::new(),
                 gate: None,
+                withheld: false,
             },
         )
     }

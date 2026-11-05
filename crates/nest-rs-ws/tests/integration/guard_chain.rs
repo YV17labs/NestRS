@@ -161,6 +161,10 @@ impl Layer for Unprovided {}
 
 #[async_trait]
 impl Guard for Unprovided {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,
@@ -268,6 +272,10 @@ impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
@@ -287,7 +295,6 @@ struct ReplayedGateway;
 #[messages]
 impl ReplayedGateway {
     #[subscribe_message("again")]
-    #[public]
     #[force_guards(CountingGuard)]
     async fn again(&self) -> &'static str {
         "ok"
@@ -344,6 +351,10 @@ mod request_decided {
 
     #[async_trait]
     impl Guard for KeyAtTheRequest {
+        fn phase(&self) -> nest_rs_guards::GuardPhase {
+            nest_rs_guards::GuardPhase::Authorization
+        }
+
         async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             keyed(cx)
         }
@@ -362,6 +373,10 @@ mod request_decided {
 
     #[async_trait]
     impl Guard for KeyAtTheUnit {
+        fn phase(&self) -> nest_rs_guards::GuardPhase {
+            nest_rs_guards::GuardPhase::Authorization
+        }
+
         async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             keyed(cx)
         }
@@ -380,7 +395,6 @@ mod request_decided {
     #[messages]
     impl KeyedGateway {
         #[subscribe_message("ping")]
-        #[public]
         async fn ping(&self) -> &'static str {
             "pong"
         }
@@ -584,13 +598,13 @@ mod posture {
         }
 
         #[subscribe_message("guarded")]
-        #[use_guards(Throttle)]
+        #[use_guards(Policy)]
         async fn guarded(&self, _client: &WsClient) -> String {
             "guarded".into()
         }
     }
 
-    #[module(imports = [WsModule], providers = [Throttle, GuardedMessagesGateway])]
+    #[module(imports = [WsModule], providers = [Policy, GuardedMessagesGateway])]
     struct GuardedMessagesModule;
 
     /// A message's guard runs on that message alone: any caller still connects,
@@ -606,7 +620,7 @@ mod posture {
     }
 
     #[gateway(path = "/ws/covered/gateway")]
-    #[use_guards(Throttle)]
+    #[use_guards(Authenticate)]
     struct CoveredGateway;
 
     #[messages]
@@ -617,7 +631,7 @@ mod posture {
         }
     }
 
-    #[module(imports = [WsModule], providers = [Throttle, CoveredGateway])]
+    #[module(imports = [WsModule], providers = [Authenticate, CoveredGateway])]
     struct CoveredModule;
 
     #[tokio::test]
@@ -640,10 +654,10 @@ mod posture {
         }
     }
 
-    #[module(imports = [WsModule], providers = [Throttle, PooledGateway])]
+    #[module(imports = [WsModule], providers = [Authenticate, PooledGateway])]
     struct PooledModule;
 
-    #[module(imports = [PooledModule], providers = [GlobalGuards<(Throttle,)>])]
+    #[module(imports = [PooledModule], providers = [GlobalGuards<(Authenticate,)>])]
     struct PooledApp;
 
     #[tokio::test]
@@ -661,7 +675,7 @@ mod posture {
     #[messages]
     impl BesideGateway {
         #[subscribe_message("ping")]
-        #[use_guards(Throttle)]
+        #[use_guards(Policy)]
         async fn ping(&self, _client: &WsClient) -> String {
             "covered beside it".into()
         }
@@ -673,7 +687,7 @@ mod posture {
         }
     }
 
-    #[module(imports = [WsModule], providers = [Throttle, BesideGateway])]
+    #[module(imports = [WsModule], providers = [Policy, BesideGateway])]
     struct BesideModule;
 
     #[tokio::test]
@@ -743,6 +757,7 @@ mod posture {
     }
 
     impl GuardFor<HttpView> for Policy {}
+    impl GuardFor<WsView> for Policy {}
 
     #[gateway(path = "/ws/mislabelled/authorized")]
     #[use_guards(Policy)]

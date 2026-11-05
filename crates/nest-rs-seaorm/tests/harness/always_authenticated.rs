@@ -14,6 +14,10 @@ impl Layer for AlwaysAuthenticated {}
 
 #[async_trait]
 impl Guard for AlwaysAuthenticated {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         cx.attach(crate::Anyone);
         Ok(())

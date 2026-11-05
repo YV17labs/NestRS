@@ -15,7 +15,7 @@ use futures_util::TryFutureExt as _;
 use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
     GlobalLayers, GuardStage, ResolvedLayer, Site, Tail, dispatch, new_unit_context,
-    report_unresolved, settled,
+    report_unresolved, settled, withhold_from_reads,
 };
 use nest_rs_core::{
     Container, Failure, Handler, Outcome, Problem, UnitContext, UnresolvedLayerError,
@@ -103,11 +103,15 @@ pub struct FieldGuards {
     /// The field as a chain's log line and a refusal name it
     /// (`query listUsers`, `UsersResolver.posts`).
     pub label: &'static str,
+    /// The posture withholds the ability from the field's reads: no mask shapes
+    /// its answer.
+    pub withheld: bool,
 }
 
 /// The guard stage of the field `declared` describes: the app-wide pool where
 /// the site folds it, the resolver's guards and the method's, each once, each
-/// running its `check` on the field — `None` when it runs none.
+/// running its `check` on the field — `None` when it runs none and has nothing to
+/// withhold.
 pub fn field_guard_stage(
     container: &Container,
     declared: FieldGuards,
@@ -118,6 +122,7 @@ pub fn field_guard_stage(
         force,
         site,
         label,
+        withheld,
     } = declared;
     let sources = SiteChainSources {
         provider: host,
@@ -125,12 +130,21 @@ pub fn field_guard_stage(
         force,
     };
     let chain = compose_site_chain(container, label, sources, site.bucket(container))?;
-    validate_carried_chain(label, &chain, || {
+    let request_chain = || {
         carried_request_chain::<GraphqlView>(container, label)
             .map_err(|unresolved| unresolved.to_string())
-    })
-    .map_err(anyhow::Error::msg)?;
-    Ok(FieldGuardStage::of(chain, DENIED_OPERATION))
+    };
+    validate_carried_chain(label, &chain, request_chain).map_err(anyhow::Error::msg)?;
+    // No guard at all, here or at the request: nothing was attached to withhold.
+    let withholds = withheld && !request_chain().map_err(anyhow::Error::msg)?.is_empty();
+    if chain.is_empty() && !withholds {
+        return Ok(None);
+    }
+    Ok(Some(Arc::new(FieldGuardStage {
+        guards: chain,
+        denied: DENIED_OPERATION,
+        withheld,
+    })))
 }
 
 /// One field's guards, as the pipeline runs a site's guard stage: each one's
@@ -138,6 +152,7 @@ pub fn field_guard_stage(
 pub(crate) struct FieldGuardStage {
     guards: Vec<ResolvedLayer<dyn Guard>>,
     denied: &'static str,
+    withheld: bool,
 }
 
 /// The line a guard's denial of a resolver's field is filed as.
@@ -153,7 +168,13 @@ impl FieldGuardStage {
         guards: Vec<ResolvedLayer<dyn Guard>>,
         denied: &'static str,
     ) -> Option<Arc<dyn GuardStage>> {
-        (!guards.is_empty()).then(|| Arc::new(Self { guards, denied }) as Arc<dyn GuardStage>)
+        (!guards.is_empty()).then(|| {
+            Arc::new(Self {
+                guards,
+                denied,
+                withheld: false,
+            }) as Arc<dyn GuardStage>
+        })
     }
 }
 
@@ -162,7 +183,11 @@ impl GuardStage for FieldGuardStage {
         Box::pin(async move {
             check_guards(&self.guards, None, cx)
                 .await
-                .map_err(|refused| Failure::from(refused.into_denial(self.denied, cx)))
+                .map_err(|refused| Failure::from(refused.into_denial(self.denied, cx)))?;
+            if self.withheld {
+                withhold_from_reads(cx);
+            }
+            Ok(())
         })
     }
 }
@@ -562,6 +587,25 @@ mod tests {
             class_gate: None,
         },
     );
+
+    /// With no guard at the field or at the `/graphql` request, nothing can have
+    /// attached what a bare `#[public]` withholds, so it keeps no stage.
+    #[test]
+    fn a_field_with_nothing_to_withhold_pays_for_no_stage() {
+        let stage = field_guard_stage(
+            &Container::default(),
+            FieldGuards {
+                host: Vec::new(),
+                method: Vec::new(),
+                force: Vec::new(),
+                site: GraphqlSite::Operation,
+                label: "query field",
+                withheld: true,
+            },
+        )
+        .expect("no guard to resolve");
+        assert!(stage.is_none());
+    }
 
     /// What a field's site adds to the future of a tail holding `N` bytes:
     /// every stage between the wrapper and the developer's method.

@@ -15,15 +15,15 @@ use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture,
-    at_most_one_authorize, authorized_entity, await_if_async, cfg_attrs, concrete_signature,
-    deprecation_header, exception_filter_specs, force_guard_typeids, guard_capability_bounds,
-    handler_const, handler_ref, host_runtime_entry, impl_self_ident, injected_methods_with_layers,
-    injected_per_request_method, interceptor_specs, layer_deps, mixed_site_ident,
-    normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
-    refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
-    spelled, takes_value, ungrouped_expr, unit_of_work_required, unknown_argument,
-    validate_argument,
+    HandlerSite, HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, PostureWord, RoutePath,
+    SitePosture, at_most_one_authorize, authorized_entity, await_if_async, cfg_attrs,
+    concrete_signature, deprecation_header, exception_filter_specs, force_guard_typeids,
+    guard_capability_bounds, handler_const, handler_ref, host_runtime_entry, impl_self_ident,
+    injected_methods_with_layers, injected_per_request_method, interceptor_specs, layer_deps,
+    mixed_site_ident, normalize_forwarded_args, nth_generic_type, one_role_per_method,
+    posture_contradiction, posture_key_unsupported, refuse_rust_deprecated,
+    reject_meta_on_operations, scoped_specs, shared_receiver, site, spelled, takes_value,
+    ungrouped_expr, unit_of_work_required, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -42,18 +42,17 @@ struct RouteHandler {
     guards: Vec<Path>,
     /// `#[use_interceptors]` paths on the method.
     interceptors: Vec<Path>,
-    /// The type `#[authorize]` declares, then every parameter type, in order:
-    /// arming a shaper and selecting a class gate are type-directed.
+    /// The type a posture naming a subject declares, then every parameter type,
+    /// in order: arming a shaper and selecting a class gate are type-directed.
     probe_types: Vec<Type>,
     /// Every parameter type, in order, then the service a bound subject loads
     /// through: the providers resolved per request are read off them.
     param_types: Vec<Type>,
-    /// The type `#[authorize]` declares, or a parameter *spelled*
-    /// `Authorize<..>`, kept so one not implementing the shaper trait is a
-    /// spanned compile error.
-    named_shaper: Option<Type>,
+    /// The type a posture naming a subject declares, kept so a subject naming
+    /// neither an entity nor a capability is a spanned compile error.
+    posture_type: Option<Type>,
     /// On an `#[sse]` route, the assertion that its posture's subject shapes
-    /// nothing, spanned on the subject `#[authorize]` names.
+    /// nothing, spanned on the subject the posture names.
     stream_posture: TokenStream2,
     /// Whether the handler declares any extractor; without one, no mask probe is emitted.
     has_extractors: bool,
@@ -249,32 +248,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(idents) => idents,
             Err(err) => return err.to_compile_error().into(),
         };
-        let authorize = match take_authorize(&mut method.attrs, &inputs) {
-            Ok(spec) => spec,
+        let RoutePosture {
+            gate: authorize,
+            public: is_public,
+        } = match take_posture(&mut method.attrs, &method.sig.ident, &inputs) {
+            Ok(posture) => posture,
             Err(err) => return err.to_compile_error().into(),
         };
-        // A hand-written `Authorize<A, E>` arms the shaper too, and the mask
-        // passes `text/event-stream` through untouched.
-        if is_sse && let Some(ty) = named_shaper_type(&inputs) {
-            return syn::Error::new_spanned(
-                &ty,
-                "a response shaper cannot arm a `#[sse]` route: masking reconciles the body \
-                 against the entity model, and an event stream is no wire model to reconcile — \
-                 it would be waved through unmasked while the document claims otherwise. Gate \
-                 the stream with `#[authorize(Action, Subject)]` on a subject `#[subject]` \
-                 declares — a capability no table holds, whose posture masks nothing — and load \
-                 what it needs inside the handler",
-            )
-            .to_compile_error()
-            .into();
-        }
         // Probed like a parameter and never extracted: the gate runs with the
         // guards, outside the route's own layers.
-        let authorize_ty = match authorize.as_ref().map(|spec| authorize_type(spec, &inputs)) {
-            Some(Ok(ty)) => Some(ty),
-            Some(Err(err)) => return err.to_compile_error().into(),
-            None => None,
-        };
+        let authorize_ty = authorize.as_ref().map(posture_type);
         // Decided by the posture's type, after name resolution: on a stream,
         // only a subject whose posture shapes nothing — one no table holds.
         let stream_posture = match (&authorize, &authorize_ty) {
@@ -323,35 +306,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Some(Err(err)) => return err.to_compile_error().into(),
             None => None,
         };
-        // Global guards still run on a `#[public]` route.
-        let is_public = match take_flag_attr(&mut method.attrs, "public") {
-            Ok(flag) => flag,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        if is_public && let Some(spec) = &authorize {
-            return syn::Error::new_spanned(
-                &spec.action,
-                "a route is `#[public]` or `#[authorize(...)]`, never both — the two \
-                 declare opposite postures",
-            )
-            .to_compile_error()
-            .into();
-        }
-        // The public-reads spelling: elsewhere a gate written as a parameter
-        // would be a posture no `#[authorize]` shows.
-        if !is_public
-            && authorize.is_none()
-            && let Some(param) = inputs.iter().find(|arg| spelled(arg, "Authorize"))
-        {
-            return syn::Error::new_spanned(
-                param,
-                "a hand-written `Authorize<Action, Entity>` parameter is the public-reads \
-                 spelling, written beside `#[public]` alone — declare this route's posture with \
-                 `#[authorize(Action, Entity)]`, which arms the same gate and mask",
-            )
-            .to_compile_error()
-            .into();
-        }
         let subject = match bound_subject(
             authorize.as_ref(),
             &inputs,
@@ -636,7 +590,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             interceptors,
             probe_types,
             param_types,
-            named_shaper: authorize_ty.or_else(|| named_shaper_type(&inputs)),
+            posture_type: authorize_ty,
             stream_posture,
             has_extractors: !inputs.is_empty(),
             handler: handler_ref(&self_ty, &method_name),
@@ -1079,10 +1033,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 /// declares neither a gate nor a shaper, so `#[routes]` probes it for neither.
 pub(crate) const UNPROBED: &str = "__nestrs_unprobed";
 
-/// A route's `#[authorize(Action, Entity)]` posture.
+/// A posture naming a subject: `#[authorize(Action, Subject)]`, or
+/// `#[public(Action, Subject)]`.
 struct AuthorizeSpec {
     action: Path,
-    /// The entity written, or under `bind = Service` alone the one its
+    /// The subject written, or under `bind = Service` alone the one its
     /// `Authorized<Action, E>` parameter names.
     entity: Type,
     /// `bind = Service`: the service that loads the subject into the route's
@@ -1090,8 +1045,38 @@ struct AuthorizeSpec {
     bind: Option<Path>,
 }
 
-/// The parameter `#[authorize(Action, bind = Service)]` fills: where the
-/// handler lists it, and what loads it.
+/// What a route's method declares about who may call it.
+struct RoutePosture {
+    /// What it gates on, where it names a subject.
+    gate: Option<AuthorizeSpec>,
+    /// `#[public]`, named or bare: a caller with no credential is admitted, and
+    /// the app's pool still runs.
+    public: bool,
+}
+
+/// Take the route's posture off its method, whose parameters, the receiver left
+/// out, are `inputs`.
+fn take_posture(
+    attrs: &mut Vec<Attribute>,
+    method: &syn::Ident,
+    inputs: &[FnArg],
+) -> syn::Result<RoutePosture> {
+    let authorize = take_authorize(attrs, inputs)?;
+    let public = nest_rs_codegen::take_single_attr(attrs, PostureWord::Public.as_str())?;
+    let (gate, public) = match (authorize, public) {
+        (Some(_), Some(_)) => {
+            return Err(syn::Error::new_spanned(method, posture_contradiction()));
+        }
+        (Some(gate), None) => (Some(gate), false),
+        (None, Some(attr)) if matches!(attr.meta, Meta::Path(_)) => (None, true),
+        (None, Some(attr)) => (Some(gate_of(&attr, PostureWord::Public, inputs)?), true),
+        (None, None) => (None, false),
+    };
+    Ok(RoutePosture { gate, public })
+}
+
+/// The parameter `bind = Service` fills: where the handler lists it, and what
+/// loads it.
 struct BoundSubject {
     /// Its position among the handler's parameters, the receiver left out.
     index: usize,
@@ -1146,8 +1131,7 @@ fn bound_subject(
 }
 
 /// What a bound route's path refusal opens with.
-const BOUND_PATH: &str =
-    "`#[authorize(.., bind = Service)]` loads the subject from the route's one path parameter,";
+const BOUND_PATH: &str = "`bind = Service` loads the subject from the route's one path parameter,";
 
 /// What a bound route's path refusal asks for.
 const BOUND_PATH_REMEDY: &str = "bind on a route whose path, its controller's included, names \
@@ -1193,12 +1177,8 @@ fn take_version_attr(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<LitStr>> {
     versioning::parse_version_args(&attr)
 }
 
-/// Take `#[authorize(Action, Entity)]` off a route method whose parameters,
+/// Take `#[authorize(Action, Subject)]` off a route method whose parameters,
 /// the receiver left out, are `inputs`.
-#[expect(
-    clippy::map_err_ignore,
-    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
-)]
 fn take_authorize(
     attrs: &mut Vec<Attribute>,
     inputs: &[FnArg],
@@ -1213,11 +1193,26 @@ fn take_authorize(
             at_most_one_authorize("route"),
         ));
     }
+    gate_of(&attr, PostureWord::Authorize, inputs).map(Some)
+}
+
+/// Read `#[word(Action, Subject)]`, or `#[word(Action, bind = Service)]`, off a
+/// route method whose parameters, the receiver left out, are `inputs`.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
+fn gate_of(attr: &Attribute, word: PostureWord, inputs: &[FnArg]) -> syn::Result<AuthorizeSpec> {
+    let grammar = match word {
+        PostureWord::Authorize => AUTHORIZE,
+        PostureWord::Public => PUBLIC,
+    };
+    let word = word.as_str();
     // Parsed as `Meta`, not `Path`, so `bind = Service` is refused by name rather
     // than by syn's `expected \`,\``.
     let metas: Vec<Meta> = attr
         .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-        .map_err(|_| malformed_authorize(&attr))?
+        .map_err(|_| malformed_posture(attr, word))?
         .into_iter()
         .collect();
     let mut bind: Option<Path> = None;
@@ -1232,7 +1227,7 @@ fn take_authorize(
                 let Expr::Path(service) = &nv.value else {
                     return Err(syn::Error::new_spanned(
                         &nv.value,
-                        takes_value("authorize", Some("bind"), BIND_TAKES),
+                        takes_value(word, Some("bind"), BIND_TAKES),
                     ));
                 };
                 bind = Some(service.path.clone());
@@ -1250,13 +1245,18 @@ fn take_authorize(
             Meta::NameValue(ref nv) if let Some(key) = nv.path.get_ident() => {
                 return Err(syn::Error::new_spanned(
                     key,
-                    unknown_argument("authorize", &key.to_string(), AUTHORIZE.keys()),
+                    unknown_argument(word, &key.to_string(), grammar.keys()),
                 ));
             }
-            other => return Err(syn::Error::new_spanned(other, malformed_authorize(&attr))),
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    malformed_posture(attr, word),
+                ));
+            }
         }
     }
-    AUTHORIZE.take_all(&keys)?;
+    grammar.take_all(&keys)?;
     if let Some(unmasked) = paths.iter().find(|p| p.is_ident("unmasked")) {
         return Err(syn::Error::new_spanned(
             unmasked,
@@ -1265,14 +1265,14 @@ fn take_authorize(
                 "HTTP",
                 "there is no value-level mask here to switch off. A route's response is \
                  shaped by a `RouteResponseShaper` the compiler arms from the *type* of \
-                 the posture `#[authorize]` declares, so what a body carries is decided by \
-                 the attribute",
+                 the subject the posture names, so what a body carries is decided by the \
+                 attribute",
             ),
         ));
     }
     let mut paths = paths.into_iter();
     let (Some(action), written, None) = (paths.next(), paths.next(), paths.next()) else {
-        return Err(malformed_authorize(&attr));
+        return Err(malformed_posture(attr, word));
     };
     let entity: Type = match (written, &bind) {
         (Some(entity), _) => parse_quote!(#entity),
@@ -1282,51 +1282,50 @@ fn take_authorize(
         (None, Some(service)) => authorized_entity(inputs)
             .cloned()
             .unwrap_or_else(|| parse_quote!(<#service as ::nest_rs_seaorm::CrudService>::Entity)),
-        (None, None) => return Err(malformed_authorize(&attr)),
+        (None, None) => return Err(malformed_posture(attr, word)),
     };
-    Ok(Some(AuthorizeSpec {
+    Ok(AuthorizeSpec {
         action,
         entity,
         bind,
-    }))
+    })
 }
 
-/// What an `#[sse]` route's `#[authorize]` naming an entity is told.
-const SSE_NAMES_AN_ENTITY: &str = "an `#[sse]` route's `#[authorize]` names a subject no table \
-     holds: an entity's posture masks the reply against its rows, and an event stream is no wire \
-     model to reconcile. Declare the capability with `#[subject]` on a unit struct and gate the \
-     stream with `#[authorize(Action, ThatSubject)]`, then load what it needs inside the handler";
+/// What an `#[sse]` route whose posture names an entity is told.
+const SSE_NAMES_AN_ENTITY: &str = "an `#[sse]` route's posture names a subject no table holds: an \
+     entity's posture masks the reply against its rows, and an event stream is no wire model to \
+     reconcile. Declare the capability with `#[subject]` on a unit struct and gate the stream with \
+     `#[authorize(Action, ThatSubject)]` or `#[public(Action, ThatSubject)]`, then load what it \
+     needs inside the handler";
 
-/// The keys a route's `#[authorize]` takes beside its action and entity.
+/// The keys a route's `#[authorize]` takes beside its action and subject.
 const AUTHORIZE: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("authorize", &["bind"]);
 
-/// The `#[authorize]` shape refusal.
-fn malformed_authorize(attr: &Attribute) -> syn::Error {
+/// The keys a route's `#[public(...)]` takes beside its action and subject.
+const PUBLIC: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("public", &["bind"]);
+
+/// The posture's shape refusal, in the words of the attribute `word` names.
+fn malformed_posture(attr: &Attribute, word: &str) -> syn::Error {
     syn::Error::new_spanned(
         attr,
-        "expected `#[authorize(Action, Entity)]` — e.g. \
-         `#[authorize(Read, users::Entity)]`. `bind = Service` loads the subject from the \
-         route's path parameter into an `Authorized<Action, E>` parameter, and lets the entity \
-         be omitted (derived from `Service::Entity`): `#[authorize(Update, bind = PostsService)]`",
+        format!(
+            "expected `#[{word}(Action, Subject)]` — e.g. `#[{word}(Read, users::Entity)]`. `bind \
+             = Service` loads the subject from the route's path parameter into an \
+             `Authorized<Action, E>` parameter, and lets the entity be omitted (derived from \
+             `Service::Entity`): `#[{word}(Update, bind = PostsService)]`"
+        ),
     )
 }
 
-/// The type `#[authorize(Action, Entity)]` declares, the same one `#[crud]`
-/// writes: probed for its class gate and its shaper, never extracted. Under
+/// The type a posture naming a subject declares, the same one `#[crud]` writes:
+/// probed for its class gate and its shaper, never extracted. Under
 /// `bind = Service` alone, the entity is the `Authorized<Action, E>`
 /// parameter's.
-fn authorize_type(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<Type> {
-    if let Some(param) = inputs.iter().find(|arg| spelled(arg, "Authorize")) {
-        return Err(syn::Error::new_spanned(
-            param,
-            "this route already declares its posture with `#[authorize(...)]` — \
-             drop the `Authorize<...>` parameter (the decorator emits it)",
-        ));
-    }
+fn posture_type(spec: &AuthorizeSpec) -> Type {
     let AuthorizeSpec { action, entity, .. } = spec;
-    Ok(syn::parse_quote! {
+    syn::parse_quote! {
         ::nest_rs_authz::http::Authorize<#action, #entity>
-    })
+    }
 }
 
 fn param_types(inputs: &[FnArg]) -> Vec<Type> {
@@ -1397,27 +1396,6 @@ fn shaper_selection(param_types: &[Type]) -> TokenStream2 {
     }}
 }
 
-/// A parameter *spelled* `Authorize<..>`, for the diagnostic only: arming is
-/// [`shaper_selection`]'s.
-fn named_shaper_type(inputs: &[FnArg]) -> Option<Type> {
-    inputs.iter().find_map(|arg| {
-        let FnArg::Typed(pt) = arg else { return None };
-        let Type::Path(tp) = pt.ty.as_ref() else {
-            return None;
-        };
-        shaper_param_type(tp).then_some((*pt.ty).clone())
-    })
-}
-
-fn shaper_param_type(tp: &syn::TypePath) -> bool {
-    let angled = tp
-        .path
-        .segments
-        .last()
-        .is_some_and(|s| matches!(s.arguments, syn::PathArguments::AngleBracketed(_)));
-    angled && tp.path.segments.iter().any(|s| s.ident == "Authorize")
-}
-
 /// One routed handler, as its route's site declares it and its mount mounts
 /// it: the `static` site (its interceptors and exception filters, its guard
 /// stage and class gates), and the call registering the handler — its
@@ -1449,7 +1427,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         guards,
         interceptors,
         probe_types,
-        named_shaper,
+        posture_type,
         stream_posture,
         has_extractors,
         handler,
@@ -1470,7 +1448,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
     // or a hand-rolled `FromRequest`), which no scan of the signature can see.
     let shaper_selection = shaper_selection(probe_types);
     let gate_selection = gate_selection(probe_types);
-    let named_shaper_assert = match named_shaper {
+    let posture_assert = match posture_type {
         Some(ty) => quote! {
             const _: fn() = || {
                 fn __nestrs_assert_route_shaper<P: ::nest_rs_http::RouteResponseShaper>() {}
@@ -1521,6 +1499,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
                     gates: #gate_selection,
                     authorized: #authorized,
                     masked: ::core::option::Option::is_some(&#shaper_selection),
+                    stream: #is_sse,
                 },
             )
         }
@@ -1568,7 +1547,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
                 none: #no_pipes_flag,
             },
             {
-                #named_shaper_assert
+                #posture_assert
                 #stream_posture
                 ::nest_rs_http::__private::shaped(#wrapper_expr, #shaper_selection, #probe)
             },

@@ -1,4 +1,4 @@
-error: an `Authorized<Action, E>` parameter receives the subject `#[authorize(Action, bind = Service)]` loads, and this operation binds none — declare `bind = Service` in its `#[authorize]`, or drop the parameter: the type carries the row, the attribute the posture
+error: an `Authorized<Action, E>` parameter receives the subject `bind = Service` loads, and this operation binds none — declare `bind = Service` in its posture, or drop the parameter: the type carries the row, the attribute the posture
   --> tests/integration/diagnostics/mcp/resource_authorized_parameter_without_bind.rs:37:26
    |
 37 |     async fn note(&self, note: Authorized<Read, note::Entity>) -> Result<String, McpError> {

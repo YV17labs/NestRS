@@ -87,9 +87,12 @@ guard, filter or interceptor loop of its own.
    edge's one rule (*Error opacity*, below) before the unit stage returns,
    so a unit-stage interceptor reads what goes out.
 5. **A posture where the guards do not already decide** —
-   `#[authorize(Action, Subject)]` or `#[public]`, and `#[public]` means one
-   thing on every edge: a caller with no credential is admitted. This is what
-   keeps *no authn/authz decision outside a guard* true. **Where an endpoint
+   `#[authorize(Action, Subject)]`, `#[public(Action, Subject)]` or a bare
+   `#[public]`, and `#[public]` means one thing on every edge: a caller with no
+   credential is admitted. Naming a subject it takes `#[authorize]`'s arguments,
+   gate and mask, on the ability that caller has; bare, it reads nothing a grant
+   guards. So what a visitor reaches is a line a reviewer reads, on every edge.
+   This is what keeps *no authn/authz decision outside a guard* true. **Where an endpoint
    admits a visitor in band, the posture is what refuses one, so it is
    mandatory**: a GraphQL operation stating none is a compile error with a
    trybuild snapshot, and an operation of an MCP endpoint `McpAccess::Public`
@@ -115,7 +118,8 @@ guard, filter or interceptor loop of its own.
    rules, as a `#[public]` route does, so a tool of an opened endpoint under the
    pool serves, and a gated unit still fails closed.
    The grammar is one `PostureRules` in `nest-rs-codegen` where it is the same
-   grammar: `#[tools]` and `#[messages]` take it verbatim, and `bind = Service`
+   grammar, for `#[authorize]` and `#[public(...)]` alike: `#[tools]` and
+   `#[messages]` take it verbatim, and `bind = Service`
    on a `#[resource]` through it, reading the id from its template's one
    variable, `Denied`, `Missing` and an id no v7 answering the resource's not
    found with no body run; a message, a tool, a prompt and a listing name no id
@@ -125,11 +129,11 @@ guard, filter or interceptor loop of its own.
    names, its controller's included. On all three the subject lands in an
    `Authorized<A, E>` parameter, which carries the row and never the posture:
    either without the other is a compile error, as is an entity written beside
-   `bind` other than the service's. `#[routes]` refuses `#[authorize]` naming an
+   `bind` other than the service's. `#[routes]` refuses a posture naming an
    entity on `#[sse]` — by the subject's type, a stream taking a subject no table
-   holds — and a hand-written `Authorize<A, E>` anywhere but beside `#[public]` —
-   by spelling at compile time, by its type at boot
-   (`.claude/decisions/route-posture-declared.md`).
+   holds — and `Authorize<A, E>` is what a posture declares, never a parameter,
+   which no `FromRequest` impl serves; a gate another parameter's type declares
+   refuses the boot (`.claude/decisions/route-posture-declared.md`).
    An edge whose units have no caller (a job, a tick, an event) declares
    `Posture::System` and runs no guard stage.
 6. **A class gate the posture emits** — `nest_rs_authz::class_gate::<A, S>`,
@@ -140,14 +144,23 @@ guard, filter or interceptor loop of its own.
    its scope challenge included — and never by a hand-written guard
    (`.claude/decisions/subject-no-table-holds.md`). Off a `#[public]` site it refuses a
    caller no principal backs (`Ability::is_visitor`) whatever the visitor's
-   rules grant, on HTTP as elsewhere; a hand-written `Authorize<A, E>` on a
-   `#[public]` route reads the visitor's grant, the public-reads pattern. One
-   refusal reads one sentence on every edge (RFC 6750 §3.1's for a scope) and
-   files one `warn`; an edge renders the `Denial` it carries.
+   rules grant, on HTTP as elsewhere; a `#[public(A, S)]` reads the visitor's
+   grant, the public-reads pattern, and licenses that visitor's reads for the unit
+   when `S` has rows. One refusal reads one sentence on every edge (RFC 6750 §3.1's
+   for a scope) and files one `warn`; an edge renders the `Denial` it carries.
 7. **Response masking armed by the posture**, never hand-written in a body,
    chosen by the protocol rather than by symmetry (`data-layer.md`, *Response
    masking*), and by the subject's type: an entity's posture masks, a
-   `#[subject]`'s arms none, and an HTTP route it gates reads as unmasked.
+   `#[subject]`'s arms none. **A unit no mask shapes withholds the ability from its
+   reads, on every edge, whatever its posture says** (`UnmaskedReply`): a bare
+   `#[public]`, a covered unit stating none, a `#[subject]`'s, a route, a stream.
+   `unmasked` keeps the ability and leaves the mask to the body, and so does a
+   hand-written MCP `ServerHandler`, which declares no unit and writes no posture: it
+   reads under a principal's ability, a visitor's reading nothing, and calls
+   `masked_reply` itself. It is attached only
+   where there is something to withhold, so a site running no guard with none at its
+   request keeps no stage and pays nothing
+   (`.claude/decisions/unmasked-reply-withholds-the-ability.md`).
 8. **Guards at two scopes, and their `GuardFor` bound when the unit has a
    caller**, plus `#[force_guards]` on a method, which binds the guard there
    and re-runs it, composed once per site and deduplicated by `TypeId`; a
@@ -544,8 +557,8 @@ router parses. The rewrite is skipped when nothing is versioned.
   (`.claude/decisions/adapter-imports-its-transport.md`).
 - **`#[sse]` is a verb, not an edge.** It collapses to `GET` before the route
   table is built and carries the route's guards, pipes, posture and document; it
-  owns only the response. It refuses `#[authorize]` on an entity (a
-  `#[subject]`'s gates it), a shaper parameter (`Authorize<A, E>`), the
+  owns only the response. It refuses a posture on an entity (a
+  `#[subject]`'s gates it), a parameter whose type arms a shaper, at boot, the
   response decorators (`#[http_code]`, `#[redirect]`, `#[response_header]`)
   and `#[api(response_content_type)]`.
   Correlation is the streaming body's, not the decorator's (`observability.md`).

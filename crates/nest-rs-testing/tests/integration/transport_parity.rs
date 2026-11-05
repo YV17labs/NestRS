@@ -35,6 +35,10 @@ impl Layer for BearerGuard {}
 
 #[async_trait]
 impl Guard for BearerGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand) {
             return Ok(());
@@ -66,6 +70,10 @@ impl Layer for ApiKeyGuard {}
 
 #[async_trait]
 impl Guard for ApiKeyGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         if HttpView::of(cx)?.request().header(API_KEY).is_some() {
             return Ok(());
@@ -90,6 +98,10 @@ impl Layer for PublicOnlyGuard {}
 
 #[async_trait]
 impl Guard for PublicOnlyGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         if cx.reflector().is_public() {
             return Ok(());
@@ -126,6 +138,10 @@ impl Layer for PostureProbe {}
 
 #[async_trait]
 impl Guard for PostureProbe {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let posture = cx.reflector().posture();
         self.postures
@@ -151,6 +167,10 @@ impl Layer for PassGuard {}
 
 #[async_trait]
 impl Guard for PassGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
     async fn check(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,
@@ -188,6 +208,10 @@ macro_rules! recording_guard {
 
         #[async_trait]
         impl Guard for $name {
+            fn phase(&self) -> nest_rs_guards::GuardPhase {
+                nest_rs_guards::GuardPhase::Authentication
+            }
+
             async fn check_http(
                 &self,
                 _cx: &mut nest_rs_core::UnitContext<'_>,

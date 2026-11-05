@@ -22,6 +22,10 @@ impl Layer for WiredGuard {}
 
 #[async_trait]
 impl Guard for WiredGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,

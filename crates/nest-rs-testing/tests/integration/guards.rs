@@ -23,6 +23,10 @@ impl Layer for DenyGuard {}
 
 #[async_trait]
 impl Guard for DenyGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,
@@ -49,6 +53,10 @@ impl Layer for ChallengeGuard {}
 
 #[async_trait]
 impl Guard for ChallengeGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,
@@ -200,6 +208,10 @@ impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,
@@ -350,6 +362,10 @@ impl Layer for PublicAwareGuard {}
 
 #[async_trait]
 impl Guard for PublicAwareGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(
         &self,
         cx: &mut nest_rs_core::UnitContext<'_>,
@@ -432,6 +448,10 @@ impl Layer for TenantGuard {}
 
 #[async_trait]
 impl Guard for TenantGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(
         &self,
         cx: &mut nest_rs_core::UnitContext<'_>,
@@ -811,6 +831,10 @@ mod required_principal {
 
     #[async_trait]
     impl Guard for NeedsClaims {
+        fn phase(&self) -> nest_rs_guards::GuardPhase {
+            nest_rs_guards::GuardPhase::Authorization
+        }
+
         async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             cx.require::<Claims>()?;
             Ok(())

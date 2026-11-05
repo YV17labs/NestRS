@@ -5,7 +5,7 @@ error[E0277]: `Piped<Trim, nest_rs::http::Json<std::string::String>>` is not a h
    |                                         ^^^^^^^ not read off the request
    |
    = help: the trait `FromRequest<'_>` is not implemented for `Piped<Trim, nest_rs::http::Json<std::string::String>>`
-   = note: a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed on the controller struct, and a request-scoped one read through `Scoped<T>`
+   = note: a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed on the controller struct, and a request-scoped one read through `Scoped<T>`; who may call is a decorator on the route, `#[public(Action, Subject)]` where a caller with no credential is admitted and `#[authorize(Action, Subject)]` where a principal must back it, never a parameter
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::http::Request
              Ambient<T>
@@ -24,7 +24,7 @@ error[E0277]: `Piped<Trim, nest_rs::http::Json<std::string::String>>` is not a h
    | ^^^^^^^^^ not read off the request
    |
    = help: the trait `FromRequest<'_>` is not implemented for `Piped<Trim, nest_rs::http::Json<std::string::String>>`
-   = note: a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed on the controller struct, and a request-scoped one read through `Scoped<T>`
+   = note: a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed on the controller struct, and a request-scoped one read through `Scoped<T>`; who may call is a decorator on the route, `#[public(Action, Subject)]` where a caller with no credential is admitted and `#[authorize(Action, Subject)]` where a principal must back it, never a parameter
    = help: the following other types implement trait `FromRequest<'a>`:
              &'a nest_rs::http::Request
              Ambient<T>

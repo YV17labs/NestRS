@@ -65,6 +65,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let role = nest_rs_http::HttpView::of(cx)?
             .request()
@@ -181,9 +185,8 @@ impl MaskTool {
         }))
     }
 
-    /// The opt-out: no gate, no mask.
+    /// No posture: no gate, no mask.
     #[tool]
-    #[public]
     async fn raw_widget(&self) -> Result<Json<WidgetDto>, McpError> {
         Ok(Json(WidgetDto {
             id: 1,
@@ -361,12 +364,11 @@ async fn a_stripped_required_field_fails_the_operation_closed() {
 }
 
 #[tokio::test]
-async fn public_opts_out_of_masking() {
+async fn an_operation_stating_no_posture_arms_no_mask() {
     let body = call("viewer", "raw_widget").await;
     assert!(
         body.contains("first"),
-        "`#[public]` declares no gate and no mask — the operation is responsible \
-         for its own output: {body}",
+        "no gate and no mask: the operation is responsible for its own output: {body}",
     );
 }
 

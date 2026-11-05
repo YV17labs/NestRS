@@ -1,5 +1,5 @@
-error: `#[public]` takes no arguments — it is a flag, and what it declares is its presence
-  --> tests/integration/diagnostics/ws/argument_on_public.rs:19:5
+error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`, optionally followed by `unmasked`
+  --> tests/integration/diagnostics/ws/argument_on_public.rs:14:5
    |
-19 |     #[public(read_only)]
+14 |     #[public(read_only)]
    |     ^^^^^^^^^^^^^^^^^^^^

@@ -32,6 +32,10 @@ impl Layer for RoleUpgrade {}
 
 #[async_trait]
 impl Guard for RoleUpgrade {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let role = HttpView::of(cx)?
             .request()

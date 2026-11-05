@@ -4,7 +4,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_authz::{AbilityBuilder, current_ability};
+use nest_rs_authz::{AbilityBuilder, Action, Read, current_ability, subject};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_database::{ExecutorScope, current_executor_scope};
 use nest_rs_guards::{Denial, Guard, GuardFor};
@@ -16,6 +16,10 @@ use nest_rs_ws::{WsModule, gateway, messages};
 use sea_orm::ConnectionTrait;
 use serde_json::json;
 
+/// What `inspect` reads: a message naming no read reads under no ability.
+#[subject]
+struct Inspection;
+
 /// Attaches an ability to every upgrade, as the authorization guard does.
 #[injectable]
 #[derive(Default)]
@@ -26,9 +30,9 @@ impl Layer for Granting {}
 #[async_trait]
 impl Guard for Granting {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        let ability = AbilityBuilder::new()
-            .build()
-            .expect("an ability with no rule builds");
+        let mut ability = AbilityBuilder::new();
+        ability.can(Action::Read, Inspection);
+        let ability = ability.build().expect("one grant builds");
         cx.attach(nest_rs_authz::__private::AmbientAbility::new(ability));
         Ok(())
     }
@@ -56,7 +60,7 @@ pub(crate) struct UnitGateway;
 #[messages]
 impl UnitGateway {
     #[subscribe_message("inspect")]
-    #[public]
+    #[public(Read, Inspection, unmasked)]
     async fn inspect(&self) -> serde_json::Value {
         json!({
             "lazy": matches!(current_executor(), Some(SeaOrmExecutor::Lazy(_))),

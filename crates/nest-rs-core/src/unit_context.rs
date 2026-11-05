@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::time::Instant;
 
-use crate::ambient::{AmbientValue, Pending};
+use crate::ambient::{AmbientValue, Pending, UnmaskedReply, carries_ambient};
 use crate::edge::Edge;
 use crate::error::MissingAmbientError;
 use crate::handler::{Handler, Reflector};
@@ -246,6 +246,15 @@ pub fn take_pending(cx: &mut UnitContext<'_>) -> Pending {
 /// edge's stage records for work its unit runs off its task.
 pub fn pending_of<'c>(cx: &'c UnitContext<'_>) -> &'c Pending {
     &cx.pending
+}
+
+/// Withhold from the reads of the unit `cx` describes what its guards attached
+/// and its request carried: no mask shapes its reply. With nothing attached and
+/// nothing carried it reads none anyway, and nothing is marked.
+pub fn withhold_from_reads(cx: &mut UnitContext<'_>) {
+    if !cx.pending.is_empty() || carries_ambient() {
+        cx.attach(UnmaskedReply);
+    }
 }
 
 #[cfg(test)]

@@ -75,6 +75,20 @@ impl GreetingResolver {
         0
     }
 
+    #[cfg(feature = "seaorm")]
+    #[query]
+    #[public(nest_rs::authz::Read, crate::entity::Entity)]
+    fn public_note_count(&self) -> u64 {
+        0
+    }
+
+    #[cfg(feature = "authz")]
+    #[query]
+    #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    fn open_export(&self) -> bool {
+        true
+    }
+
     #[cfg(feature = "authz")]
     #[mutation]
     #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]

@@ -1,18 +1,23 @@
-//! A hand-written `Authorize<Action, Entity>` is the public-reads spelling,
-//! beside `#[public]`. On a route declaring no posture it would be one no
-//! attribute shows, so the parameter is refused, naming `#[authorize]`.
+//! A key `#[public(Action, Subject)]` cannot take is refused naming what it
+//! accepts, never parsed and dropped.
+
+// The macro bails before emitting the item, so every import is unused by the
+// time rustc looks: noise the snapshot should not carry.
+#![allow(unused_imports)]
 
 use nest_rs::authz::Read;
-use nest_rs::authz::http::Authorize;
 use nest_rs::http::{controller, routes};
 
 mod posts {
+    use nest_rs::seaorm::expose;
     use sea_orm::entity::prelude::*;
 
+    #[expose(name = "Post")]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-    #[sea_orm(table_name = "gated_by_type_posts")]
+    #[sea_orm(table_name = "public_posts")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: Uuid,
     }
 
@@ -28,7 +33,8 @@ struct PostsController;
 #[routes]
 impl PostsController {
     #[get("/")]
-    async fn list(&self, _authz: Authorize<Read, posts::Entity>) -> String {
+    #[public(Read, posts::Entity, audience = "everyone")]
+    async fn list(&self) -> String {
         String::new()
     }
 }

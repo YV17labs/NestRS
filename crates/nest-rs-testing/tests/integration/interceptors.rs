@@ -51,6 +51,10 @@ impl Layer for DenyGuard {}
 
 #[async_trait]
 impl Guard for DenyGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("denied"))
     }
@@ -492,6 +496,10 @@ impl Layer for AttachPrincipal {}
 
 #[async_trait]
 impl Guard for AttachPrincipal {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         cx.attach(Principal("alice"));
         Ok(())

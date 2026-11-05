@@ -139,6 +139,20 @@ impl HygieneTool {
         Ok("0".into())
     }
 
+    #[cfg(feature = "seaorm")]
+    #[tool(description = "Count what a caller with no credential may read.")]
+    #[public(nest_rs::authz::Read, crate::entity::Entity)]
+    fn public_count(&self) -> Result<String, McpError> {
+        Ok("0".into())
+    }
+
+    #[cfg(feature = "authz")]
+    #[tool(description = "Read the export's state, open to any caller.")]
+    #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    fn open_export(&self) -> Result<String, McpError> {
+        Ok("open".into())
+    }
+
     #[cfg(feature = "authz")]
     #[tool(description = "Start the export.")]
     #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
@@ -189,6 +203,19 @@ impl HygieneTool {
     )]
     #[authorize(nest_rs::authz::Read, bind = crate::crud::HygieneCrudService)]
     fn note(
+        &self,
+        note: nest_rs::seaorm::Authorized<nest_rs::authz::Read, crate::entity::Entity>,
+    ) -> Result<String, McpError> {
+        Ok(note.into_inner().id.to_string())
+    }
+
+    #[cfg(all(feature = "http", feature = "seaorm"))]
+    #[resource(
+        template = "hygiene-public-note://{id}",
+        description = "Read one note, loaded for any caller."
+    )]
+    #[public(nest_rs::authz::Read, bind = crate::crud::HygieneCrudService)]
+    fn public_note(
         &self,
         note: nest_rs::seaorm::Authorized<nest_rs::authz::Read, crate::entity::Entity>,
     ) -> Result<String, McpError> {

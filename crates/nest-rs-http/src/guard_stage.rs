@@ -13,8 +13,8 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use http::{HeaderValue, StatusCode, header};
 use nest_rs_core::__private::{
-    GuardStage, Pending, ResolvedLayer, UnmaskedReply, carries_ambient, install_pending,
-    new_unit_context, pending_of, take_pending,
+    GuardStage, Pending, ResolvedLayer, install_pending, new_unit_context, pending_of,
+    take_pending, withhold_from_reads,
 };
 use nest_rs_core::{AmbientValue, Failure, Handler, UnitContext};
 use nest_rs_guards::__private::{
@@ -94,7 +94,7 @@ pub(crate) struct HttpGuardStage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StageKind {
     /// A route; `unmasked` when no response mask shapes its reply, so the
-    /// reads a mask would scope are withheld from it ([`UnmaskedReply`]).
+    /// reads a mask would scope are withheld from it.
     Route {
         /// No response shaper masks the route's reply.
         unmasked: bool,
@@ -121,13 +121,7 @@ impl HttpGuardStage {
     /// What the stage records once its guards passed.
     fn passed(&self, cx: &mut UnitContext<'_>) {
         match self.kind {
-            StageKind::Route { unmasked: true } => {
-                // With nothing attached here and nothing carried in, the route
-                // reads none anyway, and nothing is marked.
-                if !pending_of(cx).is_empty() || carries_ambient() {
-                    cx.attach(UnmaskedReply);
-                }
-            }
+            StageKind::Route { unmasked: true } => withhold_from_reads(cx),
             StageKind::Route { unmasked: false } => {}
             StageKind::SelfMount => {
                 let mut pending = pending_of(cx).clone();
@@ -1048,7 +1042,8 @@ mod tests {
     /// Whether what an unmasked route runs after `chain` sees the marker.
     async fn withheld(chain: Vec<ResolvedLayer<dyn Guard>>, req: Request) -> bool {
         let rest = crate::endpoint_fn(|_req| async {
-            let marked = nest_rs_core::ambient::<UnmaskedReply>().is_some();
+            let marked =
+                nest_rs_core::ambient::<nest_rs_core::__private::UnmaskedReply>().is_some();
             Ok(Response::builder().body(if marked { "withheld" } else { "bare" }))
         });
         let answer = guarded(chain, StageKind::Route { unmasked: true }, rest)

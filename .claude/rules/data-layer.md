@@ -172,7 +172,8 @@ the `UnmaskedReply` marker its guard stage attaches, and
 `current_ability` withholds the ability there, so a read the mask would have
 scoped fails closed, as a write does before its hook — and `nest-rs-http` knows
 nothing of authz or the ORM
-(`.claude/decisions/unmasked-reply-withholds-the-ability.md`).
+(`.claude/decisions/unmasked-reply-withholds-the-ability.md`). A job withholds
+nothing: `Repo` reads no ability there as system work, wider than the one it holds.
 
 ## What waits for the commit — the event and the job
 
@@ -300,16 +301,17 @@ applied it. A decorated reply
 whose rows did not come through `Repo` under the same ability keeps that trust,
 which is the limit (`.claude/decisions/mask-provenance.md`).
 
-`#[authorize(Action, Entity)]` beside the operation is the arming declaration
-on every edge; the decorator emits the gate and the mask, and that is what
-makes posture greppable. **The gate is one function**, `class_gate`, on every
+`#[authorize(Action, Entity)]` or `#[public(Action, Entity)]` beside the
+operation is the arming declaration on every edge; the decorator emits the gate
+and the mask, and that is what makes posture greppable. A unit declaring neither
+withholds the ability from its reads. **The gate is one function**, `class_gate`, on every
 edge; the mask is each edge's, chosen by its protocol, and only an entity's: a
 subject `#[subject]` declares has no rows, so its posture gates and arms no
 mask, decided by the subject's type:
 
-- **HTTP** (`#[routes]`, which `#[crud]` emits under) — `Authorize<A, E>`'s
-  class gate, run with the guards, plus the response shaper. A masked-out key
-  is omitted.
+- **HTTP** (`#[routes]`, which `#[crud]` emits under) — the class gate of the
+  `Authorize<A, E>` the posture declares, run with the guards, plus the response
+  shaper. A masked-out key is omitted.
 - **GraphQL** (`#[operations]`) — the class gate and a mask around the
   returned value; `unmasked` keeps the gate and leaves masking to the body,
   for a shape the round-trip cannot see through (a cursor connection). A
@@ -348,7 +350,12 @@ dependency cycle.** What they guarantee:
   each WS message and hook. Nothing re-runs the chain below the request. A
   `#[public]` unit no ability reached, on an opened MCP endpoint or under an open
   upgrade, takes the visitor's rules at its own `AbilityGuard`, the pool's
-  included.
+  included. **A visitor reads only inside a unit naming its read**
+  (`#[public(Action, Entity)]`): `current_ability` answers none for a visitor
+  anywhere else in a request, a bare `#[public]`, a nested GraphQL field, a relation's
+  batch, so each fails closed where no mask reaches. A job holding one reads by its
+  grant, `with_ability` being the line there, and `TestApp::unit` stands in for a unit
+  naming its read.
 - **A dataloader batch** runs off-task under what its request carries into a
   batch — the request's values, never one field's, and the pool — captured
   where a field asks the loader; nothing is bound for it.

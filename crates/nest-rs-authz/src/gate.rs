@@ -185,7 +185,8 @@ pub(crate) fn error_unreached(refusal: Refusal<'_>) {
 /// It reads the ability the site's guards attached, whether or not their stage
 /// has made it ambient yet. A site that is not `#[public]` refuses a caller no
 /// principal backs, whatever the visitor's rules grant: a grant written for
-/// public reads never satisfies an `#[authorize]`. A denial no `when` narrows
+/// public reads never satisfies an `#[authorize]`, and a `#[public(A, S)]` naming
+/// an entity licenses a visitor's reads for the unit. A denial no `when` narrows
 /// matches every row, so it refuses here, whatever else the ability grants. A
 /// refusal files one `warn` and comes back as the [`Denial`] the edge renders —
 /// `401`, `403`, or `403` naming the scopes a wider token would carry
@@ -253,7 +254,11 @@ pub fn class_gate<A: ActionMarker, S: Subject>(cx: &mut UnitContext<'_>) -> Resu
             ..Refusal::of_unit(cx).declaring::<A, S>()
         });
         Failure::from(denial)
-    })
+    })?;
+    if S::__ROWS && ability.is_visitor() {
+        cx.attach(crate::context::VisitorReadNamed);
+    }
+    Ok(())
 }
 
 /// Whether `ability` grants `action` on the class `subject` at a site of

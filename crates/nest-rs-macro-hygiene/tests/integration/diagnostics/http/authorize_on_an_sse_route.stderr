@@ -1,4 +1,4 @@
-error[E0080]: evaluation panicked: an `#[sse]` route's `#[authorize]` names a subject no table holds: an entity's posture masks the reply against its rows, and an event stream is no wire model to reconcile. Declare the capability with `#[subject]` on a unit struct and gate the stream with `#[authorize(Action, ThatSubject)]`, then load what it needs inside the handler
+error[E0080]: evaluation panicked: an `#[sse]` route's posture names a subject no table holds: an entity's posture masks the reply against its rows, and an event stream is no wire model to reconcile. Declare the capability with `#[subject]` on a unit struct and gate the stream with `#[authorize(Action, ThatSubject)]` or `#[public(Action, ThatSubject)]`, then load what it needs inside the handler
   --> tests/integration/diagnostics/http/authorize_on_an_sse_route.rs:34:23
    |
 34 |     #[authorize(Read, post::Entity)]

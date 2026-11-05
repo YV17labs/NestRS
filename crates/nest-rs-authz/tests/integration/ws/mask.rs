@@ -144,9 +144,8 @@ impl MaskGateway {
     #[authorize(Read, widget::Entity)]
     async fn nothing(&self) {}
 
-    /// The opt-out: no gate, no mask.
+    /// No posture: no gate, no mask.
     #[subscribe_message("raw_widget")]
-    #[public]
     async fn raw_widget(&self) -> Result<WidgetDto, WsError> {
         Ok(WidgetDto {
             id: 1,
@@ -278,12 +277,11 @@ async fn unmasked_keeps_the_gate_and_returns_the_body_verbatim() {
 }
 
 #[tokio::test]
-async fn public_opts_out_of_masking() {
+async fn a_message_stating_no_posture_arms_no_mask() {
     let body = reply("viewer", "raw_widget").await;
     assert!(
         body.contains("first"),
-        "`#[public]` declares no gate and no mask — the message is responsible for \
-         its own output: {body}",
+        "no gate and no mask: the message is responsible for its own output: {body}",
     );
 }
 

@@ -26,7 +26,10 @@ impl PoolTool {}
 impl ServerHandler for PoolTool {}
 
 // `ThrottlerModule` registers `ThrottlerGuard`; listing it too fails the boot.
-#[module(imports = [ThrottlerModule::for_root(one_per_minute())], providers = [PoolTool])]
+#[module(
+    imports = [ThrottlerModule::for_root(one_per_minute())],
+    providers = [Attaching, PoolTool],
+)]
 struct PoolModule;
 
 fn one_per_minute() -> ThrottlerConfig {
@@ -37,7 +40,7 @@ fn one_per_minute() -> ThrottlerConfig {
     }
 }
 
-#[module(imports = [PoolModule], providers = [GlobalGuards<(ThrottlerGuard,)>])]
+#[module(imports = [PoolModule], providers = [GlobalGuards<(Attaching, ThrottlerGuard)>])]
 struct AGlobalThrottlerGuardRateLimitsMcpApp;
 
 #[tokio::test]
@@ -118,6 +121,10 @@ mod a_hosts_own_guards {
 
     #[async_trait]
     impl Guard for Pass {
+        fn phase(&self) -> nest_rs_guards::GuardPhase {
+            nest_rs_guards::GuardPhase::Authorization
+        }
+
         async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             Ok(())
         }
@@ -194,6 +201,10 @@ macro_rules! recording_guard {
 
         #[async_trait]
         impl Guard for $name {
+            fn phase(&self) -> nest_rs_guards::GuardPhase {
+                nest_rs_guards::GuardPhase::Authentication
+            }
+
             async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
                 self.trail.seen.lock().expect("trail lock").push($label);
                 nest_rs_core::__private::set_actor_id($label);
@@ -256,6 +267,10 @@ impl Layer for DenyEverything {}
 
 #[async_trait]
 impl Guard for DenyEverything {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("the pool refused"))
     }
@@ -415,6 +430,10 @@ impl Layer for Attaching {}
 
 #[async_trait]
 impl Guard for Attaching {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("ada");
         cx.attach(Caller("ada"));
@@ -528,6 +547,10 @@ mod request_decided {
 
     #[async_trait]
     impl Guard for KeyAtTheRequest {
+        fn phase(&self) -> nest_rs_guards::GuardPhase {
+            nest_rs_guards::GuardPhase::Authorization
+        }
+
         async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             keyed(cx)
         }
@@ -546,6 +569,10 @@ mod request_decided {
 
     #[async_trait]
     impl Guard for KeyAtTheUnit {
+        fn phase(&self) -> nest_rs_guards::GuardPhase {
+            nest_rs_guards::GuardPhase::Authorization
+        }
+
         async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             keyed(cx)
         }
@@ -566,7 +593,6 @@ mod request_decided {
     impl KeyedTool {
         /// Answer with a constant.
         #[tool]
-        #[public]
         async fn ping(&self) -> Result<String, McpError> {
             Ok("pong".to_owned())
         }

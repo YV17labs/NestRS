@@ -44,6 +44,10 @@ impl Layer for Bearer {}
 
 #[async_trait]
 impl Guard for Bearer {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         self.checks.seen.fetch_add(1, Ordering::SeqCst);
         if cx.reflector().posture() == Posture::InBand {
@@ -177,7 +181,6 @@ struct OriginGateway;
 #[messages]
 impl OriginGateway {
     #[subscribe_message("ping")]
-    #[public]
     async fn ping(&self) -> &'static str {
         "pong"
     }

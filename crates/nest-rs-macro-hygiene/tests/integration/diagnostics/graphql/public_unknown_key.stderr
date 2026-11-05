@@ -1,0 +1,5 @@
+error: unknown #[public] argument `audience`; expected `bind` or `id_arg`
+  --> tests/integration/diagnostics/graphql/public_unknown_key.rs:37:35
+   |
+37 |     #[public(Read, posts::Entity, audience = "everyone")]
+   |                                   ^^^^^^^^

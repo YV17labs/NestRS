@@ -52,7 +52,10 @@
 //!   ability — and its trace;
 //! * a `Repo`-backed body reading through the ambient executor of the
 //!   operation's own unit of work, opened through the bound
-//!   `nest_rs_database::UnitOfWork`, row-filtered by the caller's ability.
+//!   `nest_rs_database::UnitOfWork`, row-filtered by the caller's ability where
+//!   its posture names what it reads, and reading nothing a grant guards where
+//!   it names nothing; a hand-written `ServerHandler`, which writes no posture,
+//!   reads under a principal's ability and masks its answer itself.
 //!
 //! Notifications and `subscriptions/listen` run no unit of work, documented
 //! on [`PropagatingHandler`].
@@ -249,11 +252,12 @@ pub use rmcp;
 /// ```
 pub use nest_rs_mcp_macros::mcp;
 
-/// Declare an `#[mcp]` host's operations on its inherent impl block. A tool the
-/// endpoint's guards cover needs no posture; `#[authorize(Action, Entity)]` adds
-/// a gate and a reply mask, which are `nest-rs-authz`'s, and `#[public]` admits a
-/// caller with no credential, the one an endpoint the app opened takes when it
-/// declares no gate. Its arguments are held to the rules their type declares, a
+/// Declare an `#[mcp]` host's operations on its inherent impl block. A tool a guard
+/// identifying its caller covers at the endpoint needs no posture;
+/// `#[authorize(Action, Subject)]` adds a gate and a reply mask, which are
+/// `nest-rs-authz`'s, and `#[public]` admits a caller with no credential, the one an
+/// endpoint the app opened takes when it declares no gate: bare it reads nothing a
+/// grant guards, and `#[public(Action, Subject)]` names what that caller reads. Its arguments are held to the rules their type declares, a
 /// refusal answered `invalid_params` before the body runs.
 ///
 /// ```

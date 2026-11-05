@@ -10,13 +10,26 @@ help: the trait `Subject` is not implemented for `Exporting`
  7 | struct Exporting;
    | ^^^^^^^^^^^^^^^^
    = note: a posture names a SeaORM entity, whose rows it masks, or a capability no table holds, declared with `#[subject]` on a unit struct: `#[subject] pub struct Exporting;`
+
+error[E0277]: `Exporting` is not an authorization subject
+  --> tests/integration/diagnostics/authz/authorize_on_a_type_that_is_no_subject.rs:16:25
+   |
+16 |     #[authorize(Manage, Exporting)]
+   |                         ^^^^^^^^^ neither an entity nor a `#[subject]`
+   |
+help: the trait `Subject` is not implemented for `Exporting`
+  --> tests/integration/diagnostics/authz/authorize_on_a_type_that_is_no_subject.rs:7:1
+   |
+ 7 | struct Exporting;
+   | ^^^^^^^^^^^^^^^^
+   = note: a posture names a SeaORM entity, whose rows it masks, or a capability no table holds, declared with `#[subject]` on a unit struct: `#[subject] pub struct Exporting;`
 note: required by a bound in `class_gate`
   --> $WORKSPACE/crates/nest-rs-authz/src/gate.rs
    |
    | pub fn class_gate<A: ActionMarker, S: Subject>(cx: &mut UnitContext<'_>) -> Result<(), Failure> {
    |                                       ^^^^^^^ required by this bound in `class_gate`
 
-error[E0277]: `#[authorize]` cannot mask a reply of type `_` on this subject
+error[E0277]: this posture cannot mask a reply of type `_` on this subject
   --> tests/integration/diagnostics/authz/authorize_on_a_type_that_is_no_subject.rs:16:25
    |
 16 |     #[authorize(Manage, Exporting)]

@@ -3,7 +3,7 @@
 //! listed, under the ability the request's in-band guards kept, and commits
 //! only an operation that answered `Ok` with no tool error in band.
 
-use nest_rs_authz::{AbilityBuilder, current_ability};
+use nest_rs_authz::{AbilityBuilder, Action, Read, current_ability, subject};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_database::{ExecutorScope, current_executor_scope};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
@@ -14,6 +14,10 @@ use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmExecutor, SeaOrmM
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool;
 use sea_orm::ConnectionTrait;
+
+/// What `inspect` reads: an operation naming no read reads under no ability.
+#[subject]
+struct Inspection;
 
 /// Attaches an ability to every request, as the authorization guard does,
 /// naming its caller as the authentication guard does.
@@ -27,9 +31,9 @@ impl Layer for Granting {}
 impl Guard for Granting {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("granted");
-        let ability = AbilityBuilder::new()
-            .build()
-            .expect("an ability with no rule builds");
+        let mut ability = AbilityBuilder::new();
+        ability.can(Action::Read, Inspection);
+        let ability = ability.build().expect("one grant builds");
         cx.attach(nest_rs_authz::__private::AmbientAbility::new(ability));
         Ok(())
     }
@@ -58,7 +62,7 @@ struct UnitTools;
 #[tools]
 impl UnitTools {
     #[tool(description = "Says what the operation runs on.")]
-    #[public]
+    #[public(Read, Inspection, unmasked)]
     async fn inspect(&self) -> Result<CallToolResult, McpError> {
         let seen = format!(
             "lazy={} request={} ability={}",
@@ -298,6 +302,10 @@ mod bound {
 
     #[async_trait]
     impl Guard for OwnNotes {
+        fn phase(&self) -> nest_rs_guards::GuardPhase {
+            nest_rs_guards::GuardPhase::Authorization
+        }
+
         async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             nest_rs_core::__private::set_actor_id("mine");
             let mut ability = AbilityBuilder::new();

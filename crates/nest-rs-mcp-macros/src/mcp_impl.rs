@@ -26,11 +26,11 @@ use syn::{
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
-    Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, Posture, PostureRules, TailParam,
-    answer_span, await_if_async, cfg_attrs, concrete_signature, exception_filter_specs,
-    force_guard_typeids, forwarded_arg_idents, generic_args, guard_capability_bounds,
-    handler_const, handler_ref, impl_self_ident, interceptor_specs, layer_deps,
-    normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
+    Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, Posture, PostureGate,
+    PostureRules, TailParam, answer_span, await_if_async, cfg_attrs, concrete_signature,
+    exception_filter_specs, force_guard_typeids, forwarded_arg_idents, generic_args,
+    guard_capability_bounds, handler_const, handler_ref, impl_self_ident, interceptor_specs,
+    layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
     reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident, site_fn_ident,
     tail_param, ungrouped_expr, unit_of_work_required, validate_argument,
 };
@@ -911,14 +911,14 @@ fn site_ref(self_ty: &Type, method: &syn::Ident) -> TokenStream2 {
 /// Step 2 — the class gate `#[authorize(Action, Entity)]` desugars to, every
 /// edge's one, run on the operation its guards checked.
 fn class_gate(posture: &Posture) -> TokenStream2 {
-    match posture {
-        Posture::Authorize { action, entity, .. } => quote! {
+    match posture.gate() {
+        Some(PostureGate { action, entity, .. }) => quote! {
             ::core::option::Option::Some(
                 ::nest_rs_authz::class_gate::<#action, #entity>
                     as ::nest_rs_core::__private::ClassGate,
             )
         },
-        Posture::Public | Posture::Undeclared => quote!(::core::option::Option::None),
+        None => quote!(::core::option::Option::None),
     }
 }
 
@@ -973,18 +973,15 @@ fn parameters_args(sig: &Signature) -> Vec<&syn::Ident> {
 /// already refused a masked role whose every answer is opaque.
 fn masked(role: Role, posture: &Posture, sig: &Signature) -> syn::Result<TokenStream2> {
     let unmasked = quote!(::core::result::Result::Ok(__nestrs_value));
-    let Posture::Authorize {
+    let Some(PostureGate {
         action,
         entity,
-        unmasked: declared_unmasked,
+        unmasked: false,
         ..
-    } = posture
+    }) = posture.gate()
     else {
         return Ok(unmasked);
     };
-    if *declared_unmasked {
-        return Ok(unmasked);
-    }
 
     // `take_operation` already refused a masked return not spelled `Result<…>`.
     let Some(ok_ty) = result_ok_type(sig) else {
@@ -997,13 +994,14 @@ fn masked(role: Role, posture: &Posture, sig: &Signature) -> syn::Result<TokenSt
             Role::Resource => role.mask_unwraps(),
             Role::Tool | Role::Prompt | Role::Resources => "`Json<T>` or `T`",
         };
+        let word = posture.word().as_str();
         return Err(syn::Error::new_spanned(
             &sig.output,
             format!(
-                "`#[authorize(...)]` cannot mask a `{opaque}` — its contents are opaque to \
+                "`#[{word}(...)]` cannot mask a `{opaque}` — its contents are opaque to \
                  the entity round-trip. Return the wire type ({remedy}) and let the \
                  mask run, or keep the gate and mask by hand with \
-                 `#[authorize(Action, Entity, unmasked)]` + `nest_rs::authz::masked_reply`",
+                 `#[{word}(Action, Entity, unmasked)]` + `nest_rs::authz::masked_reply`",
             ),
         ));
     }
@@ -1209,15 +1207,13 @@ fn take_operation(
         ..
     } = take_layers(&pair::MCP, LayerScope::Method, &mut method.attrs)?;
     let posture = posture_rules(role).take(method)?;
+    let word = posture.word().as_str();
     if posture.masks()
         && let Some(why) = role.unmaskable()
     {
         return Err(syn::Error::new_spanned(
             &method.sig.ident,
-            format!(
-                "`#[authorize(...)]` cannot mask a {why}: \
-                 `#[authorize(Action, Entity, unmasked)]`"
-            ),
+            format!("`#[{word}(...)]` cannot mask a {why}: `#[{word}(Action, Entity, unmasked)]`"),
         ));
     }
     if posture.masks() && result_ok_type(&method.sig).is_none() {
@@ -1227,7 +1223,7 @@ fn take_operation(
                 "a masked {} spells its return `Result<…>`: the mask reads the \
                  value's shape — {} to unwrap, `{}` to refuse — off \
                  that spelling, and a `Result` renamed on import or behind an alias hides \
-                 it. Write `Result<…>`, or declare `#[authorize(Action, Entity, unmasked)]` \
+                 it. Write `Result<…>`, or declare `#[{word}(Action, Entity, unmasked)]` \
                  and mask in the body",
                 role.attr(),
                 role.mask_unwraps(),
@@ -1329,6 +1325,7 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
         let force = force_guard_typeids(&op.force_guards);
         let kind = op.role.kind();
         let gate = class_gate(&op.posture);
+        let withheld = op.posture.withheld();
         quote! {
             #handler
 
@@ -1362,6 +1359,7 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
                         method: #method_guards,
                         force: #force,
                         kind: #kind,
+                        withheld: #withheld,
                     },
                 )
             }
@@ -1674,8 +1672,8 @@ fn posture_rules(role: Role) -> PostureRules {
         bind_unsupported_because: match role {
             Role::Tool | Role::Prompt => Some(
                 "an operation takes one `Parameters<T>` struct, not the named id argument the \
-                 binding reads. Keep `#[authorize(Action, Entity)]` and bind in the body with \
-                 the service's `access`",
+                 binding reads. Keep the posture naming its subject and load the row in the body \
+                 with the service's `access`",
             ),
             // The template's one variable is the id; `take_operation` refuses
             // any other number of them.

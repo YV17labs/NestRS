@@ -421,6 +421,7 @@ mod guards {
     #[routes]
     impl RatedController {
         #[get("/")]
+        #[public]
         async fn list(&self) -> &'static str {
             "[]"
         }
@@ -464,6 +465,7 @@ mod guards {
     #[routes]
     impl LimitedController {
         #[get("/")]
+        #[public]
         #[use_guards(Limit)]
         async fn list(&self) -> &'static str {
             "[]"
@@ -545,10 +547,6 @@ mod guards {
                 "a throttler refuses no credential, so no {status}: {responses}",
             );
         }
-        assert!(
-            doc["paths"]["/rated"]["get"].get("security").is_none(),
-            "a route no guard authenticates requires no credential: {doc}",
-        );
     }
 
     #[tokio::test]

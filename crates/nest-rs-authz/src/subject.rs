@@ -35,7 +35,8 @@ use sea_orm::{EntityTrait, IdenStatic};
 )]
 pub trait Subject: 'static {
     /// Whether the subject has rows a posture masks: `false` for a
-    /// `#[subject]`, so an extractor naming it owes the masking probe nothing.
+    /// `#[subject]`, whose posture withholds the unit's reads as no mask shapes
+    /// its reply.
     #[doc(hidden)]
     const __ROWS: bool = true;
 }

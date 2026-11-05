@@ -18,6 +18,10 @@ impl Layer for RolesGuard {}
 
 #[async_trait]
 impl Guard for RolesGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let required = cx
             .reflector()

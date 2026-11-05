@@ -27,6 +27,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let role = nest_rs_http::HttpView::of(cx)?
             .request()
@@ -82,9 +86,8 @@ impl GateTool {
         Ok("widgets".to_owned())
     }
 
-    /// The opt-out, for an operation with no entity behind it.
+    /// No posture: the guards at the endpoint's request cover it.
     #[tool]
-    #[public]
     async fn ping(&self) -> Result<String, McpError> {
         Ok("pong".to_owned())
     }
@@ -144,11 +147,10 @@ async fn a_refusal_a_wider_token_would_fix_says_so() {
 }
 
 #[tokio::test]
-async fn a_public_operation_has_no_gate() {
+async fn an_operation_stating_no_posture_runs_no_gate() {
     let body = call("nobody", "ping").await;
     assert!(
         body.contains("pong"),
-        "`#[public]` declares the operation has no entity to gate — the endpoint \
-         still authenticated the caller: {body}",
+        "the operation has no entity to gate, and the endpoint's guards cover it: {body}",
     );
 }

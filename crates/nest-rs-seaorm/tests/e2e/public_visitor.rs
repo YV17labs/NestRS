@@ -2,14 +2,13 @@
 //! `AbilityFactory::define_visitor` scopes `Repo`'s `SELECT` and masks the response.
 
 use nest_rs_authz::AbilityGuard;
-use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
 use nest_rs_core::module;
 use nest_rs_guards::GlobalGuards;
 use nest_rs_http::Json;
 use nest_rs_http::{controller, routes};
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError};
-use nest_rs_testing::TestApp;
+use nest_rs_testing::{LogCapture, TestApp};
 use sea_orm::DatabaseConnection;
 use serde::Serialize;
 
@@ -110,20 +109,17 @@ macro_rules! visitor_app {
             #[routes]
             impl PostsController {
                 #[get("/")]
-                #[public]
-                async fn list(
-                    &self,
-                    _authz: Authorize<Read, post::Entity>,
-                ) -> nest_rs_http::Result<Json<Vec<PostDto>>> {
+                #[public(Read, post::Entity)]
+                async fn list(&self) -> nest_rs_http::Result<Json<Vec<PostDto>>> {
                     let rows = PostsService.list().await.map_err(ServiceError::from)?;
                     Ok(Json(rows.into_iter().map(PostDto::from).collect()))
                 }
 
-                // `#[public]` attaches the ability to the request; only a shaper
-                // installs it as the ambient one `Repo` reads.
-                #[get("/unshaped")]
+                // The bare word names no read: the ability the guard attached is
+                // withheld from what `Repo` reads.
+                #[get("/bare")]
                 #[public]
-                async fn unshaped(&self) -> nest_rs_http::Result<Json<Vec<PostDto>>> {
+                async fn bare(&self) -> nest_rs_http::Result<Json<Vec<PostDto>>> {
                     let rows = PostsService.list().await.map_err(ServiceError::from)?;
                     Ok(Json(rows.into_iter().map(PostDto::from).collect()))
                 }
@@ -256,20 +252,33 @@ async fn a_field_restricted_visitor_grant_masks_the_response() {
     }
 }
 
-// No shaper parameter, no ambient ability: `Repo` fails the read closed,
-// whatever the visitor is granted.
+// No read named: `Repo` fails it closed, whatever the visitor is granted, and
+// its `warn` names the remedy.
 #[tokio::test]
-async fn a_public_route_without_the_shaper_still_reads_nothing() {
+async fn a_bare_public_route_reads_nothing_and_says_what_names_the_read() {
+    let logs = LogCapture::install();
     let _conn = seeded_db().await;
     let app = open::boot().await;
 
-    let resp = app.http().get("/posts/unshaped").send().await;
+    let resp = app.http().get("/posts/bare").send().await;
     resp.assert_status_is_ok();
     let rows = body_of(resp).await;
     assert_eq!(
         rows.as_array().map(Vec::len),
         Some(0),
         "no ambient ability ⇒ `Repo` denies every row: {rows:?}",
+    );
+    let event = logs.expect_one(
+        "nest_rs::orm",
+        "no ambient Ability outside a worker job — denying all rows",
+    );
+    assert_eq!(event.level, "warn");
+    assert!(
+        event
+            .field("hint")
+            .is_some_and(|hint| hint.contains("#[public(Read, Entity)]")),
+        "{:?}",
+        event.fields,
     );
 }
 
@@ -285,4 +294,430 @@ async fn the_unexposed_column_never_reaches_a_visitor() {
         !body.contains("secret") && !body.contains("sauce-"),
         "an unrestricted visitor grant still cannot leak an unexposed column: {body}",
     );
+}
+
+/// The same read on every edge, against live rows: what `#[public(Read, Entity)]`
+/// names answers the published rows and the granted field alone, and a bare
+/// `#[public]` reading them answers nothing, with the `warn` naming that line.
+mod every_edge {
+    use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read};
+    use nest_rs_core::{injectable, module};
+    use nest_rs_graphql::async_graphql::SimpleObject;
+    use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
+    use nest_rs_http::{EndpointGuards, Json, StatusCode, controller, routes};
+    use nest_rs_mcp::{McpAccess, McpModule, mcp, tools};
+    use nest_rs_seaorm::{
+        Authorized, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError,
+    };
+    use nest_rs_testing::mcp::call_tool;
+    use nest_rs_testing::{LogCapture, TestApp};
+    use nest_rs_ws::{WsModule, gateway, messages};
+    use serde::{Deserialize, Serialize};
+    use serde_json::{Value, json};
+
+    use super::{PostsService, post, seeded_db};
+
+    /// What every edge answers: each member optional, so a field grant has a
+    /// representation in a typed answer.
+    #[derive(Clone, Debug, Serialize, Deserialize, SimpleObject, schemars::JsonSchema)]
+    struct PostRow {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        published: Option<bool>,
+    }
+
+    impl From<post::Model> for PostRow {
+        fn from(model: post::Model) -> Self {
+            Self {
+                id: Some(model.id),
+                title: Some(model.title),
+                published: Some(model.published),
+            }
+        }
+    }
+
+    async fn feed() -> Result<Vec<PostRow>, ServiceError> {
+        let rows = PostsService.list().await.map_err(ServiceError::from)?;
+        Ok(rows.into_iter().map(PostRow::from).collect())
+    }
+
+    /// A post a route binds by id, its key a UUID v7.
+    mod bound {
+        use nest_rs_seaorm::expose;
+        use sea_orm::entity::prelude::*;
+
+        #[expose(name = "BoundRow")]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "visitor_bound_posts")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key, auto_increment = false)]
+            #[expose]
+            pub id: Uuid,
+            #[expose]
+            pub title: String,
+            #[expose]
+            pub published: bool,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    #[injectable]
+    #[derive(Default)]
+    struct BoundService;
+
+    impl CrudService for BoundService {
+        type Entity = bound::Entity;
+    }
+
+    const PUBLISHED: &str = "0195b4a6-4c1c-7d3e-8f00-000000000001";
+    const DRAFT: &str = "0195b4a6-4c1c-7d3e-8f00-000000000002";
+    const ABSENT: &str = "0195b4a6-4c1c-7d3e-8f00-000000000003";
+
+    async fn seed_bound_rows() {
+        let conn = crate::harness::connect().await;
+        crate::harness::setup_shared_table(
+            &conn,
+            "visitor_bound_posts",
+            &format!(
+                "CREATE TABLE IF NOT EXISTS visitor_bound_posts (
+                    id UUID PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    published BOOLEAN NOT NULL
+                );
+                 INSERT INTO visitor_bound_posts (id, title, published) VALUES
+                    ('{PUBLISHED}', 'published', true),
+                    ('{DRAFT}', 'a draft', false)
+                 ON CONFLICT (id) DO NOTHING;"
+            ),
+        )
+        .await;
+    }
+
+    #[injectable]
+    #[derive(Default)]
+    struct Rules;
+
+    impl AbilityFactory for Rules {
+        type Actor = crate::Anyone;
+
+        fn define(&self, _actor: &crate::Anyone, _ab: &mut AbilityBuilder) {}
+
+        fn define_visitor(&self, ab: &mut AbilityBuilder) {
+            ab.can(Action::Read, post::Entity)
+                .when(|p| p.eq(post::Column::Published, true))
+                .fields([post::Column::Title]);
+            ab.can(Action::Read, bound::Entity)
+                .when(|p| p.eq(bound::Column::Published, true))
+                .fields([bound::Column::Title]);
+        }
+    }
+
+    type VisitorGuard = AbilityGuard<Rules>;
+
+    /// The one `warn` a read no ability reaches files, naming the line to write.
+    fn assert_the_read_said_so(logs: &LogCapture) {
+        let event = logs.expect_one(
+            "nest_rs::orm",
+            "no ambient Ability outside a worker job — denying all rows",
+        );
+        assert_eq!(event.level, "warn");
+        assert!(
+            event
+                .field("hint")
+                .is_some_and(|hint| hint.contains("#[public(Read, Entity)]")),
+            "{:?}",
+            event.fields,
+        );
+    }
+
+    /// The titles a visitor's grant serves, in any order.
+    fn assert_the_published_titles_alone(rows: &Value) {
+        let rows = rows.as_array().expect("a list of rows");
+        let mut titles: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| row["title"].as_str())
+            .collect();
+        titles.sort_unstable();
+        assert_eq!(titles, ["published one", "published two"], "{rows:?}");
+        for row in rows {
+            assert_eq!(row.as_object().map(serde_json::Map::len), Some(1), "{row}");
+        }
+    }
+
+    #[controller(path = "/edge/posts")]
+    #[use_guards(VisitorGuard)]
+    struct PostsController;
+
+    #[routes]
+    impl PostsController {
+        #[get("/")]
+        #[public(Read, post::Entity)]
+        async fn named(&self) -> nest_rs_http::Result<Json<Vec<PostRow>>> {
+            Ok(Json(feed().await?))
+        }
+
+        #[get("/one/{id}")]
+        #[public(Read, bind = BoundService)]
+        async fn one(
+            &self,
+            row: Authorized<Read, bound::Entity>,
+        ) -> nest_rs_http::Result<Json<bound::BoundRow>> {
+            Ok(Json(bound::BoundRow::from(&row.into_inner())))
+        }
+    }
+
+    #[resolver]
+    struct PostsResolver;
+
+    #[operations]
+    impl PostsResolver {
+        #[query]
+        #[public(Read, post::Entity)]
+        async fn named(&self) -> Result<Vec<PostRow>, ServiceError> {
+            feed().await
+        }
+
+        #[query]
+        #[public]
+        async fn bare(&self) -> Result<Vec<PostRow>, ServiceError> {
+            feed().await
+        }
+    }
+
+    #[module(
+        imports = [
+            SeaOrmModule::for_root(SeaOrmConfig {
+                url: crate::harness::url().into(),
+                ..Default::default()
+            }),
+            SeaOrmDatabaseModule,
+            GraphqlModule,
+        ],
+        providers = [
+            Rules,
+            VisitorGuard,
+            BoundService,
+            PostsController,
+            PostsResolver,
+            EndpointGuards<GraphqlView, (VisitorGuard,)>,
+        ],
+    )]
+    struct HttpAndGraphqlApp;
+
+    async fn http_and_graphql() -> TestApp {
+        TestApp::builder()
+            .module::<HttpAndGraphqlApp>()
+            .build()
+            .await
+            .expect("the routes and the resolver boot against live Postgres")
+    }
+
+    async fn graphql(app: &TestApp, document: &str) -> Value {
+        let answer = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!({ "query": document }))
+            .send()
+            .await
+            .json()
+            .await;
+        serde_json::to_value(answer).expect("a GraphQL response")
+    }
+
+    #[tokio::test]
+    async fn a_route_naming_its_read_answers_the_published_rows_and_the_granted_field() {
+        let _conn = seeded_db().await;
+        let app = http_and_graphql().await;
+
+        let answer = app.http().get("/edge/posts").send().await;
+        answer.assert_status_is_ok();
+        assert_the_published_titles_alone(&super::body_of(answer).await);
+    }
+
+    #[tokio::test]
+    async fn a_public_route_bound_on_its_id_answers_by_the_visitors_grant() {
+        seed_bound_rows().await;
+        let app = http_and_graphql().await;
+
+        let published = app
+            .http()
+            .get(format!("/edge/posts/one/{PUBLISHED}"))
+            .send()
+            .await;
+        published.assert_status_is_ok();
+        assert_eq!(
+            super::body_of(published).await,
+            json!({ "title": "published" })
+        );
+
+        for (id, status) in [
+            (DRAFT, StatusCode::FORBIDDEN),
+            (ABSENT, StatusCode::NOT_FOUND),
+        ] {
+            app.http()
+                .get(format!("/edge/posts/one/{id}"))
+                .send()
+                .await
+                .assert_status(status);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_operation_naming_its_read_answers_the_published_rows_and_the_granted_field() {
+        let _conn = seeded_db().await;
+        let app = http_and_graphql().await;
+
+        let answer = graphql(&app, "{ named { title id published } }").await;
+        let rows = answer["data"]["named"].as_array().expect("rows");
+        assert_eq!(rows.len(), 2, "{answer}");
+        for row in rows {
+            assert!(row["title"].is_string(), "{row}");
+            assert!(row["id"].is_null() && row["published"].is_null(), "{row}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bare_public_operation_reads_nothing_and_says_what_names_the_read() {
+        let logs = LogCapture::install();
+        let _conn = seeded_db().await;
+        let app = http_and_graphql().await;
+
+        let answer = graphql(&app, "{ bare { title } }").await;
+        assert_eq!(answer["data"]["bare"], json!([]), "{answer}");
+        assert_the_read_said_so(&logs);
+    }
+
+    #[gateway(path = "/edge/ws")]
+    struct PostsGateway;
+
+    #[messages]
+    impl PostsGateway {
+        #[subscribe_message("named")]
+        #[public(Read, post::Entity)]
+        #[use_guards(VisitorGuard)]
+        async fn named(&self) -> Result<Vec<PostRow>, ServiceError> {
+            feed().await
+        }
+
+        #[subscribe_message("bare")]
+        #[public]
+        #[use_guards(VisitorGuard)]
+        async fn bare(&self) -> Result<Vec<PostRow>, ServiceError> {
+            feed().await
+        }
+    }
+
+    #[module(
+        imports = [
+            SeaOrmModule::for_root(SeaOrmConfig {
+                url: crate::harness::url().into(),
+                ..Default::default()
+            }),
+            SeaOrmDatabaseModule,
+            WsModule,
+        ],
+        providers = [Rules, VisitorGuard, PostsGateway],
+    )]
+    struct WsApp;
+
+    /// What the gateway answers `event` over a real upgrade.
+    async fn message(event: &str) -> Value {
+        let app = TestApp::builder()
+            .module::<WsApp>()
+            .build_ws()
+            .await
+            .expect("the gateway boots against live Postgres");
+        let mut socket = app.socket("/edge/ws").connect().await;
+        socket.send(event, Value::Null).await;
+        let frame = socket.next_envelope().await;
+        app.shutdown().await.expect("the transport stops cleanly");
+        frame
+    }
+
+    #[tokio::test]
+    async fn a_message_naming_its_read_answers_the_published_rows_and_the_granted_field() {
+        let _conn = seeded_db().await;
+        assert_the_published_titles_alone(&message("named").await["data"]);
+    }
+
+    #[tokio::test]
+    async fn a_bare_public_message_reads_nothing_and_says_what_names_the_read() {
+        let logs = LogCapture::install();
+        let _conn = seeded_db().await;
+        assert_eq!(message("bare").await["data"], json!([]));
+        assert_the_read_said_so(&logs);
+    }
+
+    const MCP_PATH: &str = "/edge/mcp";
+
+    #[mcp(path = "/edge/mcp")]
+    #[use_guards(VisitorGuard)]
+    #[derive(Clone, Default)]
+    struct PostsTool;
+
+    #[tools]
+    impl PostsTool {
+        /// What a visitor may read.
+        #[tool]
+        #[public(Read, post::Entity)]
+        async fn named(&self) -> Result<nest_rs_mcp::Json<Vec<PostRow>>, ServiceError> {
+            feed().await.map(nest_rs_mcp::Json)
+        }
+
+        /// The same read, naming nothing.
+        #[tool]
+        #[public]
+        async fn bare(&self) -> Result<nest_rs_mcp::Json<Vec<PostRow>>, ServiceError> {
+            feed().await.map(nest_rs_mcp::Json)
+        }
+    }
+
+    #[module(
+        imports = [
+            SeaOrmModule::for_root(SeaOrmConfig {
+                url: crate::harness::url().into(),
+                ..Default::default()
+            }),
+            SeaOrmDatabaseModule,
+            McpModule::for_root(McpAccess::Public),
+        ],
+        providers = [Rules, VisitorGuard, PostsTool],
+    )]
+    struct McpApp;
+
+    async fn tool(name: &str) -> String {
+        let app = TestApp::for_module::<McpApp>()
+            .await
+            .expect("the opened endpoint boots against live Postgres");
+        call_tool(app.http(), MCP_PATH, name, None).await
+    }
+
+    #[tokio::test]
+    async fn a_tool_naming_its_read_answers_the_published_rows_and_the_granted_field() {
+        let _conn = seeded_db().await;
+        let reply = tool("named").await;
+        assert!(reply.contains("published one"), "{reply}");
+        assert!(reply.contains("published two"), "{reply}");
+        assert!(!reply.contains("a draft"), "{reply}");
+        assert!(
+            !reply.contains("published\\\":"),
+            "the field grant holds: {reply}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bare_public_tool_reads_nothing_and_says_what_names_the_read() {
+        let logs = LogCapture::install();
+        let _conn = seeded_db().await;
+        let reply = tool("bare").await;
+        assert!(!reply.contains("published one"), "{reply}");
+        assert_the_read_said_so(&logs);
+    }
 }

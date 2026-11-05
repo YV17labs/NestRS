@@ -13,6 +13,7 @@ use nest_rs_core::__private::{
     GlobalLayers, GuardStage, HandlerDeclaration, MetaLevels, ResolvedLayer, Site, SiteDeclaration,
     SiteLayers, Tail, compose_chain, declare_handler, declare_site, dedup_bucket, dispatch,
     log_effective_chain, new_unit_context, report_unresolved, resolve_scoped, settled,
+    withhold_from_reads,
 };
 use nest_rs_core::LayerSite;
 use nest_rs_core::{
@@ -136,11 +137,15 @@ pub struct OperationGuards {
     pub force: Vec<TypeId>,
     /// Which router serves the operation.
     pub kind: McpOperationKind,
+    /// The posture withholds the ability from the operation's reads: no mask
+    /// shapes its answer.
+    pub withheld: bool,
 }
 
 /// The guard stage of the operation `handler` declares: the app-wide pool, the
 /// host's guards and the method's, each once, each running its
-/// [`check`](Guard::check) on the operation — `None` when it runs none.
+/// [`check`](Guard::check) on the operation — `None` when it runs none and has
+/// nothing to withhold.
 ///
 /// The pool is part of it, as on a GraphQL root field: the endpoint's request
 /// runs `check_http`, which a guard deciding the operation alone overrides to
@@ -167,25 +172,29 @@ pub fn operation_guard_stage(
         &label,
     );
     log_effective_chain(&label, "guards", &chain);
-    validate_carried_chain(&label, &chain, || {
-        match crate::module::posture(container) {
-            // No guard runs at an opened endpoint's request.
-            Posture::Public => Ok(Vec::new()),
-            _ => carried_request_chain::<McpView>(container, &label)
-                .map_err(|unresolved| unresolved.to_string()),
-        }
-    })
-    .map_err(anyhow::Error::msg)?;
-    if chain.is_empty() {
+    let request_chain = || match crate::module::posture(container) {
+        // No guard runs at an opened endpoint's request.
+        Posture::Public => Ok(Vec::new()),
+        _ => carried_request_chain::<McpView>(container, &label)
+            .map_err(|unresolved| unresolved.to_string()),
+    };
+    validate_carried_chain(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
+    // No guard at all, here or at the request: nothing was attached to withhold.
+    let withholds = declared.withheld && !request_chain().map_err(anyhow::Error::msg)?.is_empty();
+    if chain.is_empty() && !withholds {
         return Ok(None);
     }
-    Ok(Some(Arc::new(OperationGuardStage { guards: chain })))
+    Ok(Some(Arc::new(OperationGuardStage {
+        guards: chain,
+        withheld: declared.withheld,
+    })))
 }
 
 /// One operation's guards, as the pipeline runs a site's guard stage: each
 /// one's [`check`](Guard::check) on the operation, read through [`McpView`].
 struct OperationGuardStage {
     guards: Vec<ResolvedLayer<dyn Guard>>,
+    withheld: bool,
 }
 
 impl GuardStage for OperationGuardStage {
@@ -193,7 +202,11 @@ impl GuardStage for OperationGuardStage {
         Box::pin(async move {
             check_guards(&self.guards, None, cx)
                 .await
-                .map_err(|refused| Failure::from(refused.into_denial(DENIED, cx)))
+                .map_err(|refused| Failure::from(refused.into_denial(DENIED, cx)))?;
+            if self.withheld {
+                withhold_from_reads(cx);
+            }
+            Ok(())
         })
     }
 }
@@ -400,6 +413,25 @@ mod tests {
             assert!(description_is_blank(concat!(" ", "\u{3000}")));
             assert!(!description_is_blank(concat!(" Counts ", "items.")));
         }
+    }
+
+    /// With no guard at the operation or at an opened endpoint's request, nothing
+    /// can have attached what a bare `#[public]` withholds, so it keeps no stage.
+    #[test]
+    fn an_operation_with_nothing_to_withhold_pays_for_no_stage() {
+        let stage = operation_guard_stage(
+            &Container::default(),
+            &PING,
+            OperationGuards {
+                host: Vec::new(),
+                method: Vec::new(),
+                force: Vec::new(),
+                kind: McpOperationKind::Tool,
+                withheld: true,
+            },
+        )
+        .expect("no guard to resolve");
+        assert!(stage.is_none());
     }
 
     struct Tools;

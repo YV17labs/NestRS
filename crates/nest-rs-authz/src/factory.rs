@@ -54,7 +54,7 @@ pub trait AbilityFactory: Send + Sync + 'static {
     /// actor makes.
     fn define(&self, actor: &Self::Actor, ability: &mut AbilityBuilder);
 
-    /// The unauthenticated visitor's rules, consulted on a `#[public]` route
+    /// The unauthenticated visitor's rules, consulted on a `#[public]` unit
     /// only. The default grants nothing.
     ///
     /// ```
@@ -104,7 +104,7 @@ pub trait AbilityFactory: Send + Sync + 'static {
     /// # Ok::<(), nest_rs_authz::MalformedRuleError>(())
     /// ```
     ///
-    /// A `#[public]` route reached *with* a valid token takes
+    /// A `#[public]` unit reached *with* a valid token takes
     /// [`define`](Self::define) instead — the visitor branch is the anonymous
     /// case, not a floor added to every caller.
     fn define_visitor(&self, _ability: &mut AbilityBuilder) {}

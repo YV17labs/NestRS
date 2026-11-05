@@ -1,19 +1,10 @@
 //! [`Authorize<A, S>`] — the route-level class gate for action `A` on
 //! subject `S`, and the type that arms the route's response mask.
 
-use std::any::TypeId;
 use std::marker::PhantomData;
 
-use nest_rs_core::{Edge, Posture};
-use nest_rs_guards::Denial;
-use nest_rs_http::__private::denial_to_http_error;
-use nest_rs_http::{FromRequest, Request, RequestBody, Result};
-
-use crate::gate::{Refusal, decide, warn_denied};
-use crate::{ActionMarker, Subject};
-
-/// Enforcement plumbing for action `A` on subject `S`. A route declaring it —
-/// through `#[authorize(A, S)]` or as a handler parameter — runs
+/// Enforcement plumbing for action `A` on subject `S`. A route whose posture
+/// names it, through `#[authorize(A, S)]` or `#[public(A, S)]`, runs
 /// [`class_gate`](crate::class_gate) with its guards, before any interceptor or
 /// filter the route declares, and installs the response shaper (automatic
 /// masking + ambient ability). Class-level only — the per-row filter and
@@ -67,6 +58,9 @@ use crate::{ActionMarker, Subject};
 /// # impl Layer for Grants {}
 /// # #[async_trait]
 /// # impl Guard for Grants {
+/// #     fn phase(&self) -> nest_rs_guards::GuardPhase {
+/// #         nest_rs_guards::GuardPhase::Authorization
+/// #     }
 /// #     async fn check(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> std::result::Result<(), Denial> {
 /// #         let mut ab = AbilityBuilder::new();
 /// #         if nest_rs_http::HttpView::of(cx)?.request().header("x-admin").is_some() {
@@ -105,55 +99,36 @@ use crate::{ActionMarker, Subject};
 /// # }
 /// ```
 ///
-/// `#[routes]` reads that as this type without a parameter. Written by hand as a
-/// handler parameter — on a `#[public]` route, whose posture is the opposite
-/// one — it gates and arms the same way, and checks again as it is extracted.
-/// An extractor reached indirectly (nested, or run by a hand-rolled
-/// `FromRequest`) is backstopped by the HTTP edge's masking probe, which fails
-/// the route closed.
+/// `#[routes]` reads that as this type without a parameter, and
+/// `#[public(Action, Entity)]`, on a route a caller with no credential reaches, as
+/// the same type. Never a handler parameter: the posture is a decorator.
+///
+/// ```compile_fail,E0277
+/// # use nest_rs_authz::Read;
+/// # use nest_rs_authz::http::Authorize;
+/// # use nest_rs_http::{Result, controller, routes};
+/// # mod posts {
+/// #     use sea_orm::entity::prelude::*;
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+/// #     #[sea_orm(table_name = "posts")]
+/// #     pub struct Model {
+/// #         #[sea_orm(primary_key)]
+/// #         pub id: i32,
+/// #     }
+/// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// #     pub enum Relation {}
+/// #     impl ActiveModelBehavior for ActiveModel {}
+/// # }
+/// # #[controller(path = "/posts")]
+/// # struct PostsController;
+/// # #[routes]
+/// # impl PostsController {
+/// #[get("/")]
+/// #[public]
+/// async fn list(&self, _authz: Authorize<Read, posts::Entity>) -> Result<String> {
+///     Ok(String::new())
+/// }
+/// # }
+/// # fn main() {}
+/// ```
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
-
-#[diagnostic::do_not_recommend]
-impl<'a, A, S> FromRequest<'a> for Authorize<A, S>
-where
-    A: ActionMarker,
-    S: Subject,
-{
-    async fn from_request(_req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        // Only a masking extractor owes the probe: on a subject no table holds
-        // there is nothing a shaper would have masked.
-        if S::__ROWS {
-            nest_rs_http::__private::MaskProbe::mark();
-        }
-        checked::<A, S>().map_err(denial_to_http_error)?;
-        Ok(Authorize(PhantomData))
-    }
-}
-
-/// The class gate again, as the parameter is extracted: the route's shaper ran
-/// [`class_gate`](crate::class_gate) with its guards, and an extractor reached
-/// past the shaper — nested, or run by a hand-rolled `FromRequest` — holds the
-/// same line. No site reaches an extractor, so it decides as on the
-/// `#[public]` route a hand-written parameter is written for.
-fn checked<A: ActionMarker, S: Subject>() -> std::result::Result<(), Denial> {
-    let refusal = Refusal::on(Edge::Http.as_str()).declaring::<A, S>();
-    let Some(ability) = crate::context::installed() else {
-        crate::gate::error_unreached(Refusal {
-            remedy: Some(EXTRACTED_UNREACHED),
-            ..refusal
-        });
-        return Err(Denial::internal(crate::gate::NO_AMBIENT_ABILITY));
-    };
-    decide(&ability, A::ACTION, TypeId::of::<S>(), Posture::Public).map_err(|(why, denial)| {
-        warn_denied(Refusal {
-            reason: Some(why),
-            ..refusal
-        });
-        denial
-    })
-}
-
-/// What a route extracting `Authorize` with no ability is told to change.
-const EXTRACTED_UNREACHED: &str = "bind the ability guard on this route — \
-                                   #[use_guards(AuthnGuard, AuthzGuard)] or the app's global \
-                                   pool — and import AuthzModule in this feature's module.rs";

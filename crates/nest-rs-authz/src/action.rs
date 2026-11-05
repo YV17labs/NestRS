@@ -1,5 +1,5 @@
 //! Action verbs + compile-time markers for routes that name one as a type
-//! parameter (`Authorize<Read, _>`).
+//! argument (`#[authorize(Read, _)]`).
 
 /// The verb a rule grants or denies. A rule pairs one of these with a subject
 /// entity; [`Manage`](Self::Manage) is the wildcard that matches all four

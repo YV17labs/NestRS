@@ -1,12 +1,7 @@
-//! `#[public]` is a flag: its presence *is* the declaration, so an argument on
-//! it is a compile error rather than something the expansion drops.
-//!
-//! One of the four sites the shared refusal covers — `nest_rs::codegen::take_flag_attr`
-//! words it once, and the flag is `#[public]` at every edge because that is the
-//! reserved greppable authn/authz site. Before the refusal,
-//! `#[public(read_only)]` — plausible beside `#[authorize(Action, Entity)]`,
-//! which does take arguments — shipped an ungated, unmasked operation with the
-//! compiler silent.
+//! `#[public]` alone is a posture, and `#[public(Action, Subject)]` names what
+//! it reads. A lone word beside it — `read_only`, plausible as a flag — is neither,
+//! so it is refused naming what the attribute takes, never dropped into an
+//! ungated, unmasked operation with the compiler silent.
 
 use nest_rs::ws::{gateway, messages};
 

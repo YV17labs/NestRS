@@ -39,6 +39,10 @@ impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,
@@ -210,6 +214,10 @@ impl Layer for DenyAll {}
 
 #[async_trait]
 impl Guard for DenyAll {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(
         &self,
         _cx: &mut nest_rs_core::UnitContext<'_>,
@@ -297,6 +305,10 @@ struct OnceGuard;
 
 #[async_trait]
 impl Guard for OnceGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
         ONCE_GUARD.fetch_add(1, Ordering::SeqCst);
         Ok(())

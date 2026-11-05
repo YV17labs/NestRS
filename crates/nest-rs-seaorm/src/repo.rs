@@ -73,8 +73,9 @@ fn denying_for_want_of_an_ability<E: EntityTrait>(action: Action) {
         entity = std::any::type_name::<E>(),
         ?action,
         scope = ?current_executor_scope(),
-        hint = "bind #[use_guards(AuthnGuard, AuthzGuard)], or — on a #[public] \
-                  route — take the `Authorize<A, E>` parameter that arms the shaper",
+        hint = "bind #[use_guards(AuthnGuard, AuthzGuard)], and declare what this unit reads: \
+                #[authorize(Read, Entity)], or #[public(Read, Entity)] where a caller with no \
+                credential is admitted",
         "no ambient Ability outside a worker job — denying all rows",
     );
 }
@@ -900,6 +901,44 @@ mod tests {
             })
             .await;
         })
+        .await;
+    }
+
+    /// A visitor's ability reading the widgets of one org, and writing none.
+    fn a_visitor_reading_one_org() -> Arc<nest_rs_authz::Ability> {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Read, widget::Entity)
+            .when(|p| p.eq(widget::Column::OrgId, 1));
+        Arc::new(b.build_visitor().expect("valid test ability"))
+    }
+
+    #[tokio::test]
+    async fn a_job_narrowed_to_a_visitor_reads_and_writes_by_the_visitors_grant() {
+        with_job_executor(
+            pool(),
+            nest_rs_authz::with_ability(a_visitor_reading_one_org(), async {
+                let read = sql(scope_for::<widget::Entity>(Action::Read));
+                assert!(read.contains("org_id"), "the visitor's rows: {read}");
+                assert!(!barred_from_class::<widget::Entity>(Action::Read));
+                assert!(
+                    barred_from_class::<widget::Entity>(Action::Update),
+                    "the visitor writes nothing, and a job reads as system work under none",
+                );
+            }),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_request_unit_handed_a_visitor_by_the_harness_reads_by_its_grant() {
+        with_request_executor(
+            pool(),
+            install_ability(a_visitor_reading_one_org(), async {
+                let read = sql(scope_for::<widget::Entity>(Action::Read));
+                assert!(read.contains("org_id"), "the visitor's rows: {read}");
+                assert!(!read.contains("1 = 0"), "{read}");
+            }),
+        )
         .await;
     }
 

@@ -295,7 +295,8 @@ mod http {
         /// Run `body` in one unit of work of the app's bound `UnitOfWork`, as a
         /// request granted `ability`: the service it calls reads the ambient
         /// executor and ability an edge installs, and the unit commits on `Ok`
-        /// and rolls back on `Err`.
+        /// and rolls back on `Err`. It stands in for a unit naming its read, so a
+        /// visitor's ability reads here by its grant.
         ///
         /// # Panics
         ///

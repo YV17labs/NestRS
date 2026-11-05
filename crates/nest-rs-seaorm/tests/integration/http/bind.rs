@@ -51,6 +51,10 @@ impl Layer for Grants {}
 
 #[async_trait]
 impl Guard for Grants {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let read = HttpView::of(cx)?.request().header("x-read").is_some();
         let mut ability = AbilityBuilder::new();

@@ -19,6 +19,10 @@ impl Layer for PassGuard {}
 
 #[async_trait]
 impl Guard for PassGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("caller");
         Ok(())

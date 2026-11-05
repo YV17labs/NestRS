@@ -54,7 +54,10 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   controller's path included — into an `Authorized<Action, E>` parameter;
 ///   an entity written beside `bind` is the service's.
 /// - `#[public]` — the route is reachable anonymously; global guards still run
-///   and read the marker.
+///   and read the marker, and it reads nothing a grant guards.
+/// - `#[public(Action, Subject)]` — the same opening with `#[authorize]`'s
+///   arguments, `bind` included: the class gate and the mask, on the ability the
+///   caller has (`define_visitor`'s for a visitor, `define`'s for a valid token).
 /// - `#[use_guards(...)]` — container-resolved guards, first listed outermost.
 /// - `#[use_exception_filters(...)]` — container-resolved
 ///   `nest_rs_core::ExceptionFilter`s, tried before the controller's and the

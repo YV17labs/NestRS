@@ -128,3 +128,38 @@ there (the owner's "Tout faire (Recommandé)" of 2026-10-31, the identity audit'
 second pass; `one-execution-pipeline.md`, the same date): that stage's app-wide
 list is the root's alone. What a module still brings runs at the unit stage,
 says so in its source, and decides no posture.
+
+## 2026-11-05 — an opening names what it reads
+
+Decided by the first value under the owner's words of 2026-10-12 ("privilégier la
+sécurité … production doit être sécurisé, je te laisse arbitrer") and the owner's
+"Tout faire (Recommandé)" of 2026-10-31, the identity audit's second pass, whose item
+on `#[public]` covers this public break.
+
+**`#[public(Action, Subject)]` is the line a visitor's read writes, on every edge.**
+It takes `#[authorize]`'s arguments: the class gate runs against the ability the
+caller has, `define_visitor`'s for a visitor and `define`'s for a valid token, that
+ability is installed for the unit's reads, and an entity arms the mask. So the
+`Authorize<A, E>` parameter goes: the refusal above that kept it "beside `#[public]`"
+is replaced. It stated a posture by a parameter's type, looked unused, and answered
+`200 []` when a cleanup removed it. No `FromRequest` serves that type now, so a
+leftover is `Authorize<…>` is not a handler parameter, by its type and under any
+import, in a sentence naming the decorator. A gate another parameter's type declares
+still refuses the boot.
+
+**`bind = Service` is taken wherever `#[authorize]` takes it.** The same parameter, the
+same load, the same `404` and `403`: a public detail route writes one line where it
+wrote a body's `access` and a `match`, what the identity asks of a cross-cutting
+concern, and nothing it reads is wider than `#[authorize]`'s load under the same
+ability. The elegance value decided, the first having no objection.
+
+**Refused:**
+
+- **`bind` refused on `#[public(...)]`**: the body's `access` and its `match` are what a
+  decorator exists to remove, and a visitor's `403` on a row it may not read says what
+  an authenticated caller's says.
+- **Keeping `Authorize` out of the public path to refuse its import**: `E0432` names no
+  remedy, where the trait's own `on_unimplemented` names the decorator.
+- **A boot refusal of `#[public(A, S)]` with no ability guard in its chain**: a guard of
+  one's own may attach the ability under any phase, so the boot cannot tell; the class
+  gate fails it closed, filed at `error` with the remedy, as it does `#[authorize]`.

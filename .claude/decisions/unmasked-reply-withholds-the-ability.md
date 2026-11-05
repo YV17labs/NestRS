@@ -33,3 +33,44 @@ that must read scoped rows waits for a mask the stream can arm.
 - **The shaper taking the ability back out of the ambient context**: what a
   stage attached is installed for the rest of the unit and no later layer
   removes it, which is what lets every layer below trust what it reads.
+
+## 2026-11-05 — every edge withholds it, and a visitor reads only where it named the read
+
+Decided by the first value under the owner's words of 2026-10-12 ("privilégier la
+sécurité … production doit être sécurisé, je te laisse arbitrer") and the owner's
+"Tout faire (Recommandé)" of 2026-10-31 to the item making `#[public]` one word on
+every edge. The fix stage of that item named its closing as the end of GraphQL's
+public reads; `#[public(Action, Subject)]` keeps them
+(`route-posture-declared.md`, this date).
+
+A `#[public]` GraphQL operation, WS message or MCP operation read under the visitor's
+row rules and answered every exposed field, since only HTTP attached this marker: a
+grant reading narrower than what it served. **A unit no mask shapes withholds the
+ability on every edge, whatever its posture says**: a bare `#[public]`, a covered unit
+stating none, a `#[subject]`'s. `unmasked` keeps it: there the body masks, written on
+the line. It is attached only where there is something to withhold: a site with no
+guard and none at its request keeps no stage, so "a public route pays nothing" holds,
+and a reader finds it in one function, `withhold_from_reads`.
+
+The marker reaches one unit, and a GraphQL field below an operation is none: it runs
+after that operation's future returned, and a relation's batch runs off it with what
+the request carries. **So a visitor's ability is read only inside a unit that named
+its read.** `class_gate` on an entity licenses the visitor for the unit
+(`VisitorReadNamed`), and `current_ability` answers none for a visitor anywhere else,
+at no cost to any other caller. A visitor's nested read answers nothing, with the same
+`warn`. **Withholding stops at a job**: `Repo` reads no ability in a job as system work,
+every row, so a job narrowed to a visitor by `with_ability`, and a task off a withholding
+unit opening a job, read under what they hold. The harness's `TestApp::unit` licenses what
+it installs, standing in for a unit naming its read.
+
+**Refused:**
+
+- **Ending GraphQL's public reads**, the closing that item named: a blog's feed is the
+  feature's reason, and the line `#[public(Read, Entity)]` keeps it masked.
+- **Tracking the root field's posture to withhold a nested field's ability from a
+  caller a token backs**: a per-field lookup on the hot path, for a caller who reads the
+  same nested rows under an `#[authorize]` root. A nested read runs no mask for any
+  authenticated caller; that limit is named where it stands, and closing it is a mask at
+  the relation's loader and at a field resolver's answer.
+- **A schema extension around each root field carrying the marker into its children**:
+  an extension turns every field of every schema onto async-graphql's slow path.

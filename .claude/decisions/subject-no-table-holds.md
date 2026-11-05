@@ -68,3 +68,9 @@ blankets an entity reaches `Subject`, `SubjectMask` and `RowSubject` through
 are hidden from rustc's candidates. The `#[sse]` refusal and its remedy
 stand: an entity-gated stream would run with no mask
 (`unmasked-reply-withholds-the-ability.md`).
+
+## 2026-11-05 — a capability is named on `#[public(...)]` as on `#[authorize]`
+
+The hand-written `Authorize<A, S>` above is gone (`route-posture-declared.md`, this
+date): `#[public(Action, Subject)]` reads the grant, gates alone on a capability, and
+the unit's reads stay withheld, on every edge where only a route's were.

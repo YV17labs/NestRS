@@ -1,0 +1,5 @@
+error: `#[authorize(...)]` and `#[public]` contradict — an operation is gated or public, not both
+  --> tests/integration/diagnostics/ws/public_beside_authorize.rs:38:14
+   |
+38 |     async fn list(&self) -> String {
+   |              ^^^^

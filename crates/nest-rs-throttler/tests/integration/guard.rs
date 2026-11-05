@@ -45,11 +45,13 @@ fn denials(logs: &LogCapture, reason: &str) -> Vec<CapturedEvent> {
 #[controller(path = "/rated")]
 struct RatedController;
 
-// No `#[use_guards]` at either scope: the pool alone reaches these routes.
+// No `#[use_guards]` at either scope: the pool alone reaches these routes, and
+// identifies no one, so each says what it opens.
 #[routes]
 impl RatedController {
     /// Two per minute, declared on the route and nowhere else.
     #[get("/strict")]
+    #[public]
     #[meta(Throttle::per_minute(2))]
     async fn strict(&self) -> &'static str {
         "ok"
@@ -57,12 +59,14 @@ impl RatedController {
 
     /// No `#[meta]` — the module default applies.
     #[get("/lenient")]
+    #[public]
     async fn lenient(&self) -> &'static str {
         "ok"
     }
 
     /// Two per minute across every item: one route, one bucket.
     #[get("/items/{id}")]
+    #[public]
     #[meta(Throttle::per_minute(2))]
     async fn item(&self) -> &'static str {
         "ok"
@@ -310,6 +314,7 @@ struct StalledController;
 #[routes]
 impl StalledController {
     #[get("/ping")]
+    #[public]
     async fn ping(&self) -> &'static str {
         "pong"
     }
@@ -1007,10 +1012,32 @@ mod self_mount {
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
     use nest_rs_core::{ContainerBuilder, Discoverable, Handler, Posture, module};
 
+    use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
+    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase};
     use nest_rs_http::StatusCode;
-    use nest_rs_http::{HttpEndpointMeta, Method, Response, endpoint_fn};
+    use nest_rs_http::{HttpEndpointMeta, HttpView, Method, Response, endpoint_fn};
     use nest_rs_testing::{LogCapture, TestApp};
     use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
+
+    /// What covers a gated mount, which a rate limit alone does not.
+    #[injectable]
+    #[derive(Default)]
+    struct Identified;
+
+    impl Layer for Identified {}
+
+    #[async_trait]
+    impl Guard for Identified {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for Identified {}
 
     struct Files;
 
@@ -1047,13 +1074,13 @@ mod self_mount {
                 pseudonym_key: None,
             }),
         ],
-        providers = [Files],
+        providers = [Identified, Files],
     )]
     struct FilesModule;
 
     #[module(
         imports = [FilesModule],
-        providers = [nest_rs_guards::GlobalGuards<(ThrottlerGuard,)>],
+        providers = [nest_rs_guards::GlobalGuards<(Identified, ThrottlerGuard)>],
     )]
     struct TheThrottlerBucketsASelfMountByItsTemplateApp;
 

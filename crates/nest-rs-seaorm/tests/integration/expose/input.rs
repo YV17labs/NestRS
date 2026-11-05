@@ -119,6 +119,10 @@ impl Layer for GrantsCreate {}
 
 #[async_trait]
 impl Guard for GrantsCreate {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let mut ability = AbilityBuilder::new();
         ability.can(nest_rs_authz::Action::Create, ticket::Entity);

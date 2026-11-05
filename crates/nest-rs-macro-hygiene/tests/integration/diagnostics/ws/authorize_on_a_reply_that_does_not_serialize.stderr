@@ -1,4 +1,4 @@
-error[E0277]: `#[authorize]` cannot mask a reply of type `NoWireShape` on this subject
+error[E0277]: this posture cannot mask a reply of type `NoWireShape` on this subject
   --> tests/integration/diagnostics/ws/authorize_on_a_reply_that_does_not_serialize.rs:35:23
    |
 35 |     #[authorize(Read, note::Entity)]

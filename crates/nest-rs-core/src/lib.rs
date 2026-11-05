@@ -236,7 +236,7 @@ pub mod __private {
         HostLayers, HostRequires, ModuleDescriptor, ProviderDescriptor, reachable_providers,
     };
     pub use crate::ambient::{
-        Pending, UnmaskedReply, attached, carries_ambient, install_pending, with_ambient_from,
+        Pending, UnmaskedReply, attached, install_pending, with_ambient_from,
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{
@@ -298,7 +298,7 @@ pub mod __private {
     pub use crate::trace_context::field;
     pub use crate::type_name::{short_type_name, shorten};
     pub use crate::unit_context::{
-        new_unit_context, pending_of, run_layer, running_layer, take_pending,
+        new_unit_context, pending_of, run_layer, running_layer, take_pending, withhold_from_reads,
     };
     pub use crate::way_down::{MainCrate, main};
 

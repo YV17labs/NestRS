@@ -118,6 +118,29 @@ impl HygieneController {
         "0".into()
     }
 
+    /// What a caller with no credential reads, named.
+    #[cfg(feature = "seaorm")]
+    #[get("/public-count")]
+    #[public(nest_rs::authz::Read, crate::entity::Entity)]
+    fn public_count(&self) -> String {
+        "0".into()
+    }
+
+    /// The same opening on a capability, which gates alone, on a stream too.
+    #[cfg(feature = "authz")]
+    #[get("/exports/open")]
+    #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    fn open_export(&self) -> String {
+        "open".into()
+    }
+
+    #[cfg(feature = "authz")]
+    #[sse("/exports/open/progress")]
+    #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    fn open_export_progress(&self) -> SseStream {
+        SseStream::new(stream::iter([SseEvent::message("open")]))
+    }
+
     /// A gate-only posture, on a route and on a stream alike.
     #[cfg(feature = "authz")]
     #[post("/exports")]

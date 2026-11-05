@@ -101,6 +101,7 @@ fn hand_route_guard_stage(
             gates: Vec::new(),
             authorized: false,
             masked: false,
+            stream: false,
         },
     )
 }
@@ -126,12 +127,14 @@ pub struct RouteGuards {
     /// The posture's class gates, selected by type off what the route
     /// declares.
     pub gates: Vec<GateFn>,
-    /// The route declares `#[authorize]`, so a gate is its posture's; on a
-    /// route declaring neither it nor `#[public]`, a gate can only come from a
-    /// parameter's type, and the boot refuses it.
+    /// The route's posture names a subject, so a gate is its posture's;
+    /// elsewhere a gate can only come from a parameter's type, and the boot
+    /// refuses it.
     pub authorized: bool,
     /// Whether a response shaper masks the route's reply.
     pub masked: bool,
+    /// The route answers `#[sse]`, an event stream no shaper reconciles.
+    pub stream: bool,
 }
 
 /// The guard stage of the route `handler` declares: the app's pool, then the
@@ -145,11 +148,18 @@ pub fn route_guard_stage(
     declared: RouteGuards,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
     let label = route_label(handler);
-    if !declared.authorized && handler.posture() != Posture::Public && !declared.gates.is_empty() {
+    if !declared.authorized && !declared.gates.is_empty() {
         anyhow::bail!(
             "{label} declares its posture by a parameter's type, which arms a class gate no \
-             attribute shows — declare it with `#[authorize(Action, Entity)]`, or write the \
-             `Authorize<Action, Entity>` parameter beside `#[public]` alone"
+             attribute shows — declare it with `#[authorize(Action, Subject)]`, or \
+             `#[public(Action, Subject)]` where a caller with no credential is admitted"
+        );
+    }
+    if declared.stream && declared.masked {
+        anyhow::bail!(
+            "{label} is an `#[sse]` route a parameter's type arms a response shaper on: a shaper \
+             reconciles a body, and an event stream is none, so it would go out as written while \
+             the document says it is masked — take that parameter off the stream"
         );
     }
     let host = resolve_scoped(container, &declared.host, LayerSite::Host, &label)

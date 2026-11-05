@@ -8,12 +8,109 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures_util::StreamExt;
-use nest_rs_core::{Ambient, AmbientValue, Layer, UnitContext, async_trait, injectable, module};
+use nest_rs_core::{
+    Ambient, AmbientValue, Failure, Layer, UnitContext, async_trait, injectable, module,
+};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::StatusCode;
-use nest_rs_http::{Body, Bytes, HttpConfig, HttpModule, HttpView, RawBody, controller, routes};
+use nest_rs_http::{
+    Body, Bytes, FromRequest, HttpConfig, HttpModule, HttpView, RawBody, Request, RequestBody,
+    ResponseShaping, Result, RouteResponseShaper, SseEvent, SseStream, controller, routes,
+};
 use nest_rs_pipes::GlobalPipe;
 use nest_rs_testing::{LogCapture, TestApp};
+
+/// A parameter whose type declares a class gate no attribute shows.
+struct GateByType;
+
+impl<'a> FromRequest<'a> for GateByType {
+    async fn from_request(_req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
+        Ok(Self)
+    }
+}
+
+impl RouteResponseShaper for GateByType {
+    const GATE: Option<for<'b> fn(&mut UnitContext<'b>) -> std::result::Result<(), Failure>> =
+        Some(|_cx| Ok(()));
+    const SHAPES: bool = false;
+
+    fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
+        None
+    }
+}
+
+#[controller(path = "/gated-by-type")]
+struct GatedByTypeController;
+
+#[routes]
+impl GatedByTypeController {
+    #[get("/")]
+    #[public]
+    async fn opened(&self, _gate: GateByType) -> String {
+        "open".into()
+    }
+}
+
+#[module(providers = [GatedByTypeController])]
+struct GatedByTypeModule;
+
+/// `#[public]` beside it states no subject, so the gate is a posture no attribute
+/// shows, whatever its parameter is called.
+#[tokio::test]
+async fn a_gate_a_parameters_type_declares_refuses_the_boot() {
+    let Err(refused) = TestApp::for_module::<GatedByTypeModule>().await else {
+        panic!("a gate is declared by the posture");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains("GatedByTypeController::opened")
+            && said.contains("declares its posture by a parameter's type")
+            && said.contains("#[public(Action, Subject)]"),
+        "{said}",
+    );
+}
+
+/// A parameter whose type arms a response shaper.
+struct ShapesByType;
+
+impl<'a> FromRequest<'a> for ShapesByType {
+    async fn from_request(_req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
+        Ok(Self)
+    }
+}
+
+impl RouteResponseShaper for ShapesByType {
+    fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
+        None
+    }
+}
+
+#[controller(path = "/shaped-stream")]
+struct ShapedStreamController;
+
+#[routes]
+impl ShapedStreamController {
+    #[sse("/")]
+    #[public]
+    async fn stream(&self, _shaper: ShapesByType) -> SseStream {
+        SseStream::new(futures_util::stream::iter([SseEvent::message("tick")]))
+    }
+}
+
+#[module(providers = [ShapedStreamController])]
+struct ShapedStreamModule;
+
+#[tokio::test]
+async fn a_shaper_a_parameters_type_arms_on_a_stream_refuses_the_boot() {
+    let Err(refused) = TestApp::for_module::<ShapedStreamModule>().await else {
+        panic!("an event stream is no body a shaper reconciles");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains("ShapedStreamController::stream") && said.contains("`#[sse]` route"),
+        "{said}",
+    );
+}
 
 const CAP: usize = 64;
 
@@ -122,6 +219,10 @@ impl Layer for Shadowing {}
 
 #[async_trait]
 impl Guard for Shadowing {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let request = HttpView::of(cx)?.request_mut();
         request.extensions_mut().insert(Throttle(1));

@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
-    ClassGate, GuardStage, ResolvedLayer, new_unit_context, report_unresolved, shorten,
+    ClassGate, GuardStage, Pending, ResolvedLayer, new_unit_context, report_unresolved, shorten,
+    take_pending, withhold_from_reads,
 };
 use nest_rs_core::{Container, Failure, Handler, LayerSite, Peer, Posture, UnitContext};
 use nest_rs_guards::__private::{
@@ -41,12 +42,16 @@ pub struct MessageGuards {
     pub force: Vec<TypeId>,
     /// The class gate the message's posture declares.
     pub gate: Option<ClassGate>,
+    /// The posture withholds the ability from the message's reads: no mask
+    /// shapes its reply.
+    pub withheld: bool,
 }
 
 /// The guard stage of the message `handler` declares: the app-wide pool and
 /// the message's own guards, each once unless `#[force_guards]` replays one,
-/// then its class gate — `None` when it runs none. The gateway's own guards
-/// ran at the upgrade, so a principal a guard here requires may be theirs.
+/// then its class gate — `None` when it runs none and has nothing to withhold.
+/// The gateway's own guards ran at the upgrade, so a principal a guard here
+/// requires may be theirs.
 pub fn message_guard_stage(
     container: &Container,
     handler: &Handler,
@@ -64,12 +69,18 @@ pub fn message_guard_stage(
         host_chain(container, &declared.upgrade, &site)
     })
     .map_err(nest_rs_core::anyhow::Error::msg)?;
-    if guards.is_empty() && declared.gate.is_none() {
+    // No guard at all, here or at the upgrade: nothing was attached to withhold.
+    let withholds = declared.withheld
+        && !host_chain(container, &declared.upgrade, &site)
+            .map_err(nest_rs_core::anyhow::Error::msg)?
+            .is_empty();
+    if guards.is_empty() && declared.gate.is_none() && !withholds {
         return Ok(None);
     }
     Ok(Some(Arc::new(MessageGuardStage {
         guards,
         gate: declared.gate,
+        withheld: declared.withheld,
     })))
 }
 
@@ -79,13 +90,19 @@ pub fn message_guard_stage(
 struct MessageGuardStage {
     guards: Vec<ResolvedLayer<dyn Guard>>,
     gate: Option<ClassGate>,
+    withheld: bool,
 }
 
 impl GuardStage for MessageGuardStage {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
             match check_guards(&self.guards, self.gate, cx).await {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    if self.withheld {
+                        withhold_from_reads(cx);
+                    }
+                    Ok(())
+                }
                 Err(refused) => Err(refuse(cx, refused)),
             }
         })
@@ -127,18 +144,21 @@ pub fn denial_to_ws_error(denial: Denial) -> WsError {
 
 /// The posture's class `gate` the message `handler` declares, run alone on
 /// `data`, arrived on `client` — no guard runs — as `Gateway::dispatch` runs
-/// it: `data` back, or the frame its refusal answers, the gate filing its own.
+/// it: `data` back and what the gate attached for the handler, or the frame its
+/// refusal answers, the gate filing its own.
 pub(crate) fn gate_alone(
     client: &WsClient,
     handler: &'static Handler,
     gate: ClassGate,
     data: serde_json::Value,
-) -> Result<serde_json::Value, WsError> {
+) -> Result<(serde_json::Value, Pending), WsError> {
     let mut view = WsView::new(client.clone(), handler.address(), data);
     let peer = Peer::new(None, Some(client.id()));
-    let gated = gate(&mut new_unit_context(handler, &mut view, Some(peer), None));
+    let mut cx = new_unit_context(handler, &mut view, Some(peer), None);
+    let gated = gate(&mut cx);
+    let attached = take_pending(&mut cx);
     match gated {
-        Ok(()) => Ok(view.take_data()),
+        Ok(()) => Ok((view.take_data(), attached)),
         Err(refused) => Err(denial_to_ws_error(denial_of(&refused))),
     }
 }
@@ -281,6 +301,7 @@ mod tests {
                 layer: Arc::new(guard),
             }],
             gate: None,
+            withheld: false,
         }
     }
 
@@ -299,6 +320,33 @@ mod tests {
             (checked, seen)
         };
         (checked, view, seen)
+    }
+
+    fn stage_withholding(
+        upgrade: Vec<GuardSpec>,
+    ) -> nest_rs_core::anyhow::Result<Option<Arc<dyn GuardStage>>> {
+        message_guard_stage(
+            &Container::default(),
+            &SEND,
+            MessageGuards {
+                upgrade,
+                method: Vec::new(),
+                force: Vec::new(),
+                gate: None,
+                withheld: true,
+            },
+        )
+    }
+
+    /// With no guard at the upgrade or beside it, nothing can have attached
+    /// what a bare `#[public]` withholds, so the message keeps no stage.
+    #[test]
+    fn a_message_with_nothing_to_withhold_pays_for_no_stage() {
+        assert!(
+            stage_withholding(Vec::new())
+                .expect("no guard to resolve")
+                .is_none(),
+        );
     }
 
     #[tokio::test]

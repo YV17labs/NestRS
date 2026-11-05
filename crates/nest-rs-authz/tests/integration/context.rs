@@ -112,6 +112,36 @@ async fn a_job_acting_for_a_principal_reads_under_its_ability() {
     assert_eq!(read, Some(vec![Action::Read]));
 }
 
+#[tokio::test]
+async fn a_request_unit_handed_a_visitor_reads_what_the_visitor_may() {
+    let app = app().await;
+    let mut visitor = AbilityBuilder::new();
+    visitor.can(Action::Read, parent::Entity);
+    let visitor = Arc::new(visitor.build_visitor().expect("a valid rule set"));
+
+    let read = app
+        .unit(visitor, || allowed(&[Action::Read, Action::Delete]))
+        .await
+        .expect("the body answers");
+
+    assert_eq!(read, Some(vec![Action::Read]));
+}
+
+#[tokio::test]
+async fn a_job_acting_for_a_visitor_reads_under_its_ability() {
+    let app = app().await;
+    let mut visitor = AbilityBuilder::new();
+    visitor.can(Action::Read, parent::Entity);
+    let visitor = Arc::new(visitor.build_visitor().expect("a valid rule set"));
+
+    let read = app
+        .system_unit(|| with_ability(visitor, allowed(&[Action::Read, Action::Delete])))
+        .await
+        .expect("the body answers");
+
+    assert_eq!(read, Some(vec![Action::Read]));
+}
+
 /// A unit a product's feature declares and opens itself.
 const EXPORT: nest_rs_core::operation_log::Unit = nest_rs_core::__private::declare_unit(
     "features",

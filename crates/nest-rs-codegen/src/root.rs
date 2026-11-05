@@ -105,7 +105,7 @@ const FRAMEWORK: &[FrameworkCrate] = &[
         "nest_rs_seaorm",
         "seaorm",
         "seaorm",
-        "`#[crud]` or `#[authorize(…, bind = …)]`",
+        "`#[crud]` or a posture's `bind = Service`",
     ),
     gated(
         "nest_rs_graphql",
@@ -120,7 +120,12 @@ const FRAMEWORK: &[FrameworkCrate] = &[
     row("nest_rs_schedule", "schedule", "schedule"),
     row("nest_rs_events", "events", "events"),
     row("nest_rs_authn", "authn", "authn"),
-    gated("nest_rs_authz", "authz", "authz", "`#[authorize]`"),
+    gated(
+        "nest_rs_authz",
+        "authz",
+        "authz",
+        "`#[authorize]` or `#[public(Action, Subject)]`",
+    ),
     row("nest_rs_oauth_client", "oauth::client", "oauth-client"),
     row(
         "nest_rs_oauth_resource",
@@ -759,7 +764,7 @@ mod tests {
         });
         let req = version_req();
         let chain = quote!(
-            ::nest_rs::__requires_authz! { "`#[authorize]`" #req [] __requires_graphql __requires_end }
+            ::nest_rs::__requires_authz! { "`#[authorize]` or `#[public(Action, Subject)]`" #req [] __requires_graphql __requires_end }
         )
         .to_string();
         assert!(out.ends_with(&chain), "{out}");

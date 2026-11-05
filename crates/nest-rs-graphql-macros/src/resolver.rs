@@ -7,7 +7,6 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt;
-use syn::punctuated::Punctuated;
 use syn::spanned::Spanned as _;
 use syn::{
     Attribute, FnArg, GenericArgument, Ident, ImplItem, ItemImpl, ItemStruct, LitStr, Path,
@@ -17,19 +16,18 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, InjectableBody, SitePosture, TailParam, VersionedEdge,
-    answer_span, at_most_one_authorize, authorized_entity, await_if_async, build_injectable_body,
-    camel_case, cfg_attrs, concrete_signature, delegated_attrs, exception_filter_specs,
-    force_guard_typeids, forwarded_arg_idents, forwarded_idents, from_container_method,
-    guard_capability_bounds, handler_const, handler_ref, host_meta_fn, host_runtime_entry,
-    impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
+    HandlerSite, HostBorrow, HostMeta, InjectableBody, PostureWord, SitePosture, TailParam,
+    VersionedEdge, answer_span, at_most_one_authorize, authorized_entity, await_if_async,
+    build_injectable_body, camel_case, cfg_attrs, concrete_signature, delegated_attrs,
+    exception_filter_specs, force_guard_typeids, forwarded_arg_idents, forwarded_idents,
+    from_container_method, guard_capability_bounds, handler_const, handler_ref, host_meta_fn,
+    host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, injected_per_request_method, injects_impls,
     interceptor_specs, key_as_written, layer_deps, normalize_forwarded_args, nth_generic_type,
     one_role_per_method, piped_input, posture_contradiction, reject_meta_on_operations,
     scoped_specs, shared_receiver, site_const_ident, site_fn_ident, site_ref, spelled, tail_param,
-    takes_value, type_label, unit_of_work_required, unknown_argument, validate_argument,
+    takes_value, type_label, unit_of_work_required, unknown_argument, validate_argument, withheld,
 };
-use nest_rs_codegen::take_flag_attr;
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
@@ -220,7 +218,8 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     .into()
 }
 
-/// `#[authorize(Action, Entity)]` parsed off an operation: its declared access posture.
+/// `#[authorize(Action, Subject)]` or `#[public(Action, Subject)]` parsed off an
+/// operation: what its declared access posture gates on.
 struct AuthorizeSpec {
     action: Path,
     /// `None` when derived from `<Service as CrudService>::Entity` under `bind`.
@@ -233,7 +232,7 @@ struct AuthorizeSpec {
     id_arg: Option<Ident>,
 }
 
-/// One token in `#[authorize(...)]`; a keyed one keeps its key, where a repeat is spanned.
+/// One token in a posture's arguments; a keyed one keeps its key, where a repeat is spanned.
 enum AuthorizeArg {
     Positional(Path),
     Bind(Ident, Path),
@@ -243,53 +242,90 @@ enum AuthorizeArg {
 const AUTHORIZE: nest_rs_codegen::Grammar =
     nest_rs_codegen::Grammar::new("authorize", &["bind", "id_arg"]);
 
-impl syn::parse::Parse for AuthorizeArg {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        if input.peek(Ident) && input.peek2(Token![=]) {
-            let name: Ident = input.parse()?;
-            input.parse::<Token![=]>()?;
-            if name == "bind" {
-                input
-                    .parse()
-                    .map(|p| AuthorizeArg::Bind(name, p))
-                    .map_err(refused("bind", BIND_TAKES))
-            } else if name == "id_arg" {
-                input.parse().map(|i| AuthorizeArg::IdArg(name, i)).map_err(refused(
+const PUBLIC: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("public", &["bind", "id_arg"]);
+
+/// One token of `#[word(...)]`, whose keys are `grammar`'s.
+fn posture_arg(
+    input: syn::parse::ParseStream,
+    word: PostureWord,
+    grammar: &nest_rs_codegen::Grammar,
+) -> syn::Result<AuthorizeArg> {
+    if input.peek(Ident) && input.peek2(Token![=]) {
+        let name: Ident = input.parse()?;
+        input.parse::<Token![=]>()?;
+        if name == "bind" {
+            input
+                .parse()
+                .map(|p| AuthorizeArg::Bind(name, p))
+                .map_err(refused(word, "bind", BIND_TAKES))
+        } else if name == "id_arg" {
+            input
+                .parse()
+                .map(|i| AuthorizeArg::IdArg(name, i))
+                .map_err(refused(
+                    word,
                     "id_arg",
                     "the id argument's name as a snake_case identifier, e.g. `id_arg = file_id`",
                 ))
-            } else {
-                let spelled = name.to_string();
-                Err(syn::Error::new_spanned(
-                    name,
-                    unknown_argument("authorize", &spelled, AUTHORIZE.keys()),
-                ))
-            }
         } else {
-            input
-                .parse()
-                .map(AuthorizeArg::Positional)
-                .map_err(|stopped| syn::Error::new(stopped.span(), AUTHORIZE_SHAPE))
+            let spelled = name.to_string();
+            Err(syn::Error::new_spanned(
+                name,
+                unknown_argument(word.as_str(), &spelled, grammar.keys()),
+            ))
         }
+    } else {
+        input
+            .parse()
+            .map(AuthorizeArg::Positional)
+            .map_err(|stopped| syn::Error::new(stopped.span(), posture_shape(word)))
     }
 }
 
-fn refused(key: &'static str, takes: &'static str) -> impl Fn(syn::Error) -> syn::Error {
-    move |stopped| syn::Error::new(stopped.span(), takes_value("authorize", Some(key), takes))
+fn refused(
+    word: PostureWord,
+    key: &'static str,
+    takes: &'static str,
+) -> impl Fn(syn::Error) -> syn::Error {
+    move |stopped| syn::Error::new(stopped.span(), takes_value(word.as_str(), Some(key), takes))
 }
 
-const AUTHORIZE_SHAPE: &str = "expected `#[authorize(Action, Entity)]` — e.g. \
-     `#[authorize(Read, users::Entity)]`; append `unmasked` to keep the class gate but mask the \
-     response yourself. `bind = Service` (optionally `id_arg = ident`) binds the subject from an \
-     id argument, and lets the entity be omitted (derived from `Service::Entity`): \
-     `#[authorize(Update, bind = ArtworksService)]`";
+/// The posture's shape refusal, in the words of the attribute `word` names.
+fn posture_shape(word: PostureWord) -> String {
+    let word = word.as_str();
+    format!(
+        "expected `#[{word}(Action, Subject)]` — e.g. `#[{word}(Read, users::Entity)]`; append \
+         `unmasked` to keep the class gate but mask the response yourself. `bind = Service` \
+         (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity \
+         be omitted (derived from `Service::Entity`): `#[{word}(Update, bind = ArtworksService)]`"
+    )
+}
 
 /// What an operation with no posture at all is told.
 const POSTURE_REQUIRED: &str = "every `#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]` \
-     declares its access posture: `#[authorize(Action, Entity)]` (class-level gate + automatic \
-     response masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` (a caller with no \
-     credential is admitted: no `#[authorize]` gate and no response mask — `#[use_guards]` guards \
-     still run)";
+     declares its access posture: `#[authorize(Action, Subject)]` (class-level gate + automatic \
+     response masking — e.g. `#[authorize(Read, users::Entity)]`) for a caller a principal backs, \
+     `#[public(Action, Subject)]` for the same on what any caller may read, or a bare `#[public]` \
+     (a caller with no credential is admitted, and the operation reads nothing a grant guards — \
+     `#[use_guards]` guards still run)";
+
+/// What an operation declares about who may call it: what it gates on where it
+/// names a subject, and whether it is `#[public]`, named or bare.
+fn take_posture(
+    attrs: &mut Vec<Attribute>,
+    method: &Ident,
+) -> syn::Result<(Option<AuthorizeSpec>, bool)> {
+    let authorize = take_authorize(attrs)?;
+    let public = nest_rs_codegen::take_single_attr(attrs, PostureWord::Public.as_str())?;
+    match (authorize, public) {
+        (Some(_), Some(_)) => Err(syn::Error::new_spanned(method, posture_contradiction())),
+        (Some(gate), None) => Ok((Some(gate), false)),
+        (None, Some(attr)) if matches!(attr.meta, syn::Meta::Path(_)) => Ok((None, true)),
+        (None, Some(attr)) => Ok((Some(gate_of(&attr, PostureWord::Public)?), true)),
+        (None, None) => Ok((None, false)),
+    }
+}
 
 fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpec>> {
     let Some(pos) = attrs.iter().position(|a| a.path().is_ident("authorize")) else {
@@ -302,11 +338,32 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
             at_most_one_authorize("operation"),
         ));
     }
-    let args: Vec<AuthorizeArg> = attr
-        .parse_args_with(Punctuated::<AuthorizeArg, Token![,]>::parse_terminated)?
-        .into_iter()
-        .collect();
-    let shape_err = || syn::Error::new_spanned(&attr, AUTHORIZE_SHAPE);
+    gate_of(&attr, PostureWord::Authorize).map(Some)
+}
+
+/// Read `#[word(Action, Subject)]`, `#[word(Action, Subject, unmasked)]` or
+/// `#[word(Action, bind = Service)]`.
+fn gate_of(attr: &Attribute, word: PostureWord) -> syn::Result<AuthorizeSpec> {
+    let grammar = match word {
+        PostureWord::Authorize => AUTHORIZE,
+        PostureWord::Public => PUBLIC,
+    };
+    let shape_err = || syn::Error::new_spanned(attr, posture_shape(word));
+    if !matches!(attr.meta, syn::Meta::List(_)) {
+        return Err(shape_err());
+    }
+    let args: Vec<AuthorizeArg> = attr.parse_args_with(|input: syn::parse::ParseStream| {
+        let mut args = Vec::new();
+        while !input.is_empty() {
+            args.push(posture_arg(input, word, &grammar)?);
+            if !input.is_empty() {
+                input
+                    .parse::<Token![,]>()
+                    .map_err(|stopped| syn::Error::new(stopped.span(), posture_shape(word)))?;
+            }
+        }
+        Ok(args)
+    })?;
     let mut positional: Vec<Path> = Vec::new();
     let mut bind: Option<Path> = None;
     let mut id_arg: Option<Ident> = None;
@@ -325,10 +382,10 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
             }
         }
     }
-    AUTHORIZE.take_all(&keys)?;
+    grammar.take_all(&keys)?;
     if id_arg.is_some() && bind.is_none() {
         return Err(syn::Error::new_spanned(
-            &attr,
+            attr,
             "`id_arg` only applies with `bind = Service`",
         ));
     }
@@ -345,13 +402,13 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
         (1, true) => (subject.remove(0), None),
         _ => return Err(shape_err()),
     };
-    Ok(Some(AuthorizeSpec {
+    Ok(AuthorizeSpec {
         action,
         entity,
         unmasked,
         bind,
         id_arg,
-    }))
+    })
 }
 
 /// The parameter typed `Authorized<A, E>`, matched on the last path segment.
@@ -589,6 +646,9 @@ struct FieldSite<'a> {
     exception_filters: &'a [Path],
     /// The posture's class gate, an `Option<ClassGate>` expression.
     gate: TokenStream2,
+    /// Whether the posture withholds the ability from the field's reads, a
+    /// `bool` expression.
+    withheld: TokenStream2,
 }
 
 /// The hidden items declaring a field's site beside its handler: the function
@@ -608,6 +668,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         interceptors,
         exception_filters,
         gate,
+        withheld,
     } = site;
     let name = site_const_ident("site", method);
     let layers_fn = site_fn_ident("layers", method);
@@ -661,6 +722,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
                     force: #force,
                     site: #site_kind,
                     label: #label,
+                    withheld: #withheld,
                 },
             )
         }
@@ -962,8 +1024,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             meta: metas,
             ..
         } = take_layers(&pair::GRAPHQL, LayerScope::Method, &mut method.attrs)?;
-        let authorize_spec = take_authorize(&mut method.attrs)?;
-        let is_public = take_flag_attr(&mut method.attrs, "public")?;
+        let (authorize_spec, is_public) = take_posture(&mut method.attrs, &method.sig.ident)?;
         all_guard_paths.extend(
             method_guards
                 .iter()
@@ -1055,6 +1116,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 interceptors: &method_interceptors,
                 exception_filters: &method_exception_filters,
                 gate: quote!(::core::option::Option::None),
+                withheld: quote!(false),
             }));
             site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
             let FieldMethod {
@@ -1081,12 +1143,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         } else {
             // Posture is mandatory and fail-secure.
             match (&authorize_spec, is_public) {
-                (Some(_), true) => {
-                    return Err(syn::Error::new_spanned(
-                        &method.sig.ident,
-                        posture_contradiction(),
-                    ));
-                }
                 (None, false) if is_entity => {
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
@@ -1094,8 +1150,9 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                          forgetting is invisible: the router calls `_entities` with a *reference* \
                          — `{__typename, <key fields>}` — for an entity the client never named, so \
                          an ungated one is readable from outside every `#[authorize]` in the \
-                         schema. Write `#[authorize(Action, Entity)]` (class gate + response mask) \
-                         or `#[public]`",
+                         schema. Write `#[authorize(Action, Subject)]` (class gate + response \
+                         mask) or `#[public(Action, Subject)]`, or a bare `#[public]` for an \
+                         entity reading nothing a grant guards",
                     ));
                 }
                 (None, false) => {
@@ -1303,6 +1360,14 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 }
                 None => quote!(::core::option::Option::None),
             };
+            let subject = authorize_spec
+                .as_ref()
+                .map(|spec| (authz_entity(spec), spec.unmasked));
+            let withheld = withheld(
+                subject
+                    .as_ref()
+                    .map(|(entity, unmasked)| (entity, *unmasked)),
+            );
             let chain_site = if is_entity {
                 ChainSite::Entity
             } else {
@@ -1319,6 +1384,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 interceptors: &method_interceptors,
                 exception_filters: &method_exception_filters,
                 gate,
+                withheld,
             }));
             site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
             // After the class gate, so a class-denied caller never reaches the database.

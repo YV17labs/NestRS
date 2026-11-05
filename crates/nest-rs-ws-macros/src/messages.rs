@@ -13,7 +13,7 @@ use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
-    Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta, Posture,
+    Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta, PostureGate,
     PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs, concrete_signature,
     declared_handler, exception_filter_specs, force_guard_typeids, guard_capability_bounds,
     handler_const, handler_ref, host_runtime_entry, impl_self_ident, injected_methods_with_layers,
@@ -29,7 +29,7 @@ const POSTURE: PostureRules = PostureRules {
     transport: "WebSockets",
     bind_unsupported_because: Some(
         "a message takes one payload value, not the named id argument the binding reads. Keep \
-         `#[authorize(Action, Entity)]` and load the subject in the body with the service's \
+         the posture naming its subject and load the row in the body with the service's \
          `access`",
     ),
 };
@@ -263,8 +263,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         );
 
         let method_name = method.sig.ident.clone();
-        let gate = match &posture {
-            Posture::Authorize { action, entity, .. } => {
+        let gate = match posture.gate() {
+            Some(PostureGate { action, entity, .. }) => {
                 let class_gate = quote! {
                     ::nest_rs_authz::class_gate::<#action, #entity>
                         as ::nest_rs_core::__private::ClassGate
@@ -276,7 +276,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 });
                 quote! { ::core::option::Option::Some(#class_gate) }
             }
-            Posture::Public | Posture::Undeclared => quote! { ::core::option::Option::None },
+            None => quote! { ::core::option::Option::None },
         };
         let site = message_site(&MessageSite {
             self_ty: &self_ty,
@@ -286,6 +286,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             guards: &guards,
             force_guards: &force_guards,
             gate,
+            withheld: posture.withheld(),
             cfgs: &cfgs,
         });
         site_items.push(site.items);
@@ -422,13 +423,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // type (see `nest-rs-authz/src/ws/mask.rs`). `__ret` is bound by the arms below,
         // past what `ReplyValue` split by type, so an alias hides no `Result` from
         // the mask; a mask's failure is an error frame, whatever the method returns.
-        let reply = match &posture {
-            Posture::Authorize {
+        let reply = match posture.gate() {
+            Some(PostureGate {
                 action,
                 entity,
                 unmasked: false,
                 ..
-            } => quote! {
+            }) => quote! {
                 ::core::result::Result::Ok(
                     ::nest_rs_authz::__private::ws_masked_reply::<#action, #entity, _>(
                         #event, &__ret,
@@ -685,6 +686,9 @@ struct MessageSite<'a> {
     force_guards: &'a [Path],
     /// The class gate's expression, an `Option<ClassGate>`.
     gate: TokenStream2,
+    /// Whether the posture withholds the ability from the message's reads, a
+    /// `bool` expression.
+    withheld: TokenStream2,
     cfgs: &'a [TokenStream2],
 }
 
@@ -708,6 +712,7 @@ fn message_site(site: &MessageSite<'_>) -> EmittedSite {
         guards,
         force_guards,
         gate,
+        withheld,
         cfgs,
     } = site;
     let method_name = method.unraw().to_string();
@@ -750,6 +755,7 @@ fn message_site(site: &MessageSite<'_>) -> EmittedSite {
                     method: #method_guard_specs,
                     force: #force_typeids,
                     gate: #gate,
+                    withheld: #withheld,
                 },
             )
         }

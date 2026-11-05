@@ -1,0 +1,5 @@
+error: `#[public(...)]` cannot mask a #[prompt] — its messages are prose, opaque to the entity round-trip. Keep the gate and write into them only what the caller may read: `#[public(Action, Entity, unmasked)]`
+  --> tests/integration/diagnostics/mcp/public_masked_prompt.rs:41:14
+   |
+41 |     async fn draft(&self) -> Result<GetPromptResult, McpError> {
+   |              ^^^^^

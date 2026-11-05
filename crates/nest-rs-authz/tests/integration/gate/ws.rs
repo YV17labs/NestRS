@@ -36,12 +36,6 @@ impl GateGateway {
         Ok("written".to_owned())
     }
 
-    #[subscribe_message("open")]
-    #[public]
-    async fn open(&self) -> Result<String, WsError> {
-        Ok("open".to_owned())
-    }
-
     #[subscribe_message("touch")]
     #[authorize(Update, widget::Entity)]
     async fn touch(&self) -> Result<(), WsError> {
@@ -108,15 +102,6 @@ async fn no_ambient_ability_fails_closed() {
     );
 }
 
-#[tokio::test]
-async fn a_public_message_needs_no_ability_at_all() {
-    let body = answered(None, "open").await;
-    assert!(
-        body.contains("open"),
-        "`#[public]` emits no gate, so it does not depend on an ambient ability: {body}",
-    );
-}
-
 /// A rule the credential's scopes withhold is refused like an ungranted one,
 /// and the refusal names the scope.
 #[tokio::test]
@@ -161,18 +146,9 @@ async fn dispatch_without_an_ambient_ability_fails_closed() {
 }
 
 #[tokio::test]
-async fn dispatch_serves_a_granted_action_and_a_public_message() {
+async fn dispatch_serves_a_granted_action() {
     let read = body(dispatch_with(&GateGateway, ability_for("admin"), "read").await);
     assert!(read.contains("served"), "{read}");
-    let open = body(
-        GateGateway
-            .dispatch(&WsClient::for_test(), "open", serde_json::Value::Null)
-            .await,
-    );
-    assert!(
-        open.contains("open"),
-        "`#[public]` has no gate to run: {open}"
-    );
 }
 
 #[gateway(path = "/ws/gate/uncovered")]

@@ -126,6 +126,20 @@ impl HygieneGateway {
         Ok(0)
     }
 
+    #[cfg(feature = "seaorm")]
+    #[subscribe_message("hygiene.public_count")]
+    #[public(nest_rs::authz::Read, crate::entity::Entity)]
+    fn public_count(&self) -> Result<u64, std::fmt::Error> {
+        Ok(0)
+    }
+
+    #[cfg(feature = "authz")]
+    #[subscribe_message("hygiene.open_export")]
+    #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    fn open_export(&self) -> Result<String, std::fmt::Error> {
+        Ok("open".into())
+    }
+
     #[cfg(feature = "authz")]
     #[subscribe_message("hygiene.export")]
     #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]

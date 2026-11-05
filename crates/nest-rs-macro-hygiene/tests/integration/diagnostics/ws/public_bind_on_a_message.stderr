@@ -1,0 +1,5 @@
+error: `bind = Service` is not available on WebSockets — a message takes one payload value, not the named id argument the binding reads. Keep the posture naming its subject and load the row in the body with the service's `access`
+  --> tests/integration/diagnostics/ws/public_bind_on_a_message.rs:38:35
+   |
+38 |     #[public(Read, posts::Entity, bind = PostsService)]
+   |                                   ^^^^^^^^^^^^^^^^^^^

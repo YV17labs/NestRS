@@ -1,7 +1,6 @@
 //! Wire → model → mask → retain wire keys, driven through a real `#[routes]`
 //! handler and the `Authorize` response shaper — no live database.
 
-use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
@@ -56,6 +55,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let admin = nest_rs_http::HttpView::of(cx)?
             .request()
@@ -92,6 +95,10 @@ impl Layer for ListAbilityInjector {}
 
 #[async_trait]
 impl Guard for ListAbilityInjector {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let mut b = AbilityBuilder::new();
         b.can(Action::Read, widget::Entity);
@@ -114,15 +121,15 @@ struct WidgetController;
 #[routes]
 impl WidgetController {
     #[get("/{id}")]
-    #[public]
-    async fn one(&self, _authz: Authorize<Read, widget::Entity>) -> Json<WidgetDto> {
+    #[public(Read, widget::Entity)]
+    async fn one(&self) -> Json<WidgetDto> {
         Json(WidgetDto {
             id: 1,
             name: "ada".into(),
         })
     }
 
-    // The decorator form arms exactly what the public-reads `Authorize<..>` parameter arms.
+    // `#[authorize]` arms exactly what `#[public(Read, Entity)]` arms.
     #[get("/decorated")]
     #[authorize(Read, widget::Entity)]
     async fn decorated(&self) -> Json<RawWidget> {
@@ -317,8 +324,8 @@ async fn a_body_carrying_an_unexposed_column_cannot_leak_it() {
 
 #[tokio::test]
 async fn the_authorize_decorator_arms_the_same_gate_and_mask() {
-    // `#[authorize(Read, Entity)]` with an empty signature behaves exactly like
-    // the hand-written `Authorize<..>` parameter.
+    // `#[authorize(Read, Entity)]` behaves exactly like `#[public(Read, Entity)]`
+    // for a caller a principal backs.
     let app = boot().await;
 
     let resp = app
@@ -401,6 +408,10 @@ impl Layer for PostAbilityInjector {}
 
 #[async_trait]
 impl Guard for PostAbilityInjector {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         use crate::post;
 
@@ -509,8 +520,8 @@ async fn a_non_json_response_passes_through() {
     #[routes]
     impl PlainController {
         #[get("/")]
-        #[public]
-        async fn plain(&self, _authz: Authorize<Read, widget::Entity>) -> String {
+        #[public(Read, widget::Entity)]
+        async fn plain(&self) -> String {
             "hello".into()
         }
     }

@@ -7,6 +7,7 @@
 mod crud;
 mod graphql;
 mod mcp;
+mod public;
 mod ws;
 
 use std::sync::Arc;
@@ -79,6 +80,10 @@ impl Layer for NarrowToken {}
 
 #[async_trait]
 impl Guard for NarrowToken {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("narrow");
         cx.attach(nest_rs_authz::__private::AmbientAbility::new(too_narrow()));
@@ -101,6 +106,10 @@ impl Layer for DeniedToken {}
 
 #[async_trait]
 impl Guard for DeniedToken {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("denied");
         cx.attach(nest_rs_authz::__private::AmbientAbility::new(

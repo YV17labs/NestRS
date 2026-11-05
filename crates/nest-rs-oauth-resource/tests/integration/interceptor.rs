@@ -74,7 +74,6 @@ struct ChatGateway;
 #[messages]
 impl ChatGateway {
     #[subscribe_message("ping")]
-    #[public]
     async fn ping(&self) -> String {
         "pong".into()
     }
@@ -106,6 +105,10 @@ impl Layer for TokenTooNarrow {}
 
 #[async_trait]
 impl Guard for TokenTooNarrow {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::insufficient_scope([REQUIRED], "forbidden"))
     }
@@ -126,6 +129,10 @@ impl Layer for NeverAllowed {}
 
 #[async_trait]
 impl Guard for NeverAllowed {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("forbidden"))
     }
@@ -295,6 +302,10 @@ impl Layer for ScopeOutsideTheGrammar {}
 
 #[async_trait]
 impl Guard for ScopeOutsideTheGrammar {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::insufficient_scope(
             [OUTSIDE_THE_GRAMMAR],
@@ -383,6 +394,10 @@ impl Layer for ExpiredCredential {}
 
 #[async_trait]
 impl Guard for ExpiredCredential {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         // What `AuthnGuard` returns for an expired token.
         Err(Denial::invalid_credential("invalid token", "invalid_token"))

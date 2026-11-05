@@ -119,7 +119,8 @@ pub use nest_rs_graphql_macros::crud;
 pub use nest_rs_graphql_macros::dataloader;
 
 /// Declare a [`resolver`](macro@resolver)'s operations on its impl block. Each operation
-/// declares its posture, `#[public]` or `#[authorize(Action, Entity)]`; the
+/// declares its posture, `#[public]`, `#[public(Action, Subject)]` or
+/// `#[authorize(Action, Subject)]`; the
 /// gate and the reply mask `#[authorize]` emits run in `nest_rs_authz::graphql`.
 ///
 /// ```

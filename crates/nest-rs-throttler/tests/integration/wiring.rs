@@ -1,6 +1,6 @@
 //! What an app has to write to rate-limit a route — the boot half of the
-//! contract: `ThrottlerModule` plus `#[use_guards(ThrottlerGuard)]`,
-//! nothing in `providers`.
+//! contract: `ThrottlerModule` plus `#[use_guards(ThrottlerGuard)]`, nothing in
+//! `providers`, and the route's `#[public]`, since a rate limit identifies no one.
 
 use std::sync::Arc;
 
@@ -16,6 +16,7 @@ struct LimitedController;
 #[routes]
 impl LimitedController {
     #[get("/")]
+    #[public]
     async fn ping(&self) -> String {
         "pong".into()
     }

@@ -136,10 +136,10 @@ nest-rs-http = { path = "../nest-rs-http" }
 # expands to the per-site guard chain, which this crate only exposes with the
 # GraphQL edge compiled in.
 nest-rs-guards = { path = "../nest-rs-guards" }
-# Same reason one layer up: an `#[authorize]` operation's mask sits behind
-# authz's own `graphql` and `mcp` features. A dev-dep, so no consumer of this
-# crate gains them.
-nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql", "mcp"] }
+# Same reason one layer up: the mask of an operation, a message or a tool naming
+# its read sits behind authz's own `graphql`, `ws` and `mcp` features. A dev-dep,
+# so no consumer of this crate gains them.
+nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql", "ws", "mcp"] }
 # `features = ["orm"]` so the framework workspace actually compiles
 # `EphemeralDatabase` — the fixture that migrates against *this* crate.
 # Without it nothing in the root workspace enables `nest-rs-testing/orm`, so

@@ -2,7 +2,7 @@
 //! real decorators: a `#[public]` message under an upgrade no guard runs at reads
 //! the visitor's rules, and a gated one still fails closed.
 
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Delete, Read};
 use nest_rs_core::{AmbientValue, injectable, module};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{WsError, WsModule, gateway, messages};
@@ -42,7 +42,7 @@ struct VisitorGateway;
 #[messages]
 impl VisitorGateway {
     #[subscribe_message("open")]
-    #[public]
+    #[public(Delete, widget::Entity, unmasked)]
     #[use_guards(AuthzGuard)]
     async fn open(&self) -> String {
         rules_read()

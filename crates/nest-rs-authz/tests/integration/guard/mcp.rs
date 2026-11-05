@@ -5,7 +5,7 @@
 //! Both directions are asserted: only the pair tells a working check from a
 //! deny-all and from a no-op.
 
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Delete, Read};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::EndpointGuards;
@@ -84,7 +84,7 @@ impl GuardedTool {
 
     /// Admits a caller with no credential, the guard reading who that is.
     #[tool]
-    #[public]
+    #[public(Delete, widget::Entity, unmasked)]
     async fn open(&self) -> Result<String, McpError> {
         Ok(rules_read())
     }
@@ -202,7 +202,7 @@ struct OpenedTool;
 impl OpenedTool {
     /// Admits a caller with no credential: what its posture says on every edge.
     #[tool]
-    #[public]
+    #[public(Delete, widget::Entity, unmasked)]
     async fn open(&self) -> Result<String, McpError> {
         Ok(rules_read())
     }

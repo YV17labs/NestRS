@@ -195,6 +195,10 @@ impl Layer for StoreDown {}
 
 #[async_trait]
 impl Guard for StoreDown {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
     async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Err(Self::denial())
     }

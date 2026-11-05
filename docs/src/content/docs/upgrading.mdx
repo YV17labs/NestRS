@@ -1761,6 +1761,29 @@ lists what the boot, a log or the wire shows when one is missed.
   `module registered`. On HTTP's mount line `method` is now the Rust method
   and the HTTP method is `verb`, so a filter on `method="GET"` there reads
   nothing; the request's own line keeps `method` for the HTTP method.
+- **A log filter or a dashboard keyed on a line naming a unit** reads nothing under
+  its old field: a guard's denial says `method` and the unit's coordinates (`verb`
+  and `path`, `kind` and `field`, `event`, `tool`, `prompt` or `resource`) where it
+  said `address`, and its `guard` is the short name (`AuthnGuard<JwtStrategy<Claims>>`);
+  a scheduled job's or a lifecycle hook's lines say `host` where they said `provider`;
+  a job's and a listener's say `host` and `method` where `processor` and `listener`
+  held `Type::method`; `wired event listener` is `mounted`, at `info`.
+- **A log filter on what the boot says** reads nothing under its old word: `nestrs
+  starting` is `app starting`, whose `version` is your app's beside `framework`;
+  `attached module-contributed transport` is `transport attached`; a transport reads
+  `http`, `queue`, `schedule` or `outbox`, on every line and in a refusal's sentence,
+  where it read its type, so a `BootStep`'s `transport` and
+  `TransportContribution::name` hold that word; `cause` reads `sigint`, `sigterm`,
+  `transport_failed`, `no_transport`, `boot_failed` or `closed`; `log_format` reads `text`
+  or `json`; `max_connections` is a number; `sampler` is a sampler's name, what chose it in
+  `sampler_source`. A transport of yours keeps its short type name until it declares a
+  word, `fn name()`.
+- **A log filter on a surface no guard runs at** — `a gated endpoint runs no guard at
+  its request; it denies every request`, `no guard runs at the /graphql request —
+  graphql operations run unguarded` — reads `no guard at the request` on
+  `nest_rs::layers`, with `surface`, `path`, `then` and `hint`; GraphQL's sat on
+  `nest_rs::graphql`, and `graphql operations gated` is gone. `mounted endpoint` says
+  `surface` where it said `kind`.
 - **A bounded duration outside its range** — a zero lease, a drain window
   above an hour, a body-read gap at `0`, a request or message timeout past 3600
   — fails the boot naming the variable and why the bound is there, whether the

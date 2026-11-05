@@ -113,3 +113,10 @@ pub const LOCK_TIMEOUT: Duration = MIN_HOLD.saturating_sub(MAX_SKEW);
 pub const BACKEND_REMEDY: &str = "Import exactly one occurrence lock binding: \
      `nest_rs::redis::RedisScheduleModule` claims each occurrence in Redis; or let every replica \
      fire the job with `replicas = \"each\"`, the default.";
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<std::sync::Arc<dyn OccurrenceLock>>,
+        BACKEND_REMEDY,
+    )
+}

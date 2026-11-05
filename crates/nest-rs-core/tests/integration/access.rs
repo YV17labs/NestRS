@@ -904,11 +904,14 @@ async fn a_handler_resolving_a_provider_no_module_offers_fails_the_boot_naming_i
         missing.dependency
     );
     assert_eq!(missing.remedy, None, "no crate names one for it");
-    assert!(
-        missing
-            .to_string()
-            .contains("or seed it at `App::builder()`")
-    );
+    let said = missing.to_string();
+    let import = said
+        .find("Import the module")
+        .unwrap_or_else(|| panic!("{said}"));
+    let seed = said
+        .find("or seed it at `App::builder()`")
+        .unwrap_or_else(|| panic!("{said}"));
+    assert!(import < seed, "the likelier fix leads: {said}");
 }
 
 /// A key whose owning crate names the line to add, as a port names its
@@ -950,6 +953,95 @@ async fn a_missing_dependency_whose_crate_names_a_remedy_is_refused_with_that_li
         "{said}"
     );
     assert!(!said.contains("seed it"), "one remedy, the crate's: {said}");
+}
+
+/// A key a module lists, whose owning crate names the line to add all the same:
+/// the module listing it is not always the one to import.
+#[injectable]
+#[derive(Default)]
+struct RemediedListed;
+
+const REMEDIED_LISTED_REMEDY: &str = "Import `PortModule`, which builds it.";
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(TypeId::of::<RemediedListed>, REMEDIED_LISTED_REMEDY)
+}
+
+#[module(providers = [RemediedListed])]
+struct ListingModule;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct RemediedListedConsumer {
+    #[inject]
+    listed: Arc<RemediedListed>,
+}
+
+#[module(providers = [RemediedListedConsumer])]
+struct RemediedListedConsumerModule;
+
+#[module(imports = [RemediedListedConsumerModule, ListingModule])]
+struct RemediedListedRoot;
+
+#[tokio::test]
+async fn a_key_out_of_reach_whose_crate_names_a_remedy_is_refused_with_that_line() {
+    let said = refused_boot::<RemediedListedRoot>().await.to_string();
+    assert!(said.ends_with(REMEDIED_LISTED_REMEDY), "{said}");
+    assert!(!said.contains("add `ListingModule`"), "one remedy: {said}");
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct FirstReaching {
+    #[inject]
+    listed: Arc<RemediedListed>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct SecondReaching {
+    #[inject]
+    listed: Arc<RemediedListed>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct ThirdReaching {
+    #[inject]
+    listed: Arc<RemediedListed>,
+}
+
+#[module(providers = [FirstReaching])]
+struct FirstReachingModule;
+
+#[module(providers = [SecondReaching])]
+struct SecondReachingModule;
+
+#[module(providers = [ThirdReaching])]
+struct ThirdReachingModule;
+
+#[module(imports = [FirstReachingModule, SecondReachingModule, ThirdReachingModule, ListingModule])]
+struct ThreeReachingRoot;
+
+#[tokio::test]
+async fn an_app_with_several_gaps_is_told_the_first_in_source_order_on_every_boot() {
+    let refused = refused_boot::<ThreeReachingRoot>().await;
+    let violation = refused
+        .downcast_ref::<AccessGraphError>()
+        .unwrap_or_else(|| panic!("not an access violation: {refused:#}"));
+    assert_eq!(violation.consumer, "FirstReaching");
 }
 
 /// What a decorator's generated code requires of its host, and nothing else

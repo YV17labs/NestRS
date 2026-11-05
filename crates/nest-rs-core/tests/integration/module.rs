@@ -396,6 +396,70 @@ async fn a_provider_injecting_what_a_hand_written_module_registers_later_fails_t
     );
 }
 
+/// What a hand-written module registers, whose owning crate names that module.
+struct Journal;
+
+const JOURNAL_REMEDY: &str = "Import `JournalModule`, which opens it.";
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(std::any::TypeId::of::<Journal>, JOURNAL_REMEDY)
+}
+
+struct JournalModule;
+
+impl Module for JournalModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide(Journal)
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Clerk {
+    #[inject]
+    journal: Arc<Journal>,
+}
+
+#[module(providers = [Clerk])]
+struct ClerkModule;
+
+#[module(imports = [ClerkModule, JournalModule])]
+struct JournalAfterRoot;
+
+#[tokio::test]
+async fn a_dependency_registered_later_whose_crate_names_a_remedy_is_refused_with_that_line() {
+    let said = refused_boot::<JournalAfterRoot>().await.to_string();
+    assert!(said.ends_with(JOURNAL_REMEDY), "{said}");
+    assert!(!said.contains("import that module"), "one remedy: {said}");
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Auditor {
+    #[inject]
+    journal: Option<Arc<Journal>>,
+}
+
+#[module(providers = [Auditor])]
+struct AuditorModule;
+
+#[module(imports = [AuditorModule, JournalModule])]
+struct OptionalJournalAfterRoot;
+
+#[tokio::test]
+async fn an_optional_dependency_registered_later_whose_crate_names_a_remedy_is_refused_with_that_line()
+ {
+    let said = refused_boot::<OptionalJournalAfterRoot>().await.to_string();
+    assert!(said.ends_with(JOURNAL_REMEDY), "{said}");
+    assert!(!said.contains("import that module"), "one remedy: {said}");
+}
+
 #[module(imports = [LedgerModule], providers = [Bookkeeper])]
 struct ImportingBookkeepingModule;
 

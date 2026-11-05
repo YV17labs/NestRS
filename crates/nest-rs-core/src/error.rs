@@ -12,6 +12,11 @@ use crate::type_name::shorten;
 /// A provider depends on something its module does not import and that is not
 /// global infrastructure. Raised at boot by the access-graph validation.
 ///
+/// When the crate owning the dependency's type names the line to add — a
+/// [`DependencyRemedy`](crate::DependencyRemedy) — the refusal says that line in
+/// place of importing the module listing it, which may be no fix: a root listing
+/// a guard in its pool owns it for the graph, and no adapter imports its root.
+///
 /// The boot builds it; a program reads its fields, and a later 7.x may add one:
 ///
 /// ```compile_fail,E0639
@@ -20,15 +25,10 @@ use crate::type_name::shorten;
 ///     consumer: "UsersService",
 ///     dependency: "Mailer",
 ///     owner: "MailModule",
+///     remedy: None,
 /// };
 /// ```
 #[derive(Debug, Error)]
-#[error(
-    "module access violation: `{consumer}` (in module `{module}`) depends on `{dependency}`, \
-     but `{module}` imports no module that provides it. `{dependency}` is provided by `{owner}` \
-     — add `{owner}` to `#[module(imports = [...])]` of `{module}`, or route the dependency \
-     through a module `{module}` already imports."
-)]
 #[non_exhaustive]
 pub struct AccessGraphError {
     /// Module that owns the offending consumer and whose imports fall short.
@@ -37,8 +37,37 @@ pub struct AccessGraphError {
     pub consumer: &'static str,
     /// The dependency that was out of reach.
     pub dependency: &'static str,
-    /// Module that actually provides `dependency` — the one to import to fix it.
+    /// Module that actually provides `dependency`.
     pub owner: &'static str,
+    /// The line to add, as the crate owning the dependency's type names it —
+    /// `None` when no crate names one, and the refusal says to import `owner`.
+    pub remedy: Option<&'static str>,
+}
+
+impl std::fmt::Display for AccessGraphError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            module,
+            consumer,
+            dependency,
+            owner,
+            remedy,
+        } = self;
+        write!(
+            f,
+            "module access violation: `{consumer}` (in module `{module}`) depends on \
+             `{dependency}`, but `{module}` imports no module that provides it. "
+        )?;
+        match remedy {
+            Some(remedy) => f.write_str(remedy),
+            None => write!(
+                f,
+                "`{dependency}` is provided by `{owner}` — add `{owner}` to \
+                 `#[module(imports = [...])]` of `{module}`, or route the dependency through a \
+                 module `{module}` already imports."
+            ),
+        }
+    }
 }
 
 /// A layer required a value no earlier layer attached to its unit
@@ -148,8 +177,9 @@ impl std::fmt::Display for MissingDependencyError {
             None => write!(
                 f,
                 "but no module provides it and it is not global infrastructure (a seed or \
-                 factory output). Add a provider for `{dependency}` to a module reachable from \
-                 the root, or seed it at `App::builder()`."
+                 factory output). Import the module that opens it, add a provider for \
+                 `{dependency}` to a module reachable from the root, or seed it at \
+                 `App::builder()`."
             ),
         }
     }
@@ -642,9 +672,9 @@ fn arrow_chain(chain: &[&str]) -> String {
 #[non_exhaustive]
 #[error(
     "module `{module}`: `{provider}` was never built — it needs {}, which nothing had registered \
-     when `{module}`'s providers were built; {}",
+     when `{module}`'s providers were built{}",
     and_list(.missing),
-    unbuilt_clause(.cause, .module, .missing.len())
+    unbuilt_clause(.cause, .module, .missing.len(), *.remedy)
 )]
 pub struct UnbuiltProviderError {
     /// The module listing the provider.
@@ -655,6 +685,10 @@ pub struct UnbuiltProviderError {
     pub missing: Vec<&'static str>,
     /// Why it was absent.
     pub cause: UnbuiltCause,
+    /// The line to add for the first of `missing` whose owning crate names one,
+    /// said in place of [`RegisteredLater`](UnbuiltCause::RegisteredLater)'s
+    /// edit, which can name no module.
+    pub remedy: Option<&'static str>,
 }
 
 /// Why a dependency was absent when its consumer's module built its providers.
@@ -685,8 +719,8 @@ pub enum UnbuiltCause {
 #[non_exhaustive]
 #[error(
     "module `{module}`: `{provider}` was built without its optional `{dependency}`, registered \
-     only afterwards, so it would run as if the capability were absent; {}",
-    unbuilt_clause(.cause, .module, 1)
+     only afterwards, so it would run as if the capability were absent{}",
+    unbuilt_clause(.cause, .module, 1, *.remedy)
 )]
 pub struct LateOptionalDependencyError {
     /// The module listing the provider.
@@ -697,33 +731,44 @@ pub struct LateOptionalDependencyError {
     pub dependency: &'static str,
     /// Why it was absent then.
     pub cause: UnbuiltCause,
+    /// The line to add, when the crate owning the dependency's type names one,
+    /// said in place of [`RegisteredLater`](UnbuiltCause::RegisteredLater)'s
+    /// edit, which can name no module.
+    pub remedy: Option<&'static str>,
 }
 
 /// What an [`UnbuiltCause`] says of `count` dependencies of a provider in
-/// `module`: the cause, then its edit.
-fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {
+/// `module`, following what was absent: the cause and its edit, or the `remedy`
+/// the dependency's crate names for what registers later.
+fn unbuilt_clause(
+    cause: &UnbuiltCause,
+    module: &str,
+    count: usize,
+    remedy: Option<&str>,
+) -> String {
     let them = if count == 1 { "it" } else { "them" };
-    match cause {
-        UnbuiltCause::ImportCycle(modules) if modules.len() == 2 => format!(
-            "{} import each other, so one registers before the other's providers exist: move \
+    match (cause, remedy) {
+        (UnbuiltCause::RegisteredLater, Some(remedy)) => format!(". {remedy}"),
+        (UnbuiltCause::ImportCycle(modules), _) if modules.len() == 2 => format!(
+            "; {} import each other, so one registers before the other's providers exist: move \
              what both need into a module both import",
             and_list(modules)
         ),
-        UnbuiltCause::ImportCycle(modules) => format!(
-            "{} import each other in a cycle, so one registers before another's providers \
+        (UnbuiltCause::ImportCycle(modules), _) => format!(
+            "; {} import each other in a cycle, so one registers before another's providers \
              exist: move what they need into a module they all import",
             and_list(modules)
         ),
-        UnbuiltCause::RegisteredLater => format!(
-            "a hand-written module or a `for_root` outside `{module}`'s imports registers {them} \
-             later: import that module in `{module}`'s `imports`"
+        (UnbuiltCause::RegisteredLater, None) => format!(
+            "; a hand-written module or a `for_root` outside `{module}`'s imports registers \
+             {them} later: import that module in `{module}`'s `imports`"
         ),
-        UnbuiltCause::RegisteredByAPool => format!(
-            "only an app-wide pool's declaration lists {them}, and a pool registers what it \
+        (UnbuiltCause::RegisteredByAPool, _) => format!(
+            "; only an app-wide pool's declaration lists {them}, and a pool registers what it \
              lists once every module is built: list {them} in `{module}`'s `providers`"
         ),
-        UnbuiltCause::ImportedFirst => format!(
-            "`{module}` was imported on a container built by hand while nothing there \
+        (UnbuiltCause::ImportedFirst, _) => format!(
+            "; `{module}` was imported on a container built by hand while nothing there \
              provided {them}: provide {them}, or import what provides {them}, before \
              `{module}`"
         ),
@@ -1940,12 +1985,68 @@ mod boot_refusal_tests {
     }
 
     #[test]
+    fn an_access_violation_says_its_crates_remedy_in_place_of_importing_the_owner() {
+        let violation = AccessGraphError {
+            module: "BlogHttpModule",
+            consumer: "PostsController",
+            dependency: "ThrottlerGuard",
+            owner: "AppModule",
+            remedy: None,
+        };
+        assert_eq!(
+            violation.to_string(),
+            "module access violation: `PostsController` (in module `BlogHttpModule`) depends on \
+             `ThrottlerGuard`, but `BlogHttpModule` imports no module that provides it. \
+             `ThrottlerGuard` is provided by `AppModule` — add `AppModule` to \
+             `#[module(imports = [...])]` of `BlogHttpModule`, or route the dependency through \
+             a module `BlogHttpModule` already imports."
+        );
+        let remedied = AccessGraphError {
+            remedy: Some("Import `ThrottlerModule` where the guard is bound."),
+            ..violation
+        };
+        assert_eq!(
+            remedied.to_string(),
+            "module access violation: `PostsController` (in module `BlogHttpModule`) depends on \
+             `ThrottlerGuard`, but `BlogHttpModule` imports no module that provides it. Import \
+             `ThrottlerModule` where the guard is bound."
+        );
+    }
+
+    #[test]
+    fn a_provider_never_built_says_its_crates_remedy_only_for_what_registers_later() {
+        const REMEDY: &str = "Import `LedgerModule`.";
+        let later = UnbuiltProviderError {
+            module: "BillingModule",
+            provider: "Invoices",
+            missing: vec!["Ledger"],
+            cause: UnbuiltCause::RegisteredLater,
+            remedy: Some(REMEDY),
+        };
+        assert_eq!(
+            later.to_string(),
+            "module `BillingModule`: `Invoices` was never built — it needs `Ledger`, which \
+             nothing had registered when `BillingModule`'s providers were built. Import \
+             `LedgerModule`."
+        );
+        let cycle = UnbuiltProviderError {
+            cause: UnbuiltCause::ImportCycle(vec!["BillingModule", "LedgerModule"]),
+            ..later
+        };
+        assert!(
+            !cycle.to_string().contains(REMEDY),
+            "the import is what closes the cycle: {cycle}"
+        );
+    }
+
+    #[test]
     fn a_provider_never_built_names_what_it_needed_and_the_edit_its_cause_has() {
         let cycle = UnbuiltProviderError {
             module: "UsersModule",
             provider: "UsersService",
             missing: vec!["PostsService"],
             cause: UnbuiltCause::ImportCycle(vec!["UsersModule", "PostsModule"]),
+            remedy: None,
         };
         assert_eq!(
             cycle.to_string(),
@@ -1971,6 +2072,7 @@ mod boot_refusal_tests {
             provider: "Invoices",
             missing: vec!["Ledger", "Clock"],
             cause: UnbuiltCause::RegisteredLater,
+            remedy: None,
         };
         assert_eq!(
             later.to_string(),

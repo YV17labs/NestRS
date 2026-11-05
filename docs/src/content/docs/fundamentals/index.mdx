@@ -169,11 +169,11 @@ repo.
 Empty the port's `providers`, the line that lists `BlogService`, then build:
 
 ```text frame="terminal" "BlogService"
-Error: unmet dependency: `BlogController` (in module `BlogHttpModule`) depends on `BlogService`, but no module provides it and it is not global infrastructure (a seed or factory output). Add a provider for `BlogService` to a module reachable from the root, or seed it at `App::builder()`.
+Error: unmet dependency: `BlogController` (in module `BlogHttpModule`) depends on `BlogService`, but no module provides it and it is not global infrastructure (a seed or factory output). Import the module that opens it, add a provider for `BlogService` to a module reachable from the root, or seed it at `App::builder()`.
 ```
 
 The error names the consumer (`BlogController`), the missing dependency
-(`BlogService`), and the two ways to fix it. Boot fails inside
+(`BlogService`), and the ways to fix it. Boot fails inside
 `build().await`, before the HTTP transport starts — never at the first
 request.
 

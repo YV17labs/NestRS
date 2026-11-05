@@ -92,4 +92,9 @@ async fn a_module_skipping_the_import_reaches_metrics_by_registration_order_alon
         refused.downcast_ref::<UnbuiltProviderError>().is_some(),
         "{refused:#}"
     );
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains("nest_rs::opentelemetry::OpenTelemetryModule"),
+        "the remedy names the module: {said}"
+    );
 }

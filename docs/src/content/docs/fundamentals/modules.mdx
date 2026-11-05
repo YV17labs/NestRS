@@ -315,8 +315,9 @@ and `Repo`.
 What a hand-written module installs in its own `register` — `EventsModule`'s
 `EventBus`, `OpenTelemetryModule`'s `Metrics` — is neither global nor gated:
 the access graph does not see it. A provider registered after it reaches it with no import, and
-one registered before it fails the boot (`UnbuiltProviderError`), so import
-the module that installs it and it registers first. In a module of your own,
+one registered before it fails the boot (`UnbuiltProviderError`, naming the
+module when its crate does), so import the module that installs it and it
+registers first. In a module of your own,
 open app-wide infrastructure in a factory, and list what you gate in
 `providers`.
 

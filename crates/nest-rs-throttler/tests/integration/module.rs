@@ -16,7 +16,7 @@ fn default_throttle_constant_is_60_per_minute() {
 mod guard_outside_for_root {
     use std::sync::Arc;
 
-    use nest_rs_core::{App, AppBuilder, MissingDependencyError, module};
+    use nest_rs_core::{App, AppBuilder, MissingDependencyError, injectable, module};
     use nest_rs_guards::GlobalGuards;
     use nest_rs_throttler::{
         InMemoryThrottler, Throttle, ThrottlerGuard, ThrottlerModule, ThrottlerStore,
@@ -72,6 +72,60 @@ mod guard_outside_for_root {
         let dependency =
             dependency_told_the_import(App::builder().module::<PoolWithoutThePort>()).await;
         assert!(dependency.contains("Throttle"), "{dependency}");
+    }
+
+    #[expect(
+        dead_code,
+        reason = "the guard is declared for the container to resolve, never read"
+    )]
+    #[injectable]
+    struct BindsTheGuard {
+        #[inject]
+        guard: Arc<ThrottlerGuard>,
+    }
+
+    #[module(providers = [BindsTheGuard])]
+    struct AdapterWithoutThePort;
+
+    /// The pool reports the guard on its root's behalf, and importing that root
+    /// from its own adapter is no fix.
+    #[tokio::test]
+    async fn an_adapter_beside_a_root_listing_the_guard_is_told_the_port_not_the_root() {
+        let Err(refused) = App::builder()
+            .module::<AdapterWithoutThePort>()
+            .module::<PoolWithoutThePort>()
+            .build()
+            .await
+        else {
+            panic!("no module builds the guard");
+        };
+        let said = refused.to_string();
+        assert!(
+            said.contains("depends on `ThrottlerGuard`")
+                && said.contains("`nest_rs::throttler::ThrottlerModule`"),
+            "{said}"
+        );
+        assert!(!said.contains("— add `"), "{said}");
+    }
+
+    #[expect(
+        dead_code,
+        reason = "the store is declared for the container to resolve, never read"
+    )]
+    #[injectable]
+    struct ReadsTheStore {
+        #[inject]
+        store: Arc<dyn ThrottlerStore>,
+    }
+
+    #[module(providers = [ReadsTheStore])]
+    struct StoreWithoutThePort;
+
+    #[tokio::test]
+    async fn a_provider_injecting_the_store_with_no_port_imported_is_told_the_import() {
+        let dependency =
+            dependency_told_the_import(App::builder().module::<StoreWithoutThePort>()).await;
+        assert!(dependency.contains("ThrottlerStore"), "{dependency}");
     }
 
     #[module(imports = [ThrottlerModule], providers = [GlobalGuards<(ThrottlerGuard,)>])]

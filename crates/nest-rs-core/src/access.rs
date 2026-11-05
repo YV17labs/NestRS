@@ -156,6 +156,16 @@ inventory::collect!(HostLayers);
 inventory::collect!(HostRequires);
 inventory::collect!(DependencyRemedy);
 
+/// The remedy the first of `keys` an owning crate names one for, read off the
+/// registry where a refusal is written.
+pub(crate) fn first_remedy(keys: &[TypeId]) -> Option<&'static str> {
+    keys.iter().find_map(|key| {
+        inventory::iter::<DependencyRemedy>()
+            .find(|entry| (entry.key)() == *key)
+            .map(|entry| entry.remedy)
+    })
+}
+
 /// Every module `module` imports: those its `imports = [...]` names, in order,
 /// then what each of its providers' decorators brings.
 fn imported_by(module: &ModuleDescriptor) -> impl DoubleEndedIterator<Item = TypeId> {
@@ -395,7 +405,9 @@ pub(crate) fn validate_access_graph(
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
 
-    let reached = reachable(roots, &by_id);
+    // In source order, so the same app is refused the same way on every boot.
+    let walked = reachable_in_order(roots, &by_id);
+    let reached: HashSet<TypeId> = walked.iter().copied().collect();
     // An optional dependency's owner is read among the modules this app reaches:
     // one only another binary's module provides is absent here, not a leak.
     let provided_by = owners(descriptors.iter().copied());
@@ -406,7 +418,7 @@ pub(crate) fn validate_access_graph(
             .filter(|d| reached.contains(&(d.module)())),
     );
 
-    for module_id in &reached {
+    for module_id in &walked {
         let Some(desc) = by_id.get(module_id) else {
             continue;
         };
@@ -480,6 +492,7 @@ pub(crate) fn validate_access_graph(
                         consumer: p.name,
                         dependency,
                         owner,
+                        remedy: linked.remedies.get(&dep).copied(),
                     }
                     .into());
                 }

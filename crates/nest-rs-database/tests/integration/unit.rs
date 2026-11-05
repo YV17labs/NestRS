@@ -928,3 +928,28 @@ async fn a_provider_injecting_the_port_with_no_binding_is_refused_naming_the_fir
         "{BACKEND_REMEDY}"
     );
 }
+
+#[expect(
+    dead_code,
+    reason = "the store is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct ReadsTheOutbox {
+    #[inject]
+    store: Arc<dyn nest_rs_database::OutboxStore>,
+}
+
+#[module(providers = [ReadsTheOutbox])]
+struct OutboxWithNoBinding;
+
+#[tokio::test]
+async fn a_provider_injecting_the_outbox_store_with_no_binding_is_told_the_binding() {
+    let Err(refused) = App::builder().module::<OutboxWithNoBinding>().build().await else {
+        panic!("no module binds the store");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains("`nest_rs::seaorm::SeaOrmDatabaseModule`"),
+        "{said}"
+    );
+}

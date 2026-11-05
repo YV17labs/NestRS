@@ -89,6 +89,14 @@ impl ClaimedRecord {
     }
 }
 
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<std::sync::Arc<dyn OutboxStore>>,
+        "Import a data driver's binding: `nest_rs::seaorm::SeaOrmDatabaseModule` binds the \
+         outbox store the queue port's relay drains.",
+    )
+}
+
 /// The relay's side of the outbox a data driver keeps: bound as
 /// `Arc<dyn OutboxStore>` by the driver's binding, read by the queue port's
 /// relay, which files what committed units wrote.

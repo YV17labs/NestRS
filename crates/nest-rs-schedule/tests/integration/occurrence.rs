@@ -233,3 +233,29 @@ async fn a_job_firing_once_with_no_lock_bound_fails_the_boot_naming_it() {
     );
     assert!(refusal.contains(BACKEND_REMEDY), "{refusal}");
 }
+
+#[expect(
+    dead_code,
+    reason = "the lock is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct ReadsTheLock {
+    #[inject]
+    lock: Arc<dyn OccurrenceLock>,
+}
+
+#[module(providers = [ReadsTheLock])]
+struct LockWithNoBinding;
+
+#[tokio::test]
+async fn a_provider_injecting_the_lock_with_no_binding_is_told_the_binding() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .module::<LockWithNoBinding>()
+        .build()
+        .await
+    else {
+        panic!("no module binds the lock");
+    };
+    let said = format!("{refused:#}");
+    assert!(said.ends_with(BACKEND_REMEDY), "{said}");
+}

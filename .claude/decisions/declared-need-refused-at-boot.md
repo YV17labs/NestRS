@@ -105,3 +105,21 @@ no unit over SeaORM's executor.
 ## 2026-11-05 — a root field reads a loader as a field resolver does
 
 "The docs teach only the parameter" was false of a root field, which had no parameter to teach: `&DataLoader<L>` on a `#[query]` was an `InputType` error, so `ctx.data::<DataLoader<L>>()?` was its one spelling, and with the owner unreached it sent the client ``Data `…DataLoader<…>` does not exist.``, a Rust type path, with no operator line and no boot refusal. `#[query]`, `#[mutation]`, `#[subscription]` and `#[entity]` now take the parameter, left out of the schema's arguments and an entity's key, each submitting a `GraphqlRootLoaderRegistration`. It is read against the resolver rather than the objects a schema serves: an `#[entity]` is no field of any object, and a root field is served exactly when the app reaches its resolver. A `Context` a body reads by hand stays unreadable by the boot, as above; the answer is what moves. `Redacted` reads `Context::data`'s refusal off every error, as it reads async-graphql's other sentences, and answers the opaque error with the type on the operator's line, so no Rust type path reaches a client, whichever data was missing. That line names no field: an error's path holds the client's aliases, which no log line carries, and the field's own `graphql.field` line sits under the same trace. Decided on security and on the developer's ease: the shorter spelling is the checked one.
+
+## 2026-11-05 — every refusal naming a key says its remedy, and no port binding is left to the kernel's sentence
+
+The owner's mandate of 2026-11-05. A crate's remedy was read for
+`MissingDependencyError` alone. So a root listing `ThrottlerGuard` in its pool
+"owned" the guard for an adapter binding it with no port, which was told to add
+that root to its imports, or any other module the binary links listing the guard
+by hand; and a provider injecting `Metrics` before `OpenTelemetryModule` registered
+was told to "import that module", naming none, though the crate names it.
+`AccessGraphError` now says the remedy in place of its add-owner clause, and
+`UnbuiltProviderError` and `LateOptionalDependencyError` in place of
+`UnbuiltCause::RegisteredLater`'s edit; a cycle or a pool's cause keeps its own,
+since there the import is not the fix. `dyn ThrottlerStore`, `dyn OccurrenceLock`
+and `dyn OutboxStore` submit one too, and the kernel's sentence for a key no crate
+names now leads with the import.
+
+**Refused:** naming the instance in `RedisConnection<Cache>`'s remedy stays refused,
+as above: it takes a probe at the inject site.

@@ -219,3 +219,12 @@ by class; a request-scoped one, built after the pool, boots. **Refused:** regist
 "already provided" is a read of every reached descriptor that a hand-written
 module's later registration contradicts, and where the step's static wait on the
 layer's dependencies stalls on those of a layer something else provides.
+
+## 2026-11-05 — the access graph walks in source order
+
+The owner's mandate of 2026-11-05. `validate_access_graph` iterated the reached
+modules as a `HashSet`, so an app with two gaps read one or the other by the
+process's hash seed: 21 and 9 of 30 runs of one test told apart two refusals, one of
+them naming the wrong fix. It now walks them as `provider_order` does, roots first
+and imports depth-first, so one app reads one first refusal on every boot.
+

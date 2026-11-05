@@ -34,6 +34,14 @@ nest_rs_core::inventory::submit! {
     nest_rs_core::DependencyRemedy::new(std::any::TypeId::of::<CountingStore>, IMPORT_REMEDY)
 }
 
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<Arc<dyn ThrottlerStore>>,
+        "Import `nest_rs::throttler::ThrottlerModule`, which binds the in-process \
+         `dyn ThrottlerStore` a vendor binding supersedes.",
+    )
+}
+
 /// The throttler port: policy, guard, and the in-process default store. An
 /// adapter whose host binds the guard imports it bare, which reads
 /// `<PREFIX>_THROTTLER__*` (default `Throttle::per_minute(60)`); a vendor binding

@@ -37,9 +37,8 @@
 //! #
 //! # #[nest_rs_core::main]
 //! # async fn main() -> anyhow::Result<()> {
-//! # let token = String::from("a-token");
 //! let app = TestApp::builder().module::<ChatModule>().build_ws().await?;
-//! let mut socket = app.socket("/ws").bearer(&token).connect().await;
+//! let mut socket = app.socket("/ws").connect().await;
 //! socket.send("message", json!({ "text": "hi" })).await;
 //! assert_eq!(socket.next_envelope().await["event"], "message");
 //! app.shutdown().await?;
@@ -141,6 +140,16 @@ impl WsApp {
         format!("ws://{}/{}", self.addr, path.trim_start_matches('/'))
     }
 
+    /// The `Authorization` value of a bearer token over `claims`, signed with
+    /// the key [`ephemeral_signing_key`](crate::TestAppBuilder::ephemeral_signing_key)
+    /// installed, as `TestApp::bearer` signs it: set it on the upgrade with
+    /// [`header`](WsSocketBuilder::header). Panics when the app was booted
+    /// with no such key.
+    #[cfg(feature = "authn")]
+    pub fn bearer(&self, claims: &impl serde::Serialize) -> String {
+        self.app.kept.bearer(claims)
+    }
+
     /// Open a socket against a mounted gateway path.
     pub fn socket(&self, path: &str) -> WsSocketBuilder {
         WsSocketBuilder {
@@ -182,12 +191,6 @@ impl WsSocketBuilder {
     pub fn header(mut self, name: &str, value: impl Into<String>) -> Self {
         self.headers.push((name.to_string(), value.into()));
         self
-    }
-
-    /// `Authorization: Bearer <token>` on the upgrade.
-    #[must_use]
-    pub fn bearer(self, token: &str) -> Self {
-        self.header("authorization", format!("Bearer {token}"))
     }
 
     /// How long the socket's reads wait before reporting silence.

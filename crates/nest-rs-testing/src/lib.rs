@@ -17,8 +17,8 @@
 //! [`override_value`](TestAppBuilder::override_value). Boot on a throwaway
 //! database with `ephemeral_database` (feature `orm`), run a service in a unit
 //! of the app's binding with `unit` and `system_unit` (features `authz`,
-//! `database`), and sign a bearer with the app's own `JwtService` with
-//! `TestApp::bearer` (feature `authn`).
+//! `database`), and sign the bearers the app verifies with a key of the test's
+//! own with `ephemeral_signing_key` and `TestApp::bearer` (feature `authn`).
 //!
 //! [`LogCapture`] covers the other half of a transport's contract: the events
 //! it emits. A denial that fails closed but logs nothing passes every response
@@ -54,6 +54,8 @@ pub mod mcp;
 mod package;
 #[cfg(feature = "http")]
 mod response;
+#[cfg(feature = "authn")]
+mod signer;
 #[cfg(feature = "database")]
 mod unit;
 mod url;

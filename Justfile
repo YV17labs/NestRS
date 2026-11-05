@@ -21,6 +21,7 @@ lint:
     cargo clippy --workspace --all-targets --all-features --keep-going -- -D warnings
     cargo hack check -p nest-rs -p nest-rs-macro-hygiene --each-feature --exclude-all-features --keep-going "{{deny_warnings}}"
     cargo check -p nest-rs-macro-hygiene --no-default-features --features queue,testing "{{deny_warnings}}"
+    cargo check -p nest-rs-macro-hygiene --no-default-features --features authn,testing "{{deny_warnings}}"
 
 # Each lockfile is read as committed: one its manifests outgrew fails rather than
 # being resolved again. An ignore is judged in the framework's tree, where it is

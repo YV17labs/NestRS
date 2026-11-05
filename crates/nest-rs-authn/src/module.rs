@@ -4,6 +4,7 @@ use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, Unnamed};
 
 use crate::binding::ResourceBinding;
+use crate::ephemeral_signing_key::EphemeralSigningKey;
 use crate::{AuthnConfig, JwtService};
 
 /// DI module that builds a [`JwtService`] from [`AuthnConfig`] and provides it as
@@ -32,11 +33,12 @@ impl Module for AuthnModule {
         ConfigModule::provide_feature::<Unnamed, AuthnConfig>(builder)
             .provide_factory_after::<JwtService, (AuthnConfig, ResourceBinding), _, _>(
                 |container| async move {
-                    let config = ConfigModule::resolved::<AuthnConfig>(&container)?;
-                    let options = (*config)
-                        .clone()
-                        .into_options()
-                        .map_err(anyhow::Error::new)?;
+                    let config = (*ConfigModule::resolved::<AuthnConfig>(&container)?).clone();
+                    let options = match container.get::<EphemeralSigningKey>() {
+                        Some(key) => key.options_from(config),
+                        None => config.into_options(),
+                    }
+                    .map_err(anyhow::Error::new)?;
                     match container.get::<ResourceBinding>() {
                         Some(binding) => JwtService::bound(options, &binding),
                         None => JwtService::new(options),

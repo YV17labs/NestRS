@@ -20,11 +20,11 @@ async fn the_live_app_requires_its_own_audience_read_from_its_own_file() {
 
     let refused = app
         .socket("/ws")
-        .bearer(&token_for(ASSISTANT, ORG_ID, "user", client()))
+        .header("authorization", format!("Bearer {}", token_for(ASSISTANT, ORG_ID, "user", client())))
         .expect_refused()
         .await;
     assert_eq!(refused, StatusCode::UNAUTHORIZED);
-    let mut socket = app.socket("/ws").bearer(&machine_token()).connect().await;
+    let mut socket = app.socket("/ws").header("authorization", format!("Bearer {}", machine_token())).connect().await;
 
     socket.close(CloseCode::Normal, "done").await;
     app.shutdown().await.expect("transport shuts down");

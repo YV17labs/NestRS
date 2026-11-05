@@ -568,10 +568,12 @@ in `tests/e2e/` instead — scaffolded empty, and where a test boots the module
 `main` runs on a throwaway database, `TestApp::builder()` with
 `.ephemeral_database::<migrations::Migrator>()` (`nest-rs`'s `seaorm` feature, on
 since `nestrs new`, and its `testing` feature, which each app enables in its
-`[dev-dependencies]` alone, so no release binary carries the harness), and calls
-a guarded route with `app.bearer(&claims)`, a token the app's own key
-signs. `nestrs g resource` writes the first: the resource's round trip in
-`tests/e2e/<resource>.rs`, and the `boot` fixture in `tests/e2e/main.rs`.
+`[dev-dependencies]` alone, so no release binary carries the harness), and
+`.ephemeral_signing_key()`, which has the app verify the tokens of a key the
+test holds; it calls a guarded route with `app.bearer(&claims)`, a token that
+key signs for the app's audience. `nestrs g resource` writes the first: the
+resource's round trip in `tests/e2e/<resource>.rs`, and the `boot` fixture in
+`tests/e2e/main.rs`.
 
 ## Commands
 

@@ -134,9 +134,11 @@ impl {{controller}} {}
 /// The app's `e2e` suite root, written over the empty one `nestrs new`
 /// scaffolds by the first `g resource` wired into the app: its module list and
 /// the fixture every test boots — the module `main` runs, on a throwaway
-/// database migrated by the workspace's migrator.
+/// database migrated by the workspace's migrator, verifying the tokens of a
+/// key the test holds.
 pub(crate) const E2E_MAIN: &str = r#"//! The app's suite against a throwaway database: every test boots the
-//! composition `main` runs, migrated by the workspace's migrator.
+//! composition `main` runs, migrated by the workspace's migrator, and signs
+//! the tokens it sends with a key of its own.
 
 mod {{snake}};
 
@@ -148,6 +150,7 @@ pub(crate) async fn boot() -> TestApp {
     TestApp::builder()
         .module::<{{app_module}}>()
         .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
         .build()
         .await
         .expect("{{app_module}} boots against a throwaway database")
@@ -162,6 +165,7 @@ pub(crate) async fn boot() -> nest_rs::testing::TestApp {
     nest_rs::testing::TestApp::builder()
         .module::<{{app_snake}}::{{app_module}}>()
         .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
         .build()
         .await
         .expect("{{app_module}} boots against a throwaway database")
@@ -169,10 +173,10 @@ pub(crate) async fn boot() -> nest_rs::testing::TestApp {
 "#;
 
 /// The resource's round trip through the app, as a caller the guards admit:
-/// a token the app's own `JwtService` signs over the auth adapter's `Claims`.
-/// It posts a value of every column and reads each back: it passes once
-/// `AuthzAbility` grants the entity — until then it fails on the 403 that says
-/// so.
+/// a token over the auth adapter's `Claims`, signed with the key the boot
+/// installed. It posts a value of every column and reads each back: it passes
+/// once `AuthzAbility` grants the entity — until then it fails on the 403 that
+/// says so.
 pub(crate) const E2E_TEST: &str = r#"use nest_rs::http::StatusCode;
 use serde_json::json;
 use uuid::Uuid;

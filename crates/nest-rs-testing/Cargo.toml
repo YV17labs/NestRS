@@ -27,8 +27,10 @@ http = [
     "dep:serde",
     "dep:url",
 ]
-# A bearer token the app's own `JwtService` signs (`TestApp::bearer`).
-authn = ["http", "dep:nest-rs-authn", "dep:serde"]
+# The bearer tokens an app verifies, signed with a key pair of the test's own
+# that `rcgen` issues in process (`TestAppBuilder::ephemeral_signing_key`,
+# `TestApp::bearer`).
+authn = ["http", "dep:nest-rs-authn", "dep:rcgen", "dep:serde"]
 # A unit of work run through the app's bound `UnitOfWork` as system work
 # (`TestApp::system_unit`, `HeadlessApp::system_unit`).
 database = ["dep:nest-rs-database"]
@@ -75,7 +77,8 @@ nest-rs-config.workspace = true
 # `load_project_env` reads the package's Cargo workspace root off its manifests,
 # with the TOML parser the CLI reads them with.
 toml_edit.workspace = true
-# Behind `tls`.
+# Behind `tls` and `authn`: the certificates a TLS test presents, and the key
+# pair a test signs its tokens with.
 rcgen = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 tokio-rustls = { workspace = true, optional = true }
@@ -110,7 +113,8 @@ nest-rs-ws = { workspace = true, optional = true }
 # `assert_json`.
 nest-rs-queue = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
-# Behind `authn`: the `JwtService` `TestApp::bearer` signs with.
+# Behind `authn`: the `JwtService` `TestApp::bearer` signs with, and the seam
+# the app's own verifies through.
 nest-rs-authn = { workspace = true, optional = true }
 # Behind `database` and `authz`: the unit of work a test runs, and the ability
 # it runs under.

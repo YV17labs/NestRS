@@ -58,7 +58,7 @@ pub(crate) async fn open(app: &WsApp, path: &str) -> WsSocket {
 }
 
 pub(crate) async fn open_as(app: &WsApp, path: &str, token: &str) -> WsSocket {
-    app.socket(path).bearer(token).connect().await
+    app.socket(path).header("authorization", format!("Bearer {token}")).connect().await
 }
 
 pub(crate) async fn wait_for_presence(socket: &mut WsSocket, want: u64) {

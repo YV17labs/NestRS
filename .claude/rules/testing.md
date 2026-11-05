@@ -86,15 +86,24 @@ nextest prints each test's time: compare before and after.
   TLS on both sides — the test authority's certificate to the client, the
   system's trust to the service — so what it reads or holds back is the
   protocol, never a record; the client under test trusts both authorities.
-- **`EphemeralDatabase`** (`orm` feature) — a per-test database, dropped with
-  the value; `TestAppBuilder::ephemeral_database::<Migrator>()` boots the app
-  on one it holds, dropped after the app.
+- **`TestAppBuilder::ephemeral_database::<Migrator>()`** (`orm` feature) —
+  the one boot on a database of the test's own: created and migrated for the
+  test, held by the app and dropped after it; a test seeding rows, or booting a
+  second app on it, reads the connection back from the booted app's container.
+  `EphemeralDatabase` alone is for a test that boots no app, or whose subject
+  is a pool opening its URL.
 - **`TestApp::unit(ability, || …)` / `system_unit(|| …)`** (`authz`,
   `database`) — a service's body run in one unit of the app's bound
   `UnitOfWork`, as a request granted the ability or as system work,
   committed on `Ok`: never an executor or an ability installed by hand.
-- **`TestApp::bearer(&claims)`** (`authn`) — the `Authorization` value
-  of a token the app's own `JwtService` signs over `claims`.
+- **`TestAppBuilder::ephemeral_signing_key()` / `TestApp::bearer(&claims)`**
+  (`authn`) — the app verifies the tokens of a key pair the test holds, issued
+  in process as `TestAuthority` issues certificates, in place of its configured
+  key material, signing only where that material signs and verifying only when
+  it names none; `bearer` signs a claims value for its audience, as its issuer,
+  `exp` at its lifetime unless the claims carry one. No app's suite commits a
+  private key, and none signs with the app's own
+  (`.claude/decisions/suite-signs-with-a-key-of-its-own.md`).
 - **`load_project_env`** — the `.env` cascade, so a test reaches the
   devcontainer's `postgres`, `valkey-standalone` and `rustfs`.
 
@@ -103,11 +112,12 @@ nextest prints each test's time: compare before and after.
 nextest runs each test in its own process, and both workspaces' suites run on
 one Postgres, one Redis and one store. Isolation is declared, never hoped for.
 
-- **A suite that boots over SeaORM runs on an `EphemeralDatabase`**, never on
-  the database `<PREFIX>_SEAORM__URL` names: it seeds the connection
-  (`provide_arc(db.connection())`), which keeps `SeaOrmModule` from opening
-  its pool, and the guard drops the database. A dirty or unmigrated main
-  database then fails nothing.
+- **A suite that boots over SeaORM boots on `ephemeral_database`**, never on
+  the database `<PREFIX>_SEAORM__URL` names: the connection seeded keeps
+  `SeaOrmModule` from opening its pool, and the app drops the database. A
+  dirty or unmigrated main database then fails nothing. `nest-rs-seaorm`'s own
+  suite alone also boots on that URL: its subject is the pool and the binding
+  over it, and it works on probe tables of its own.
 - **Redis's databases are split between development and the suites**, on
   every Valkey the dev container runs, which declares enough for each
   (`--databases`, a Cluster's `cluster-databases`): 0 is the developer's —

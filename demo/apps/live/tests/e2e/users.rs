@@ -30,7 +30,7 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
     .expect("seed users");
 
     let token = token_for_org(org_a, Role::User).await;
-    let mut socket = app.socket("/users").bearer(&token).connect().await;
+    let mut socket = app.socket("/users").header("authorization", format!("Bearer {token}")).connect().await;
     socket.send("users.list", Value::Null).await;
     let reply = socket.next_envelope().await;
 

@@ -36,6 +36,7 @@ mod binding;
 mod config;
 mod credentials;
 mod development;
+mod ephemeral_signing_key;
 mod error;
 mod guard;
 mod jwk_set;
@@ -130,6 +131,7 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::binding::ResourceBinding;
+    pub use crate::ephemeral_signing_key::EphemeralSigningKey;
     pub use crate::guard::{Verdict, authenticate};
     pub use crate::principal::{
         Actor, ActorField, ActorRefusal, IdentifierAnswer, IdentifierProbe, ScopeList, Tenant,

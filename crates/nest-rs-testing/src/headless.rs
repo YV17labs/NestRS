@@ -24,7 +24,7 @@ pub struct HeadlessApp {
     /// Each of them still serving, with its [`Transport::stop_bound`].
     serving: Serving,
     /// Dropped after the app, which may still hold its connection.
-    kept: Kept,
+    pub(crate) kept: Kept,
 }
 
 /// The transports still serving, in the order they were spawned.

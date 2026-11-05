@@ -179,7 +179,8 @@ events = ["dep:nest-rs-events"]
 # `guards`) the way every other capability row does. Without it the extension
 # point the docs teach cannot be spelled, and the error is an unresolved import
 # at their `use`.
-# Beside `testing`, the harness signs a bearer with the app's own `JwtService`.
+# Beside `testing`, the harness signs the bearers an app verifies with a key of
+# the test's own (`ephemeral_signing_key`, `bearer`).
 authn = ["dep:nest-rs-authn", "http", "nest-rs-testing?/authn"]
 # The OAuth 2.0 *client* role: obtaining a token from somebody else's
 # authorization server. Its transaction cookie is `JwtService`-signed, hence

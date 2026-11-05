@@ -33,7 +33,6 @@ pub struct TestAppBuilder {
 }
 
 /// What a booted test app keeps alive beside its container, dropped after it.
-#[derive(Default)]
 pub(crate) struct Kept {
     #[cfg(feature = "orm")]
     #[expect(
@@ -41,6 +40,10 @@ pub(crate) struct Kept {
         reason = "held for its drop, which drops the database once the app is gone"
     )]
     pub(crate) database: Option<crate::EphemeralDatabase>,
+    /// What signs the tokens the app verifies, with
+    /// [`ephemeral_signing_key`](TestAppBuilder::ephemeral_signing_key).
+    #[cfg(feature = "authn")]
+    pub(crate) signer: Option<crate::signer::Signer>,
 }
 
 impl TestAppBuilder {
@@ -55,19 +58,34 @@ impl TestAppBuilder {
     }
 
     /// Build the app: its database first, the connection seeded, then the
-    /// four phases, then its outbox armed. A boot failing past the build is
-    /// closed before the error returns.
+    /// four phases, then its outbox armed and the signer of its tokens
+    /// proven. A boot failing past the build is closed before the error
+    /// returns.
     pub(crate) async fn boot(self) -> Result<(App, Kept)> {
         #[cfg(feature = "orm")]
-        let (inner, kept) = crate::database::seeded(self.inner, self.database).await?;
+        let (inner, database) = crate::database::seeded(self.inner, self.database).await?;
         #[cfg(not(feature = "orm"))]
-        let (inner, kept) = (self.inner, Kept::default());
+        let inner = self.inner;
         let app = inner.build().await?;
         #[cfg(feature = "queue")]
         if let Err(refused) = nest_rs_queue::__private::arm_outbox(app.container()).await {
             app.close().await;
             return Err(refused);
         }
+        #[cfg(feature = "authn")]
+        let signer = match crate::signer::Signer::proven(app.container()).await {
+            Ok(signer) => signer,
+            Err(refused) => {
+                app.close().await;
+                return Err(refused);
+            }
+        };
+        let kept = Kept {
+            #[cfg(feature = "orm")]
+            database,
+            #[cfg(feature = "authn")]
+            signer,
+        };
         Ok((app, kept))
     }
 
@@ -230,15 +248,18 @@ mod http {
 
     #[cfg(feature = "authn")]
     impl TestApp {
-        /// The `Authorization` value of a bearer token the app's own
-        /// `JwtService` signs over `claims`, stamping what the signer owns —
-        /// `exp` among it: a token the app's authentication guard admits,
-        /// signed with the key it verifies with. Panics when the app provides
-        /// no `JwtService` or one holding no signing key.
+        /// The `Authorization` value of a bearer token over `claims`, signed
+        /// with the key [`ephemeral_signing_key`](TestAppBuilder::ephemeral_signing_key)
+        /// installed: for the app's audience and as its issuer — the resource
+        /// it serves and the first authorization server it trusts, else its
+        /// configured ones — `iat` and `jti` stamped, and `exp` at the app's
+        /// token lifetime when the claims carry none. A claim the claims carry
+        /// is kept: a test proving a refusal writes the `aud`, `iss` or `exp`
+        /// it wants. Panics when the app was booted with no such key.
         ///
         /// ```
-        /// # use nest_rs_authn::{AuthnConfig, AuthnModule, JwtService};
-        /// # use nest_rs_core::{Secret, module};
+        /// # use nest_rs_authn::{AuthnModule, JwtService};
+        /// # use nest_rs_core::module;
         /// # use nest_rs_testing::TestApp;
         /// # use serde::Serialize;
         /// #[derive(Serialize)]
@@ -253,10 +274,7 @@ mod http {
         ///
         /// let app = TestApp::builder()
         ///     .module::<BlogModule>()
-        /// #   .provide(AuthnConfig {
-        /// #       secret: Some(Secret::new("a-test-secret-of-thirty-two-bytes!".into())),
-        /// #       ..AuthnConfig::default()
-        /// #   })
+        ///     .ephemeral_signing_key()
         ///     .build()
         ///     .await?;
         /// let authorization = app.bearer(&Claims { sub: "ada".into() });
@@ -268,14 +286,7 @@ mod http {
         /// # }
         /// ```
         pub fn bearer(&self, claims: &impl serde::Serialize) -> String {
-            let jwt = self
-                .container()
-                .get::<nest_rs_authn::JwtService>()
-                .expect("the app provides no JwtService: import the module authenticating it");
-            let token = jwt
-                .sign(claims)
-                .unwrap_or_else(|refused| panic!("the app's JwtService signs no token: {refused}"));
-            format!("Bearer {token}")
+            self.kept.bearer(claims)
         }
     }
 

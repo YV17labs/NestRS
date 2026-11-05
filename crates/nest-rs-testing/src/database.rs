@@ -16,7 +16,6 @@ use sea_orm::{
 use sea_orm_migration::MigratorTrait;
 
 use crate::TestAppBuilder;
-use crate::app::Kept;
 use crate::env::load_project_env;
 
 /// The database a test app creates at its boot.
@@ -60,22 +59,17 @@ impl TestAppBuilder {
 pub(crate) async fn seeded(
     inner: AppBuilder,
     fixture: Option<DatabaseFixture>,
-) -> Result<(AppBuilder, Kept)> {
+) -> Result<(AppBuilder, Option<EphemeralDatabase>)> {
     let Some(create) = fixture else {
-        return Ok((inner, Kept::default()));
+        return Ok((inner, None));
     };
     let database = create().await?;
-    Ok((
-        inner.provide_arc(database.connection()),
-        Kept {
-            database: Some(database),
-        },
-    ))
+    Ok((inner.provide_arc(database.connection()), Some(database)))
 }
 
 /// Fresh Postgres database created for one e2e run, migrated, then **dropped
-/// when this guard drops**. Seed `db.connection()` into a test app and the
-/// real connection short-circuits the pool `SeaOrmModule::for_root` opens.
+/// when this guard drops** — for a test that boots no app: an app boots on one
+/// it holds with [`TestAppBuilder::ephemeral_database`].
 ///
 /// Every connection it opens is the app's pool's
 /// ([`SeaOrmConfig::connect_options`]): TLS verified or off, as the URL says,
@@ -135,8 +129,7 @@ impl EphemeralDatabase {
         })
     }
 
-    /// The live connection to the ephemeral database, to seed into a test app
-    /// ([`TestAppBuilder::provide_arc`](crate::TestAppBuilder::provide_arc)).
+    /// The live connection to the ephemeral database, to migrate or seed it.
     pub fn connection(&self) -> Arc<DatabaseConnection> {
         self.connection.clone()
     }

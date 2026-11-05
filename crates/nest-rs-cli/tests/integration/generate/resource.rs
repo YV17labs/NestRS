@@ -589,6 +589,7 @@ fn generate_resource_writes_the_round_trip_test_of_the_app_it_wires() {
         "use blog::BlogModule;",
         ".module::<BlogModule>()",
         ".ephemeral_database::<migrations::Migrator>()",
+        ".ephemeral_signing_key()",
     ] {
         assert!(main.contains(line), "{line}: {main}");
     }

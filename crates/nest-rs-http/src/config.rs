@@ -2,6 +2,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use http::HeaderName;
+use nest_rs_config::__private::RetiredKey;
 use nest_rs_config::{
     Bound, ConfigService, CountBounds, DurationBounds, Field, Floor, Namespaced, Result, config,
 };
@@ -565,8 +566,7 @@ fn cors(env: &ConfigService, field: Field, base: Option<HttpCors>) -> Result<Opt
     HttpCors::from_env(env, base)
 }
 
-/// The security headers, each key its field's name after `SECURITY_HEADERS_`;
-/// a header's 6.x flat key is refused naming the one it became.
+/// The security headers, each key its field's name after `SECURITY_HEADERS_`.
 fn security_headers(
     env: &ConfigService,
     field: Field,
@@ -577,55 +577,61 @@ fn security_headers(
         "SECURITY_HEADERS",
         "HttpSecurityHeaders reads its fields' names under `security_headers`"
     );
-    refuse_retired_header_keys(env)?;
     HttpSecurityHeaders::from_env(env, base)
 }
 
-/// Each security header's 6.x key, a flat one beside `SECURITY_HEADERS`.
-const RETIRED_HEADER_KEYS: [&str; 9] = [
-    "HSTS",
-    "FRAME_OPTIONS",
-    "CONTENT_TYPE_OPTIONS",
-    "REFERRER_POLICY",
-    "CROSS_ORIGIN_OPENER_POLICY",
-    "CROSS_ORIGIN_RESOURCE_POLICY",
-    "CROSS_ORIGIN_EMBEDDER_POLICY",
-    "PERMISSIONS_POLICY",
-    "CONTENT_SECURITY_POLICY",
-];
+/// Why a security header set under its 6.x flat key fails the boot: read by
+/// nothing, it would leave the header to its default, a policy the deployment
+/// wrote not sent at all.
+const A_HEADER_UNSENT: &str =
+    "it was a security header's 6.x key, and the header it set would not be sent as set";
 
-/// Refuse a security header set under its 6.x key: read by nothing, it would
-/// leave the header to its default — a policy the deployment wrote not sent at
-/// all — where an unread variable's `warn` is all a deployment would hear. A
-/// detector of the old spelling, never an alias of it.
-fn refuse_retired_header_keys(env: &ConfigService) -> Result<()> {
-    for retired in RETIRED_HEADER_KEYS {
-        if let Some(setting) = env.setting(retired)? {
-            return Err(nest_rs_config::ConfigError::Retired {
-                var: setting.var().to_owned(),
-                read_as: env.var_name(&format!("SECURITY_HEADERS_{retired}")),
-                why: "it was a security header's 6.x key, and the header it set would not be \
-                      sent as set",
-            });
-        }
-    }
-    Ok(())
-}
-
-// The vocabularies' other 6.x keys: losing one leaves a policy more closed
-// than the one set, so the report says it at `warn`.
+// The vocabularies' other 6.x keys leave a policy more closed than the one set,
+// so the report says them at `warn`.
 nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKey::new("http", "CORS_EXPOSED", "CORS_EXPOSED_HEADERS")
-}
-nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKey::new("http", "CORS_MAX_AGE", "CORS_MAX_AGE_SECS")
-}
-nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKey::new(
-        "http",
-        "SECURITY_HEADERS",
-        "SECURITY_HEADERS_ENABLED",
-    )
+    nest_rs_config::__private::RetiredKeys::under("http", &[
+        RetiredKey::renamed("CORS_EXPOSED", "CORS_EXPOSED_HEADERS"),
+        RetiredKey::renamed("CORS_MAX_AGE", "CORS_MAX_AGE_SECS"),
+        RetiredKey::renamed("SECURITY_HEADERS", "SECURITY_HEADERS_ENABLED"),
+        RetiredKey::removed("FAIL_SECURE_STRICT"),
+        RetiredKey::refused("HSTS", "SECURITY_HEADERS_HSTS", A_HEADER_UNSENT),
+        RetiredKey::refused("FRAME_OPTIONS", "SECURITY_HEADERS_FRAME_OPTIONS", A_HEADER_UNSENT),
+        RetiredKey::refused(
+            "CONTENT_TYPE_OPTIONS",
+            "SECURITY_HEADERS_CONTENT_TYPE_OPTIONS",
+            A_HEADER_UNSENT,
+        ),
+        RetiredKey::refused(
+            "REFERRER_POLICY",
+            "SECURITY_HEADERS_REFERRER_POLICY",
+            A_HEADER_UNSENT,
+        ),
+        RetiredKey::refused(
+            "CROSS_ORIGIN_OPENER_POLICY",
+            "SECURITY_HEADERS_CROSS_ORIGIN_OPENER_POLICY",
+            A_HEADER_UNSENT,
+        ),
+        RetiredKey::refused(
+            "CROSS_ORIGIN_RESOURCE_POLICY",
+            "SECURITY_HEADERS_CROSS_ORIGIN_RESOURCE_POLICY",
+            A_HEADER_UNSENT,
+        ),
+        RetiredKey::refused(
+            "CROSS_ORIGIN_EMBEDDER_POLICY",
+            "SECURITY_HEADERS_CROSS_ORIGIN_EMBEDDER_POLICY",
+            A_HEADER_UNSENT,
+        ),
+        RetiredKey::refused(
+            "PERMISSIONS_POLICY",
+            "SECURITY_HEADERS_PERMISSIONS_POLICY",
+            A_HEADER_UNSENT,
+        ),
+        RetiredKey::refused(
+            "CONTENT_SECURITY_POLICY",
+            "SECURITY_HEADERS_CONTENT_SECURITY_POLICY",
+            A_HEADER_UNSENT,
+        ),
+    ])
 }
 
 /// The global prefix, trimmed; blank is none.
@@ -832,8 +838,18 @@ mod tests {
     #[test]
     fn a_security_header_set_under_its_6x_key_is_refused_naming_its_7_0_key() {
         const SECRET: &str = "default-src 'self' hunter2_secret";
-        for retired in RETIRED_HEADER_KEYS {
-            let refused = HttpConfig::from_env(
+        for retired in [
+            "HSTS",
+            "FRAME_OPTIONS",
+            "CONTENT_TYPE_OPTIONS",
+            "REFERRER_POLICY",
+            "CROSS_ORIGIN_OPENER_POLICY",
+            "CROSS_ORIGIN_RESOURCE_POLICY",
+            "CROSS_ORIGIN_EMBEDDER_POLICY",
+            "PERMISSIONS_POLICY",
+            "CONTENT_SECURITY_POLICY",
+        ] {
+            let refused = nest_rs_config::read(
                 &ConfigService::with_vars("http", [(retired, SECRET)]),
                 HttpConfig::default(),
             )
@@ -991,8 +1007,7 @@ mod tests {
         );
     }
 
-    /// A set `FAIL_SECURE_STRICT` changes nothing, and the boot names it as a
-    /// key no config reads.
+    /// A set `FAIL_SECURE_STRICT` changes nothing, and the boot says it retired.
     #[test]
     fn the_fail_secure_strict_variable_is_no_longer_read() {
         let var = nest_rs_config::var_name("http", "FAIL_SECURE_STRICT");
@@ -1007,9 +1022,10 @@ mod tests {
             );
             let line = logs.expect_one(
                 nest_rs_config::TARGET,
-                nest_rs_config::unclaimed::UNREAD_CONFIG_VARIABLE,
+                nest_rs_core::__private::RETIRED_VARIABLE,
             );
             assert_eq!(line.field("variable").as_deref(), Some(var.as_str()));
+            assert_eq!(line.field("read_as"), None);
             Ok(())
         });
     }

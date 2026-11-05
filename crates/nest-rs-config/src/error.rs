@@ -67,9 +67,10 @@ pub enum ConfigError {
         named: String,
     },
     /// A variable 7.0 retired, set: read by nothing, it is refused where losing
-    /// what it set in silence would open what it closed — a security header
-    /// left unsent. The key is refused, never its value, in the words every
-    /// retired variable is said with at `warn`.
+    /// what it set in silence would leave a policy weaker than the one set — a
+    /// security header left unsent, introspection a development profile answers.
+    /// The key is refused, never its value, in the words every retired variable
+    /// is said with at `warn`.
     #[error("{var} is read by nothing since 7.0 — set {read_as}: {why}")]
     Retired {
         /// The retired variable as the deployment set it — `<KEY>` or

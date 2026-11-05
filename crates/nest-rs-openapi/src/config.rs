@@ -9,6 +9,13 @@ use nest_rs_core::AppIdentity;
 use crate::contact::OpenApiContact;
 use crate::license::OpenApiLicense;
 
+nest_rs_core::inventory::submit! {
+    nest_rs_config::__private::RetiredKeys::under("openapi", &[
+        nest_rs_config::__private::RetiredKey::renamed("EMIT_DOCUMENT", "EMIT"),
+        nest_rs_config::__private::RetiredKey::renamed("DOCUMENT_PATH", "EMIT_PATH"),
+    ])
+}
+
 /// The OpenAPI document's `info` block plus the master enable switch, settable
 /// via `<PREFIX>_OPENAPI__*` or pinned through
 /// [`OpenApiModule::for_root`](crate::OpenApiModule::for_root).

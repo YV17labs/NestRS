@@ -34,6 +34,7 @@ mod pipe_codes;
 mod pipes;
 mod reflector;
 mod request_scope;
+mod retired_keys;
 mod setups;
 mod shutdown;
 mod transient_scope;

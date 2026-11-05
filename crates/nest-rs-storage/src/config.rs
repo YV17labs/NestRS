@@ -17,6 +17,13 @@ const DEFAULT_OPERATION_TIMEOUT_SECS: u64 = 15;
 /// object_store waits for a request by default.
 const DEFAULT_READ_TIMEOUT_SECS: u64 = 30;
 
+// The URL names the store whole now, its scheme picking the backend.
+nest_rs_core::inventory::submit! {
+    nest_rs_config::__private::RetiredKeys::under("storage", &[
+        nest_rs_config::__private::RetiredKey::renamed("BUCKET", "URL"),
+    ])
+}
+
 /// The object store's configuration, read from the framework-namespaced
 /// `<PREFIX>_STORAGE__*` keys: [`url`](Self::url) names the store, and its
 /// scheme picks the backend — `s3` or `memory`.

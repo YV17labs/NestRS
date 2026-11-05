@@ -1,7 +1,7 @@
 //! [`OAuthResourceConfig`] — who this resource server is, and which
 //! authorization servers issue tokens for it (RFC 9728 §2).
 
-use nest_rs_config::__private::is_loopback;
+use nest_rs_config::__private::{RetiredKey, is_loopback};
 use nest_rs_config::{Environment, Namespaced, config};
 use nest_rs_guards::__private::is_scope_token;
 
@@ -18,6 +18,28 @@ const BEARER_METHODS_DEFINED: [&str; 3] = [BEARER_METHOD_HEADER, "body", "query"
 const USERINFO: &str = "it carries userinfo, which RFC 9110 §4.2.4 forbids a sender to generate \
                         in an http or https URI, and the document would publish it — name the \
                         host alone";
+
+// A family puts its name first in its namespace: 6.x read `oauth_resource`.
+nest_rs_core::inventory::submit! {
+    nest_rs_config::__private::RetiredKeys::under("oauth_resource", &[
+        RetiredKey::moved("RESOURCE", "oauth__resource", "RESOURCE"),
+        RetiredKey::moved("AUTHORIZATION_SERVERS", "oauth__resource", "AUTHORIZATION_SERVERS"),
+        RetiredKey::moved("SCOPES_SUPPORTED", "oauth__resource", "SCOPES_SUPPORTED"),
+        RetiredKey::moved(
+            "BEARER_METHODS_SUPPORTED",
+            "oauth__resource",
+            "BEARER_METHODS_SUPPORTED",
+        ),
+        RetiredKey::moved("RESOURCE_NAME", "oauth__resource", "RESOURCE_NAME"),
+        RetiredKey::moved(
+            "RESOURCE_DOCUMENTATION",
+            "oauth__resource",
+            "RESOURCE_DOCUMENTATION",
+        ),
+        RetiredKey::moved("RESOURCE_POLICY_URI", "oauth__resource", "RESOURCE_POLICY_URI"),
+        RetiredKey::moved("RESOURCE_TOS_URI", "oauth__resource", "RESOURCE_TOS_URI"),
+    ])
+}
 
 /// Identity of this deployment as an OAuth 2.1 protected resource (namespace
 /// `oauth__resource`).

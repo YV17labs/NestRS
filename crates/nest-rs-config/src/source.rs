@@ -118,8 +118,10 @@ pub trait ConfigSource: Send + Sync + 'static {
 pub struct EnvSource;
 
 impl ConfigSource for EnvSource {
+    /// Witnessing nothing, unlike [`env_var`]: the reader records what it asks
+    /// for, and a key it judges without reading stays unread.
     fn get(&self, var: &str) -> Option<String> {
-        env_var(var)
+        env_var_from(var, dotenv_values())
     }
 
     /// The real process environment only, minus what the cascade merged in.

@@ -151,7 +151,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `<PREFIX>_STORAGE__BUCKET=media` | `<PREFIX>_STORAGE__URL=s3://media` (or `s3://media/some/prefix`) |
    | `<PREFIX>_STORAGE__ENDPOINT=` (empty for AWS) | unset |
    | `<PREFIX>_STORAGE__TLS_CERT` / `TLS_KEY`, set and ignored | removed: the boot now fails naming them |
-   | `<PREFIX>_HTTP__FAIL_SECURE_STRICT` | removed: no mount is left for it to guard, and the boot reports it as read by no config |
+   | `<PREFIX>_HTTP__FAIL_SECURE_STRICT` | removed: no mount is left for it to guard, and the boot says it retired |
    | `<PREFIX>_HTTP__CORS_MAX_AGE` | `<PREFIX>_HTTP__CORS_MAX_AGE_SECS`, whole seconds from `1` to `86400`, or `0` for no `Access-Control-Max-Age` |
    | `<PREFIX>_HTTP__CORS_EXPOSED` | `<PREFIX>_HTTP__CORS_EXPOSED_HEADERS`, the field it sets |
    | `<PREFIX>_HTTP__SECURITY_HEADERS` | `<PREFIX>_HTTP__SECURITY_HEADERS_ENABLED` |
@@ -159,7 +159,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` (step 16) |
    | `<PREFIX>_GRAPHQL__EMIT_SDL` | `<PREFIX>_GRAPHQL__EMIT` — on by default under a declared development profile, so a `.env.development` setting it drops the line |
    | `<PREFIX>_GRAPHQL__SCHEMA_PATH` | `<PREFIX>_GRAPHQL__EMIT_PATH`, a relative path now the app crate's: `apps/api/schema.graphql` becomes `schema.graphql`, the default |
-   | `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` | `<PREFIX>_GRAPHQL__INTROSPECTION`, its opposite: `DISABLE_INTROSPECTION=false` is `INTROSPECTION=true`. On by default under a declared development or test profile, so a `.env.development` setting it drops the line |
+   | `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION` | `<PREFIX>_GRAPHQL__INTROSPECTION`, its opposite, and the boot refuses the old key set: `DISABLE_INTROSPECTION=false` is `INTROSPECTION=true`. On by default under a declared development or test profile, so a `.env.development` setting it drops the line |
    | `<PREFIX>_OPENAPI__EMIT_DOCUMENT` | `<PREFIX>_OPENAPI__EMIT` — on by default under a declared development profile |
    | `<PREFIX>_OPENAPI__DOCUMENT_PATH` | `<PREFIX>_OPENAPI__EMIT_PATH`, relative to the app crate: `apps/api/openapi.json` becomes `openapi.json`, the default |
    | `<PREFIX>_LOG`, in a `.env` file or the deployment | `RUST_LOG`, unprefixed: the console's filter is the ecosystem's variable alone, and a real `RUST_LOG` outranks one a committed file writes |
@@ -1687,13 +1687,14 @@ lists what the boot, a log or the wire shows when one is missed.
   demo's `assistant`, started with a 6.x `.env`:
 
   ```text frame="terminal"
-   WARN nest_rs::config: config variable under a misspelled namespace variable="NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS" namespace="oauth__resource" suggestion="NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS"
-   WARN nest_rs::config: config variable under a misspelled namespace variable="NESTRS_OAUTH_RESOURCE__RESOURCE" namespace="oauth__resource" suggestion="NESTRS_OAUTH__RESOURCE__RESOURCE"
-   WARN nest_rs::config: config variable under a misspelled namespace variable="NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED" namespace="oauth__resource" suggestion="NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED"
+   WARN nest_rs::config: variable read by nothing since 7.0 variable="NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS" namespace="oauth__resource" read_as="NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS"
+   WARN nest_rs::config: variable read by nothing since 7.0 variable="NESTRS_OAUTH_RESOURCE__RESOURCE" namespace="oauth__resource" read_as="NESTRS_OAUTH__RESOURCE__RESOURCE"
+   WARN nest_rs::config: variable read by nothing since 7.0 variable="NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED" namespace="oauth__resource" read_as="NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED"
   Error: authentication failed: NESTRS_OAUTH__RESOURCE__RESOURCE (or NESTRS_OAUTH__RESOURCE__RESOURCE_FILE) must name this deployment's canonical URI (for example https://api.example.com)
   ```
 
-  Rename what the `suggestion` names. The report, and what it leaves silent, is
+  Rename what the `read_as` names, every row of step 3 said the same way. The
+  report, and what it leaves silent, is
   described under
   [A variable nothing reads](/configuration/env-reference/#a-variable-nothing-reads).
 - **A hand-written adapter importing its port alone**, in an app whose root no
@@ -1728,9 +1729,9 @@ lists what the boot, a log or the wire shows when one is missed.
   `HttpModule` bare — and write the port in the app's own `apps/<app>/.env`, or
   move the key's value into the pin.
 - **The worker's drain window kept under
-  `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`** is the one renamed variable
-  the boot does not name: it reads `redis__worker` as another binary's
-  namespace, and the drain runs on what `for_root` pins, or the default.
+  `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`** is said retired at `warn`,
+  `read_as` naming `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, by a boot reading
+  the queue's config, and the drain runs on what `for_root` pins, or the default.
 - **A `redis` requirement of yours that excludes 1.8** — `=1.7` — fails to
   resolve beside the framework's `=1.8` pin, cargo naming both requirements.
 - **A manifest naming a removed feature** — `worker`, `interceptors`,
@@ -1759,15 +1760,19 @@ lists what the boot, a log or the wire shows when one is missed.
   `<PREFIX>_STORAGE__ACCESS_KEY`, in every profile: name them in
   `.env.development` and `.env.test`.
 - **A `.env.development` still setting `<PREFIX>_GRAPHQL__EMIT_SDL` or
-  `<PREFIX>_OPENAPI__DOCUMENT_PATH`** is read by nothing, and the boot says so
-  at `warn`; the development run writes `schema.graphql` and `openapi.json`
+  `<PREFIX>_OPENAPI__DOCUMENT_PATH`** is read by nothing, and the boot says each
+  retired at `warn`, `read_as` naming its `EMIT` or `EMIT_PATH`; the development run writes `schema.graphql` and `openapi.json`
   beside the app's `Cargo.toml` anyway. A path the old key gave relative to
   the workspace root, kept under the new name, now lands under the app crate:
   drop it, or make it relative to the app.
-- **A deployment still opening introspection with
-  `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION=false`** keeps it closed: the key is
-  read by nothing, and the boot says so at `warn`. `<PREFIX>_GRAPHQL__INTROSPECTION=true`
-  opens it, and that boot says so at `warn` too.
+- **A process still setting `<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION`** fails
+  its boot — `… is read by nothing since 7.0 — set <PREFIX>_GRAPHQL__INTROSPECTION:
+  …` — inline or as a file: its successor is its opposite, so a rename by hand
+  inverts it, and read by nothing, `true` would leave introspection answering under
+  a development profile. In a `.env` file under a `GraphqlModule::for_root(cfg)`, the
+  pin holds the policy and the file reaches nothing, so it is said retired at `warn`
+  instead. `<PREFIX>_GRAPHQL__INTROSPECTION=true` opens it, and a deployment's boot
+  says so at `warn`.
 - **A configuration refusal** opens on the variable it refuses —
   ``invalid value for <PREFIX>_HTTP__PORT: …`` — and a validation failure lists
   each field beside its variable, ``client_id (<PREFIX>_ISSUER__CLIENT_ID):

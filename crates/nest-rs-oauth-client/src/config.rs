@@ -1,10 +1,23 @@
 //! [`OAuthClientConfig`] — env-driven OAuth2 provider endpoints.
 
 use nest_rs_authn::AuthError;
-use nest_rs_config::__private::is_loopback;
+use nest_rs_config::__private::{RetiredKey, is_loopback};
 use nest_rs_config::{ClientTls, ConfigService, Environment, config, endpoint_shown};
 use nest_rs_core::Secret;
 use oauth2::url::Url;
+
+// A family puts its name first in its namespace: 6.x read `oauth_client`.
+nest_rs_core::inventory::submit! {
+    nest_rs_config::__private::RetiredKeys::under("oauth_client", &[
+        RetiredKey::moved("CLIENT_ID", "oauth__client", "CLIENT_ID"),
+        RetiredKey::moved("CLIENT_SECRET", "oauth__client", "CLIENT_SECRET"),
+        RetiredKey::moved("AUTH_URL", "oauth__client", "AUTH_URL"),
+        RetiredKey::moved("TOKEN_URL", "oauth__client", "TOKEN_URL"),
+        RetiredKey::moved("REDIRECT_URL", "oauth__client", "REDIRECT_URL"),
+        RetiredKey::moved("USERINFO_URL", "oauth__client", "USERINFO_URL"),
+        RetiredKey::moved("SCOPES", "oauth__client", "SCOPES"),
+    ])
+}
 
 /// Env-driven OAuth2 provider endpoints (namespace `oauth__client`); every URL and
 /// credential is required.

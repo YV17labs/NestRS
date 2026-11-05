@@ -65,9 +65,9 @@ The `None` is a `PushOptions`: a delay, a unique key — see
   `nestrs:queue:{<queue>}:jobs` now — see
   [Concurrency and scaling](/queue/scaling/#on-queue-depth-with-keda).
 - **`<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` kept** is read by nothing,
-  and the boot does not name it, reading `redis__worker` as another binary's
-  namespace. Until it is renamed, the drain window is what `for_root` pins, or
-  the 20-second default.
+  and a worker's boot says so at `warn`, `variable read by nothing since 7.0`,
+  `read_as` naming `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`. Until it is renamed,
+  the drain window is what `for_root` pins, or the 20-second default.
 
 ## Going further
 

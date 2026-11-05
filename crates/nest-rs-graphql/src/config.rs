@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use nest_rs_config::__private::RetiredKey;
 use nest_rs_config::{Bound, CountBounds, DurationBounds, Environment, Floor, Surface, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
@@ -101,6 +102,22 @@ const PLAYGROUND_OPEN: &str = "GraphQL playground is enabled and public outside 
 /// What the boot says when a deployment answers introspection.
 const INTROSPECTION_OPEN: &str =
     "GraphQL introspection is enabled and public outside a dev profile";
+
+// `INTROSPECTION` is `DISABLE_INTROSPECTION`'s opposite, so a deployment that set
+// it closed would find it answering under a development profile, and a rename by
+// hand inverts it: refused, where the emit's two only move a committed artifact.
+nest_rs_core::inventory::submit! {
+    nest_rs_config::__private::RetiredKeys::under("graphql", &[
+        RetiredKey::renamed("EMIT_SDL", "EMIT"),
+        RetiredKey::renamed("SCHEMA_PATH", "EMIT_PATH"),
+        RetiredKey::refused(
+            "DISABLE_INTROSPECTION",
+            "INTROSPECTION",
+            "its opposite, so `true` here is `false` there, and read by nothing it would leave \
+             introspection answering under a development profile",
+        ),
+    ])
+}
 
 /// GraphQL endpoint options, settable via `<PREFIX>_GRAPHQL__*` or pinned through
 /// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root).

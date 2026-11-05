@@ -34,12 +34,17 @@ pub trait Namespaced {
 /// The seam every path into `from_env` takes, a discovery registry's included;
 /// a free function so a `Config` impl cannot override it and leave the claim
 /// registry. It refuses first a namespace another type declares too
-/// ([`ConfigError::SharedNamespace`](crate::ConfigError)), and runs the
+/// ([`ConfigError::SharedNamespace`](crate::ConfigError)) and one a crate
+/// retired whose loss would weaken a policy
+/// ([`ConfigError::Retired`](crate::ConfigError::Retired)), and runs the
 /// unclaimed-variable report ([`crate::unclaimed`]) before a read error can end
 /// the boot.
 pub fn read<C: Config>(env: &ConfigService, base: C) -> Result<C> {
     crate::namespace::sole_declaration::<C>()?;
-    let (value, claim) = crate::service::claiming::<C, _>(|| C::from_env(env, base));
+    let (value, claim) = crate::service::claiming::<C, _>(|| {
+        crate::unclaimed::refuse_retired(env)?;
+        C::from_env(env, base)
+    });
     if env.reads_environment() {
         crate::unclaimed::after_read(env.namespace(), value.is_ok());
     }

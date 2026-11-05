@@ -151,7 +151,7 @@ pub mod __private {
     pub use crate::tls::{PairRefusal, certified_key, crypto_provider};
     #[cfg(feature = "reqwest")]
     pub use crate::tls::{ReqwestTls, reqwest_tls};
-    pub use crate::unclaimed::__private::RetiredKey;
+    pub use crate::unclaimed::__private::{RetiredKey, RetiredKeys};
 
     pub use nest_rs_core::__private::InjectedFactory;
     pub use nest_rs_core::inventory;

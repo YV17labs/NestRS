@@ -407,17 +407,10 @@ impl ConfigService {
             }
         }
         let deployment_only = pinned || deployed;
-        let read = |name: &str| {
-            let value = if deployment_only {
-                self.source.get_from_deployment(name)
-            } else {
-                self.source.get(name)
-            };
-            // Empty is unset whatever the source: a custom source that forgets
-            // would otherwise blank a default or show two spellings.
-            value.filter(|value| !value.is_empty())
-        };
-        match (read(&var), read(&file_var)) {
+        match (
+            self.answer(&var, deployment_only),
+            self.answer(&file_var, deployment_only),
+        ) {
             (None, None) => Ok(None),
             (Some(value), None) => Ok(Some(Spelled::Inline(value))),
             (None, Some(path)) => Ok(Some(Spelled::File(PathBuf::from(
@@ -430,6 +423,31 @@ impl ConfigService {
                 ),
             )),
         }
+    }
+
+    /// The variable the tier that answers sets `key` under, recording nothing and
+    /// reading no file: how a key no config reads is judged, for which a read would
+    /// claim the key, name it to the report and shadow it under a pin.
+    pub(crate) fn spelling_set(&self, key: &str) -> Option<String> {
+        let (var, file_var) = (self.var_name(key), self.var_name(&file_key(key)));
+        let deployment_only = self.precedence == Precedence::OverPinned
+            || self.source.in_deployment(&var)
+            || self.source.in_deployment(&file_var);
+        [var, file_var]
+            .into_iter()
+            .find(|name| self.answer(name, deployment_only).is_some())
+    }
+
+    /// The value of `name` in the tier that answers.
+    fn answer(&self, name: &str, deployment_only: bool) -> Option<String> {
+        let value = if deployment_only {
+            self.source.get_from_deployment(name)
+        } else {
+            self.source.get(name)
+        };
+        // Empty is unset whatever the source: a custom source that forgets
+        // would otherwise blank a default or show two spellings.
+        value.filter(|value| !value.is_empty())
     }
 
     fn read_file(&self, key: &str, path: &std::path::Path) -> Result<Vec<u8>, ConfigError> {

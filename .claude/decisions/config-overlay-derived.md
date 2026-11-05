@@ -187,3 +187,39 @@ Refused:
 - **`SeaOrmConfig`'s pair judged in the overlay.** A combination is the consumer's
   (`container.md`), refused in `connect_options`, the one constructor every path
   reaches, where sqlx would clamp a minimum above the maximum in silence.
+
+### Every key 7.0 renamed is declared retired
+
+The 2026-10-31 entry declared the HTTP vocabulary's keys alone, so every other
+rename stayed the report's guess (`OAUTH_RESOURCE` read as a misspelled namespace)
+or its silence (`redis__worker` read as another binary's). A `RetiredKey` per key
+of the upgrading guide's step 3 now says each, in the crate that retired it, under
+`variable read by nothing since 7.0`, once the namespace that reads what it set was
+read, so another binary's stays silent. A key may move namespace, or go with nothing
+in its place; `read_as` then names the variable it became, or nothing.
+
+The refusal is declared on the same line (`RetiredKey::refused`) and judged at
+`read`, the seam every path into `from_env` takes, so a crate's refusal holds no
+reader of its own: the nine security headers moved there from HTTP's. Refused
+beside them, by "losing it leaves a policy weaker than the one set":
+`<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION`, whose successor is its opposite. Every
+other key is said at `warn`, each read against the same question: the OAuth
+client's and resource's and `STORAGE__BUCKET` stop the boot on their own, a required
+value unset; the CORS keys and the bare `SECURITY_HEADERS` leave a policy more closed;
+the emit's and the drain window's move no policy.
+
+A refused key is judged by the tier that answers the read, and the judgement records
+nothing, so no report calls it read and no near miss is told to set it. Under a pin the
+cascade answers nothing and the pin holds the policy, so what a `.env` sets there
+weakens nothing and is said retired; what the deployment sets is refused, as it is with
+no pin. A refusal that fired under a pin on a file the read never reaches would refuse
+an app whose policy is whole.
+
+Refused:
+
+- **A key's retirement named by value.** The refusal asks whether the key is set,
+  never what it holds: reading the value to decide would be reading it.
+- **`<PREFIX>_QUEUE__URL`, and the demo's `<PREFIX>_OAUTH__SIGN_IN_RESOURCES`.**
+  6.0 retired the first, so "since 7.0" would be false of it; the second is a
+  product's own key, which the framework's registry has no business naming.
+

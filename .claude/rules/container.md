@@ -297,7 +297,12 @@ arbitrates between variables or tiers.
   by name and never by value: a key under a namespace this binary read that no
   config read, a near miss of such a namespace, and a cascade key in a
   namespace a pin in code cut off the cascade, naming the import that pinned
-  it. Everything else is silent by design: the root's `.env` serves several
+  it. A key the framework retired is declared by the crate that retired it
+  (`RetiredKey`) and said as retired, naming what reads it now, once the namespace
+  reading it was read; one whose loss would leave a policy weaker than the one set
+  is refused at the read (`ConfigError::Retired`) when the tier answering that read
+  sets it, and said when only the cascade does under a pin, which holds the policy;
+  none is ever read, which would be an alias. Everything else is silent by design: the root's `.env` serves several
   binaries (what is one app's alone sits in its own layer), and a namespace
   this binary does not read is another binary's. The near-miss tests are narrow for that reason
   (the algorithm is `unclaimed.rs`'s `//!`); a diagnostic that fires on correct

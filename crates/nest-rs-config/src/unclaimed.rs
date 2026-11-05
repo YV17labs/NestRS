@@ -9,11 +9,16 @@
 //!   enough to be the intended one, or is the key it names once renamed
 //!   (`HSTS` for `SECURITY_HEADERS_HSTS`).
 //! - **A retired key** — `variable read by nothing since 7.0`, in the words every
-//!   retired variable is said with. An unread key the crate that retired it
-//!   declares, under either spelling; the key it became comes back as `read_as`.
+//!   retired variable is said with. A key the crate that retired it declares,
+//!   under either spelling, once the namespace that reads what it set was read;
+//!   the variable it became, when it became one, comes back as `read_as`. Said
+//!   before anything could guess at it as a near miss. One whose loss would
+//!   leave a policy weaker than the one set is refused instead, at the read, as
+//!   `ConfigError::Retired`, when the tier that answers the read sets it: under a
+//!   pin the cascade answers nothing, so what it sets there is said.
 //! - **A misspelled namespace** — [`MISSPELLED_CONFIG_NAMESPACE`]. The variable
 //!   spells a namespace this binary read otherwise than the loader reads it —
-//!   other separators (`OAUTH_RESOURCE` for `oauth__resource`, `SEAORM_URL` for
+//!   other separators (`REDIS_QUEUE` for `redis__queue`, `SEAORM_URL` for
 //!   `SEAORM__URL`), another case, prefix included, or one misspelled segment
 //!   of six letters or more (`PORBE_KEYS` for `probe_keys`, [`is_near_miss`]) —
 //!   **and the key after it is one that namespace reads**, or one edit from
@@ -59,7 +64,8 @@ use std::sync::{Mutex, PoisonError};
 use nest_rs_core::__private::RETIRED_VARIABLE;
 use nest_rs_core::EnvPrefix;
 
-use crate::service::var_name;
+use crate::error::ConfigError;
+use crate::service::{ConfigService, var_name};
 
 /// The event for a variable under a namespace this binary read, naming a key no
 /// config read. Fields: `variable`, `namespace`, and `suggestion` when a key
@@ -96,12 +102,12 @@ enum Unclaimed {
         namespace: String,
         suggestion: String,
     },
-    /// Under a namespace this binary read, naming a key 7.0 retired, which the
-    /// crate that retired it declares with the key it became.
+    /// A key 7.0 retired, which the crate that retired it declares with what
+    /// reads it now, `namespace` being the one a read of this binary judged it by.
     Retired {
         variable: String,
         namespace: String,
-        read_as: String,
+        read_as: Option<String>,
     },
     /// Set by the `.env` cascade in a namespace a pin in code cut off it.
     Shadowed {
@@ -154,7 +160,7 @@ impl Unclaimed {
                 target: crate::TARGET,
                 variable = variable.as_str(),
                 namespace = namespace.as_str(),
-                read_as = read_as.as_str(),
+                read_as = read_as.as_deref(),
                 "{RETIRED_VARIABLE}",
             ),
             Self::Shadowed {
@@ -223,6 +229,16 @@ impl Ledger {
     /// misspellings at every check, against the keys known by then. A variable
     /// two checks both see is still reported once.
     fn check(&mut self, names: &BTreeSet<String>, linked: &[&str]) -> Vec<Unclaimed> {
+        self.check_declaring(names, linked, declared_retired())
+    }
+
+    /// [`check`](Self::check), with the keys retired as `declared` says.
+    fn check_declaring<'k>(
+        &mut self,
+        names: &BTreeSet<String>,
+        linked: &[&str],
+        declared: impl IntoIterator<Item = (&'k str, &'k __private::RetiredKey)>,
+    ) -> Vec<Unclaimed> {
         self.known.extend(framework_wide());
         let owners: BTreeSet<&str> = linked
             .iter()
@@ -239,16 +255,12 @@ impl Ledger {
             .filter(|ns| !self.keys_checked.contains(*ns))
             .collect();
 
-        let mut out = misspelled_namespaces(names, &self.known, &owners, &read);
+        // First, so a variable a later check would guess at is said as what it
+        // is: what is reported once is what is found first.
+        let mut out = retired_variables(names, &self.known, &read, declared);
+        out.extend(misspelled_namespaces(names, &self.known, &owners, &read));
         for namespace in &keys {
-            let retired = retired_keys(namespace);
-            out.extend(unread_keys(
-                namespace,
-                names,
-                &self.known,
-                &owners,
-                &retired,
-            ));
+            out.extend(unread_keys(namespace, names, &self.known, &owners));
         }
         out.extend(run_together(names, &self.known, &owners));
         out.extend(std::mem::take(&mut self.shadowed).into_iter().map(
@@ -286,43 +298,188 @@ fn framework_wide() -> [String; 4] {
 
 static LEDGER: Mutex<Ledger> = Mutex::new(Ledger::new());
 
-/// The keys of `namespace` the crates linked declare retired, each with the key
-/// it became.
-fn retired_keys(namespace: &str) -> Vec<(&'static str, &'static str)> {
-    nest_rs_core::inventory::iter::<__private::RetiredKey>()
-        .filter(|entry| entry.namespace == namespace)
-        .map(|entry| (entry.key, entry.read_as))
-        .collect()
+/// Every key the crates linked declare retired, each with its old namespace.
+fn declared_retired() -> impl Iterator<Item = (&'static str, &'static __private::RetiredKey)> {
+    nest_rs_core::inventory::iter::<__private::RetiredKeys>()
+        .flat_map(|retired| retired.keys.iter().map(|key| (retired.namespace, key)))
+}
+
+/// The variables under a key `declared` retires, once a read judged it: the
+/// namespace that reads what it set now was read, so it is this binary's to say,
+/// and neither its spelling nor any other reader claims it.
+fn retired_variables<'k>(
+    names: &BTreeSet<String>,
+    known: &BTreeSet<String>,
+    read: &[&str],
+    declared: impl IntoIterator<Item = (&'k str, &'k __private::RetiredKey)>,
+) -> Vec<Unclaimed> {
+    let mut out = Vec::new();
+    for (namespace, retired) in declared {
+        let reader = retired.reader(namespace);
+        if !read.contains(&reader) {
+            continue;
+        }
+        let spelled = [
+            var_name(namespace, retired.key),
+            var_name(namespace, &format!("{}_FILE", retired.key)),
+        ];
+        out.extend(
+            spelled
+                .into_iter()
+                .filter(|variable| names.contains(variable) && !known.contains(variable))
+                .map(|variable| Unclaimed::Retired {
+                    variable,
+                    namespace: reader.to_owned(),
+                    read_as: retired.read_as(namespace),
+                }),
+        );
+    }
+    out
+}
+
+/// Refuse a key of `env`'s namespace that its crate declares refused, set in the
+/// tier that answers `env`: read by nothing, it would leave a policy weaker than
+/// the one it set, where an unread variable's `warn` is all a deployment would
+/// hear. What the cascade sets under a pin reaches nothing either way, the pin
+/// holding the policy, so it stays the report's to say. A detector of the old
+/// spelling, never an alias of it: it records no read, so nothing suggests it.
+pub(crate) fn refuse_retired(env: &ConfigService) -> Result<(), ConfigError> {
+    for (namespace, retired) in declared_retired() {
+        let __private::Successor::Refused { key, why } = retired.successor else {
+            continue;
+        };
+        if namespace != env.namespace() {
+            continue;
+        }
+        if let Some(var) = env.spelling_set(retired.key) {
+            // The refusal says it: the report running before it ends the boot adds
+            // no second sentence.
+            LEDGER
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .reported
+                .insert(var.clone());
+            return Err(ConfigError::Retired {
+                var,
+                read_as: env.var_name(key),
+                why,
+            });
+        }
+    }
+    Ok(())
 }
 
 pub(crate) mod __private {
-    /// A key 7.0 retired from a namespace, and the key that reads what it set:
-    /// the unread-variable report says one still set as retired, naming that
-    /// key, where it would only guess a near miss. Submitted by the crate that
-    /// retired it; never read, which would make it an alias.
+    use crate::service::var_name;
+
+    /// What took a retired key's place.
+    #[derive(Clone, Copy, Debug)]
+    pub(super) enum Successor {
+        /// A key of the same namespace.
+        Key(&'static str),
+        /// A key of another namespace.
+        Moved {
+            namespace: &'static str,
+            key: &'static str,
+        },
+        /// A key of the same namespace, and the boot refuses the retired one
+        /// set, losing it being weaker than the policy it set; `why` says what
+        /// it would lose.
+        Refused {
+            key: &'static str,
+            why: &'static str,
+        },
+        /// Nothing: what it set means nothing now.
+        Nothing,
+    }
+
+    /// A key 7.0 retired, and what reads what it set now: the unread-variable
+    /// report says one still set as retired, naming that variable, where it
+    /// would only guess a near miss. Never read, which would make it an alias.
+    #[derive(Clone, Copy, Debug)]
     pub struct RetiredKey {
-        pub(super) namespace: &'static str,
         pub(super) key: &'static str,
-        pub(super) read_as: &'static str,
+        pub(super) successor: Successor,
     }
 
     impl RetiredKey {
-        /// `key` of `namespace`, read by nothing since 7.0, which `read_as`
-        /// replaced.
-        pub const fn new(
-            namespace: &'static str,
+        /// `key`, read as `read_as` in the same namespace.
+        pub const fn renamed(key: &'static str, read_as: &'static str) -> Self {
+            Self {
+                key,
+                successor: Successor::Key(read_as),
+            }
+        }
+
+        /// `key`, read as `read_as` in `namespace`.
+        pub const fn moved(
             key: &'static str,
+            namespace: &'static str,
             read_as: &'static str,
         ) -> Self {
             Self {
-                namespace,
                 key,
-                read_as,
+                successor: Successor::Moved {
+                    namespace,
+                    key: read_as,
+                },
+            }
+        }
+
+        /// `key`, read as `read_as` in the same namespace, and refused at the
+        /// read when the tier answering it sets it: `why` says what setting it
+        /// alone would lose, and never quotes its value.
+        pub const fn refused(key: &'static str, read_as: &'static str, why: &'static str) -> Self {
+            Self {
+                key,
+                successor: Successor::Refused { key: read_as, why },
+            }
+        }
+
+        /// `key`, with nothing in its place.
+        pub const fn removed(key: &'static str) -> Self {
+            Self {
+                key,
+                successor: Successor::Nothing,
+            }
+        }
+
+        /// The namespace whose read makes this key the binary's to say, given
+        /// the one it sat in.
+        pub(super) fn reader<'n>(&self, namespace: &'n str) -> &'n str {
+            match self.successor {
+                Successor::Moved { namespace, .. } => namespace,
+                Successor::Key(_) | Successor::Refused { .. } | Successor::Nothing => namespace,
+            }
+        }
+
+        /// The variable that reads what it set, given the namespace it sat in.
+        pub(super) fn read_as(&self, namespace: &str) -> Option<String> {
+            match self.successor {
+                Successor::Key(key) | Successor::Refused { key, .. } => {
+                    Some(var_name(namespace, key))
+                }
+                Successor::Moved { namespace, key } => Some(var_name(namespace, key)),
+                Successor::Nothing => None,
             }
         }
     }
 
-    nest_rs_core::inventory::collect!(RetiredKey);
+    /// The keys one crate retired from one namespace, submitted to the link-time
+    /// registry the report and the read judge by.
+    pub struct RetiredKeys {
+        pub(super) namespace: &'static str,
+        pub(super) keys: &'static [RetiredKey],
+    }
+
+    impl RetiredKeys {
+        /// `keys`, each of `namespace`.
+        pub const fn under(namespace: &'static str, keys: &'static [RetiredKey]) -> Self {
+            Self { namespace, keys }
+        }
+    }
+
+    nest_rs_core::inventory::collect!(RetiredKeys);
 }
 
 /// Record that a framework reader asked for `name`.
@@ -416,8 +573,7 @@ fn environment_names() -> BTreeSet<String> {
     names
 }
 
-/// The variables under `namespace` that name a key nothing read — retired
-/// when `retired` declares the key, `(key, the key it became)`.
+/// The variables under `namespace` that name a key nothing read.
 ///
 /// A variable a longer owned namespace holds (`redis__queue` under `redis`, or
 /// a registered instance's `redis__cache`) is that namespace's to judge. A key holding `__` is a sub-namespace this binary
@@ -427,7 +583,6 @@ fn unread_keys(
     names: &BTreeSet<String>,
     known: &BTreeSet<String>,
     linked: &[&str],
-    retired: &[(&str, &str)],
 ) -> Vec<Unclaimed> {
     let head = var_name(namespace, "");
     let deeper: Vec<String> = linked
@@ -446,14 +601,6 @@ fn unread_keys(
         .filter(|name| !deeper.iter().any(|other| name.starts_with(other.as_str())))
         .filter_map(|name| {
             let key = name.strip_prefix(&head)?;
-            let inline = key.strip_suffix("_FILE").unwrap_or(key);
-            if let Some((_, read_as)) = retired.iter().find(|(old, _)| *old == inline) {
-                return Some(Unclaimed::Retired {
-                    variable: name.clone(),
-                    namespace: namespace.to_owned(),
-                    read_as: var_name(namespace, read_as),
-                });
-            }
             let suggestion = closest(key, &read).map(ToOwned::to_owned);
             if key.contains("__") && suggestion.is_none() {
                 return None;
@@ -940,7 +1087,7 @@ mod tests {
             var_name("fixture", "BANNER"),
             var_name("fixture", "PORT"),
         ]);
-        let found = unread_keys("fixture", &names, &known, &["fixture"], &[]);
+        let found = unread_keys("fixture", &names, &known, &["fixture"]);
         assert_eq!(
             found,
             [
@@ -958,34 +1105,112 @@ mod tests {
         );
     }
 
-    /// A key the crate that retired it declares is said as retired, naming the
-    /// key it became — under either spelling — never as a near miss.
+    const RETIRED: [__private::RetiredKey; 4] = [
+        __private::RetiredKey::renamed("EXPOSED", "EXPOSED_HEADERS"),
+        __private::RetiredKey::renamed("SWITCH", "SWITCH_ENABLED"),
+        __private::RetiredKey::moved("DRAIN", "fixture__port", "WINDOW"),
+        __private::RetiredKey::removed("GONE"),
+    ];
+
+    fn retired_in_fixture() -> Vec<(&'static str, &'static __private::RetiredKey)> {
+        RETIRED.iter().map(|key| ("fixture", key)).collect()
+    }
+
+    /// A key the crate that retired it declares is said as retired, naming what
+    /// reads it now — under either spelling, in its namespace or another's —
+    /// and only once a read of that namespace makes it this binary's to say.
     #[test]
-    fn a_declared_retired_key_is_said_retired_naming_the_key_it_became() {
-        let known = set(&[
-            var_name("fixture", "EXPOSED_HEADERS"),
-            var_name("fixture", "SWITCH_ENABLED"),
-        ]);
+    fn a_declared_retired_key_is_said_retired_naming_what_reads_it_now() {
         let names = set(&[
             var_name("fixture", "EXPOSED"),
             var_name("fixture", "SWITCH_FILE"),
+            var_name("fixture", "DRAIN"),
+            var_name("fixture", "GONE"),
         ]);
-        let retired = [("EXPOSED", "EXPOSED_HEADERS"), ("SWITCH", "SWITCH_ENABLED")];
-        let found = unread_keys("fixture", &names, &known, &["fixture"], &retired);
+        let found = retired_variables(
+            &names,
+            &BTreeSet::new(),
+            &["fixture", "fixture__port"],
+            retired_in_fixture(),
+        );
         assert_eq!(
             found,
             [
                 Unclaimed::Retired {
                     variable: var_name("fixture", "EXPOSED"),
                     namespace: "fixture".to_owned(),
-                    read_as: var_name("fixture", "EXPOSED_HEADERS"),
+                    read_as: Some(var_name("fixture", "EXPOSED_HEADERS")),
                 },
                 Unclaimed::Retired {
                     variable: var_name("fixture", "SWITCH_FILE"),
                     namespace: "fixture".to_owned(),
-                    read_as: var_name("fixture", "SWITCH_ENABLED"),
+                    read_as: Some(var_name("fixture", "SWITCH_ENABLED")),
+                },
+                Unclaimed::Retired {
+                    variable: var_name("fixture", "DRAIN"),
+                    namespace: "fixture__port".to_owned(),
+                    read_as: Some(var_name("fixture__port", "WINDOW")),
+                },
+                Unclaimed::Retired {
+                    variable: var_name("fixture", "GONE"),
+                    namespace: "fixture".to_owned(),
+                    read_as: None,
                 },
             ],
+        );
+
+        let another_binarys = retired_variables(
+            &names,
+            &BTreeSet::new(),
+            &["unrelated"],
+            retired_in_fixture(),
+        );
+        assert_eq!(
+            another_binarys,
+            [],
+            "a namespace unread is another binary's"
+        );
+
+        let moved_only = retired_variables(
+            &names,
+            &BTreeSet::new(),
+            &["fixture__port"],
+            retired_in_fixture(),
+        );
+        assert_eq!(
+            moved_only
+                .iter()
+                .map(Unclaimed::variable)
+                .collect::<Vec<_>>(),
+            [var_name("fixture", "DRAIN")],
+            "a moved key is judged by the namespace that reads it now"
+        );
+    }
+
+    /// A variable a read claims is no retired one, whoever declared the name.
+    #[test]
+    fn a_variable_something_reads_is_never_said_retired() {
+        let names = set(&[var_name("fixture", "EXPOSED")]);
+        let known = set(&[var_name("fixture", "EXPOSED")]);
+        let found = retired_variables(&names, &known, &["fixture"], retired_in_fixture());
+        assert_eq!(found, []);
+    }
+
+    /// One said retired is reported as retired alone, though `check`'s other
+    /// passes would each have guessed at it.
+    #[test]
+    fn a_retired_key_is_said_once_ahead_of_a_near_miss() {
+        let mut ledger = Ledger::new();
+        ledger.record_read("fixture", true);
+        let names = set(&[var_name("fixture", "EXPOSED")]);
+        let out = ledger.check_declaring(&names, &["fixture"], retired_in_fixture());
+        assert_eq!(
+            out,
+            [Unclaimed::Retired {
+                variable: var_name("fixture", "EXPOSED"),
+                namespace: "fixture".to_owned(),
+                read_as: Some(var_name("fixture", "EXPOSED_HEADERS")),
+            }],
         );
     }
 
@@ -996,13 +1221,7 @@ mod tests {
     fn a_longer_linked_namespace_owns_its_own_variables() {
         let known = set(&[var_name("fixture", "MEMBER_URL")]);
         let names = set(&[var_name("fixture__member", "URL")]);
-        let found = unread_keys(
-            "fixture",
-            &names,
-            &known,
-            &["fixture", "fixture__member"],
-            &[],
-        );
+        let found = unread_keys("fixture", &names, &known, &["fixture", "fixture__member"]);
         assert!(found.is_empty(), "{found:?}");
     }
 
@@ -1013,7 +1232,7 @@ mod tests {
             var_name("fixture__elsewhere", "TOKEN"),
             var_name("fixture", "CLIENT__ID"),
         ]);
-        let found = unread_keys("fixture", &names, &known, &["fixture"], &[]);
+        let found = unread_keys("fixture", &names, &known, &["fixture"]);
         assert_eq!(
             found,
             [Unclaimed::Key {

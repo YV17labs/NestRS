@@ -18,6 +18,8 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::harness::{ProbeMigrator, ProbeTables};
+
 mod handle {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
@@ -165,31 +167,31 @@ async fn a_connection_on_its_way_back_is_waited_for_and_the_conflict_names_its_f
     }
 }
 
+struct PartitionedTables;
+
+impl ProbeTables for PartitionedTables {
+    fn ddl() -> String {
+        "CREATE TABLE unique_key_probe_handles (
+            id UUID NOT NULL,
+            email TEXT NOT NULL,
+            PRIMARY KEY (id, email),
+            UNIQUE (email)
+        ) PARTITION BY HASH (email);
+        CREATE TABLE unique_key_probe_handles_0 PARTITION OF unique_key_probe_handles
+            FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+        CREATE TABLE unique_key_probe_handles_1 PARTITION OF unique_key_probe_handles
+            FOR VALUES WITH (MODULUS 2, REMAINDER 1);"
+            .to_owned()
+    }
+}
+
 /// Postgres reports the partition and the partition's own index, never the
 /// table the entity names, which the read follows through `pg_inherits`.
 #[tokio::test]
 async fn a_key_of_a_partitioned_table_names_its_field() {
-    let db = EphemeralDatabase::create::<crate::harness::NoMigrations>()
-        .await
-        .expect("a database of the test's own");
-    db.connection()
-        .execute_unprepared(
-            "CREATE TABLE unique_key_probe_handles (
-                id UUID NOT NULL,
-                email TEXT NOT NULL,
-                PRIMARY KEY (id, email),
-                UNIQUE (email)
-            ) PARTITION BY HASH (email);
-            CREATE TABLE unique_key_probe_handles_0 PARTITION OF unique_key_probe_handles
-                FOR VALUES WITH (MODULUS 2, REMAINDER 0);
-            CREATE TABLE unique_key_probe_handles_1 PARTITION OF unique_key_probe_handles
-                FOR VALUES WITH (MODULUS 2, REMAINDER 1);",
-        )
-        .await
-        .expect("the partitioned probe table");
     let app = TestApp::builder()
-        .provide_arc(db.connection())
         .module::<HandlesModule>()
+        .ephemeral_database::<ProbeMigrator<PartitionedTables>>()
         .build()
         .await
         .expect("boots");

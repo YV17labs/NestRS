@@ -1,9 +1,12 @@
 //! The suite's Postgres, over TLS alone at `<PREFIX>_SEAORM__URL`, opened with
 //! the pool's own options so it verifies the certificate as the app does.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
+use async_trait::async_trait;
+use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbErr};
+use sea_orm_migration::{MigrationName, MigrationTrait, MigratorTrait, SchemaManager};
 
 pub(crate) fn url() -> String {
     nest_rs_config::ConfigService::for_namespace("seaorm")
@@ -34,9 +37,40 @@ pub(crate) async fn connect_arc() -> Arc<DatabaseConnection> {
 /// A database of its own with no table in it.
 pub(crate) struct NoMigrations;
 
-impl sea_orm_migration::MigratorTrait for NoMigrations {
-    fn migrations() -> Vec<Box<dyn sea_orm_migration::MigrationTrait>> {
+impl MigratorTrait for NoMigrations {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         Vec::new()
+    }
+}
+
+/// The tables an app's boot reads, there before it.
+pub(crate) trait ProbeTables: Send + Sync + 'static {
+    fn ddl() -> String;
+}
+
+/// A database of its own holding `T`'s tables and nothing else.
+pub(crate) struct ProbeMigrator<T>(PhantomData<T>);
+
+impl<T: ProbeTables> MigratorTrait for ProbeMigrator<T> {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        vec![Box::new(Self(PhantomData))]
+    }
+}
+
+impl<T> MigrationName for ProbeMigrator<T> {
+    fn name(&self) -> &str {
+        "m00000000_000000_probe_tables"
+    }
+}
+
+#[async_trait]
+impl<T: ProbeTables> MigrationTrait for ProbeMigrator<T> {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(&T::ddl())
+            .await
+            .map(drop)
     }
 }
 

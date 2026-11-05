@@ -13,7 +13,7 @@ use nest_rs_testing::TestApp;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
 use uuid::Uuid;
 
-use crate::harness::{ProbeController, ProbeHandler, answered};
+use crate::harness::{ProbeController, ProbeHandler, ProbeMigrator, ProbeTables, answered};
 
 const TABLE: &str = "error_probe_accounts";
 const UNIQUE: &str = "error_probe_accounts_email_key";
@@ -250,15 +250,14 @@ impl HandlesController {}
 )]
 struct HandlesModule;
 
-/// The keys a conflict can name, created before the app boots, which reads
-/// them: a constraint carrying an `INCLUDE` column, a partial index whose
-/// other column a grant pins, and an index over an expression.
-async fn handles_app() -> (nest_rs_testing::EphemeralDatabase, TestApp) {
-    let db = nest_rs_testing::EphemeralDatabase::create::<crate::harness::NoMigrations>()
-        .await
-        .expect("a database of the test's own");
-    db.connection()
-        .execute_unprepared(&format!(
+/// The keys a conflict can name, which the app's boot reads: a constraint
+/// carrying an `INCLUDE` column, a partial index whose other column a grant
+/// pins, and an index over an expression.
+struct HandlesTables;
+
+impl ProbeTables for HandlesTables {
+    fn ddl() -> String {
+        format!(
             "CREATE TABLE {HANDLES} (
                 id UUID PRIMARY KEY,
                 org_id INT NOT NULL,
@@ -269,16 +268,17 @@ async fn handles_app() -> (nest_rs_testing::EphemeralDatabase, TestApp) {
             );
             CREATE UNIQUE INDEX {HANDLES}_slug_live ON {HANDLES} (org_id, slug) WHERE slug <> '';
             CREATE UNIQUE INDEX {HANDLES}_display_folded ON {HANDLES} (lower(display));"
-        ))
-        .await
-        .expect("the probe table and its keys");
-    let app = TestApp::builder()
-        .provide_arc(db.connection())
+        )
+    }
+}
+
+async fn handles_app() -> TestApp {
+    TestApp::builder()
         .module::<HandlesModule>()
+        .ephemeral_database::<ProbeMigrator<HandlesTables>>()
         .build()
         .await
-        .expect("the app boots on the probe database");
-    (db, app)
+        .expect("the app boots on the probe database")
 }
 
 /// What a write answered: its status and its problem document.
@@ -311,7 +311,7 @@ async fn a_crud_write_a_unique_key_refuses_names_the_inputs_fields_it_holds() {
     use nest_rs_http::Method;
     use serde_json::json;
 
-    let (_db, app) = handles_app().await;
+    let app = handles_app().await;
     let unique = json!([{ "code": "unique" }]);
 
     let (status, first) = written(
@@ -464,6 +464,19 @@ impl BespokeController {}
 )]
 struct BespokeModule;
 
+struct BespokeTables;
+
+impl ProbeTables for BespokeTables {
+    fn ddl() -> String {
+        format!(
+            "CREATE TABLE {BESPOKE} (
+                id UUID PRIMARY KEY,
+                email TEXT NOT NULL CONSTRAINT {BESPOKE}_email_key UNIQUE
+            )"
+        )
+    }
+}
+
 /// An entity declaring no input is read too: the input a service writes by hand
 /// names its field through `field_for`.
 #[tokio::test]
@@ -471,21 +484,9 @@ async fn a_hand_written_input_names_its_field_through_field_for() {
     use nest_rs_http::Method;
     use serde_json::json;
 
-    let db = nest_rs_testing::EphemeralDatabase::create::<crate::harness::NoMigrations>()
-        .await
-        .expect("a database of the test's own");
-    db.connection()
-        .execute_unprepared(&format!(
-            "CREATE TABLE {BESPOKE} (
-                id UUID PRIMARY KEY,
-                email TEXT NOT NULL CONSTRAINT {BESPOKE}_email_key UNIQUE
-            )"
-        ))
-        .await
-        .expect("the probe table");
     let app = TestApp::builder()
-        .provide_arc(db.connection())
         .module::<BespokeModule>()
+        .ephemeral_database::<ProbeMigrator<BespokeTables>>()
         .build()
         .await
         .expect("the app boots on the probe database");

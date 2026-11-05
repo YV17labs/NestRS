@@ -1,6 +1,7 @@
 //! [`HostRuntime`] — the modules an edge's host runs on, which its decorator
 //! brings: the `#[module]` listing the host imports each of them bare, so the
-//! app importing an adapter serves it and reads its edge's config.
+//! app importing an adapter serves it and reads its edge's config. A host no
+//! `#[module]` lists brings nothing, and [`App::run`](crate::App::run) says so.
 
 use std::any::TypeId;
 use std::collections::HashMap;

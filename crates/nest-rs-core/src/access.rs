@@ -117,7 +117,8 @@ pub(crate) mod __private {
 /// The line to add when a provider depends on `key` and no module the app
 /// imports provides it — submitted by the crate owning `key`'s type, so the
 /// boot's [`MissingDependencyError`] names the module that binds it instead of
-/// the kernel's generic remedy. Text only: it mounts nothing, so it is no
+/// the kernel's generic remedy, as do [`AccessGraphError`] and a provider a
+/// later registration left unbuilt. Text only: it mounts nothing, so it is no
 /// discovery to gate.
 ///
 /// A port names its first-party binding for its trait object, and an adapter
@@ -402,7 +403,7 @@ pub(crate) fn positions(order: impl IntoIterator<Item = TypeId>) -> HashMap<Type
 /// a descriptor terminate a branch, making a hand-written root a no-op. A
 /// provider in `overridden` is never built, so what it injects is not checked;
 /// `linked` holds what each host's decorators declare of it, and the remedy a
-/// crate names for a key no module provides.
+/// crate names for a key no module provides or none in reach does.
 pub(crate) fn validate_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],

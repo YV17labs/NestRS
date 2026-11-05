@@ -18,7 +18,7 @@
 //! The boot walks the module tree from the root and fails with a named error
 //! before any transport starts: [`AccessGraphError`] when a provider reaches
 //! across a module boundary no `import` covers, [`MissingDependencyError`] when
-//! no module provides a dependency — naming the line to add when the crate
+//! no module provides a dependency — each naming the line to add when the crate
 //! owning its type submits a [`DependencyRemedy`] — [`BudgetPastNetError`] when a resource's
 //! [`Budget`] reaches past a [`Net`] that waits on it. The layers a site
 //! binds — `#[use_guards]`, `#[use_pipes]`, `#[use_interceptors]`,

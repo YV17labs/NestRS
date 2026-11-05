@@ -417,10 +417,10 @@ impl App {
     /// signal received once the way down has begun exits at once (130 / 143).
     ///
     /// Transports come only from imported modules, an edge's host bringing the
-    /// one it runs on to the module listing it. A run with no transport at all
-    /// says so at `warn`, runs its init hooks and stops for
-    /// [`StopCause::NoTransport`], never turning
-    /// `Ready`.
+    /// one it runs on to the module listing it; a host seeded or registered by
+    /// hand brings nothing, and is named at `warn` when nothing imports what it
+    /// runs on. A run with no transport at all says so at `warn`, runs its init
+    /// hooks and stops for [`StopCause::NoTransport`], never turning `Ready`.
     pub async fn run(self) -> Result<()> {
         let served = self.boot_and_serve().await;
         if served.is_err() {
@@ -455,6 +455,7 @@ impl App {
             transports.push((name, transport));
         }
         crate::probe_runtime::report_unserved(&self.container)?;
+        crate::host_runtime::report_unserved(&self.container);
         if transports.is_empty() {
             tracing::warn!(
                 target: crate::target::APP,
@@ -1141,7 +1142,12 @@ fn seal(
     Ok(Sealed {
         reachable: ReachableProviders::new(reachable_provider_ids(&order, global)),
         order: ProviderOrder::new(order),
-        composition: Composition::from_descriptors(descriptors, roots, overridden),
+        composition: Composition::from_descriptors(
+            descriptors,
+            roots,
+            overridden,
+            builder.registered_modules(),
+        ),
         hook_order,
     })
 }

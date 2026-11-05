@@ -519,6 +519,7 @@ mod tests {
                 &refs,
                 &[(TypeId::of::<AppModule>(), "api::module::ApiModule")],
                 Default::default(),
+                Default::default(),
             );
             (modules, composition)
         }

@@ -243,7 +243,10 @@ or `#[scheduled]` host imports what that edge runs on, bare, because the
 decorator on the host says so; a module the app does not reach brings nothing, so
 the root's import of the adapter is still the one line opening the edge. A
 module listing no host, such as an adapter holding only an interceptor, imports
-its transport itself.
+its transport itself. So does a hand-written module registering a host, or a host
+you seed: no `#[module]` lists it, so it brings nothing, and the run names it at
+`warn` (`host not served: its edge's transport is not attached`) when nothing
+imports what it runs on.
 
 An app run with no transport at all says `app serves nothing: no transport is
 attached`, runs its init hooks and stops.

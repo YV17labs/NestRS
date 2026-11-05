@@ -195,3 +195,18 @@ is why `features.md` keeps hosts in adapters; a module listing a host in a binar
 that was not meant to serve its edge now listens or refuses instead of idling, and
 a container built by hand seeds what a listed host's module reads, as it does for
 an import written out. Both are in the upgrading guide.
+
+## 2026-11-05 — a host no module lists is said at run
+
+The owner's mandate of 2026-11-05, closing what the 2026-10-31 entry's commit left
+unnamed. "The backstop is gone for edges" holds for a host a reached module lists.
+One seeded, or registered by a hand-written `impl Module`, brings nothing, and no
+line said so. `App::run` now files `host not served: its edge's transport is not
+attached` at `warn`, once per such host, naming it and the modules it runs on,
+unless the boot's register phase ran one of them. A hand-written module's import
+counts: the check reads what ran (`Composition::imports`), not what discovery's gate
+reaches, which stays as it was. One module of a gateway's two is enough: an app
+may well import `WsModule` alone, and which is missing is another line's.
+
+The public seam stays closed: an entry is tier 2, and no third party asks.
+

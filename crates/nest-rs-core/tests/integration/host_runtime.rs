@@ -9,8 +9,9 @@ use nest_rs_core::__private::{HostRuntime, RuntimeModule};
 use nest_rs_core::{
     App, Collecting, Composition, Container, ContainerBuilder, ContainerError, Module,
     ReachableProviders, Registering, UnbuiltCause, UnbuiltProviderError, hooks, injectable,
-    inventory, module,
+    inventory, module, target,
 };
+use nest_rs_testing::LogCapture;
 
 use crate::refused_boot;
 
@@ -56,6 +57,7 @@ struct Host {
 inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<Host>(),
+        name: std::any::type_name::<Host>,
         modules: RUNTIME,
     }
 }
@@ -192,6 +194,7 @@ struct TwoEdges;
 inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<TwoEdges>(),
+        name: std::any::type_name::<TwoEdges>,
         modules: FIRST_EDGE,
     }
 }
@@ -199,6 +202,7 @@ inventory::submit! {
 inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<TwoEdges>(),
+        name: std::any::type_name::<TwoEdges>,
         modules: SECOND_EDGE,
     }
 }
@@ -240,6 +244,7 @@ struct RefusedHost;
 inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<RefusedHost>(),
+        name: std::any::type_name::<RefusedHost>,
         modules: REFUSING,
     }
 }
@@ -307,6 +312,7 @@ impl Listing {
 inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<Listing>(),
+        name: std::any::type_name::<Listing>,
         modules: BROUGHT,
     }
 }
@@ -355,6 +361,7 @@ const CYCLE: &[RuntimeModule] = &[RuntimeModule::of::<CycleRuntimeModule>()];
 inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<CycleHost>(),
+        name: std::any::type_name::<CycleHost>,
         modules: CYCLE,
     }
 }
@@ -378,4 +385,180 @@ async fn an_import_cycle_closing_through_what_a_host_brings_is_named() {
     for module in ["CycleModule", "CycleRuntimeModule"] {
         assert!(modules.contains(&module), "{unbuilt}");
     }
+}
+
+/// What `App::run` files for a host no import of the boot brings its edge to.
+const UNSERVED: &str = "host not served: its edge's transport is not attached";
+
+/// What a run-time host's edge runs on: empty, the import alone tells.
+#[module]
+struct EdgeRuntimeModule;
+
+const EDGE_RUNTIME: &[RuntimeModule] = &[RuntimeModule::of::<EdgeRuntimeModule>()];
+
+#[injectable]
+#[derive(Default)]
+struct HandRegisteredHost;
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<HandRegisteredHost>(),
+        name: std::any::type_name::<HandRegisteredHost>,
+        modules: EDGE_RUNTIME,
+    }
+}
+
+/// Registers the host itself, as a `#[module]` listing it would not, and imports
+/// nothing it runs on.
+struct HandRegistersItModule;
+
+impl Module for HandRegistersItModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide(HandRegisteredHost)
+    }
+}
+
+async fn logs_of_a_run(app: nest_rs_core::AppBuilder) -> LogCapture {
+    let logs = LogCapture::install();
+    app.build()
+        .await
+        .expect("the app boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+    logs
+}
+
+#[tokio::test]
+async fn a_host_registered_by_hand_with_nothing_serving_its_edge_is_named_at_run() {
+    let logs = logs_of_a_run(App::builder().module::<HandRegistersItModule>()).await;
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(unserved.level, "warn");
+    assert_eq!(
+        unserved.field("host").as_deref(),
+        Some("HandRegisteredHost")
+    );
+    assert_eq!(
+        unserved.field("import").as_deref(),
+        Some("EdgeRuntimeModule")
+    );
+}
+
+#[module]
+struct SecondRuntimeModule;
+
+const TWO_RUNTIMES: &[RuntimeModule] = &[
+    RuntimeModule::of::<EdgeRuntimeModule>(),
+    RuntimeModule::of::<SecondRuntimeModule>(),
+];
+
+#[injectable]
+#[derive(Default)]
+struct TwoRuntimesHost;
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<TwoRuntimesHost>(),
+        name: std::any::type_name::<TwoRuntimesHost>,
+        modules: TWO_RUNTIMES,
+    }
+}
+
+// A second method's entry for the same host, as a provider-hosted decorator
+// submits one per method.
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<TwoRuntimesHost>(),
+        name: std::any::type_name::<TwoRuntimesHost>,
+        modules: TWO_RUNTIMES,
+    }
+}
+
+#[tokio::test]
+async fn a_host_on_two_modules_is_named_once_with_both() {
+    let logs = logs_of_a_run(App::builder().provide(TwoRuntimesHost)).await;
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(
+        unserved.field("import").as_deref(),
+        Some("EdgeRuntimeModule, SecondRuntimeModule")
+    );
+}
+
+/// One module of the two imported: the edge runs, and the app chose what else.
+struct ImportsOneOfTwoModule;
+
+impl Module for ImportsOneOfTwoModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<SecondRuntimeModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<SecondRuntimeModule>()
+    }
+}
+
+#[tokio::test]
+async fn a_host_one_of_whose_modules_is_imported_is_not_named() {
+    let logs = logs_of_a_run(
+        App::builder()
+            .provide(TwoRuntimesHost)
+            .module::<ImportsOneOfTwoModule>(),
+    )
+    .await;
+    logs.expect_none(target::APP, UNSERVED);
+}
+
+#[tokio::test]
+async fn a_seeded_host_with_nothing_serving_its_edge_is_named_at_run() {
+    let logs = logs_of_a_run(App::builder().provide(HandRegisteredHost)).await;
+    logs.expect_one(target::APP, UNSERVED);
+}
+
+/// Registers the host and imports what it runs on, as the docs tell one to.
+struct HandRegistersItBesideItsRuntimeModule;
+
+impl Module for HandRegistersItBesideItsRuntimeModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<EdgeRuntimeModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .import::<EdgeRuntimeModule>()
+            .provide(HandRegisteredHost)
+    }
+}
+
+#[tokio::test]
+async fn a_host_registered_by_hand_beside_its_runtime_is_not_named() {
+    let logs =
+        logs_of_a_run(App::builder().module::<HandRegistersItBesideItsRuntimeModule>()).await;
+    logs.expect_none(target::APP, UNSERVED);
+}
+
+#[injectable]
+#[derive(Default)]
+struct ListedHost;
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<ListedHost>(),
+        name: std::any::type_name::<ListedHost>,
+        modules: EDGE_RUNTIME,
+    }
+}
+
+#[module(providers = [ListedHost])]
+struct ListsItModule;
+
+#[tokio::test]
+async fn a_host_a_module_lists_brings_its_runtime_and_is_not_named() {
+    let logs = logs_of_a_run(App::builder().module::<ListsItModule>()).await;
+    logs.expect_none(target::APP, UNSERVED);
+}
+
+#[tokio::test]
+async fn a_host_the_app_does_not_hold_is_not_named() {
+    let logs = logs_of_a_run(App::builder().module::<ElsewhereModule>()).await;
+    logs.expect_none(target::APP, UNSERVED);
 }

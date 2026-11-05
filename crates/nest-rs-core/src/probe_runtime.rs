@@ -123,6 +123,7 @@ mod tests {
             &refs,
             &[(TypeId::of::<ServedModule>(), "app::ServedModule")],
             HashSet::new(),
+            HashSet::new(),
         );
         (modules, composition)
     }

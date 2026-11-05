@@ -305,16 +305,18 @@ pub struct Composition {
     roots: Vec<TypeId>,
     modules: HashSet<TypeId>,
     overridden: HashSet<TypeId>,
+    imported: HashSet<TypeId>,
 }
 
 impl Composition {
     /// The composition of an app built from `roots`, each with its type's
     /// name, in which a test's overrides stand in for the providers
-    /// `overridden`.
+    /// `overridden`, and whose register phase ran the modules `imported`.
     pub(crate) fn from_descriptors(
         descriptors: &[&ModuleDescriptor],
         roots: &[(TypeId, &'static str)],
         overridden: HashSet<TypeId>,
+        imported: HashSet<TypeId>,
     ) -> Self {
         let by_id: HashMap<TypeId, &ModuleDescriptor> =
             descriptors.iter().map(|d| ((d.module)(), *d)).collect();
@@ -328,6 +330,7 @@ impl Composition {
             modules: reachable(&ids, &by_id),
             roots: ids,
             overridden,
+            imported,
         }
     }
 
@@ -340,6 +343,13 @@ impl Composition {
     /// Whether the app reaches the module `module`.
     pub fn reaches(&self, module: TypeId) -> bool {
         self.modules.contains(&module)
+    }
+
+    /// Whether any import of this boot ran the module `module`, a hand-written
+    /// module's included, which [`reaches`](Self::reaches), the gate discovery
+    /// reads, does not follow.
+    pub(crate) fn imports(&self, module: TypeId) -> bool {
+        self.imported.contains(&module)
     }
 
     /// Whether the app boots the module `module`: one of its roots.

@@ -35,6 +35,28 @@ struct TasksModule;
 #[module(imports = [TasksModule])]
 struct AppRoot;
 
+#[tokio::test]
+async fn a_scheduled_host_registered_by_hand_with_no_scheduler_is_named_at_run() {
+    let logs = nest_rs_testing::LogCapture::install();
+    App::builder()
+        .provide(Tasks {
+            counter: Arc::new(Counter(AtomicUsize::new(0))),
+        })
+        .build()
+        .await
+        .expect("the app boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let unserved = logs.expect_one(
+        nest_rs_core::target::APP,
+        "host not served: its edge's transport is not attached",
+    );
+    assert_eq!(unserved.field("host").as_deref(), Some("Tasks"));
+    assert_eq!(unserved.field("import").as_deref(), Some("ScheduleModule"));
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_listed_scheduled_host_brings_the_scheduler_and_ticks_the_method() {
     let counter = Arc::new(Counter(AtomicUsize::new(0)));

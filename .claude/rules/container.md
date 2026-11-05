@@ -358,7 +358,9 @@ onto it for symmetry. **A host brings what its edge runs on**, gated the same
 way: its decorator submits a `HostRuntime` naming the modules its edge's crate
 declares, and the `#[module]` listing the host imports them bare, in both phases,
 after its `imports`, the access graph walking them as imports (held by a test
-per edge; `.claude/decisions/adapter-imports-its-transport.md`). **Being buildable is not discovery**: a discovered
+per edge; `.claude/decisions/adapter-imports-its-transport.md`); one no
+`#[module]` lists — seeded, or registered by hand — brings nothing, and `App::run`
+names it at `warn` when nothing in the boot imported what it runs on. **Being buildable is not discovery**: a discovered
 entry's own config decides its fate — complete is active, absent is inert with
 a boot `warn`, partial or invalid fails the boot naming it. **A registry the
 app's code reads is filled by `provide_wiring`, before any hook — never by a

@@ -6,12 +6,15 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::container::ContainerBuilder;
+use crate::access::Composition;
+use crate::container::{Container, ContainerBuilder};
 use crate::module::Module;
+use crate::type_name::shorten;
 
 /// One module an edge's hosts run on, as the edge's crate declares it.
 pub struct RuntimeModule {
     module: fn() -> TypeId,
+    name: fn() -> &'static str,
     import: fn(ContainerBuilder) -> ContainerBuilder,
 }
 
@@ -20,6 +23,7 @@ impl RuntimeModule {
     pub const fn of<M: Module>() -> Self {
         Self {
             module: TypeId::of::<M>,
+            name: std::any::type_name::<M>,
             import: ContainerBuilder::import::<M>,
         }
     }
@@ -31,6 +35,8 @@ impl RuntimeModule {
 pub struct HostRuntime {
     /// The host provider's type.
     pub host: fn() -> TypeId,
+    /// That type's name, shortened where a line gives it.
+    pub name: fn() -> &'static str,
     /// The modules its edge's crate declares.
     pub modules: &'static [RuntimeModule],
 }
@@ -66,4 +72,32 @@ pub(crate) fn runtime_modules(host: TypeId) -> impl DoubleEndedIterator<Item = T
         .into_iter()
         .flatten()
         .map(|module| (module.module)())
+}
+
+/// File one `warn` per host the app `container` was booted for holds with none
+/// of the modules it runs on imported: seeded, or registered by a hand-written
+/// module, so no `#[module]` listing brought them, and no edge will dispatch it.
+pub(crate) fn report_unserved(container: &Container) {
+    let Some(composition) = container.get::<Composition>() else {
+        return;
+    };
+    let mut hosts: Vec<&'static HostRuntime> = inventory::iter::<HostRuntime>()
+        .filter(|entry| container.holds((entry.host)()))
+        .filter(|entry| !runtime_modules((entry.host)()).any(|module| composition.imports(module)))
+        .collect();
+    hosts.sort_unstable_by_key(|entry| ((entry.name)(), (entry.host)()));
+    hosts.dedup_by_key(|entry| (entry.host)());
+    for entry in hosts {
+        let import: Vec<String> = entry
+            .modules
+            .iter()
+            .map(|module| shorten((module.name)()))
+            .collect();
+        tracing::warn!(
+            target: crate::target::APP,
+            host = shorten((entry.name)()),
+            import = import.join(", "),
+            "host not served: its edge's transport is not attached",
+        );
+    }
 }

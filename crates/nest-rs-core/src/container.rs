@@ -1484,6 +1484,11 @@ impl ContainerBuilder {
             .map(|queued| self.late_factory(queued))
     }
 
+    /// Every module a register phase ran.
+    pub(crate) fn registered_modules(&self) -> HashSet<TypeId> {
+        self.registered_modules.clone()
+    }
+
     /// The first module collected that no register phase reached — imported in
     /// a collect alone — read as the register phase ends.
     fn unregistered_module(&self) -> Option<&'static str> {

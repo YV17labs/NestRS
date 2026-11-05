@@ -16,6 +16,7 @@ pub fn host_runtime_entry(
         ::nest_rs_core::inventory::submit! {
             ::nest_rs_core::__private::HostRuntime {
                 host: || ::core::any::TypeId::of::<#host>(),
+                name: ::core::any::type_name::<#host>,
                 modules: #runtime,
             }
         }
@@ -45,6 +46,10 @@ mod tests {
         );
         assert!(
             entry.contains("TypeId :: of :: < ReportsProcessor >"),
+            "{entry}"
+        );
+        assert!(
+            entry.contains("name : :: core :: any :: type_name :: < ReportsProcessor >"),
             "{entry}"
         );
         assert!(

@@ -4,14 +4,12 @@
 //! the guard brings, wherever the two fall in `imports`.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use nest_rs_core::{App, Module, module};
-use nest_rs_redis::{RedisConfig, RedisThrottlerModule};
+use nest_rs_redis::RedisThrottlerModule;
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule, ThrottlerStore};
 
 use crate::connection::DemotedRedis;
-use crate::harness::tls::trusting_the_test_authority;
 
 #[tokio::test]
 async fn the_binding_registered_without_its_collect_fails_the_boot_naming_its_store() {
@@ -34,11 +32,7 @@ struct BindingThenAdapter;
 /// The store `M`'s app counts through, over `server`.
 async fn store_name<M: Module>(server: &DemotedRedis) -> &'static str {
     let app = App::builder()
-        .provide(RedisConfig {
-            url: server.url().into(),
-            connect_timeout: Duration::from_secs(2),
-            tls: trusting_the_test_authority(),
-        })
+        .provide(server.config())
         .provide(ThrottlerConfig {
             pseudonym_key: Some("nest-rs-redis integration pseudonym key".into()),
             ..ThrottlerConfig::default()

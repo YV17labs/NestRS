@@ -5,25 +5,12 @@
 //! imports or by a binding, once however many modules open it — and liveness
 //! waits on neither. An app without `HealthModule` boots as it did.
 
-use std::time::Duration;
-
 use nest_rs_core::{App, module};
 use nest_rs_health::{HealthModule, HealthService, IndicatorStatus, ProbeKind};
-use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueModule, RedisScheduleModule};
+use nest_rs_redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 
 use crate::connection::DemotedRedis;
-use crate::harness::tls::trusting_the_test_authority;
 use crate::module::{CACHE_URL, Cache, cache_config};
-
-/// The default instance's config, on `server`: the suite's own
-/// `<PREFIX>_REDIS__URL` would outrank a pin.
-fn default_on(server: &DemotedRedis) -> RedisConfig {
-    RedisConfig {
-        url: server.url().into(),
-        connect_timeout: Duration::from_secs(2),
-        tls: trusting_the_test_authority(),
-    }
-}
 
 /// The names `kind`'s report carries, each `up`.
 async fn answering_up(health: &HealthService, kind: ProbeKind) -> Vec<String> {
@@ -45,7 +32,7 @@ async fn each_instance_answers_the_readiness_and_startup_probes_under_its_own_na
     let cache = DemotedRedis::start().await;
     CACHE_URL.set(cache.url()).expect("set once");
     let app = App::builder()
-        .provide(default_on(&primary))
+        .provide(primary.config())
         .module::<TwoOpened>()
         .build()
         .await
@@ -111,7 +98,7 @@ struct OpenedByItsBindings;
 async fn an_instance_its_bindings_open_answers_once_under_its_own_name() {
     let server = DemotedRedis::start().await;
     let app = App::builder()
-        .provide(default_on(&server))
+        .provide(server.config())
         .module::<OpenedByItsBindings>()
         .build()
         .await
@@ -131,7 +118,7 @@ struct OpenedUnprobed;
 async fn without_health_module_an_app_opening_an_instance_boots_and_serves_no_probe() {
     let primary = DemotedRedis::start().await;
     let app = App::builder()
-        .provide(default_on(&primary))
+        .provide(primary.config())
         .module::<OpenedUnprobed>()
         .build()
         .await

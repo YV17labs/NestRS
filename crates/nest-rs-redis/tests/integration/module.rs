@@ -50,11 +50,7 @@ async fn two_instances_open_two_connections_each_to_its_own_server() {
     let cache = DemotedRedis::start().await;
     CACHE_URL.set(cache.url()).expect("set once");
     let app = App::builder()
-        .provide(RedisConfig {
-            url: primary.url().into(),
-            connect_timeout: Duration::from_secs(2),
-            tls: trusting_the_test_authority(),
-        })
+        .provide(primary.config())
         .module::<TwoInstances>()
         .build()
         .await
@@ -181,11 +177,7 @@ async fn a_queue_pinned_on_a_named_instance_holds_its_config_under_that_instance
     assert_ne!(RedisQueueConfig::default().lease, CACHE_LEASE);
     let cache = DemotedRedis::start().await;
     let app = App::builder()
-        .provide(Instanced::<Cache, RedisConfig>::from(RedisConfig {
-            url: cache.url().into(),
-            connect_timeout: Duration::from_secs(2),
-            tls: trusting_the_test_authority(),
-        }))
+        .provide(Instanced::<Cache, RedisConfig>::from(cache.config()))
         .module::<QueueOnTheCache>()
         .build()
         .await
@@ -222,15 +214,10 @@ struct StoreAlone;
 #[module(imports = [RedisModule, RedisQueueModule])]
 struct QueueBesideItsResource;
 
-/// Whether `M`, naming no `RedisModule`, opened the default instance over
-/// `server`.
+/// Whether `M` opened the default instance over `server`.
 async fn opens_the_default_instance<M: Module>(server: &DemotedRedis) -> bool {
     App::builder()
-        .provide(RedisConfig {
-            url: server.url().into(),
-            connect_timeout: Duration::from_secs(2),
-            tls: trusting_the_test_authority(),
-        })
+        .provide(server.config())
         .module::<M>()
         .build()
         .await

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 #[cfg(any(feature = "http", feature = "graphql"))]
 use anyhow::Context as _;
+use nest_rs_config::ConfigModule;
 use nest_rs_core::{Collecting, Container, ContainerBuilder, Module, Registering};
 use nest_rs_database::{UnitOfWork, provide_unit_of_work};
 use sea_orm::DatabaseConnection;
@@ -47,10 +48,15 @@ impl Module for SeaOrmDatabaseModule {
             .into_iter()
             .fold(builder, ContainerBuilder::provide_meta);
         let builder = provide_unit_of_work::<UnitInputs, _, _>(builder, |container| async move {
-            let unit_of_work = unit_of_work(&container)?;
+            let db = present::<DatabaseConnection>(&container)?;
+            let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;
+            let settles = present::<Settles>(&container)?;
+            let unit_of_work =
+                SeaOrmUnitOfWork::draining_into(Arc::clone(&db), &config, (*settles).clone());
+            #[cfg(feature = "queue")]
+            let unit_of_work = unit_of_work.keeping(container.get::<crate::queue::SeaOrmOutbox>());
             #[cfg(any(feature = "http", feature = "graphql"))]
             let unit_of_work = {
-                let db = present::<DatabaseConnection>(&container)?;
                 let keys = UniqueKeys::read(&db, unit_of_work.settle_net())
                     .await
                     .context(
@@ -80,21 +86,6 @@ impl Module for SeaOrmDatabaseModule {
         let builder = crate::queue::register(builder);
         builder.import::<SeaOrmModule>()
     }
-}
-
-/// SeaORM's unit of work over the container's pool and config, its settles
-/// drained by the binding's close.
-fn unit_of_work(container: &Container) -> anyhow::Result<SeaOrmUnitOfWork> {
-    let db = present::<DatabaseConnection>(container)?;
-    let config = present::<SeaOrmConfig>(container)?;
-    let settles = container
-        .get::<Settles>()
-        .map(|settles| (*settles).clone())
-        .unwrap_or_default();
-    let unit_of_work = SeaOrmUnitOfWork::draining_into(db, &config, settles);
-    #[cfg(feature = "queue")]
-    let unit_of_work = unit_of_work.keeping(container.get::<crate::queue::SeaOrmOutbox>());
-    Ok(unit_of_work)
 }
 
 fn present<T: std::any::Any + Send + Sync>(container: &Container) -> anyhow::Result<Arc<T>> {

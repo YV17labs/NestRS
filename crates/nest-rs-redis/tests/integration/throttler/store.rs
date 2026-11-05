@@ -11,7 +11,7 @@ use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
 use nest_rs_core::{App, Handler, Posture, module};
 use nest_rs_guards::Guard;
 use nest_rs_http::__private::check_request;
-use nest_rs_redis::{RedisConfig, RedisModule, RedisThrottlerModule};
+use nest_rs_redis::{RedisConfig, RedisThrottlerModule};
 use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule, ThrottlerSetup};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
@@ -86,7 +86,7 @@ fn policy() -> ThrottlerSetup {
     })
 }
 
-#[module(imports = [RedisThrottlerModule, policy(), RedisModule])]
+#[module(imports = [RedisThrottlerModule, policy()])]
 struct RedisThrottlerHost;
 
 struct Routes;

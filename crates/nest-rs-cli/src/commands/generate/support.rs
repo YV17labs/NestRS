@@ -103,14 +103,11 @@ pub(super) fn wire_into_app(
 /// Whether `source` names `ident` outside its `use` lines: an import listed
 /// bare, pinned (`X::for_root(..)`) or of a named instance (`X::<I>`) alike.
 fn names(source: &str, ident: &str) -> bool {
-    listed(source).any(|line| words(line, ident).next().is_some())
-}
-
-/// The lines of `source` that can list an import: every one but its `use`s.
-fn listed(source: &str) -> impl Iterator<Item = &str> {
-    source.lines().filter(|line| {
+    source.lines().any(|line| {
         let line = line.trim_start();
-        !line.starts_with("use ") && !line.starts_with("pub use ")
+        !line.starts_with("use ")
+            && !line.starts_with("pub use ")
+            && words(line, ident).next().is_some()
     })
 }
 

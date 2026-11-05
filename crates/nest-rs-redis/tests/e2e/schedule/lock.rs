@@ -3,12 +3,13 @@
 //! `RedisScheduleModule` binds.
 //!
 //! Every app here is the documented wiring — `ScheduleModule`,
-//! `RedisScheduleModule` and a `#[scheduled]` host — booted through the harness, with its scheduler started the way the
-//! app's run starts it. Each boot seeds its `RedisConfig`, the hermetic-test
-//! hatch: a seed freezes the namespace, so the `NESTRS_REDIS__URL` the suite
-//! runs under cannot move an app off the database or the proxy the test chose.
-//! All of them claim on [`crate::DB_SCHEDULE`], which holds nothing but claims,
-//! so the key layout is asserted over the whole database.
+//! `RedisScheduleModule` and a `#[scheduled]` host — booted through the
+//! harness, with its scheduler started the way the app's run starts it. Each
+//! boot seeds its `RedisConfig`, the hermetic-test hatch: a seed freezes the
+//! namespace, so the `NESTRS_REDIS__URL` the suite runs under cannot move an app
+//! off the database or the proxy the test chose. All of them claim on
+//! [`crate::DB_SCHEDULE`], which holds nothing but claims, so the key layout is
+//! asserted over the whole database.
 //!
 //! **What fired is read off the lines, never counted against the keys.** A claim
 //! key exists once Redis ran the claim, which can be before the scheduler read

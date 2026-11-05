@@ -207,9 +207,10 @@ pub(crate) const ENV_TEST: &str = r#"# nestrs workspace — test-profile overrid
 pub(crate) const DEV_SERVICES: &str = r#"# Postgres, Valkey and the S3 store as `compose.yml` exposes them on localhost.
 # Start them with `docker compose up -d`, then `nestrs run db up`. An app only
 # connects to what its imports run on, the data layer, a Redis binding or the
-# store, so these are inert for a plain HTTP app. All run without TLS here, which the URLs say:
-# Postgres's connection is verified TLS unless `sslmode=disable` opens it, and
-# the store's `http://` endpoint is refused outside development and test.
+# store, so these are inert for a plain HTTP app. All run without TLS here,
+# which the URLs say: Postgres's connection is verified TLS unless
+# `sslmode=disable` opens it, and the store's `http://` endpoint is refused
+# outside development and test.
 {{env_prefix}}_SEAORM__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}?sslmode=disable
 "#;
 

@@ -251,7 +251,7 @@ impl<I: Instance> RedisConnection<I> {
     }
 
     /// The connection [`RedisModule`](crate::RedisModule) opened for the
-    /// instance `I`, for the factory of `binding`, which imports that module.
+    /// instance `I`, for `binding`, which runs after it.
     pub(crate) fn of(container: &nest_rs_core::Container, binding: &str) -> anyhow::Result<Self> {
         container
             .get::<Self>()

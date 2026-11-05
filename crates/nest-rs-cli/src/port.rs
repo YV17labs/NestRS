@@ -135,7 +135,7 @@ mod tests {
                 "[AudioQueueModule, RedisQueueModule, AudioScheduleModule]",
             ),
             ("pushes", "// HttpModule\n[ChatModule, WsModule]"),
-            ("cli", "[SeaOrmModule, SeaOrmDatabaseModule]"),
+            ("cli", "[SeaOrmDatabaseModule]"),
         ];
         for (app, module) in roots {
             fs::create_dir_all(apps.join(app).join("src")).unwrap();

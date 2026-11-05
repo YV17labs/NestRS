@@ -185,6 +185,16 @@ impl DemotedRedis {
         format!("rediss://{}/", self.addr)
     }
 
+    /// The config to seed for an instance on this server: the suite's own
+    /// `<PREFIX>_REDIS__URL` would outrank a pin.
+    pub(crate) fn config(&self) -> RedisConfig {
+        RedisConfig {
+            url: self.url().into(),
+            connect_timeout: Duration::from_secs(2),
+            tls: crate::harness::tls::trusting_the_test_authority(),
+        }
+    }
+
     /// Demote every connection accepted so far.
     pub(crate) fn demote(&self) {
         self.demoted_below

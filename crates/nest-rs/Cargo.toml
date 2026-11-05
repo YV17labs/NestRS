@@ -156,11 +156,10 @@ queue = [
 # instance `RedisModule` opens attaches its own indicator.
 redis = ["dep:nest-rs-redis"]
 # `redis-<port>`: one feature per binding of `nest-rs-redis`, read off its
-# folder, each closing over the port it binds — the binding is imported beside
-# that port's module, which the developer's own code names. Never a feature
-# named for a use (`redis-cache`). A binding the umbrella does not forward
-# exists in no umbrella build, short of the second manifest line the umbrella
-# forbids.
+# folder, each closing over the port it binds, whose module the developer's own
+# code names. Never a feature named for a use (`redis-cache`). A binding the
+# umbrella does not forward exists in no umbrella build, short of the second
+# manifest line the umbrella forbids.
 #
 # The job queue on Redis Streams (`RedisQueueModule`).
 redis-queue = ["redis", "queue", "nest-rs-redis/queue"]

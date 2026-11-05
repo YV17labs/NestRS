@@ -88,7 +88,10 @@ That import is the whole wiring. It registers the shared store **and** the
 resolves from any module that binds it, and nothing goes in a controller
 module's `providers`. Listing `ThrottlerGuard` there as well is a duplicate
 registration and fails the boot naming it. Several adapters importing it share
-one store and one policy, and the app's root imports nothing for it.
+one store and one policy, and the app's root imports nothing for them.
+
+A root whose `GlobalGuards` lists the guard binds it too, so it imports
+`ThrottlerModule` itself: the pool stays armed whichever adapters the root lists.
 
 The bare import reads `ThrottlerConfig` from `<PREFIX>_THROTTLER__*` over its
 defaults (`60` requests per `60s` window), which apply when nothing is set.

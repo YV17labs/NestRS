@@ -77,7 +77,8 @@ bindings it chooses, bare (`SeaOrmDatabaseModule`, `RedisQueueModule`,
 imports — a feature's guards, its authn or authz port, the throttler its
 controller binds, the resource a binding runs on: whoever runs on a module
 imports it, where the access graph checks it, and the root names one only to
-pin it (`RedisModule::for_root(cfg)`) or to swap what it binds. A module's
+pin it (`RedisModule::for_root(cfg)`), to swap what it binds, or for a guard its
+own `GlobalGuards` lists. A module's
 settings are set through its variables, or pinned through its `for_root`
 (`architecture.md`, *Configuration*).
 

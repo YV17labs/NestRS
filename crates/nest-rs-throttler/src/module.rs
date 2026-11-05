@@ -11,16 +11,27 @@ use nest_rs_core::{
 };
 
 use crate::config::ThrottlerConfig;
-use crate::guard::ThrottlerGuard;
+use crate::guard::{CountingStore, ThrottlerGuard};
 use crate::store::{InMemoryThrottler, ThrottlerStore};
 use crate::throttle::Throttle;
 
+/// One sentence for the three things a guard nothing built can miss: a host
+/// reaches the guard itself, a pool or a hand-listed guard what it injects.
+const IMPORT_REMEDY: &str = "Import `nest_rs::throttler::ThrottlerModule` where the guard is \
+                             bound, in the adapter whose host binds it or at the root whose \
+                             `GlobalGuards` lists it: it builds the guard over the port's policy \
+                             and store, so no module lists the guard by hand.";
+
 nest_rs_core::inventory::submit! {
-    nest_rs_core::DependencyRemedy::new(
-        std::any::TypeId::of::<ThrottlerGuard>,
-        "Import `nest_rs::throttler::ThrottlerModule` in the adapter binding the guard, which \
-         builds it over the port's policy and store.",
-    )
+    nest_rs_core::DependencyRemedy::new(std::any::TypeId::of::<ThrottlerGuard>, IMPORT_REMEDY)
+}
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(std::any::TypeId::of::<Throttle>, IMPORT_REMEDY)
+}
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(std::any::TypeId::of::<CountingStore>, IMPORT_REMEDY)
 }
 
 /// The throttler port: policy, guard, and the in-process default store. An

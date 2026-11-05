@@ -1826,10 +1826,10 @@ lists what the boot, a log or the wire shows when one is missed.
   A provider injecting `Arc<Jobs>` with no queue backend names
   `RedisQueueModule`, one injecting the pool or the default instance's
   `RedisConnection` with no module opening it names `SeaOrmModule`
-  or `RedisModule`, and a host binding `ThrottlerGuard` with nothing importing
-  the port names `ThrottlerModule` — where 6.x told it to add a provider or
-  seed one. A GraphQL schema serving an exposed relation whose target's module
-  the app does not import names the field, the entity declaring it and the
+  or `RedisModule`, and a host or a root's `GlobalGuards` binding
+  `ThrottlerGuard` with nothing importing the port names `ThrottlerModule` —
+  where 6.x told it to add a provider or seed one. A GraphQL schema serving an
+  exposed relation whose target's module the app does not import names the field, the entity declaring it and the
   module, where 6.x counted the loader at `warn` and erred on every query
   selecting the field; so does a `#[field_resolver]`'s `&DataLoader<L>`
   parameter, where 6.x panicked on each. A served `#[field_resolver]` whose

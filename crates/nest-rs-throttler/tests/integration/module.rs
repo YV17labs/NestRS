@@ -12,34 +12,79 @@ fn default_throttle_constant_is_60_per_minute() {
 }
 
 /// The policy is a dependency, never a default: a guard built by any path but
-/// `ThrottlerModule::for_root` fails the boot naming `Throttle`.
+/// `ThrottlerModule` fails the boot naming what it missed, and told that import.
 mod guard_outside_for_root {
     use std::sync::Arc;
 
-    use nest_rs_core::{App, MissingDependencyError, module};
-    use nest_rs_throttler::{InMemoryThrottler, ThrottlerGuard, ThrottlerStore};
+    use nest_rs_core::{App, AppBuilder, MissingDependencyError, module};
+    use nest_rs_guards::GlobalGuards;
+    use nest_rs_throttler::{
+        InMemoryThrottler, Throttle, ThrottlerGuard, ThrottlerModule, ThrottlerStore,
+    };
+
+    /// The dependency `app` is refused on, having been told to import the port.
+    async fn dependency_told_the_import(app: AppBuilder) -> String {
+        let Err(refused) = app.build().await else {
+            panic!("a guard with no policy must not boot");
+        };
+        let missing = refused
+            .downcast_ref::<MissingDependencyError>()
+            .unwrap_or_else(|| panic!("a named unmet dependency, got: {refused:#}"));
+        assert!(
+            missing
+                .remedy
+                .is_some_and(|remedy| remedy.contains("`nest_rs::throttler::ThrottlerModule`")),
+            "{missing}"
+        );
+        missing.dependency.to_string()
+    }
 
     #[module(providers = [ThrottlerGuard])]
     struct GuardAsProviderModule;
 
     #[tokio::test]
     async fn a_guard_listed_in_providers_without_for_root_fails_the_boot_naming_the_policy() {
-        let err = match App::builder()
-            .provide_dyn::<dyn ThrottlerStore>(Arc::new(InMemoryThrottler::new()))
-            .module::<GuardAsProviderModule>()
+        let dependency = dependency_told_the_import(
+            App::builder()
+                .provide_dyn::<dyn ThrottlerStore>(Arc::new(InMemoryThrottler::new()))
+                .module::<GuardAsProviderModule>(),
+        )
+        .await;
+        assert!(dependency.contains("Throttle"), "{dependency}");
+    }
+
+    #[tokio::test]
+    async fn a_guard_listed_by_hand_over_a_seeded_policy_fails_the_boot_naming_its_store() {
+        let dependency = dependency_told_the_import(
+            App::builder()
+                .provide(Throttle::per_minute(5))
+                .module::<GuardAsProviderModule>(),
+        )
+        .await;
+        assert!(dependency.contains("CountingStore"), "{dependency}");
+    }
+
+    #[module(providers = [GlobalGuards<(ThrottlerGuard,)>])]
+    struct PoolWithoutThePort;
+
+    #[tokio::test]
+    async fn a_root_listing_the_guard_in_its_pool_with_no_port_imported_is_told_the_import() {
+        let dependency =
+            dependency_told_the_import(App::builder().module::<PoolWithoutThePort>()).await;
+        assert!(dependency.contains("Throttle"), "{dependency}");
+    }
+
+    #[module(imports = [ThrottlerModule], providers = [GlobalGuards<(ThrottlerGuard,)>])]
+    struct PoolOverThePort;
+
+    #[tokio::test]
+    async fn a_root_importing_the_port_for_its_pool_boots_with_the_guard_the_port_built() {
+        let app = App::builder()
+            .module::<PoolOverThePort>()
             .build()
             .await
-        {
-            Ok(_) => panic!("a guard with no policy must not boot"),
-            Err(e) => e,
-        };
-        let missing = err
-            .downcast_ref::<MissingDependencyError>()
-            .unwrap_or_else(|| panic!("a named unmet dependency, got: {err}"));
-        assert!(
-            missing.dependency.contains("Throttle"),
-            "the missing dependency is the policy: {missing}",
-        );
+            .expect("the import is what the refusal told it to write");
+        assert!(app.container().get::<ThrottlerGuard>().is_some());
     }
 }
 

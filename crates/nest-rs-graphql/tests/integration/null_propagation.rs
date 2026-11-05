@@ -26,6 +26,14 @@ impl Shape {
     async fn strict(&self) -> Result<i32> {
         Err("the non-null field failed".into())
     }
+
+    async fn inner(&self) -> Option<Shape> {
+        Some(Shape)
+    }
+
+    async fn sure_inner(&self) -> Shape {
+        Shape
+    }
 }
 
 #[resolver]
@@ -61,6 +69,18 @@ impl ShapeResolver {
     #[public]
     async fn shapes(&self) -> Vec<Option<Shape>> {
         vec![Some(Shape), Some(Shape)]
+    }
+
+    #[query]
+    #[public]
+    async fn sure_shape(&self) -> Shape {
+        Shape
+    }
+
+    #[query]
+    #[public]
+    async fn sure_shapes(&self) -> Vec<Shape> {
+        vec![Shape, Shape]
     }
 
     #[subscription]
@@ -227,7 +247,7 @@ async fn a_copy_a_directive_leaves_out_hides_no_answer() {
         ),
         (
             json!({
-                "query": "{ shapes { broken } shapes { fine @skip(if: true) } }",
+                "query": "{ shapes { broken } shapes @skip(if: true) { fine } }",
             }),
             json!({ "shapes": [{ "broken": null }, { "broken": null }] }),
         ),
@@ -247,18 +267,281 @@ async fn a_copy_a_directive_leaves_out_hides_no_answer() {
 
 /// async-graphql (`7.2.1`, `do_resolve_container`) answers `null` for an object
 /// with no key to answer, and an object every selection of which a directive
-/// leaves out has none. A `null` under a resolver's `None` and one here look
-/// the same, so it stands, `null` at a Non-Null position included, as the docs
-/// say. When this fails, a release answers `{}`.
+/// leaves out has none. At a nullable position that `null` reads as a resolver's
+/// `None` does, so it stands. When this fails, a release answers `{}`.
 #[tokio::test]
-async fn an_object_every_selection_of_which_is_left_out_answers_null() {
+async fn a_nullable_object_every_selection_of_which_is_left_out_answers_null() {
+    let app = boot().await;
+    for (document, data) in [
+        (
+            "{ shape { fine @skip(if: true) } }",
+            json!({ "shape": null }),
+        ),
+        (
+            "{ shapes { fine @skip(if: true) } }",
+            json!({ "shapes": [null, null] }),
+        ),
+        (
+            "{ shape { fine @skip(if: true) } shape { broken @include(if: false) } }",
+            json!({ "shape": null }),
+        ),
+    ] {
+        let answer = post(&app, &json!({ "query": document })).await;
+        assert_eq!(answer, json!({ "data": data }), "{document}");
+    }
+}
+
+/// A Non-Null position has no `None`: a `null` with no error there can only be
+/// an object every selection of which a directive left out, and it answers as
+/// GraphQL §6.3 does.
+#[tokio::test]
+async fn a_non_null_object_every_selection_of_which_is_left_out_answers_an_empty_object() {
+    let app = boot().await;
+    for (body, data) in [
+        (
+            json!({ "query": "{ sureShape { fine @skip(if: true) } }" }),
+            json!({ "sureShape": {} }),
+        ),
+        (
+            json!({ "query": "{ sureShapes { fine @skip(if: true) } }" }),
+            json!({ "sureShapes": [{}, {}] }),
+        ),
+        (
+            json!({
+                "query": "query($x: Boolean = false) { sureShape { fine @include(if: $x) } }",
+            }),
+            json!({ "sureShape": {} }),
+        ),
+        (
+            json!({
+                "query": "query($x: Boolean!) { sureShape { fine @include(if: $x) } }",
+                "variables": { "x": false },
+            }),
+            json!({ "sureShape": {} }),
+        ),
+        (
+            json!({
+                "query": "{ sureShape { ...A ... @skip(if: true) { fine } } } \
+                          fragment A on Shape { fine @skip(if: true) }",
+            }),
+            json!({ "sureShape": {} }),
+        ),
+        (
+            json!({ "query": "{ sureShape { sureInner { fine @skip(if: true) } fine } }" }),
+            json!({ "sureShape": { "sureInner": {}, "fine": 1 } }),
+        ),
+        (
+            json!({ "query": "{ shape { sureInner { fine @skip(if: true) } } }" }),
+            json!({ "shape": { "sureInner": {} } }),
+        ),
+        (
+            json!({
+                "query": "{ a: sureShape { fine @skip(if: true) } \
+                          a: sureShape { broken @include(if: false) } }",
+            }),
+            json!({ "a": {} }),
+        ),
+    ] {
+        let answer = post(&app, &body).await;
+        assert_eq!(answer, json!({ "data": data }), "{body}");
+    }
+}
+
+/// Beside a field's error too, its `null` placed as if nothing else stood there.
+#[tokio::test]
+async fn an_empty_object_stands_beside_a_field_error() {
     let app = boot().await;
     let answer = post(
         &app,
-        &json!({ "query": "{ shape { fine @skip(if: true) } }" }),
+        &json!({ "query": "{ broken sureShape { fine @skip(if: true) } }" }),
     )
     .await;
-    assert_eq!(answer, json!({ "data": { "shape": null } }));
+    assert_eq!(
+        answer["data"],
+        json!({ "broken": null, "sureShape": {} }),
+        "{answer}"
+    );
+    assert_eq!(paths(&answer), [json!(["broken"])]);
+}
+
+/// What the operation answers once a directive leaves the selection under
+/// `key` nothing to answer beside another that answers.
+fn hidden(key: &str) -> String {
+    format!(
+        r#"the operation selects "{key}" more than once at one place, and its directives leave one of those selections nothing to answer: put the directive on that selection, to leave it out whole"#
+    )
+}
+
+/// async-graphql answers `null` for a selection left nothing to answer, and
+/// drops what the other selection answers once that `null` finished first, with
+/// no error: `null_propagation::tests::` pins it, so no such document runs.
+#[tokio::test]
+async fn a_selection_left_nothing_to_answer_beside_another_is_refused() {
+    let app = boot().await;
+    for (body, key) in [
+        (
+            json!({ "query": "{ shape { fine @skip(if: true) } shape { fine } }" }),
+            "shape",
+        ),
+        (
+            json!({ "query": "{ shape { fine } shape { fine @skip(if: true) } }" }),
+            "shape",
+        ),
+        (
+            json!({
+                "query": "query($x: Boolean = false) { \
+                          shape { fine @include(if: $x) } shape { fine } }",
+            }),
+            "shape",
+        ),
+        (
+            json!({
+                "query": "query($x: Boolean!) { shape { fine @include(if: $x) } shape { fine } }",
+                "variables": { "x": false },
+            }),
+            "shape",
+        ),
+        (
+            json!({ "query": "{ ... { shape { fine @skip(if: true) } } shape { fine } }" }),
+            "shape",
+        ),
+        (
+            json!({ "query": "{ shapes { fine @skip(if: true) } shapes { fine } }" }),
+            "shapes",
+        ),
+        (
+            json!({ "query": "{ sureShape { fine @skip(if: true) } sureShape { fine } }" }),
+            "sureShape",
+        ),
+        (
+            json!({
+                "query": "{ ...A ...B } fragment A on Query { shape { ...C } } \
+                          fragment B on Query { shape { fine } } \
+                          fragment C on Shape { fine @skip(if: true) }",
+            }),
+            "shape",
+        ),
+        (
+            json!({
+                "query": "{ a: shape { ... @skip(if: true) { fine } } a: shape { fine } }",
+            }),
+            "a",
+        ),
+        (
+            json!({ "query": "{ shape { inner { fine @skip(if: true) } } shape { inner { fine } } }" }),
+            "inner",
+        ),
+        (
+            json!({ "query": "{ shape { fine @skip(if: true) } shape { broken } }" }),
+            "shape",
+        ),
+    ] {
+        let answer = post(&app, &body).await;
+        assert_eq!(answer["data"], Value::Null, "{body}: {answer}");
+        assert_eq!(
+            answer["errors"][0]["message"],
+            hidden(key),
+            "{body}: {answer}"
+        );
+        assert_eq!(
+            answer["errors"].as_array().map(Vec::len),
+            Some(1),
+            "{answer}"
+        );
+        assert_eq!(
+            answer["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
+            "{answer}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_refused_selection_points_at_the_one_left_nothing_to_answer() {
+    let answer = post(
+        &boot().await,
+        &json!({ "query": "{\n  shape { fine }\n  shape { fine @skip(if: true) }\n}" }),
+    )
+    .await;
+    assert_eq!(
+        answer["errors"][0]["locations"],
+        json!([{ "line": 3, "column": 9 }]),
+        "{answer}"
+    );
+}
+
+/// Validation speaks first, as for every refusal the operation's read holds.
+#[tokio::test]
+async fn a_document_validation_refuses_says_what_validation_says_of_it() {
+    let answer = post(
+        &boot().await,
+        &json!({ "query": "{ shape { fine @skip(if: true) } shape { fine } unknownField }" }),
+    )
+    .await;
+    assert_eq!(
+        answer["errors"][0]["message"], r#"Unknown field "unknownField" on type "Query"."#,
+        "{answer}"
+    );
+}
+
+/// None of these hides an answer, so each runs.
+#[tokio::test]
+async fn a_selection_hiding_no_answer_is_not_refused() {
+    let app = boot().await;
+    for (body, data) in [
+        (
+            json!({ "query": "{ shape @skip(if: true) { fine } shape { fine } }" }),
+            json!({ "shape": { "fine": 1 } }),
+        ),
+        (
+            json!({ "query": "{ shape { fine } shape @include(if: false) { fine } }" }),
+            json!({ "shape": { "fine": 1 } }),
+        ),
+        (
+            json!({
+                "query": "query($x: Boolean = true) { \
+                          shape { fine @include(if: $x) } shape { fine } }",
+            }),
+            json!({ "shape": { "fine": 1 } }),
+        ),
+        (
+            json!({ "query": "{ a: shape { fine @skip(if: true) } b: shape { fine } }" }),
+            json!({ "a": null, "b": { "fine": 1 } }),
+        ),
+        (
+            json!({ "query": "{ shape { inner { fine @skip(if: true) } } a: shape { inner { fine } } }" }),
+            json!({ "shape": { "inner": null }, "a": { "inner": { "fine": 1 } } }),
+        ),
+        (
+            json!({ "query": "{ shape { fine } shape { fine } }" }),
+            json!({ "shape": { "fine": 1 } }),
+        ),
+    ] {
+        let answer = post(&app, &body).await;
+        assert_eq!(answer, json!({ "data": data }), "{body}");
+    }
+}
+
+/// In a batch only the operation holding it is refused.
+#[tokio::test]
+async fn a_batch_refuses_only_its_operation_hiding_an_answer() {
+    let answer = post(
+        &boot().await,
+        &json!([
+            { "query": "{ shape { fine @skip(if: true) } shape { fine } }" },
+            { "query": "{ sureShape { fine @skip(if: true) } }" },
+        ]),
+    )
+    .await;
+    assert_eq!(
+        answer[0]["errors"][0]["message"],
+        hidden("shape"),
+        "{answer}"
+    );
+    assert_eq!(
+        answer[1],
+        json!({ "data": { "sureShape": {} } }),
+        "{answer}"
+    );
 }
 
 #[tokio::test]
@@ -274,4 +557,13 @@ async fn a_subscription_item_answers_its_nulls() {
         &json!({ "shaped": { "fine": 1, "broken": null } }),
         &[json!(["shaped", "broken"])],
     );
+    socket.subscribe("left", "subscription { shaped { fine @skip(if: true) } }");
+    let item = socket.next_item("left").await.expect("the item");
+    assert_eq!(item, json!({ "data": { "shaped": {} } }), "{item}");
+    socket.subscribe(
+        "hiding",
+        "subscription { shaped { inner { fine @skip(if: true) } inner { fine } } }",
+    );
+    let item = socket.next_item("hiding").await.expect("the refusal");
+    assert_eq!(item["errors"][0]["message"], hidden("inner"), "{item}");
 }

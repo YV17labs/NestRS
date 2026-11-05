@@ -1351,6 +1351,12 @@ lists what the boot, a log or the wire shows when one is missed.
   `@include(if: $x)` dropping it, and an argument's root field alone failing. Send the
   variable, or declare it a default. A client relying on `@skip` or `@include` ignoring
   a default now reads what its document says.
+- **A GraphQL document selecting an object twice at one place, a directive leaving one
+  selection nothing to answer**, `{ org { name @skip(if: true) } org { id } }`, reads an
+  `INVALID_ARGUMENT` refusal and runs nothing: `org` answered `null` whenever that
+  selection finished first. Put the directive on the selection itself,
+  `org @skip(if: true) { name }`. An object every selection of which a directive leaves
+  out answers `{}` at a Non-Null position, where it answered `null`.
 - **A `Data` type a resolver reads off its `Context` and its request does not hold**
   answers the opaque internal error, the type filed at `error`, where the client read
   ``Data `…` does not exist.`` A loader read so whose owner the app does not import

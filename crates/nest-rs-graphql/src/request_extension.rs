@@ -49,8 +49,11 @@ impl Extension for RequestExtension {
         next: NextValidation<'_>,
     ) -> Result<ValidationResult, Vec<ServerError>> {
         let validated = next.run(ctx).await?;
-        match ctx.data_opt::<OperationRefusal>() {
-            Some(refusal) => Err(vec![refusal.0.clone()]),
+        match ctx
+            .data_opt::<OperationRefusal>()
+            .and_then(OperationRefusal::said)
+        {
+            Some(refusal) => Err(vec![refusal]),
             None => Ok(validated),
         }
     }

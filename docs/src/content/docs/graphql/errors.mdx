@@ -346,16 +346,35 @@ the path, so its `null` lands. And an object selected twice at one place — two
 fragments that each select `org` — keeps whichever copy finishes first. When
 that copy's every field failed, the object answers `null`, or its nearest
 nullable parent does, never an object missing what the other copy answered; a
-copy that `@skip` or `@include` leaves out is no copy, so the object answers as
-the one that ran. At a mutation's root, where each copy would run its writes,
-such a document is refused before anything runs
+copy `@skip` or `@include` leaves out whole, `org @skip(if: true) { id }`, is no
+copy, so the object answers as the one that ran. At a mutation's root, where each
+copy would run its writes, such a document is refused before anything runs
 ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 
-One more answers `null` with no error beside it, also from async-graphql 7.2.1:
-an object every selection of which a directive leaves out, at a Non-Null position
-too, where the specification answers `{}`. The answer cannot tell it from a
-resolver's `None`, so it stands. An operation every root selection of which is
-left out has no such doubt, and answers `{"data": {}}`.
+One more comes from async-graphql 7.2.1: an object with no key to answer answers
+`null`, with no error beside it, where the specification answers `{}`. A directive
+leaves an object that way when it leaves out every selection inside it, as in
+`{ org { name @skip(if: true) } }`, and what the client reads depends on where the
+object stands:
+
+- **At a nullable position** the `null` stands, since a resolver's `None` reads
+  the same.
+- **At a Non-Null position**, which has no `None`, the object answers `{}`, and so
+  does the operation's root: `{"data": {}}`.
+- **Beside another selection of the same object at one place**, as in
+  `{ org { name @skip(if: true) } org { id } }`, that `null` would hide what the
+  other answers whenever it finished first, with nothing to say so. The operation
+  is refused once validation passed, and nothing runs: `data: null` and one
+  `INVALID_ARGUMENT` error at the selection left with nothing to answer. The
+  directive on the selection itself, `org @skip(if: true) { name }`, leaves it out
+  whole, and the document runs. The read goes by response key, so two selections
+  under type conditions no one value meets count as one place too.
+
+A type condition leaves an object that way too, by what the value turns out to be:
+`{ node { ... on Post { title } } }` over a `Comment`. No read of the document can
+know it, so that `null` stands at every position, a Non-Null one included, and it
+can hide what another selection of `node` answers. `__typename` beside the
+condition gives the object a key whatever it turns out to be.
 
 ## Multiple errors in one response
 

@@ -773,6 +773,32 @@ async fn a_copy_a_directive_leaves_out_repeats_no_root_field() {
     }
 }
 
+/// A selection a directive leaves nothing to answer, beside one that answers,
+/// below a mutation's root: nothing runs, as for a repeated root selection.
+#[tokio::test]
+async fn a_mutation_hiding_an_answer_below_its_root_runs_nothing() {
+    let logs = LogCapture::install();
+    let (app, journal) = boot().await;
+    let reply = post(
+        &app,
+        json!({ "query": "mutation { maybeShaped { inner { fine @skip(if: true) } inner { fine } } }" }),
+    )
+    .await;
+    assert_eq!(reply["data"], Value::Null, "{reply}");
+    assert_eq!(
+        reply["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
+        "{reply}"
+    );
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "settle graphql.operation false"
+        ],
+    );
+    assert!(dispatched(&logs).is_empty(), "no root field resolves");
+}
+
 /// A mutation whose root spreads a chain of `links` fragments, the last selecting
 /// `last`.
 fn fragment_chain(links: usize, last: &str) -> String {
@@ -1509,6 +1535,18 @@ async fn over_graphql_ws_a_document_is_read_as_a_post_reads_it() {
         (
             "mutation { maybeWrite(fail: false) @skip(if: true) maybeWrite(fail: false) }",
             json!({ "maybeWrite": "block" }),
+            None,
+        ),
+        (
+            "mutation { shaped { inner { fine @skip(if: true) } inner { fine } } }",
+            Value::Null,
+            Some(
+                r#"the operation selects "inner" more than once at one place, and its directives leave one of those selections nothing to answer: put the directive on that selection, to leave it out whole"#,
+            ),
+        ),
+        (
+            "mutation { shaped { fine @skip(if: true) } }",
+            json!({ "shaped": {} }),
             None,
         ),
     ]

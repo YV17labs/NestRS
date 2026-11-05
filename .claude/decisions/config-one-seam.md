@@ -49,3 +49,22 @@ to pin and never `None`; the primitive a driver calls splits the same way,
 (`.claude/decisions/bare-import-reads-for-root-pins.md`). The split this entry
 holds stands, read off the same two words: one value configures, and nothing
 else does.
+
+## 2026-11-05 — a setup has no public conversion
+
+The owner's mandate of 2026-11-05. `McpSetup`, `StaticFilesSetup` and
+`OAuthResourceSetup` took their values through `impl Into<…Setup>`, so `From` on the
+setup was tier 1: `McpSetup::from(config)` imported the module beside
+`McpModule::for_root(config)`, the second way to configure a module the hard "no"
+refuses, and one a type can refuse. Each `for_root` now takes
+`impl nest_rs_core::__private::ForRootValue<…Setup>`, implemented for the same values,
+so a call site writes what it wrote. The third occurrence is what made it one trait.
+
+**The price:** the bound names a tier-2 trait in a tier-1 signature, so rustdoc shows
+it unlinked, and each `for_root`'s documentation lists its values, as it already did.
+A package with a declaration beyond its config writes a function per value or a trait
+of its own: nothing it names may sit under `__private`, and no package has asked.
+
+**Refused:** `ForInstance<I, C>`'s conversion stays public. It is no setup: it reaches
+nothing but a `for_root`, and a marker before a config is what it is for.
+

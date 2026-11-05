@@ -4,6 +4,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
+use nest_rs_core::__private::ForRootValue;
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Registering, Unnamed};
 use nest_rs_http::{BoxEndpoint, HttpFallbackMeta, HttpModule};
 
@@ -41,42 +42,50 @@ impl StaticFilesModule {
     /// directory — code, with no variable to set it; or both, the folder
     /// first, `(Embedded, StaticFilesConfig)`. The bare import reads those
     /// variables over the defaults and serves the directory they name.
-    pub fn for_root(declared: impl Into<StaticFilesSetup>) -> StaticFilesSetup {
-        declared.into()
+    pub fn for_root(declared: impl ForRootValue<StaticFilesSetup>) -> StaticFilesSetup {
+        declared.into_setup()
     }
 }
 
 /// [`DynamicModule`] returned by [`StaticFilesModule::for_root`]: resolves
 /// [`StaticFilesConfig`] (environment over the pinned base, when one is) and
 /// declares the embedded folder, if any.
+///
+/// `for_root` is the one way to it:
+///
+/// ```compile_fail,E0277
+/// use nest_rs_static_files::{StaticFilesConfig, StaticFilesSetup};
+///
+/// let second_way = StaticFilesSetup::from(StaticFilesConfig::default());
+/// ```
 pub struct StaticFilesSetup {
     embedded: Option<Embedded>,
     config: Option<StaticFilesConfig>,
 }
 
-impl From<StaticFilesConfig> for StaticFilesSetup {
-    fn from(config: StaticFilesConfig) -> Self {
-        Self {
+impl ForRootValue<StaticFilesSetup> for StaticFilesConfig {
+    fn into_setup(self) -> StaticFilesSetup {
+        StaticFilesSetup {
             embedded: None,
-            config: Some(config),
+            config: Some(self),
         }
     }
 }
 
-impl From<Embedded> for StaticFilesSetup {
-    fn from(embedded: Embedded) -> Self {
-        Self {
-            embedded: Some(embedded),
+impl ForRootValue<StaticFilesSetup> for Embedded {
+    fn into_setup(self) -> StaticFilesSetup {
+        StaticFilesSetup {
+            embedded: Some(self),
             config: None,
         }
     }
 }
 
-impl From<(Embedded, StaticFilesConfig)> for StaticFilesSetup {
-    fn from((embedded, config): (Embedded, StaticFilesConfig)) -> Self {
-        Self {
-            embedded: Some(embedded),
-            config: Some(config),
+impl ForRootValue<StaticFilesSetup> for (Embedded, StaticFilesConfig) {
+    fn into_setup(self) -> StaticFilesSetup {
+        StaticFilesSetup {
+            embedded: Some(self.0),
+            config: Some(self.1),
         }
     }
 }

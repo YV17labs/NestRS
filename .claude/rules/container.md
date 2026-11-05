@@ -139,10 +139,11 @@ bare import (`HttpModule`, `RedisModule::<Cache>` for a named instance) queues
 the environment over `C::default()` and does its whole wiring; a module is
 configured in exactly one place, by exactly one value: `Module::for_root(x)`,
 where `x` carries everything the app pins about it. The `*Setup` it returns is
-opaque — no public method, no second constructor on the module type. A
-declaration that does not fit makes `x` grow a **field**, never the seam a
-**method**. Held by review: no inherent `impl` on a `*Setup`, and no inherent
-`pub fn` on a module type besides `for_root`. `ConfigModule` is the one
+opaque — no public method or conversion, no second constructor on the module
+type. A declaration that does not fit makes `x` grow a **field**, never the seam
+a **method**. Held by a `compile_fail` doctest on each hand-written setup, and by
+review: no inherent `impl` on a `*Setup`, and no inherent `pub fn` on a module
+type besides `for_root`. `ConfigModule` is the one
 carve-out — its `provide_feature` (what a bare import queues),
 `provide_root` (what a `for_root` pins), `setup` and `resolved`
 (`resolved_for` per instance) are the primitives every other seam is built
@@ -167,13 +168,15 @@ the bare import:
   `(Marker, x)`. A value names the instance at `for_root` because Rust applies
   no default type parameter while inferring an expression; a bare import,
   where it does, names it as a type argument (`RedisModule::<Cache>`).
-- **`impl Into<MSetup>`** — only when the module carries a declaration with
-  **no environment twin** (MCP's identity and access, static files' embedded
-  folder, the `Scope`s a resource server's rules gate on — the variable
-  advertising scopes replaces what is advertised, never the vocabulary): that
-  declaration `D` alone, the config alone, or the declarations before the
-  config as a tuple, `(D, C)`, as a marker precedes its config. The setup
-  stays opaque: the conversions are its only constructors.
+- **`impl ForRootValue<MSetup>`** (`nest_rs_core::__private`) — only when the
+  module carries a declaration with **no environment twin** (MCP's identity and
+  access, static files' embedded folder, the `Scope`s a resource server's rules
+  gate on — the variable advertising scopes replaces what is advertised, never
+  the vocabulary): that declaration `D` alone, the config alone, or the
+  declarations before the config as a tuple, `(D, C)`, as a marker precedes its
+  config. A tier-2 trait rather than `Into`, whose `From` impls were a public
+  `MSetup::from(x)` beside `for_root(x)`; the call site writes the same values,
+  and a value it does not take is refused by the trait's one sentence.
 
 A setup that only pins its config is `ConfigSetup<M, C>` (`ConfigSetup<M, C,
 I>` per instance) behind a named alias, built by `ConfigModule::setup`; a

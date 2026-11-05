@@ -15,9 +15,10 @@ publish = false
 # fails this crate's build.
 nest-rs = { path = "../nest-rs", default-features = false }
 
-# One feature per umbrella capability that owns a decorator.
+# One feature per umbrella capability that owns a decorator, or a `for_root`
+# whose refusal a developer reads.
 [features]
-default = ["authn", "authz", "config", "events", "graphql", "health", "http", "mcp", "queue", "schedule", "seaorm", "ws"]
+default = ["authn", "authz", "config", "events", "graphql", "health", "http", "mcp", "oauth-resource", "queue", "schedule", "seaorm", "static-files", "ws"]
 # `#[derive(PrincipalIdentity)]` on a claims type, and the custom `Strategy`
 # whose principal derives it, run by a guard a `#[controller]` binds.
 authn = ["nest-rs/authn"]
@@ -29,6 +30,7 @@ graphql = ["nest-rs/graphql"]
 health = ["nest-rs/health"]
 http = ["nest-rs/http"]
 mcp = ["nest-rs/mcp"]
+oauth-resource = ["nest-rs/oauth-resource"]
 queue = ["nest-rs/queue"]
 # `redis-<port>` owns no decorator: each is the witness that its binding is
 # reached through that feature alone, since `redis` is the connection and
@@ -44,6 +46,7 @@ schedule = ["nest-rs/schedule"]
 # `#[expose]` and the entity every `#[authorize(Action, Entity)]` witness names.
 # `#[crud]` rides `http` and `seaorm` together.
 seaorm = ["nest-rs/seaorm"]
+static-files = ["nest-rs/static-files"]
 # `queue_kit!` and `TestAuthority` beside `queue`, as a driver's suite reaches
 # them, and the signing key beside `authn`, as an app's does. Off by default for `redis-<port>`'s reason: it links the harness into
 # the fixtures, whose snapshots list a trait's implementors.

@@ -32,6 +32,20 @@ pub(crate) mod __private {
 
     use super::DynamicModule;
 
+    /// A value a module's `for_root` takes, made into the setup `S` it returns,
+    /// when the module carries a declaration beyond its config. A conversion on
+    /// `S` would be a public second way to configure the module.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` is not a value this module's `for_root` takes",
+        label = "`for_root` does not take this",
+        note = "`for_root` takes the module's config, a declaration the module documents, or \
+                those declarations before the config as a tuple"
+    )]
+    pub trait ForRootValue<S> {
+        /// The setup this value declares.
+        fn into_setup(self) -> S;
+    }
+
     /// Logs that the module `name` registered its providers; emitted by `#[module]`.
     pub fn module_registered(name: &'static str) {
         tracing::info!(

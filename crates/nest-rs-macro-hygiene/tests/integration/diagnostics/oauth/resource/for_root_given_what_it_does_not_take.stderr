@@ -1,0 +1,26 @@
+error[E0277]: `&str` is not a value this module's `for_root` takes
+ --> tests/integration/diagnostics/oauth/resource/for_root_given_what_it_does_not_take.rs:7:51
+  |
+7 | #[module(imports = [OAuthResourceModule::for_root("posts:read")])]
+  |                     ----------------------------- ^^^^^^^^^^^^ `for_root` does not take this
+  |                     |
+  |                     required by a bound introduced by this call
+  |
+  = help: the trait `nest_rs::core::__private::ForRootValue<OAuthResourceSetup>` is not implemented for `&str`
+  = note: `for_root` takes the module's config, a declaration the module documents, or those declarations before the config as a tuple
+help: the following other types implement trait `nest_rs::core::__private::ForRootValue<S>`
+ --> $WORKSPACE/crates/nest-rs-oauth-resource/src/module.rs
+  |
+  | impl ForRootValue<OAuthResourceSetup> for OAuthResourceConfig {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `OAuthResourceConfig`
+...
+  | impl<const N: usize> ForRootValue<OAuthResourceSetup> for [Scope; N] {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `[nest_rs::guards::Scope; N]`
+...
+  | impl<const N: usize> ForRootValue<OAuthResourceSetup> for ([Scope; N], OAuthResourceConfig) {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `([nest_rs::guards::Scope; N], OAuthResourceConfig)`
+note: required by a bound in `OAuthResourceModule::for_root`
+ --> $WORKSPACE/crates/nest-rs-oauth-resource/src/module.rs
+  |
+  |     pub fn for_root(declared: impl ForRootValue<OAuthResourceSetup>) -> OAuthResourceSetup {
+  |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `OAuthResourceModule::for_root`

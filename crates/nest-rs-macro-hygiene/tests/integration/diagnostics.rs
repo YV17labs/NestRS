@@ -18,9 +18,11 @@
     feature = "health",
     feature = "http",
     feature = "mcp",
+    feature = "oauth-resource",
     feature = "queue",
     feature = "schedule",
     feature = "seaorm",
+    feature = "static-files",
     feature = "ws",
     not(feature = "redis-queue"),
     not(feature = "redis-schedule"),
@@ -39,11 +41,13 @@ fn every_decorator_refuses_in_the_words_pinned() {
     t.compile_fail("tests/integration/diagnostics/health/*.rs");
     t.compile_fail("tests/integration/diagnostics/http/*.rs");
     t.compile_fail("tests/integration/diagnostics/mcp/*.rs");
+    t.compile_fail("tests/integration/diagnostics/oauth/resource/*.rs");
     t.compile_fail("tests/integration/diagnostics/queue/*.rs");
     t.compile_fail("tests/integration/diagnostics/schedule/*.rs");
     // `#[expose(…, graphql)]` without the `graphql` feature is not pinned: every
     // build that runs this glob has the feature on.
     t.compile_fail("tests/integration/diagnostics/seaorm/*.rs");
+    t.compile_fail("tests/integration/diagnostics/static_files/*.rs");
     t.compile_fail("tests/integration/diagnostics/ws/*.rs");
 }
 
@@ -73,6 +77,7 @@ fn an_attribute_names_the_feature_its_expansion_needs() {
     feature = "health",
     feature = "http",
     feature = "mcp",
+    feature = "oauth-resource",
     feature = "queue",
     feature = "redis-health",
     feature = "redis-queue",
@@ -80,6 +85,7 @@ fn an_attribute_names_the_feature_its_expansion_needs() {
     feature = "redis-throttler",
     feature = "schedule",
     feature = "seaorm",
+    feature = "static-files",
     feature = "testing",
     feature = "ws",
 )))]

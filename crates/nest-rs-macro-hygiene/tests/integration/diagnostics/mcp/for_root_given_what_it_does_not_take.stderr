@@ -1,0 +1,23 @@
+error[E0277]: `&str` is not a value this module's `for_root` takes
+ --> tests/integration/diagnostics/mcp/for_root_given_what_it_does_not_take.rs:7:41
+  |
+7 | #[module(imports = [McpModule::for_root("assistant")])]
+  |                     ------------------- ^^^^^^^^^^^ `for_root` does not take this
+  |                     |
+  |                     required by a bound introduced by this call
+  |
+  = help: the trait `nest_rs::core::__private::ForRootValue<McpSetup>` is not implemented for `&str`
+  = note: `for_root` takes the module's config, a declaration the module documents, or those declarations before the config as a tuple
+  = help: the following other types implement trait `nest_rs::core::__private::ForRootValue<S>`:
+            (McpAccess, McpConfig)
+            (McpAccess, McpIdentity)
+            (McpAccess, McpIdentity, McpConfig)
+            (McpIdentity, McpConfig)
+            McpAccess
+            McpConfig
+            McpIdentity
+note: required by a bound in `McpModule::for_root`
+ --> $WORKSPACE/crates/nest-rs-mcp/src/module.rs
+  |
+  |     pub fn for_root(declared: impl ForRootValue<McpSetup>) -> McpSetup {
+  |                                    ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `McpModule::for_root`

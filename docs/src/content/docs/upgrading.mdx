@@ -1383,6 +1383,9 @@ lists what the boot, a log or the wire shows when one is missed.
   status the handler computes, new responses on every operation, and a text or bytes body where
   it read none: a generated type naming `200` for one moves, or the route says
   `#[http_code(200)]` where its status never varies.
+- **`McpSetup::from(x)`, `StaticFilesSetup::from(x)`, `OAuthResourceSetup::from(x)`, or
+  `.into()` to one of them,** does not compile (`E0277`): a setup has one way in, so
+  write `McpModule::for_root(x)`, which takes the same value.
 - **A lone Redis binding over a seeded `RedisConnection`** now reads the
   `RedisConfig` of the module it imports, so a suite with `<PREFIX>_REDIS__URL`
   unset is refused naming the variable: seed the `RedisConfig` beside the

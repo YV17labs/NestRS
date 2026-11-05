@@ -12,7 +12,7 @@
 use std::any::TypeId;
 
 use nest_rs_config::ConfigModule;
-use nest_rs_core::__private::RuntimeModule;
+use nest_rs_core::__private::{ForRootValue, RuntimeModule};
 use nest_rs_core::{
     Collecting, Container, ContainerBuilder, DynamicModule, Posture, Registering, module,
 };
@@ -92,14 +92,20 @@ impl McpModule {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn for_root(declared: impl Into<McpSetup>) -> McpSetup {
-        declared.into()
+    pub fn for_root(declared: impl ForRootValue<McpSetup>) -> McpSetup {
+        declared.into_setup()
     }
 }
 
 /// [`DynamicModule`] returned by [`McpModule::for_root`]: resolves
 /// [`McpConfig`] (env over the pinned base, when one is), and declares the
 /// app's [`McpIdentity`] and its opening.
+///
+/// `for_root` is the one way to it:
+///
+/// ```compile_fail,E0277
+/// let second_way = nest_rs_mcp::McpSetup::from(nest_rs_mcp::McpConfig::default());
+/// ```
 pub struct McpSetup {
     access: Option<McpAccess>,
     server: Option<McpIdentity>,
@@ -119,45 +125,45 @@ fn declaring(
     }
 }
 
-impl From<McpConfig> for McpSetup {
-    fn from(config: McpConfig) -> Self {
-        declaring(None, None, Some(config))
+impl ForRootValue<McpSetup> for McpConfig {
+    fn into_setup(self) -> McpSetup {
+        declaring(None, None, Some(self))
     }
 }
 
-impl From<McpIdentity> for McpSetup {
-    fn from(server: McpIdentity) -> Self {
-        declaring(None, Some(server), None)
+impl ForRootValue<McpSetup> for McpIdentity {
+    fn into_setup(self) -> McpSetup {
+        declaring(None, Some(self), None)
     }
 }
 
-impl From<McpAccess> for McpSetup {
-    fn from(access: McpAccess) -> Self {
-        declaring(Some(access), None, None)
+impl ForRootValue<McpSetup> for McpAccess {
+    fn into_setup(self) -> McpSetup {
+        declaring(Some(self), None, None)
     }
 }
 
-impl From<(McpIdentity, McpConfig)> for McpSetup {
-    fn from((server, config): (McpIdentity, McpConfig)) -> Self {
-        declaring(None, Some(server), Some(config))
+impl ForRootValue<McpSetup> for (McpIdentity, McpConfig) {
+    fn into_setup(self) -> McpSetup {
+        declaring(None, Some(self.0), Some(self.1))
     }
 }
 
-impl From<(McpAccess, McpConfig)> for McpSetup {
-    fn from((access, config): (McpAccess, McpConfig)) -> Self {
-        declaring(Some(access), None, Some(config))
+impl ForRootValue<McpSetup> for (McpAccess, McpConfig) {
+    fn into_setup(self) -> McpSetup {
+        declaring(Some(self.0), None, Some(self.1))
     }
 }
 
-impl From<(McpAccess, McpIdentity)> for McpSetup {
-    fn from((access, server): (McpAccess, McpIdentity)) -> Self {
-        declaring(Some(access), Some(server), None)
+impl ForRootValue<McpSetup> for (McpAccess, McpIdentity) {
+    fn into_setup(self) -> McpSetup {
+        declaring(Some(self.0), Some(self.1), None)
     }
 }
 
-impl From<(McpAccess, McpIdentity, McpConfig)> for McpSetup {
-    fn from((access, server, config): (McpAccess, McpIdentity, McpConfig)) -> Self {
-        declaring(Some(access), Some(server), Some(config))
+impl ForRootValue<McpSetup> for (McpAccess, McpIdentity, McpConfig) {
+    fn into_setup(self) -> McpSetup {
+        declaring(Some(self.0), Some(self.1), Some(self.2))
     }
 }
 

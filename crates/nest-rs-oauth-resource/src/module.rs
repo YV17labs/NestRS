@@ -29,6 +29,7 @@ use std::any::TypeId;
 use nest_rs_authn::__private::ResourceBinding;
 use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_config::{ConfigModule, endpoint_shown};
+use nest_rs_core::__private::ForRootValue;
 use nest_rs_core::{Collecting, ContainerBuilder, DynamicModule, Module, Registering, module};
 use nest_rs_guards::Scope;
 use nest_rs_http::__private::CanonicalHost;
@@ -74,41 +75,49 @@ impl OAuthResourceModule {
     /// #[module(imports = [OAuthResourceModule::for_root([POSTS_READ, POSTS_WRITE])])]
     /// struct AssistantModule;
     /// ```
-    pub fn for_root(declared: impl Into<OAuthResourceSetup>) -> OAuthResourceSetup {
-        declared.into()
+    pub fn for_root(declared: impl ForRootValue<OAuthResourceSetup>) -> OAuthResourceSetup {
+        declared.into_setup()
     }
 }
 
 /// The configured import [`OAuthResourceModule::for_root`] returns: the
 /// scopes it declares, the config it pins, or both.
+///
+/// `for_root` is the one way to it:
+///
+/// ```compile_fail,E0277
+/// use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceSetup};
+///
+/// let second_way = OAuthResourceSetup::from(OAuthResourceConfig::default());
+/// ```
 pub struct OAuthResourceSetup {
     scopes: Option<Vec<Scope>>,
     config: Option<OAuthResourceConfig>,
 }
 
-impl From<OAuthResourceConfig> for OAuthResourceSetup {
-    fn from(config: OAuthResourceConfig) -> Self {
-        Self {
+impl ForRootValue<OAuthResourceSetup> for OAuthResourceConfig {
+    fn into_setup(self) -> OAuthResourceSetup {
+        OAuthResourceSetup {
             scopes: None,
-            config: Some(config),
+            config: Some(self),
         }
     }
 }
 
-impl<const N: usize> From<[Scope; N]> for OAuthResourceSetup {
-    fn from(scopes: [Scope; N]) -> Self {
-        Self {
-            scopes: Some(scopes.to_vec()),
+impl<const N: usize> ForRootValue<OAuthResourceSetup> for [Scope; N] {
+    fn into_setup(self) -> OAuthResourceSetup {
+        OAuthResourceSetup {
+            scopes: Some(self.to_vec()),
             config: None,
         }
     }
 }
 
-impl<const N: usize> From<([Scope; N], OAuthResourceConfig)> for OAuthResourceSetup {
-    fn from((scopes, config): ([Scope; N], OAuthResourceConfig)) -> Self {
-        Self {
-            scopes: Some(scopes.to_vec()),
-            config: Some(config),
+impl<const N: usize> ForRootValue<OAuthResourceSetup> for ([Scope; N], OAuthResourceConfig) {
+    fn into_setup(self) -> OAuthResourceSetup {
+        OAuthResourceSetup {
+            scopes: Some(self.0.to_vec()),
+            config: Some(self.1),
         }
     }
 }

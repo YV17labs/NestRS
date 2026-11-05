@@ -278,7 +278,7 @@ pub mod __private {
         ConsoleLayer, LibraryClamp, LogFilter, ProfileSource, TextFormat, filter_dispatch,
         install_global_subscriber, log_filter,
     };
-    pub use crate::module::__private::{dynamic_import_module, module_registered};
+    pub use crate::module::__private::{ForRootValue, dynamic_import_module, module_registered};
     pub use crate::opaque::__private::OpaqueCause;
     pub use crate::operation_log::__private::{declare_unit, unit_opened_by};
     pub use crate::outcome::__private::{caught_problem, settled};

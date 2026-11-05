@@ -80,7 +80,7 @@ instead.
   integration test (its public API, hand-constructed) or as an app e2e
   (boots the real graph).
 - **Anything that touches the database.** A repository test is
-  integration at best — use `EphemeralDatabase` and an e2e test.
+  integration at best — boot on `ephemeral_database` in an e2e test.
 - **Anything that asserts wiring** — that a guard fires, that a
   controller is mounted, that the access graph rejects a missing
   import. Wiring lives in app e2e.

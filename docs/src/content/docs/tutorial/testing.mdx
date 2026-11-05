@@ -56,8 +56,8 @@ uuid = { workspace = true }
 `testing` is what brings `TestApp` in, and `nestrs new` already put it on the
 app's `nest-rs` dev-dependency: it stays out of the workspace's `nest-rs`, so no
 release binary carries the harness. Its throwaway database rides the `seaorm`
-feature the workspace's `nest-rs` has carried since `nestrs new`, and the bearer
-it signs the `authn` one the auth adapter added. `migrations` is the
+feature the workspace's `nest-rs` has carried since `nestrs new`, and the key it
+signs its bearers with the `authn` one the auth adapter added. `migrations` is the
 workspace's migrator, `serde_json` writes the request bodies, and `uuid` the
 subject a token names. The suite asks nothing of telemetry: `main`'s
 `OpenTelemetry::init()` is the app's whole wiring, and a suite never runs
@@ -69,11 +69,15 @@ subject a token names. The suite asks nothing of telemetry: `main`'s
 access-graph check, on the module `main` boots — its guards and every other
 app-wide layer it declares come with it. `ephemeral_database` creates the
 throwaway database, migrates it, seeds its connection as the app's pool and
-drops it after the app. The generator wrote the one fixture every test shares:
+drops it after the app. `ephemeral_signing_key` has the app verify the tokens
+of a key pair the test holds, issued for that boot, in place of the secret
+`.env.test` names — so the suite signs a token the guards admit without
+spelling a key. The generator wrote the one fixture every test shares:
 
 ```rust title="apps/blog/tests/e2e/main.rs"
 //! The app's suite against a throwaway database: every test boots the
-//! composition `main` runs, migrated by the workspace's migrator.
+//! composition `main` runs, migrated by the workspace's migrator, and signs
+//! the tokens it sends with a key of its own.
 
 mod posts;
 
@@ -85,6 +89,7 @@ pub(crate) async fn boot() -> TestApp {
     TestApp::builder()
         .module::<BlogModule>()
         .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
         .build()
         .await
         .expect("BlogModule boots against a throwaway database")
@@ -104,10 +109,9 @@ pub use module::BlogModule;
 ## The round trip, and two failures
 
 Because the controller is guarded, every request carries a bearer, and
-`app.bearer` signs it with the app's own `JwtService`, so the token is signed
-with exactly the key the app verifies with and carries the expiry it stamps.
-`TestApp` runs under `<PREFIX>_ENV=test`, which reads the secret the auth
-adapter drew into `.env.test`; the test never spells it.
+`app.bearer` signs it with the key the boot installed: a token over your own
+`Claims`, for the audience and from the issuer the app requires, which its
+guard admits, living as long as one the app would mint.
 
 The generated `posts_round_trip` posts a value of each column you named on
 page 2 and reads each back. Add two negative paths beside it — the `400` you

@@ -1,6 +1,6 @@
 ---
 title: End-to-end tests
-description: TestApp boots the real AppModule against an EphemeralDatabase — the route table, the DI graph, the access-graph check, authn/authz, and the data path all run.
+description: TestApp boots the real AppModule on a throwaway database and a signing key of the test's own — the route table, the DI graph, the access-graph check, authn/authz, and the data path all run.
 sidebar:
   order: 4
 ---
@@ -21,31 +21,27 @@ never trips.
 
 ```rust title="apps/api/tests/e2e/main.rs (from the demo, abridged)"
 use api::ApiModule;
-use nest_rs::authn::AuthnConfig;
-use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
+use features::{Role, Subject};
+use nest_rs::testing::{TestApp, TestAppBuilder, TestResponse};
 // …
 
-pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
+pub(crate) async fn boot() -> TestApp {
     boot_with(TestApp::builder()).await
 }
 // …
 
-async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let app = builder
+async fn boot_with(builder: TestAppBuilder) -> TestApp {
+    builder
         .module::<ApiModule>()
-        .provide_arc(db.connection())
-        .provide(AuthnConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
-            ..Default::default()
-        })
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
         .build()
         .await
-        .expect("ApiModule boots against the throwaway database");
-    (db, app)
+        .expect("ApiModule boots against a throwaway database")
+}
+
+pub(crate) fn sign(app: &TestApp, org_id: Uuid, role: Role) -> String {
+    app.bearer(&claims(org_id, role, client()))
 }
 ```
 
@@ -55,10 +51,14 @@ that module's providers, so every route runs behind the guards the binary puts
 in front of it, and the OpenAPI document describes them. The boot also arms the
 app's outbox, as the binary's relay does, so what a test pushes waits in the
 throwaway database
-([below](#a-job-pushed-inside-a-transaction-waits-for-a-relay)). The database is
-created apart here because several tests seed it, or boot a second app on it.
+([below](#a-job-pushed-inside-a-transaction-waits-for-a-relay)). Each test gets
+a database of its own, created and migrated at the boot and dropped after the
+app, and the app verifies the tokens of a key the test holds, so `sign` mints a
+bearer the guards admit ([below](#a-bearer-the-app-verifies)). Nothing else is
+configured: the api reads its audience and its issuer from its own `.env`
+layer, as `nestrs run dev` does.
 
-Each test module reaches for that `boot()` and the token helpers beside it:
+Each test module reaches for that `boot()` and the `sign` helper beside it:
 
 ```rust title="apps/api/tests/e2e/users.rs (from the demo, abridged)"
 use nest_rs::http::{StatusCode, header};
@@ -69,12 +69,12 @@ use crate::*;
 
 #[tokio::test]
 async fn users_are_scoped_to_their_org_and_bound_by_id() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org_a = create_org(&app, &bootstrap, "Acme").await;
     // …
-    let token_a = format!("Bearer {}", token_for(&org_a, "admin").await);
+    let token_a = sign(&app, org_a, Role::Admin);
     // …
 
     let created = app
@@ -108,7 +108,7 @@ the whole subtree links into one `e2e` binary that the nextest
 apps/api/
 └── tests/
     └── e2e/
-        ├── main.rs         ← the suite root: mod users; …, boot(), token_for(), fixtures
+        ├── main.rs         ← the suite root: mod users; …, boot(), sign(), fixtures
         ├── users.rs
         ├── orgs.rs
         ├── posts.rs
@@ -156,30 +156,14 @@ Why one binary instead of `tests/e2e_users.rs`, `tests/e2e_orgs.rs`:
 
 ## Ephemeral Postgres
 
-`EphemeralDatabase::create::<Migrator>()` creates a uniquely-named
-Postgres database, runs migrations, and drops it on the guard's `Drop`
-— even on panic, even after a crashed previous run (it reaps
-`nest_rs_e2e_*` databases older than five minutes on the next call). The
-admin URL comes from `<PREFIX>_SEAORM__URL`, and every connection the fixture
-opens is the app's pool's: TLS verified or off as the URL says, an `sslmode`
-that encrypts without verifying refused.
-
-`provide_arc(db.connection())` seeds the real connection into the
-container, in place of the pool `SeaOrmModule` would open. The
-rest of the app builds normally.
-
-```rust title="apps/api/tests/e2e/users.rs"
-let db = EphemeralDatabase::create::<migrations::Migrator>().await?;
-let app = TestApp::builder()
-    .module::<ApiModule>()
-    .provide_arc(db.connection())
-    .build()
-    .await?;
-```
-
-An app that is the database's only user lets the harness hold it:
-`ephemeral_database::<Migrator>()` creates, migrates and seeds it at the boot,
-and drops it after the app, closed or dropped.
+`ephemeral_database::<Migrator>()` is how a suite boots on a database: the
+harness creates a uniquely-named Postgres database at the boot, runs the
+migrations, seeds its connection in place of the pool `SeaOrmModule` would
+open, and drops it after the app, closed or dropped — even on panic, and even
+after a crashed previous run, whose `nest_rs_e2e_*` databases older than five
+minutes the next boot reaps. The admin URL comes from `<PREFIX>_SEAORM__URL`,
+and every connection the fixture opens is the app's pool's: TLS verified or off
+as the URL says, an `sslmode` that encrypts without verifying refused.
 
 ```rust title="crates/features/tests/e2e/main.rs (from the demo)"
 pub(crate) async fn data_app() -> TestApp {
@@ -192,6 +176,28 @@ pub(crate) async fn data_app() -> TestApp {
 }
 ```
 
+A test that seeds rows, or boots a second app beside the first — a worker
+draining what the api filed — reads the connection back from the booted app's
+container and writes through your own entities:
+
+```rust title="apps/api/tests/e2e/orgs.rs"
+let conn = app
+    .container()
+    .get::<DatabaseConnection>()
+    .expect("the app's pool is its throwaway database");
+let org = orgs::ActiveModel {
+    id: Set(Uuid::now_v7()),
+    name: Set("Acme".into()),
+    ..Default::default()
+}
+.insert(conn.as_ref())
+.await?;
+```
+
+`EphemeralDatabase::create::<Migrator>()` is the same database for a test that
+boots no app — a migration run, a seed script — held by the value and dropped
+with it.
+
 ## A service in a unit
 
 A service reads the executor and the ability its unit installs, so a test
@@ -203,7 +209,7 @@ an ability installed by hand.
 
 ```rust title="crates/features/tests/e2e/orgs/service.rs (from the demo, abridged)"
 let app = data_app().await;
-seed_org(&connection(&app), org_id, "Acme").await;
+let org_id = seed_org(&connection(app.container()), "Acme").await;
 
 let rows = app
     .unit(read_all_ability(), || OrgsService.list())
@@ -214,22 +220,53 @@ let rows = app
 `unit` and `system_unit` are `nest-rs`'s `authz` and `database` features
 beside `testing`.
 
-## A bearer the app signs
+## A bearer the app verifies
 
-An app that signs its own tokens — `nestrs g auth`'s HS256 secret, an issuer's
-key — mints a test's bearer with its own `JwtService`, so the token carries the
-key the app verifies with and the expiry it stamps:
+`ephemeral_signing_key()` has the app verify the tokens of a key pair the test
+holds, issued in process for that boot — so no app's suite commits a private
+key, and an app that only verifies, a resource server, is tested as one. Its
+`JwtService` checks signatures with the pair's public half in place of the key
+material its configuration names — a secret, a key, an issuer's JWK Set — and
+signs with the private half only where that material signs. A configuration
+naming no key, the deployment's to set, boots verifying only. Everything else
+is the app's: the audience it requires, the issuer it trusts, the resource it
+serves.
 
-```rust title="apps/blog/tests/e2e/main.rs"
+`app.bearer(&claims)` signs a claims value of your own with the private half
+and hands back the `Authorization` value, for the app's audience and as its
+issuer, `iat` and `jti` stamped and `exp` at the app's token lifetime when the
+claims carry none:
+
+```rust title="apps/blog/tests/e2e/blog.rs"
+let app = TestApp::builder()
+    .module::<BlogModule>()
+    .ephemeral_database::<migrations::Migrator>()
+    .ephemeral_signing_key()
+    .build()
+    .await?;
 let auth = app.bearer(&Claims {
     sub: Subject::User(Uuid::now_v7()),
     roles: vec![Role::User],
 });
 ```
 
-`bearer` is the `authn` feature beside `testing`. An app that only verifies —
-the demo's `api`, whose tokens the `auth` app issues — signs nothing, and its
-suite mints tokens with the issuer's key instead.
+A claim the claims carry is kept, which is how a test proves a refusal: an
+`aud` naming another resource, an `iss` the app does not trust, a claim set with
+no `sub`.
+
+```rust title="apps/assistant/tests/e2e/authorization.rs"
+let mut forged = serde_json::to_value(admin_claims())?;
+forged["aud"] = API.into();
+post_message(app.http(), "/mcp", None, Some(&app.bearer(&forged)), &initialize_request())
+    .await
+    .assert_status(StatusCode::UNAUTHORIZED);
+```
+
+`WsApp::bearer` signs the same way for a socket's upgrade, set with
+`.header("authorization", …)`. The boot refuses the key on an app that provides
+no `JwtService`, and on one whose `JwtService` refuses a token of the pair —
+seeded or overridden past the module that builds it. `ephemeral_signing_key` and
+`bearer` are `nest-rs`'s `authn` feature beside `testing`.
 
 ## Driving the HTTP surface
 
@@ -412,7 +449,7 @@ with `Container::builder()`, whose `build` refuses it as
 External-IO services — HTTP clients to third-party APIs, queue producers
 reaching an outside system — are the right override target. **The
 database is not.** A test that mocks `Repo` to make a service compile is
-asserting on a fiction; use `EphemeralDatabase` instead.
+asserting on a fiction; boot on `ephemeral_database` instead.
 
 ## Headless apps
 
@@ -423,7 +460,7 @@ still runs, so the access-graph check still fires.
 ```rust title="apps/worker/tests/e2e/module.rs"
 let app = HeadlessApp::builder()
     .module::<WorkerModule>()
-    .provide_arc(db.connection())
+    .ephemeral_database::<migrations::Migrator>()
     .build_headless()
     .await?;
 ```
@@ -469,7 +506,7 @@ can own is the database. Two settings keep a suite apart:
   ```rust title="apps/worker/tests/e2e/module.rs (from the demo, abridged)"
   let worker = HeadlessApp::builder()
       .module::<WorkerModule>()
-      .provide_arc(db.connection())
+      .ephemeral_database::<migrations::Migrator>()
       .provide(RedisDatabase::WorkerRuns.config())
       .build_headless()
       .await
@@ -482,8 +519,10 @@ can own is the database. Two settings keep a suite apart:
 
   `RedisDatabase` is the demo's list, in `features::testing`: an enum with one
   entry per such test, so two entries on one database is a compile error, and
-  `config()` rewrites the suite's URL to that index. Redis ships sixteen, so the list is short: one
-  database per test that starts a worker, not one per test.
+  `config()` rewrites the suite's URL to that index. The list is short — one
+  database per test that starts a worker, not one per test — and bounded by
+  the range the suites hold among the databases the server declares (Valkey's
+  `databases`, sixteen unless set; the dev container declares thirty-two).
 
 ### A job pushed inside a transaction waits for a relay
 
@@ -499,7 +538,7 @@ relay beside the worker that drains — any relay files any app's records from
 the shared table:
 
 ```rust title="apps/api/tests/e2e/posts.rs (from the demo, abridged)"
-let (db, app) = boot_on(RedisDatabase::PostsNotify).await;
+let app = boot_on(RedisDatabase::PostsNotify).await;
 // …
 let relaying = worker
     .spawn_transport(OutboxRelay::new())

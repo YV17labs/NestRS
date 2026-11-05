@@ -150,9 +150,8 @@ fix is to drop yours.
 
 **A check exists where the module opening its resource is imported.** A
 seeded or overridden connection is what the pool's or an instance's check
-pings — a suite seeding the pool from an `EphemeralDatabase` still reads
-`seaorm` — while a test that overrides `Storage` opens no store, and probes
-none.
+pings — a suite booting on `ephemeral_database` still reads `seaorm` — while a
+test that overrides `Storage` opens no store, and probes none.
 
 **What each check reads.**
 

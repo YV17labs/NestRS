@@ -663,8 +663,10 @@ lists what the boot, a log or the wire shows when one is missed.
    | `.use_guards_global(…)`, `.use_pipes_global(…)`, `.use_interceptors_global(…)` or `.use_exception_filters_global(…)` on `TestApp::builder()` | nothing for the app's suite, which boots the module declaring them; a test of a feature declares its pool on a root module of its own, `#[module(imports = [Feature], providers = [GlobalGuards<(G,)>])]` |
    | a suite arming the app's outbox by hand (`container.get_dyn::<dyn OutboxStore>()…arm()`) | delete it: `TestApp` and `HeadlessApp` arm the outbox of an app binding a store and a queue backend, as the relay does at boot |
    | a service test installing `SeaOrmExecutor::Pool(pool).into()` with `with_request_executor` or `with_job_executor`, and an ability with `with_ability` | `app.unit(ability, \|\| svc.call())` as a request, `app.system_unit(\|\| svc.call())` as a job, on a `TestApp` booting the binding — `nest-rs`'s `authz` and `database` features beside `testing` |
-   | `EphemeralDatabase::create::<M>()` held in a tuple beside the app it seeds | `TestApp::builder()…ephemeral_database::<M>()`, held and dropped by the app; `app.container().get::<DatabaseConnection>()` reaches it |
-   | a test helper signing a bearer with `app.container().get::<JwtService>()` | `app.bearer(&claims)`, `nest-rs`'s `authn` feature beside `testing` |
+   | `EphemeralDatabase::create::<M>()` held in a tuple beside the app it seeds | `TestApp::builder()…ephemeral_database::<M>()`, held and dropped by the app; `app.container().get::<DatabaseConnection>()` reaches it to seed rows. `EphemeralDatabase::create` stays for a test that boots no app |
+   | a test helper signing a bearer with `app.container().get::<JwtService>()`, or with a private key the suite commits | `.ephemeral_signing_key()` on the builder, then `app.bearer(&claims)` — the app verifies the test's key in place of its own, for its own audience and issuer — `nest-rs`'s `authn` feature beside `testing` |
+   | an `AuthnConfig` a suite seeds to verify its own tokens | delete it: the app reads its audience and issuer from its `.env`, and `ephemeral_signing_key` replaces its key alone |
+   | `app.socket(path).bearer(token)` on a `WsApp` | `app.socket(path).header("authorization", app.bearer(&claims))` |
 
    **Lifecycle hooks and the way down**
 
@@ -1329,6 +1331,11 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A pool naming a layer whose module the root does not import** boots now, where it
   was refused: the pool registers the layer as the root's, from what the root reaches.
   Import the module when you meant its provider and its configuration.
+- **A suite calling `app.bearer(…)` on an app booted without
+  `.ephemeral_signing_key()`** panics naming the builder call; 7.0's `bearer`
+  signs with a key of the test's own, never the app's. The key on an app that
+  provides no `JwtService`, or one whose `JwtService` the suite seeded, refuses
+  the boot.
 - **A binary whose `main` installs no exporter, run where the deployment sets
   `OTEL_EXPORTER_OTLP_ENDPOINT`** (or a signal's own endpoint) — a platform
   injecting it into every pod included — fails `App::run` before serving,

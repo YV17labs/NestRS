@@ -8,9 +8,9 @@ sidebar:
 A 2xx test is half a test. The bugs that ship to production live in
 the failure modes — the request that should have been refused, the
 transaction that should have rolled back, the field that should have
-been masked. `tests/e2e/` is the natural home: the same `TestApp` and
-`EphemeralDatabase` that drive the [e2e happy paths](/testing/e2e/),
-just asserting on the failure shape.
+been masked. `tests/e2e/` is the natural home: the same `TestApp`, booted on
+a throwaway database and a signing key of the test's own, that drives the
+[e2e happy paths](/testing/e2e/), just asserting on the failure shape.
 
 ## Four shapes worth covering
 
@@ -40,7 +40,7 @@ use crate::*;
 
 #[tokio::test]
 async fn protected_route_rejects_a_missing_or_bogus_bearer_token() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     app.http()
         .get("/orgs")
@@ -72,12 +72,9 @@ would mean `Ability::condition_for` never installed.
 ```rust title="apps/api/tests/e2e/users.rs"
 #[tokio::test]
 async fn get_other_tenants_user_returns_403() {
-    let (db, app) = boot().await;
-    let other_user = seed_user_in_org(&db, ORG_B).await;
-    let bearer = format!(
-        "Bearer {}",
-        token_for(ORG_A, "admin").await,
-    );
+    let app = boot().await;
+    let other_user = seed_user_in_org(&app, ORG_B).await;
+    let bearer = sign(&app, ORG_A, Role::Admin);
 
     let resp = app
         .http()
@@ -94,8 +91,8 @@ async fn get_other_tenants_user_returns_403() {
 ```rust title="apps/api/tests/e2e/users.rs"
 #[tokio::test]
 async fn create_with_invalid_email_returns_400_with_field_errors() {
-    let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", login().await);
+    let app = boot().await;
+    let bearer = sign(&app, ORG_ID, Role::Admin);
 
     let resp = app
         .http()
@@ -129,8 +126,8 @@ test next to it confirms it unwinds:
 ```rust title="apps/api/tests/e2e/users.rs"
 #[tokio::test]
 async fn handler_error_rolls_back_the_create() {
-    let (db, app) = boot().await;
-    let bearer = format!("Bearer {}", login().await);
+    let app = boot().await;
+    let bearer = sign(&app, ORG_ID, Role::Admin);
 
     let resp = app
         .http()
@@ -141,7 +138,7 @@ async fn handler_error_rolls_back_the_create() {
         .await;
     resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
 
-    let count = count_users_named(&db, "Bob").await;
+    let count = count_users_named(&app, "Bob").await;
     assert_eq!(count, 0, "the failed mutation must not have committed");
 }
 ```
@@ -158,7 +155,7 @@ beside the `200` it contrasts with:
 
 ```text frame="none"
 apps/api/tests/e2e/
-├── main.rs        ← mod users; mod orgs; …, boot(), token_for(), fixtures
+├── main.rs        ← mod users; mod orgs; …, boot(), sign(), fixtures
 ├── users.rs       ← scoping, masking, by-id 403/404
 ├── orgs.rs
 └── http.rs        ← 401s, the problem+json envelope, compression

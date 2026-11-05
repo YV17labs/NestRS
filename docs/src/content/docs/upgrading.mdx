@@ -2057,6 +2057,18 @@ lists what the boot, a log or the wire shows when one is missed.
   `p.all([])`, `Predicate::Always`, a disjunction holding one — refuses the
   same way, at the class gate, where its rows used to decide it. A denial
   meant for some rows alone reads a column in its `.when`.
+- **A site gated on `Manage`** — `#[authorize(Manage, E)]`, `#[public(Manage, E)]`,
+  `Ability::can_class(Action::Manage, ..)` — means every action, and no longer reads
+  `Manage`'s rules alone. A `cannot` no `when` narrows on any one action, beside
+  `can(Manage, E)`, now answers it `403`, `forbidden`, with `reason=class_denied`,
+  where the request ran; a `cannot` a `when` narrows takes its rows out of
+  `Repo::scoped(Action::Manage)`, `Ability::can` and a `bind` under it. Gate the body
+  on the action it runs (`#[authorize(Update, E)]`), or drop the denial. Four separate
+  grants now pass such a site, where they answered `403`. What it answers shows
+  `Read`'s columns and rows, not `Manage`'s: a `.fields` grant on `Read` beside
+  `can(Manage, E).fields(..)` widens the reply, a `cannot(Read, E)` narrows it.
+  `missing_scopes` names what each refused action lacks, so a scope challenge may
+  appear where the answer was a plain `403`.
 - **A module listing `ClientSecretBasicStrategy<P>` or
   `ClientAuthenticationGuard<ClientSecretBasicStrategy<P>>` beside
   `OAuthServerModule::<P>`** fails the boot: `duplicate provider:

@@ -61,6 +61,9 @@ them into one `sea_orm::Condition`:
 - **Conditional grants** ⇒ each `.when(|p| ...)` lowers via
   `Predicate::to_condition()` and is `OR`-ed in.
 - **Denials** ⇒ the union is `NOT`-ed onto the outer `AND`.
+- **`Action::Manage` itself** ⇒ every action's condition, `AND`-ed: a row must
+  pass all four. When only `Manage` rules exist every action reads them alike,
+  and the one condition above is the whole filter.
 
 The same `Predicate` AST also drives the in-memory check
 (`Ability::can`), which reads the row as the rendered SQL would: `eq` and

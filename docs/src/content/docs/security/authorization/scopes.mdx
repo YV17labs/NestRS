@@ -203,6 +203,12 @@ grants would have allowed the operation, it is the narrowest one's — the
 action's own before `Action::Manage`'s, the first declared among them — never their
 union, which would send the client asking for more than it needs.
 
+A site gated on `Manage` needs [every action](/security/authorization/policies/#actions),
+so its list is what lifts all of them: what each refused action lacks, each scope
+once, or the wildcard's own grant, which opens the four at once, when it asks for
+less. A site no scope could lift, a denial barring one action or an action no grant
+opens, names none and answers a plain `403`.
+
 The sentence is RFC 6750 §3.1's own description of `insufficient_scope`, and
 it is the same on every transport: one class gate,
 [`class_gate`](/security/authorization/#one-class-gate-on-every-edge), decides

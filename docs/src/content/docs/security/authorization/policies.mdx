@@ -132,6 +132,16 @@ A grant on `Read` does not imply `Update`. A grant on `Manage` does.
 ab.can(Action::Manage, org::Entity); // covers Read, Create, Update, Delete
 ```
 
+A site gated on `Manage` asks for all of it: `#[authorize(Manage, E)]` passes only
+where `Read`, `Create`, `Update` and `Delete` would each pass. So `cannot(Read, E)`
+beside `can(Manage, E)` refuses a site gated on `Read` and a site gated on `Manage`,
+and leaves the other three open; four separate grants pass it; `cannot(Manage, E)`
+refuses all five. A caller barred from reading a thing does not manage it.
+
+The rows follow the same reading: `condition_for::<E>(Action::Manage)` and
+`Ability::can` hold a row to every action's rules. What such a site answers shows what
+the caller may `Read`, and a write in its body reads the write's own action.
+
 ## Rules — grant, condition, fields
 
 `AbilityBuilder` has two starters: `can` (grant) and `cannot`

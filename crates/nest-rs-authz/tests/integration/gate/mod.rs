@@ -6,6 +6,7 @@
 
 mod crud;
 mod graphql;
+mod manage;
 mod mcp;
 mod public;
 mod ws;

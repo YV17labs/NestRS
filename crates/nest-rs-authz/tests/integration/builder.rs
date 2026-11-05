@@ -229,6 +229,23 @@ fn a_subject_no_table_holds_is_granted_whole_by_class() {
 }
 
 #[test]
+fn four_grants_on_a_subject_no_table_holds_pass_a_site_gated_on_manage() {
+    let mut b = AbilityBuilder::new();
+    for action in [Action::Read, Action::Create, Action::Update] {
+        b.can(action, Exporting);
+    }
+    let three = b.build().expect("valid test ability");
+    assert!(!three.can_class(Action::Manage, TypeId::of::<Exporting>()));
+
+    let mut b = AbilityBuilder::new();
+    for action in [Action::Read, Action::Create, Action::Update, Action::Delete] {
+        b.can(action, Exporting);
+    }
+    let four = b.build().expect("valid test ability");
+    assert!(four.can_class(Action::Manage, TypeId::of::<Exporting>()));
+}
+
+#[test]
 fn a_capability_a_token_was_not_granted_names_the_scope_it_lacks() {
     let narrow: std::sync::Arc<[String]> = std::sync::Arc::from(["reports:read".to_owned()]);
     let mut b = AbilityBuilder::new().with_granted_scopes(Some(narrow));

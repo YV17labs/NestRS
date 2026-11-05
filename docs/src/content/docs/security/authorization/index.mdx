@@ -127,8 +127,9 @@ Entity>`, run on the unit right after its guards:
   `#[authorize]`;
 - no grant on the class: `403`, `forbidden`;
 - a denial no `when` narrows — `cannot(Create, E)` beside `can(Manage, E)` —
-  matches every row, so the action is refused here: `403`, `forbidden`, the
-  same answer whatever the token carries, since no scope lifts a denial;
+  matches every row, so the action is refused here, and so is a site gated on
+  `Manage`, which means every action: `403`, `forbidden`, the same answer
+  whatever the token carries, since no scope lifts a denial;
 - a grant the token's scopes withhold: `403` naming the scopes to ask for
   ([Scopes](/security/authorization/scopes/)).
 
@@ -236,7 +237,11 @@ own services may reach for `can` directly when they cannot fit through
 answers what `Ability::can` cannot see on the model.
 
 `Action::Manage` is the wildcard: a grant on `Manage` matches every
-other action. A grant on `Action::Read` does not imply `Update`.
+other action. A grant on `Action::Read` does not imply `Update`. Asked of a
+site, `Manage` means every action at once: `can_class` and `can` hold each of
+the four, `condition_for` conjoins their conditions, and `mask` and
+`permitted_fields` read `Read`'s
+([Policies](/security/authorization/policies/#actions)).
 
 <Aside type="caution">
 A handler **without** the authz module imported has no request

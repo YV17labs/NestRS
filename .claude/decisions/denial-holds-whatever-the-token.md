@@ -101,3 +101,57 @@ round trip.
   rendering today, but a narrowing read off a renderer's spelling turns a
   grant into a rule for every row the day the spelling changes; a grant is
   never widened on a guess.
+
+## 2026-11-05 — a site gated on `Manage` means every action
+
+Agreed in the owner's mandate of 2026-11-05 ("on ne veut pas d'angle mort"), the
+reading decided by the first value. It closes the second Limit of the first entry
+above: `cannot(Read, E)` beside `can(Manage, E)` passed `#[authorize(Manage, E)]`,
+so a caller the policy bars from reading a thing managed it, and four separate
+grants, which open every action, were refused it.
+
+A **grant** on `Manage` stays the wildcard, read under each concrete action's key.
+A **site** gated on `Manage` — a posture, or any read the ability is asked with
+`Action::Manage` — means `Read`, `Create`, `Update` and `Delete` all at once:
+
+- **`can_class` is the AND of the four**, and `denied_outright` the OR, so a denial
+  no `when` narrows on any of them refuses it (`reason = "class_denied"`), an action
+  no grant opens refuses it (`no_class_grant`), and four separate grants pass it.
+- **`condition_for` is the AND of the four conditions**, reduced to one when no rule
+  names a concrete action: every action then reads the wildcard's rules alike, and
+  the statement renders as it did. **`can` likewise**, on the model.
+- **`pinned_values` keeps what any of the four pins**, the row having to fall in
+  scope for each; two actions pinning a column apart leave it to the re-check.
+- **A reply reads `Read`**: `permitted_fields`, `mask`, `mask_many` and every edge's
+  mask judge the row at `Read`, which is the question a reply asks. A write reads the
+  action it runs, never the site's, so a body under `Manage` writes under `Update`.
+- **`missing_scopes` answers what lifts the site**: what each refused action lacks,
+  once each, or the wildcard's own withheld grant, which opens all four, when it asks
+  for fewer scopes; nothing when a denial bars one, or no grant, withheld or held,
+  would open one, since a wider token would be refused all the same. An intersection
+  keeps a withheld wildcard whole where the other side grants all four, and on each
+  action it grants otherwise, after that action's own.
+- **A `#[subject]` follows the same reading**: it takes no `cannot`, so what changes
+  there is that four separate grants pass.
+
+**Refused:**
+
+- **CASL's reading**, where a check of `manage` merges `manage` rules alone
+  (`packages/casl-ability/src/RuleIndex.ts`, read at its lookup stage): it is the shape
+  this entry removes. Stricter than CASL on purpose: an ability read off a rule set
+  should not answer yes to "may do everything" while it refuses one thing by name.
+- **Compile-refusing `Manage` at a site**: `Ability::can_class(Action)` is a runtime
+  API anyway, and `#[authorize(Manage, Transcoding)]` is how a capability reads.
+- **`Manage` at a site reading as "any action"**: it would widen what a posture
+  demands past what its name says.
+
+**Limits:**
+
+- `missing_scopes` at a site gated on `Manage` weighs two sets, each refused action's
+  first grant and the wildcard's. Each suffices, but the one named is not always the
+  smallest when one action's second grant and another's first share a scope: finding
+  the smallest is a set cover no refusal needs. It names a little more than needed,
+  never less.
+- A reply's row under a site gated on `Manage` is trusted as `Loaded` for `Read`'s
+  rules, whichever action the body read it for, as a reply under any other posture
+  trusts its read (`mask-provenance.md`).

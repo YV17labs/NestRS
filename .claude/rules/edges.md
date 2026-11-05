@@ -148,7 +148,9 @@ guard, filter or interceptor loop of its own.
    missing ambient ability fails closed. `S` is any subject: an entity, or a
    capability no table holds that `#[subject]` declares, gated the same way —
    its scope challenge included — and never by a hand-written guard
-   (`.claude/decisions/subject-no-table-holds.md`). Off a `#[public]` site it refuses a
+   (`.claude/decisions/subject-no-table-holds.md`). `A` is `Manage` for a site needing
+   every concrete action, so a denial of one refuses it and four separate grants pass
+   (`.claude/decisions/denial-holds-whatever-the-token.md`). Off a `#[public]` site it refuses a
    caller no principal backs (`Ability::is_visitor`) whatever the visitor's
    rules grant, on HTTP as elsewhere; a `#[public(A, S)]` reads the visitor's
    grant, the public-reads pattern, and licenses that visitor's reads for the unit

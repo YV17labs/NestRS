@@ -2,8 +2,8 @@
 //! argument (`#[authorize(Read, _)]`).
 
 /// The verb a rule grants or denies. A rule pairs one of these with a subject
-/// entity; [`Manage`](Self::Manage) is the wildcard that matches all four
-/// concrete verbs.
+/// entity; [`Manage`](Self::Manage) is the wildcard a grant covers all four
+/// concrete verbs with, and what a site asks for when it needs them all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Action {
@@ -15,8 +15,26 @@ pub enum Action {
     Update,
     /// Remove an instance.
     Delete,
-    /// The wildcard grant — matches every action.
+    /// Every action: a grant on it matches each of the four, a site gated on it
+    /// needs each of the four.
     Manage,
+}
+
+impl Action {
+    /// The concrete actions, in the order a refusal names what they lack.
+    pub(crate) const CONCRETE: [Action; 4] =
+        [Action::Read, Action::Create, Action::Update, Action::Delete];
+
+    /// The concrete actions a site gated on this one needs.
+    pub(crate) const fn concrete(self) -> &'static [Action] {
+        match self {
+            Action::Read => &[Action::Read],
+            Action::Create => &[Action::Create],
+            Action::Update => &[Action::Update],
+            Action::Delete => &[Action::Delete],
+            Action::Manage => &Self::CONCRETE,
+        }
+    }
 }
 
 /// Lets a route name an [`Action`] as a type argument on stable Rust (enum
@@ -63,8 +81,16 @@ mod tests {
 
     #[test]
     fn manage_is_distinct_from_every_other_action() {
-        for other in [Action::Read, Action::Create, Action::Update, Action::Delete] {
+        for other in Action::CONCRETE {
             assert_ne!(Action::Manage, other);
         }
+    }
+
+    #[test]
+    fn a_concrete_action_needs_itself_and_manage_needs_all_four() {
+        for action in Action::CONCRETE {
+            assert_eq!(action.concrete(), [action]);
+        }
+        assert_eq!(Action::Manage.concrete(), Action::CONCRETE);
     }
 }

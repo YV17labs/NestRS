@@ -154,6 +154,30 @@ async fn a_push_that_leaves_an_exposed_column_out_is_not_judged_on_it() {
     );
 }
 
+/// `Manage` asks a push what it asks a reply, `Read`: post 2 goes when `Read`
+/// refuses it, and stays when `Delete` alone does.
+#[tokio::test]
+async fn a_push_at_manage_is_judged_at_read() {
+    for (denied, kept) in [
+        (Action::Read, json!([post::wire(1, 7)])),
+        (Action::Delete, json!([post::wire(1, 7), post::wire(2, 7)])),
+    ] {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity);
+        b.cannot(denied, post::Entity)
+            .when(|p| p.eq(post::Column::Id, 2));
+        let wire = json!([post::wire(1, 7), post::wire(2, 7)]);
+
+        let masked = install_ability(Arc::new(b.build().unwrap()), async move {
+            masked_reply::<post::Entity>(Action::Manage, wire)
+        })
+        .await
+        .expect("the push reconciles with the post model");
+
+        assert_eq!(masked, kept, "{denied:?}");
+    }
+}
+
 #[tokio::test]
 async fn a_push_ships_only_the_keys_it_carried() {
     let mut b = AbilityBuilder::new();

@@ -29,7 +29,8 @@ pub(crate) use crate::ability::warn_mask_failure;
 /// The value is judged as a **push**: no `Repo` read decided a relation or a
 /// column the value does not carry — unexposed, or exposed and left out — so a
 /// rule reading one grants nothing and a denial reading one denies. Decide such
-/// a rule before pushing, or expose the column and send it.
+/// a rule before pushing, or expose the column and send it. [`Action::Manage`]
+/// judges it at [`Action::Read`].
 ///
 /// It masks for the principal whose ability is ambient — right for a reply to
 /// that principal. A push to other connections (`WsServer::emit`,

@@ -309,7 +309,11 @@ which is the limit (`.claude/decisions/mask-provenance.md`).
 `#[authorize(Action, Entity)]` or `#[public(Action, Entity)]` beside the
 operation is the arming declaration on every edge; the decorator emits the gate
 and the mask, and that is what makes posture greppable. A unit declaring neither
-withholds the ability from its reads. **The gate is one function**, `class_gate`, on every
+withholds the ability from its reads. A site gated on `Manage` holds a row to every
+concrete action where it reads (`condition_for`, `can`), and its reply shows what the
+caller may `Read`; a write reads the write's own action
+(`.claude/decisions/denial-holds-whatever-the-token.md`).
+**The gate is one function**, `class_gate`, on every
 edge; the mask is each edge's, chosen by its protocol, and only an entity's: a
 subject `#[subject]` declares has no rows, so its posture gates and arms no
 mask, decided by the subject's type:

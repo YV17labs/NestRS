@@ -180,7 +180,7 @@ pub(crate) fn error_unreached(refusal: Refusal<'_>) {
 
 /// The class gate `#[authorize(A, S)]` declares, the same function on every
 /// edge: whether the ability the unit carries grants action `A` on the subject
-/// class `S`.
+/// class `S`, every concrete action where `A` is [`Manage`](crate::Manage).
 ///
 /// It reads the ability the site's guards attached, whether or not their stage
 /// has made it ambient yet. A site that is not `#[public]` refuses a caller no

@@ -643,8 +643,8 @@ router parses. The rewrite is skipped when nothing is versioned.
   through `schemars`, `#[api(...)]` enriches) and an offline Swagger UI that
   loads nothing from elsewhere. The document is 3.1 and states only what the
   framework knows (`.claude/decisions/openapi-document-scope.md`), what an edge
-  answers on a route's behalf under the transport's config included, and `2XX`
-  for a status only the handler knows; it is a
+  answers on a route's behalf under the transport's config included, `2XX` for a
+  status only the handler knows, and the media type a return type writes; it is a
   development surface (`.claude/decisions/openapi-docs-exposure.md`). A route
   is deprecated with `#[api(deprecated = "…")]`, never Rust's `#[deprecated]`
   (`.claude/decisions/route-deprecation.md`), and a list links its next page

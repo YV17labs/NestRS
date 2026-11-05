@@ -226,8 +226,10 @@ impl HttpRouteMeta {
     }
 
     /// The media type of the success response body, when it is **not**
-    /// `application/json` — `#[api(response_content_type = "audio/mpeg")]`, or
-    /// `text/event-stream` inferred from an `#[sse]` route.
+    /// `application/json` — `#[api(response_content_type = "audio/mpeg")]`, a
+    /// `#[response_header("content-type", …)]`, `text/event-stream` inferred
+    /// from an `#[sse]` route, or what the return type writes, a `String`'s
+    /// `text/plain`.
     pub fn response_content_type(&self) -> Option<&'static str> {
         self.parts.response_content_type
     }

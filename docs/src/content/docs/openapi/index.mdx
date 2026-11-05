@@ -158,7 +158,8 @@ The document composes from the route table, so everything in it is derived:
 - the success status — a `#[http_code]`'s or a `#[redirect]`'s, or the one the
   return type states — or
   [the `2XX` range](/openapi/operations/#a-status-the-handler-computes) where
-  only the handler knows it;
+  only the handler knows it — and its body, by the schema the return type names or
+  [the media type it writes](/openapi/operations/#bodies-that-are-not-json);
 - the error statuses an operation can actually produce, read off what it takes
   and the transport it runs on — `400` where a parameter or a body can be refused,
   `404` where a path parameter or a version selects, `408` where a body can stall

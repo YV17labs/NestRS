@@ -89,6 +89,15 @@ say a status would make everyday code harder to fix a document (the owner's rule
 `#[http_code(N)]` pins it where the status never varies. `default` stays refused, for the reason
 above: it would type as this body every status the document lists no other for.
 
+**An answer documents the media type it writes**, read off its type by a probe of its own
+(`DocumentedMedia`), so a `(StatusCode, String)` sits under `2XX` with `text/plain`, with no key for
+the developer: text is `text/plain`, bytes `application/octet-stream`, a `Body`, which sets none,
+`*/*`. It is no field of `AnswerDoc`: `Created<T>` states its `201` over any `T`, an application's
+own answer included, and a const cannot read `T` only where it can, so a field would either leave
+`Created<String>` out or send `Created<Own>` to the computed arm. A
+`#[response_header("content-type", …)]` writes over what the type wrote, so it keys the body, and
+`#[api(response_content_type)]` wins over both, the developer's own word.
+
 **A guard declaring a status outside `400` to `599` fails the boot** (`HttpGuardStage::new`),
 naming the guard, at every site: the document files a declared status over what else it says of
 it, and a declared `200` stood there for the route's success.

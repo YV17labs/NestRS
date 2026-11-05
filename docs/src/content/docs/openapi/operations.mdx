@@ -59,8 +59,15 @@ document names and every success answers; a status outside the range is one of
 
 ## Bodies that are not JSON
 
-`multipart = Type` and `response_content_type = "…"` describe a body `Json<T>`
-cannot — an upload form, a streamed download. A handler taking `RawBody` or `Body`
+A handler returning text or bytes declares nothing: the document reads the media
+type off the return type, bare, in a `(StatusCode, B)` pair, a `Created<B>`, a
+`Paginated<B>` or a `Result` — `text/plain` for a `String` or a `&'static str`,
+`application/octet-stream` for `Bytes` or a `Vec<u8>`, and `*/*` for a `Body`, which
+sets none — and a [`#[response_header("content-type", "…")]`](/http/responses/#response_headername-value)
+keys the body on what it writes instead.
+
+`multipart = Type` and `response_content_type = "…"` describe a body no type
+states — an upload form, a streamed download. A handler taking `RawBody` or `Body`
 declares nothing: the document says `*/*`, optional and binary, since it reads
 any bytes under any media type or none.
 
@@ -90,10 +97,10 @@ apart, so a part renamed in one must be renamed in the other. A handler that tak
 `multipart/form-data` with a free-form object: the media type it accepts is
 knowledge a client needs, even when no type states the parts.
 
-`response_content_type` replaces `application/json` on the success response and,
-with no `response = Type` beside it, types the body the way OpenAPI spells a
-stream — `string` with `format: binary`, or plain `string` for a `text/*` media
-type. **An [`#[sse]`](/http/streaming/) route needs no annotation**: it answers
+`response_content_type` replaces what the return type says on the success
+response and, with no `response = Type` beside it, types the body the way OpenAPI
+spells a stream — `string` with `format: binary`, or plain `string` for a `text/*`
+media type. **An [`#[sse]`](/http/streaming/) route needs no annotation**: it answers
 `text/event-stream` and nothing else, so the document reads the media type off
 the decorator — and declaring `response_content_type` there is a compile error.
 

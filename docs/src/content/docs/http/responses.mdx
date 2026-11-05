@@ -51,9 +51,10 @@ async fn enqueue(&self) -> (StatusCode, &'static str) {
 
 The OpenAPI document cannot name a status the handler computes, so it lists
 the [`2XX` range](/openapi/operations/#a-status-the-handler-computes) with `T`'s
-schema when `T` is a `Json<_>`, and a bare `StatusCode` the range alone. A
-status that never varies is a [`#[http_code(N)]`](#http_coden), which the document
-names.
+schema when `T` is a `Json<_>`, [the media type `T` writes](/openapi/operations/#bodies-that-are-not-json)
+when it is text or bytes, here `text/plain`, and a bare `StatusCode` the range
+alone. A status that never varies is a [`#[http_code(N)]`](#http_coden), which the
+document names.
 
 ## A create names what it created
 

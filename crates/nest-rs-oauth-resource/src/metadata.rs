@@ -2,8 +2,9 @@
 //! serves, and the `WWW-Authenticate` challenge that points at it.
 
 use nest_rs_guards::__private::is_scope_token;
-use nest_rs_http::__private::DocumentedAnswer;
+use nest_rs_http::__private::{DocumentedAnswer, DocumentedPayload};
 use nest_rs_http::challenge::BEARER;
+use nest_rs_http::schemars::JsonSchema;
 use nest_rs_http::{HeaderValue, IntoResponse, Response, StatusCode};
 use serde::Serialize;
 
@@ -25,11 +26,18 @@ pub(crate) struct ResourceDescription {
 ///
 /// Of §2's fourteen members, response signing, DPoP, mTLS binding and
 /// `signed_metadata` are not advertised: nothing here implements them.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[schemars(
+    crate = "nest_rs_http::schemars",
+    description = "RFC 9728 §2 — OAuth 2.0 Protected Resource Metadata."
+)]
 pub struct ProtectedResourceMetadata {
     resource: String,
     authorization_servers: Vec<String>,
+    // The OpenAPI document reads schemas under the deserialize contract, where
+    // only a default says a member may be absent.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schemars(default)]
     scopes_supported: Vec<String>,
     bearer_methods_supported: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -184,6 +192,10 @@ fn build_challenge(metadata_url: &str, scopes: &[String], error: Option<&str>) -
 
 /// RFC 9728 §3.2 answers `200`.
 impl DocumentedAnswer for &ProtectedResourceMetadata {}
+
+impl DocumentedPayload for &ProtectedResourceMetadata {
+    type Payload = ProtectedResourceMetadata;
+}
 
 impl IntoResponse for &ProtectedResourceMetadata {
     fn into_response(self) -> Response {

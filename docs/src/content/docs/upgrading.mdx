@@ -1350,8 +1350,9 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A `(StatusCode, Json<T>)` route whose `T` has no schema** does not compile (`E0277`), as a
   bare `Json<T>` route does not: derive it with `#[output]`.
 - **A client generated from `/api-json`** reads `2XX` where it read `200` on a route whose
-  status the handler computes, and new responses on every operation: a generated type naming
-  `200` for one moves, or the route says `#[http_code(200)]` where its status never varies.
+  status the handler computes, new responses on every operation, and a text or bytes body where
+  it read none: a generated type naming `200` for one moves, or the route says
+  `#[http_code(200)]` where its status never varies.
 - **A lone Redis binding over a seeded `RedisConnection`** now reads the
   `RedisConfig` of the module it imports, so a suite with `<PREFIX>_REDIS__URL`
   unset is refused naming the variable: seed the `RedisConfig` beside the

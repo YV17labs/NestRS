@@ -11,10 +11,11 @@
 
 use crate::{AlwaysUnauthorized, boot_error};
 use nest_rs_authn::{AuthnConfig, AuthnModule};
+use nest_rs_config::Surface;
 use nest_rs_core::module;
-use nest_rs_http::StatusCode;
-use nest_rs_http::{controller, routes};
+use nest_rs_http::{StatusCode, controller, header, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule, WELL_KNOWN_PATH};
+use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_testing::TestApp;
 use serde_json::Value;
 
@@ -305,4 +306,56 @@ async fn a_resource_with_a_query_serves_the_url_its_challenge_advertises() {
         .send()
         .await;
     response.assert_status_is_ok();
+}
+
+#[module(
+    imports = [
+        AuthnModule::for_root(authn()),
+        OAuthResourceModule::for_root(resource()),
+        OpenApiModule::for_root(OpenApiConfig {
+            enabled: Surface::Open,
+            ..OpenApiConfig::default()
+        }),
+    ],
+)]
+struct DocumentedApp;
+
+async fn json_of(resp: nest_rs_testing::TestResponse) -> Value {
+    let body = resp.0.into_body().into_bytes().await.expect("a body");
+    serde_json::from_slice(&body).expect("a JSON body")
+}
+
+/// RFC 9728 §3.2's `200` says what a client parses: each member sent, and the
+/// optional ones that a resource advertising nothing leaves out are not required.
+#[tokio::test]
+async fn the_metadata_route_documents_the_body_it_sends() {
+    let app = TestApp::for_module::<DocumentedApp>()
+        .await
+        .expect("the documented app boots");
+
+    let live = app.http().get(WELL_KNOWN_PATH).send().await;
+    live.assert_status_is_ok();
+    live.assert_header(header::CONTENT_TYPE, "application/json");
+    let sent = json_of(live).await;
+    let doc = json_of(app.http().get("/api-json").send().await).await;
+    let answer = &doc["paths"][WELL_KNOWN_PATH]["get"]["responses"]["200"];
+    assert_eq!(
+        answer["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ProtectedResourceMetadata",
+        "{answer}",
+    );
+    let schema = &doc["components"]["schemas"]["ProtectedResourceMetadata"];
+    let properties = schema["properties"].as_object().expect("properties");
+    for member in sent.as_object().expect("an object").keys() {
+        assert!(properties.contains_key(member), "{member}: {schema}");
+    }
+    assert_eq!(
+        schema["required"],
+        serde_json::json!([
+            "resource",
+            "authorization_servers",
+            "bearer_methods_supported"
+        ]),
+        "{schema}",
+    );
 }

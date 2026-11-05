@@ -32,6 +32,7 @@ mod deprecation;
 mod detached;
 mod documented_answer;
 mod documented_body;
+mod documented_media;
 mod documented_payload;
 mod drain;
 mod edge;
@@ -263,6 +264,7 @@ pub mod __private {
         AnswerDoc, AnswerProbe, ComputedAnswerProbe, DocumentedAnswer,
     };
     pub use crate::documented_body::{BodyProbe, DocumentedBody, UndocumentedProbe};
+    pub use crate::documented_media::{DocumentedMedia, MediaProbe, UndocumentedMediaProbe};
     pub use crate::documented_payload::{
         DocumentedPayload, PayloadProbe, UndocumentedPayloadProbe,
     };

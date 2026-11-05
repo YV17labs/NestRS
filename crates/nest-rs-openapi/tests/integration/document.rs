@@ -706,8 +706,9 @@ mod answers {
     use futures_util::StreamExt as _;
     use nest_rs_core::{input, module, output};
     use nest_rs_http::{
-        ApiVersioning, Body, Bytes, Form, Header, HttpConfig, HttpCors, HttpModule, IntoResponse,
-        Json, Multipart, Path, Query, RawBody, Response, Result, StatusCode, controller, routes,
+        ApiVersioning, Body, Bytes, Created, Form, Header, HttpConfig, HttpCors, HttpModule,
+        IntoResponse, Json, Multipart, Paginated, Path, Query, RawBody, Response, Result,
+        StatusCode, controller, header, routes,
     };
     use nest_rs_testing::{TestApp, TestClient};
     use serde_json::{Value, json};
@@ -884,7 +885,130 @@ mod answers {
         }
     }
 
-    #[module(imports = [openapi()], providers = [OrdersController])]
+    /// One route per spelling writing a body no schema names.
+    #[controller(path = "/bodies")]
+    struct BodiesController;
+
+    #[routes]
+    impl BodiesController {
+        #[get("/string")]
+        #[public]
+        async fn string(&self) -> String {
+            "text".to_owned()
+        }
+
+        #[get("/str")]
+        #[public]
+        async fn text(&self) -> &'static str {
+            "text"
+        }
+
+        #[get("/bytes")]
+        #[public]
+        async fn bytes(&self) -> Bytes {
+            Bytes::from_static(b"octets")
+        }
+
+        #[get("/vec")]
+        #[public]
+        async fn vec(&self) -> Vec<u8> {
+            b"octets".to_vec()
+        }
+
+        #[get("/body")]
+        #[public]
+        async fn body(&self) -> Body {
+            Body::from("whatever")
+        }
+
+        #[get("/result")]
+        #[public]
+        async fn result(&self) -> Result<String> {
+            Ok("text".to_owned())
+        }
+
+        #[get("/pair/string")]
+        #[public]
+        async fn pair_string(&self) -> (StatusCode, String) {
+            (StatusCode::ACCEPTED, "text".to_owned())
+        }
+
+        #[get("/pair/str")]
+        #[public]
+        async fn pair_text(&self) -> (StatusCode, &'static str) {
+            (StatusCode::ACCEPTED, "text")
+        }
+
+        #[get("/pair/bytes")]
+        #[public]
+        async fn pair_bytes(&self) -> (StatusCode, Bytes) {
+            (StatusCode::ACCEPTED, Bytes::from_static(b"octets"))
+        }
+
+        #[get("/pair/vec")]
+        #[public]
+        async fn pair_vec(&self) -> (StatusCode, Vec<u8>) {
+            (StatusCode::ACCEPTED, b"octets".to_vec())
+        }
+
+        #[get("/pair/body")]
+        #[public]
+        async fn pair_body(&self) -> (StatusCode, Body) {
+            (StatusCode::ACCEPTED, Body::from("whatever"))
+        }
+
+        #[get("/pair/result")]
+        #[public]
+        async fn pair_result(&self) -> Result<(StatusCode, Bytes)> {
+            Ok((StatusCode::ACCEPTED, Bytes::from_static(b"octets")))
+        }
+
+        #[get("/created")]
+        #[public]
+        async fn created(&self) -> Created<String> {
+            Created::at(7, "text".to_owned())
+        }
+
+        #[get("/paginated")]
+        #[public]
+        async fn paginated(&self) -> Result<Paginated<Bytes>> {
+            Ok(Paginated::new(Bytes::from_static(b"octets"), 2, Some(2)))
+        }
+
+        #[get("/pair/created")]
+        #[public]
+        async fn pair_created(&self) -> (StatusCode, Created<Bytes>) {
+            (
+                StatusCode::ACCEPTED,
+                Created::at(7, Bytes::from_static(b"octets")),
+            )
+        }
+
+        #[get("/html")]
+        #[public]
+        #[response_header("content-type", "text/html; charset=utf-8")]
+        async fn html(&self) -> String {
+            "<p>text</p>".to_owned()
+        }
+
+        #[get("/vendored")]
+        #[public]
+        #[response_header("content-type", "application/vnd.api+json")]
+        async fn vendored(&self) -> Json<Receipt> {
+            receipt()
+        }
+
+        #[get("/declared")]
+        #[public]
+        #[api(response_content_type = "text/csv")]
+        async fn declared(&self) -> Response {
+            Response::builder()
+                .content_type(nest_rs_http::HeaderValue::from_static("text/csv"))
+                .body("a,b")
+        }
+    }
+
+    #[module(imports = [openapi()], providers = [OrdersController, BodiesController])]
     struct DefaultApp;
 
     #[module(
@@ -1130,7 +1254,77 @@ mod answers {
         }
         let text = responses(&doc, "/orders/text-pair", "post");
         assert!(text.get("200").is_none(), "{text}");
-        assert!(text.get("2XX").is_some(), "{text}");
+        assert_eq!(
+            text["2XX"]["content"]["text/plain"]["schema"],
+            json!({ "type": "string" }),
+            "{text}",
+        );
+    }
+
+    /// What a client reads off the response beside what the document says it
+    /// reads: every spelling whose body no schema names, under the status it
+    /// answers and the one the document keys it on.
+    #[tokio::test]
+    async fn an_answer_documents_the_media_type_it_writes() {
+        const TEXT: &str = "text/plain";
+        const OCTETS: &str = "application/octet-stream";
+        let string = json!({ "type": "string" });
+        let binary = json!({ "type": "string", "format": "binary" });
+
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        for (path, status, key, media_type, schema) in [
+            ("/bodies/string", 200, "200", TEXT, &string),
+            ("/bodies/str", 200, "200", TEXT, &string),
+            ("/bodies/result", 200, "200", TEXT, &string),
+            ("/bodies/bytes", 200, "200", OCTETS, &binary),
+            ("/bodies/vec", 200, "200", OCTETS, &binary),
+            ("/bodies/body", 200, "200", "*/*", &binary),
+            ("/bodies/pair/string", 202, "2XX", TEXT, &string),
+            ("/bodies/pair/str", 202, "2XX", TEXT, &string),
+            ("/bodies/pair/bytes", 202, "2XX", OCTETS, &binary),
+            ("/bodies/pair/vec", 202, "2XX", OCTETS, &binary),
+            ("/bodies/pair/body", 202, "2XX", "*/*", &binary),
+            ("/bodies/pair/result", 202, "2XX", OCTETS, &binary),
+            ("/bodies/pair/created", 202, "2XX", OCTETS, &binary),
+            ("/bodies/created", 201, "201", TEXT, &string),
+            ("/bodies/paginated", 200, "200", OCTETS, &binary),
+            ("/bodies/html", 200, "200", "text/html", &string),
+            ("/bodies/declared", 200, "2XX", "text/csv", &string),
+        ] {
+            let live = app.http().get(path).send().await;
+            assert_eq!(live.0.status(), status, "{path}");
+            // `*/*` is a body that sets no type, which no client can read one off.
+            let written = live
+                .0
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .map_or("*/*", |written| {
+                    written.to_str().expect("ascii").split(';').next().unwrap()
+                });
+            assert_eq!(written, media_type, "{path}");
+
+            let answer = &responses(&doc, path, "get")[key];
+            assert_eq!(
+                answer["content"],
+                json!({ media_type: { "schema": schema } }),
+                "{path}: {answer}",
+            );
+        }
+    }
+
+    /// `#[response_header]` writes over what the type wrote, a schema included.
+    #[tokio::test]
+    async fn a_content_type_the_route_sets_keys_the_schema_its_type_names() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        let live = app.http().get("/bodies/vendored").send().await;
+        live.assert_header(header::CONTENT_TYPE, "application/vnd.api+json");
+        assert_eq!(
+            responses(&doc, "/bodies/vendored", "get")["200"]["content"],
+            json!({ "application/vnd.api+json": { "schema": receipt_schema() } }),
+        );
     }
 
     #[tokio::test]

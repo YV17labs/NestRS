@@ -68,6 +68,20 @@ impl ResponseShapers {
         self.redirect.is_some() || self.http_code.is_some()
     }
 
+    /// The media type a `#[response_header("content-type", …)]` writes over what
+    /// the handler's answer did, for the OpenAPI document: the last one set,
+    /// without its parameters.
+    pub(crate) fn content_type(&self) -> Option<LitStr> {
+        self.headers
+            .iter()
+            .rfind(|(name, _)| name.value() == "content-type")
+            .map(|(_, value)| {
+                let value_text = value.value();
+                let essence = value_text.split(';').next().unwrap_or_default().trim();
+                LitStr::new(essence, value.span())
+            })
+    }
+
     /// The success status this handler emits, for the OpenAPI document: a
     /// `#[redirect]`'s code (default `307`), else `#[http_code(N)]`'s, else `200`.
     pub(crate) fn success_status(&self) -> u16 {

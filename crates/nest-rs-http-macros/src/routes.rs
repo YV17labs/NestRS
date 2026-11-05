@@ -765,12 +765,19 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             quote! { (#status, ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn) }
         });
         let error_responses = quote! { &[#(#error_responses),*] };
-        let response_content_type = match &api.response_content_type {
-            Some(lit) => quote! { ::core::option::Option::Some(#lit) },
-            None if is_sse => {
+        let response_content_type = match (
+            api.response_content_type.clone(),
+            response_shapers.content_type(),
+            answered,
+        ) {
+            (Some(lit), ..) | (None, Some(lit), _) => {
+                quote! { ::core::option::Option::Some(#lit) }
+            }
+            (None, None, _) if is_sse => {
                 quote! { ::core::option::Option::Some("text/event-stream") }
             }
-            None => quote! { ::core::option::Option::None },
+            (None, None, Some(ty)) => quote! { ::nest_rs_http::__media_of!(#ty) },
+            (None, None, None) => quote! { ::core::option::Option::None },
         };
         let masked = quote! { #shaper_selection.is_some() };
 

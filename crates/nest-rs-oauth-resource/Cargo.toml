@@ -43,6 +43,8 @@ nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
 # one.
 nest-rs-mcp = { path = "../nest-rs-mcp" }
 nest-rs-ws = { path = "../nest-rs-ws" }
+# The document's own route, read back from the document a real app serves.
+nest-rs-openapi = { path = "../nest-rs-openapi" }
 jsonwebtoken = { workspace = true }
 tokio = { workspace = true }
 

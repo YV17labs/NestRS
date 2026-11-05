@@ -54,8 +54,8 @@ closure composes the request only for a chain holding an authentication guard, a
 pooled `AuthnGuard` among them, once per site at boot.
 
 **Refused:** reading the unit's chain alone, the narrower fix: it leaves that second
-misorder booting and refusing everyone with nothing to say why, this entry's first
-sentence.
+misorder booting and refusing everyone with nothing to say why, what this decision's
+first sentence exists to prevent.
 
 What it leaves: the phase is its author's word, which no type can check, and a
 hand-written MCP `ServerHandler` has no chain to read.

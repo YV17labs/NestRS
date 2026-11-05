@@ -30,14 +30,14 @@ teachable rule:
 > Global = around every unit the app serves. Scoped = around your handler.
 > Either way, once.
 
-You can watch the dedup happen. Declare `AuthnGuard` both globally
-(`GlobalGuards<(AuthnGuard,)>`) and on a controller (`#[use_guards(AuthnGuard, …)]`), and
+You can watch the dedup happen. Declare `RequireApiKey` both globally
+(`GlobalGuards<(RequireApiKey,)>`) and on a controller (`#[use_guards(RequireApiKey, …)]`), and
 boot logs the redundant declaration it dropped — the guard still runs exactly
 once:
 
 ```text
 DEBUG nest_rs::layers: redundant layer declaration deduped
-  layer="AuthnGuard<JwtStrategy<Claims>>" kept="global" skipped="host"
+  layer="RequireApiKey" kept="global" skipped="host"
   hint="broadest site wins; `#[force_guards]` re-runs a guard"
 ```
 

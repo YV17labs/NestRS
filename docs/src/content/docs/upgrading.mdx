@@ -715,7 +715,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | a guard's `async fn check_http(&self, req: &mut Request)` | `async fn check_http(&self, cx: &mut UnitContext<'_>)`: the request through `HttpView::of(cx)?.request()` — `request_mut()` to read the body and set it back — and the route's `#[meta]` and posture through `cx.reflector()` |
     | a guard's `check_graphql`, `check_ws_message` or `check_mcp` | one `async fn check(&self, cx: &mut UnitContext<'_>)`: the field, message or operation through `cx.switch_to::<GraphqlView>()`, `WsView` or `McpView`, its name through `cx.handler().address()` |
     | one decision written twice, in `check_http` and in an in-band entry | the decision once, in `check`: `check_http` runs it unless the guard overrides it, which it does only where the request differs from the unit (it reads the request, or a value missing at the request means something else) |
-    | an `impl Guard` writing only `check_http`, or nothing | its decision in `check`, which `check_http` runs: `check` has no default. A guard whose decision is the request's alone — an authentication guard in the global pool — keeps `check_http` and admits the units the request carries: `async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }` |
+    | an `impl Guard` writing only `check_http`, or nothing | its decision in `check`, which `check_http` runs: `check` has no default. A guard whose decision is the request's alone — an authentication guard in the global pool — keeps `check_http` and admits the units the request carries: `async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }`; one admitting an in-band request reads `Posture::Gated` there, to refuse what its principal is absent from |
     | a guard whose decision is a field's, a message's or an operation's alone, registered with `use_guards_global` | the same `check`, and `async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> { Ok(()) }` beside it: a pooled guard's `check` now runs on every request too |
     | `impl Layer for X {}`, empty | `#[derive(Layer)]` on the struct — `#[layer(priority = …)]` for an override of `Layer::priority`; a layer overriding `serves` keeps its `impl` |
     | `#[derive(Default)]` beside `#[injectable]` on a struct with no field | nothing: a fieldless struct, unit or braced, is built as written |
@@ -1685,6 +1685,23 @@ lists what the boot, a log or the wire shows when one is missed.
 
   Write `GuardPhase::Authentication` or `Authorization` on a guard of your own that does
   gate.
+- **A class gate no ability guard reaches** stops the boot, on every edge, for
+  `#[authorize]` and `#[public(Action, Subject)]` alike. It answered `500` on every call:
+
+  ```text frame="terminal"
+  Error: PostsController::list declares a class gate (`#[authorize]` or `#[public(Action, Subject)]`), and no guard in its chain or at its request attaches the ability the gate reads, so every call would answer `500`: bind `AbilityGuard` over your `AbilityFactory` with `#[use_guards]`, `GlobalGuards<(...)>` or, on an in-band endpoint, `EndpointGuards<View, (...)>`
+  ```
+
+  Bind `AuthzGuard` where the message says. A guard of your own delegating to
+  `AbilityGuard` adds `fn __attaches_ability(&self) -> bool { true }`.
+- **An in-band chain listing authentication after authorization** stops the boot, on a
+  GraphQL field, a WS message and an MCP operation, reading its request's chain ahead of
+  its own. List the authentication guard first, or declare the phase of a guard of your
+  own that attaches no principal as what it is.
+- **A router answered `UNAUTHENTICATED` on `_service` or `_entities`**: an anonymous caller
+  no longer reads them under an `AuthnGuard`. Present a token. `_service` runs the guards
+  of `/graphql`'s request now, `EndpointGuards` included; `_entities` under `EndpointGuards`
+  alone is still each `#[entity]`'s posture.
 - **A `#[public]` read answering nothing**, `200 []` on HTTP and an empty value in band,
   with `no ambient Ability outside a worker job — denying all rows` at `warn` on
   `nest_rs::orm`: the unit names no read. Write `#[public(Read, Entity)]`:

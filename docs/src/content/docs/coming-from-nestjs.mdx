@@ -53,7 +53,7 @@ resolver — carries across intact.
 | `@UseGuards(...)` | `#[use_guards(...)]` |
 | `@UseInterceptors(...)` | `#[use_interceptors(...)]` |
 | `@UseFilters(...)` (binds `@Catch(...)` classes) | `#[use_exception_filters(...)]`; `@Catch(T)` is `type Exception = T`, and `@Catch()` with no argument is `type Exception = dyn Error + Send + Sync` |
-| `APP_GUARD` | `GlobalGuards<(AuthnGuard, AuthzGuard)>` in the providers of the module the app boots |
+| `APP_GUARD` | `GlobalGuards<(RequireApiKey,)>` in the providers of the module the app boots |
 | `APP_INTERCEPTOR` | `GlobalInterceptors<(…)>` in the module the app boots; around the guards, `#[interceptor(stage = unit)]`, which its module's import brings |
 | `APP_FILTER`, `APP_PIPE` | `GlobalExceptionFilters<(…)>`, `GlobalPipes<(…)>` in the module the app boots |
 | an `HttpException` whose body carries an error code | a `nest_rs::core::Problem` and its `Code`, which every edge renders in its own form |

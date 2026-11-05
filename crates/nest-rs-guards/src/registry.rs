@@ -42,25 +42,15 @@ pub fn guard<G: Guard + 'static>() -> GuardSpec {
 /// # use nest_rs_guards::{Denial, GlobalGuards, Guard};
 /// # #[injectable]
 /// # #[derive(Default)]
-/// # struct AuthnGuard;
-/// # impl Layer for AuthnGuard {}
+/// # struct RequireApiKey;
+/// # impl Layer for RequireApiKey {}
 /// # #[async_trait]
-/// # impl Guard for AuthnGuard {
+/// # impl Guard for RequireApiKey {
 /// #     async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
 /// #         Ok(())
 /// #     }
 /// # }
-/// # #[injectable]
-/// # #[derive(Default)]
-/// # struct AuthzGuard;
-/// # impl Layer for AuthzGuard {}
-/// # #[async_trait]
-/// # impl Guard for AuthzGuard {
-/// #     async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-/// #         Ok(())
-/// #     }
-/// # }
-/// #[module(providers = [GlobalGuards<(AuthnGuard, AuthzGuard)>])]
+/// #[module(providers = [GlobalGuards<(RequireApiKey,)>])]
 /// struct AppModule;
 /// # #[nest_rs_core::main]
 /// # async fn main() -> nest_rs_core::anyhow::Result<()> {
@@ -71,7 +61,7 @@ pub fn guard<G: Guard + 'static>() -> GuardSpec {
 /// ```
 pub struct GlobalGuards<G: GlobalGuardList>(PhantomData<fn() -> G>);
 
-/// A tuple of guards — `(AuthnGuard,)` to eight of them — run in the order
+/// A tuple of guards — `(RequireApiKey,)` to eight of them — run in the order
 /// written. Sealed: only tuples are lists.
 pub trait GlobalGuardList: listed::Listed + 'static {
     /// Each guard's spec, in order.

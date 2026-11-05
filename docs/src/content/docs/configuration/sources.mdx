@@ -90,7 +90,7 @@ let env = ConfigService::with_source("seaorm", vault);
 let db_config = SeaOrmConfig::from_env(&env, SeaOrmConfig::default())?;
 
 App::builder()
-    .module::<AppModule>()
+    .module::<ApiModule>()
     .provide(db_config)
     .build()
     .await?;

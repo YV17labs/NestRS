@@ -195,7 +195,8 @@ its read.
 
 A dataloader batch carries what its request carries, so relations that fan out
 across batches run under the same ability, on the pool — scoped without the
-resolver threading anything, and with nothing more to register.
+resolver threading anything, and with nothing more to register. A visitor reads
+nothing there ([Public reads](/security/authorization/public-reads/#limits)).
 
 ## WebSockets — per-message scope
 
@@ -303,8 +304,8 @@ one answers `UNAUTHENTICATED`.
 
 What the endpoint runs is `check_http` — it holds a request, not an operation.
 A pooled guard's `check` runs in the **per-operation chain**, which folds the
-pool too, so a global guard overriding `check` gates every tool call even when
-the endpoint's guards already authenticated the caller who sent it.
+pool too, so a global guard's `check` gates every tool call even when the
+endpoint's guards already authenticated the caller who sent it.
 
 ## Public handlers — one line per unit
 

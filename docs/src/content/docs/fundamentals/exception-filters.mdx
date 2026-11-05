@@ -83,6 +83,7 @@ them.
 
 ```rust title="crates/features/src/users/service.rs"
 use nest_rs::seaorm::{Creatable, ServiceError};
+use nest_rs::http::Json;
 
 impl UsersService {
     pub async fn create(&self, input: CreateUser) -> Result<User, ServiceError> {

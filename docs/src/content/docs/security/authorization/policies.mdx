@@ -168,6 +168,7 @@ time. A rule scoped to `user::Entity` cannot accidentally reference
 ```rust title="nest_rs::authz::Predicate"
 pub enum Predicate<E: EntityTrait> {
     Always,
+    Deny,                           // a rejected relation: fails the build
     Eq(E::Column, Value),
     In(E::Column, Vec<Value>),
     Cmp(E::Column, CmpOp, Value),   // Ne / Lt / Lte / Gt / Gte
@@ -235,8 +236,9 @@ uncorrelated `IN (subquery)`, `has_many` a correlated `EXISTS`. A
 relation's custom `on_condition` is folded into the subquery so the
 scope is never widened past the join.
 
-Two boot-time guards close the gap that type erasure opens — both
-panic at rule-definition time, never a silently-wrong filter:
+Two checks close the gap that type erasure opens. A rule failing either files
+one `error` on `nest_rs::authz` and fails `AbilityBuilder::build`, so the guard
+answers `500` rather than install a silently-wrong filter:
 
 - the relation must point at `R` (its target table is checked);
 - the relation must be single-column — a tenant key is one column by
@@ -275,7 +277,7 @@ member should not see.
 
 The exemplar in `crates/features/src/authz/ability.rs`:
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
@@ -288,6 +290,7 @@ impl AbilityFactory for AuthzAbility {
             ab.can(Action::Manage, org::Entity);
             ab.can(Action::Manage, Transcoding)
                 .requires_scope(constants::AUDIO_TRANSCODE);
+            // …
         } else {
             ab.can(Action::Read, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id))
@@ -296,7 +299,9 @@ impl AbilityFactory for AuthzAbility {
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
             ab.can(Action::Read, org::Entity)
                 .when(|p| p.eq(org::Column::Id, actor.org_id));
+            // …
         }
+        // …
     }
 }
 ```

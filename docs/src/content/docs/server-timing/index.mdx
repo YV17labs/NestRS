@@ -71,6 +71,8 @@ use std::time::Instant;
 use nest_rs::http::{controller, routes};
 use nest_rs::server_timing::Timings;
 use nest_rs::http::Request;
+use std::sync::Arc;
+use nest_rs::http::Json;
 
 #[controller(path = "/posts")]
 pub struct PostsController {

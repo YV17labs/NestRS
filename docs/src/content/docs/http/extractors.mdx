@@ -95,6 +95,7 @@ the pipe's output:
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::Path;
 use nest_rs::pipes::{ParseUuid, Piped};
+use nest_rs::http::Json;
 
 #[get("/posts/{id}")]
 async fn show(&self, Piped(id): Piped<ParseUuid, Path<String>>) -> Json<Post> {
@@ -245,6 +246,7 @@ transaction handle, a per-request audit batch, a user-specific cache).
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::core::injectable;
 use nest_rs::core::Scoped;
+use nest_rs::http::Json;
 
 #[injectable(scope = request)]
 pub struct PerRequestAudit { /* ... */ }

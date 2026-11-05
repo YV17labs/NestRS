@@ -153,6 +153,7 @@ When the input needs a transform, name the pipe at the call site:
 ```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::http::Path;
 use nest_rs::pipes::{ParseUuidV7, Piped};
+use nest_rs::http::Json;
 
 #[get("/{id}")]
 async fn get(&self, Piped(id): Piped<ParseUuidV7, Path<String>>) -> Result<Json<User>> {

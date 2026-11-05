@@ -26,8 +26,9 @@ pub struct UsersController {
 ## The guarantee
 
 Once the authz modules are imported, the caller's ambient `Ability` is
-non-optional. It does four things on every request, without a
-per-handler opt-in:
+non-optional. On every unit whose posture names what it reads, the one line a
+handler writes, it does four things, and a unit naming nothing reads nothing a
+grant guards:
 
 - **Pre-filters every read.** `Repo` joins the ability's predicate into
   the SQL `WHERE`, so a member querying posts gets `org_id =
@@ -38,8 +39,8 @@ per-handler opt-in:
   caller's org is rolled back and answers `403`.
 - **Gates every by-id write.** A denied-but-existing row updates zero
   rows and returns `403`, not the row.
-- **Masks every response field.** Fields the caller cannot read are
-  stripped from the body before it leaves the process.
+- **Masks the reply.** Fields the caller cannot read are stripped from the
+  body before it leaves the process.
 
 One predicate AST is interpreted twice — as SQL and in memory — so the
 rows a query returns and the rows the masker keeps cannot diverge. The

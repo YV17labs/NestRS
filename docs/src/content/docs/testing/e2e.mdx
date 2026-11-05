@@ -1,6 +1,6 @@
 ---
 title: End-to-end tests
-description: TestApp boots the real AppModule on a throwaway database and a signing key of the test's own — the route table, the DI graph, the access-graph check, authn/authz, and the data path all run.
+description: TestApp boots the real ApiModule on a throwaway database and a signing key of the test's own — the route table, the DI graph, the access-graph check, authn/authz, and the data path all run.
 sidebar:
   order: 4
 ---
@@ -344,7 +344,7 @@ impl Upstream for StubUpstream {
 }
 
 let app = TestApp::builder()
-    .module::<AppModule>()
+    .module::<ApiModule>()
     .override_dyn::<dyn Upstream>(Arc::new(StubUpstream))
     .build()
     .await?;
@@ -362,6 +362,7 @@ use std::sync::Arc;
 
 use nest_rs::http::StatusCode;
 use parking_lot::Mutex;
+use nest_rs::core::async_trait;
 
 #[derive(Default)]
 struct RecordingUpstream {

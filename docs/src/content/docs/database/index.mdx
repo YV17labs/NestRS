@@ -196,7 +196,7 @@ The app root activates the database and lists the slice:
         PostsHttpModule,
     ],
 )]
-pub struct AppModule;
+pub struct ApiModule;
 ```
 
 `SeaOrmDatabaseModule`, a bare import, binds the data layer over the one pool,
@@ -285,7 +285,7 @@ slice inherits, without writing any of them:
 ## Going further
 
 - [Authorization](/security/authorization/) — the ability every `Repo` read
-  is filtered by, and the mask every response goes through.
+  is filtered by, and the mask a posture arms on its response.
 - [GraphQL](/graphql/) — the other consumer of the same entity, relations
   and loaders.
 - [Testing](/testing/) — driving this layer against a live Postgres rather

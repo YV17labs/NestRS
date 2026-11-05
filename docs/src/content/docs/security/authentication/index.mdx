@@ -76,6 +76,7 @@ request's guards verified the same way.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::core::Ambient;
+use nest_rs::http::Json;
 
 async fn me(&self, auth: Ambient<Claims>) -> Result<Json<User>> {
     Ok(Json(self.svc.lookup(&auth.sub).await?))

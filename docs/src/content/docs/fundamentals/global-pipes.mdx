@@ -60,6 +60,7 @@ it once, and the pool registers it unless the app already does:
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::pipes::GlobalPipes;
 use features::pipes::TrimStrings;
+use nest_rs::core::module;
 
 #[module(
     imports = [/* … */],

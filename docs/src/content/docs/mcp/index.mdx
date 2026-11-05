@@ -336,7 +336,7 @@ pub struct PostsTool {
 #[tools]
 impl PostsTool {
     #[tool(description = "Publish the caller's open draft under its slug.")]
-    #[authorize(Create, PostEntity, unmasked)]
+    #[authorize(Create, post::Entity, unmasked)]
     #[use_exception_filters(SlugTakenFilter)]
     async fn publish_draft(&self, draft: Scoped<Draft>) -> Result<String, PublishError> {
         self.svc.publish(&draft).await

@@ -87,6 +87,7 @@ That's a guard. Gate the request, return `Err(Denial)` on rejection.
 use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
 use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::HttpView;
+use nest_rs::guards::GuardPhase;
 
 #[injectable]
 #[derive(Layer)]

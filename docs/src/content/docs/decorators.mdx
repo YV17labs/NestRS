@@ -43,7 +43,7 @@ own reads its keys and words its refusals as these do, on the kit
 | `#[get]` `#[post]` `#[put]` `#[patch]` `#[delete]` | method | Binds the method to an HTTP verb at the given path | [Controllers](/http/controllers/) |
 | `#[sse]` | method | Binds a `GET` that answers a `text/event-stream`, with the keep-alive and the connection ceiling | [Streaming](/http/streaming/) |
 | `#[http_code]` | method | Overrides the default response status code | [Responses](/http/responses/) |
-| `#[response_header]` | method | Appends a response header (repeatable) | [Responses](/http/responses/) |
+| `#[response_header]` | method | Sets a response header, `set-cookie` appended (repeatable) | [Responses](/http/responses/) |
 | `#[redirect]` | method | Issues a redirect and discards the handler payload | [Responses](/http/responses/) |
 | `#[no_pipes]` | method | Runs no global pipe over the route's body, the app's pool included | [Global pipes](/fundamentals/global-pipes/) |
 | `#[version]` | method | Narrows a route to one of the controller's declared versions | [Versioning](/http/versioning/) |

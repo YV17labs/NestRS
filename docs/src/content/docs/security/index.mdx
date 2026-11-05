@@ -10,9 +10,10 @@ import { Aside, FileTree } from '@astrojs/starlight/components';
 Security in nestrs splits into two concerns wired by two composable
 layers. Authentication establishes *who* the caller is. Authorization
 declares *what* they may do, then enforces it on every read, every
-by-id write, and every response body before it leaves the process.
-Bind the two guards on the controller and the framework does the rest
-— there is no per-handler checklist.
+by-id write, and every response body a unit's posture names before it
+leaves the process. Bind the two guards on the controller, write the one
+line that says what each unit reads, and the framework does the rest: a
+unit naming nothing reads nothing a grant guards, so nothing fails open.
 
 **Here for the first auth task?**
 [Add login and protect a route](/security/add-login/) walks the whole

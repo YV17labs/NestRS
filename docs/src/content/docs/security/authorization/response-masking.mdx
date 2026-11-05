@@ -22,6 +22,7 @@ arms the shaper:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::authz::Read;
+use nest_rs::http::Json;
 
 #[get("/")]
 #[authorize(Read, user::Entity)]
@@ -95,7 +96,9 @@ way.
   column the mask could not rebuild never gets that far, refused by
   `#[expose]` at compile time.
 
-Non-2xx, non-JSON, and scalar responses pass through untouched.
+A non-2xx, a body declaring a type other than JSON and a JSON scalar pass through
+untouched; a body declaring no type is refused like one that does not parse, and
+an empty one goes out as it is.
 
 Pair every masked route with a
 [negative-path test](/testing/negative-path/) that pins the masked body

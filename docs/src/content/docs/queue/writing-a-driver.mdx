@@ -361,6 +361,7 @@ impl KitBackend for MemoryKit {
 /// The kit over a backend that files a record due later.
 mod delaying {
     use super::MemoryKit;
+use std::time::Duration;
 
     nest_rs_testing::queue_kit!(MemoryKit::delaying());
 }

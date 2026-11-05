@@ -28,9 +28,11 @@ kind of value it was and what was expected, and never what it held:
 { "event": "error", "data": { "error": "invalid envelope: invalid type: a sequence, expected an object with `event` and `data`", "code": "INVALID_ARGUMENT" } }
 ```
 
-A binary frame carries no envelope, and a frame past `max_message_bytes` is
-not read: each is answered on the `error` event under the class HTTP names for
-the same refusal, as RFC 6455's close codes 1003 and 1009 name it:
+A message past `max_message_bytes` closes the socket `1009 Message Too Big`, at
+the protocol layer, before anything reads it. A binary frame carries no
+envelope, and a text frame that layer let through at the boundary is not read:
+each is answered on the `error` event under the class HTTP names for the same
+refusal, as RFC 6455's close codes 1003 and 1009 name it:
 
 ```json
 { "event": "error", "data": { "error": "binary frames are not supported", "code": "UNSUPPORTED_MEDIA_TYPE" } }
@@ -213,7 +215,7 @@ reply and is not masked for them; see
 ## The payload
 
 Whatever you put in `data` arrives in your handler typed, and held to the
-rules its type declares. The macro calls `serde_json::from_value` under the
+rules its type declares. The macro decodes it through the edge's own reader under the
 hood:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
@@ -265,8 +267,7 @@ async fn history(&self) -> Vec<ChatMessageDto> {
 
 ## The return contract
 
-The macro inspects the handler's return type at parse time and picks
-the reply behavior:
+The handler's return type picks the reply behavior, read by the type itself:
 
 | Return type | Wire effect |
 |---|---|
@@ -369,6 +370,7 @@ client could read is one it must not, say so where it happens:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 use nest_rs::ws::Opaque;
+use nest_rs::ws::WsError;
 
 #[subscribe_message("users.list")]
 #[authorize(Read, users::Entity)]
@@ -396,7 +398,7 @@ async fn typing(&self, msg: SendMessageDto, client: &WsClient) {
 }
 ```
 
-The handler returns `()`, so no envelope flows back to the sender on
+The handler answers `Ok(())`, so no envelope flows back to the sender on
 this event. The `client.broadcast(...)` call pushes a server→client
 event on a different event name — see [Rooms](/websockets/rooms/).
 

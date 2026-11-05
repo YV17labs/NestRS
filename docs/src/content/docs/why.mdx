@@ -176,8 +176,8 @@ pub struct UsersController {
 Once the [security modules](/security/) are imported, every read through the
 data layer is filtered, every mutating write is gated, and every operation declaring
 `#[authorize]` on an entity has its response masked. A route declaring none reads no
-row. A feature does not opt in to authn and authz; it opts out by not
-importing them.
+row, and one no guard identifying a caller covers refuses the boot unless it says
+`#[public]`.
 
 Security is **structural**, not vigilant: forgetting a check is a category
 error the framework prevents, not a bug a code reviewer has to catch.

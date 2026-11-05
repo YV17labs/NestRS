@@ -139,7 +139,7 @@ let env = ConfigService::with_source("seaorm", source);
 let cfg = SeaOrmConfig::from_env(&env, SeaOrmConfig::default()).unwrap();
 
 let app = TestApp::builder()
-    .module::<AppModule>()
+    .module::<ApiModule>()
     .provide(cfg)
     .build()
     .await?;

@@ -114,10 +114,10 @@ deep on each.
   spawned task, after-commit work, a socket's next messages.
 - **[Bound subject](/security/authorization/by-id-binding/)** —
   `#[authorize(Action, bind = Service)]`: parses the id from the URL (an
-  `id` argument on GraphQL), calls `Service::access(id)` through the
+  `id` argument on GraphQL), calls `Service::access(action, id)` through the
   ambient ability, and hands the loaded + authorized entity to the
   operation's `Authorized<Action, E>` parameter (404 absent, 403 denied).
-- **[Scope (extractor)](/security/authorization/row-level-filtering/)**
+- **[`scope_for`](/security/authorization/row-level-filtering/)**
   — the explicit-condition counterpart to a bound subject; hands a hand-built
   query a SeaORM `Condition` derived from the ambient ability.
 - **[`#[expose]`](/database/entities/)** — the opt-in read-side
@@ -208,8 +208,8 @@ deep on each.
 
 - **[Probe vs Indicator](/health/indicators/)** — a *probe* is one of
   the three HTTP routes (`live` / `ready` / `startup`); an *indicator*
-  is a unit the probe aggregates (a `DatabaseHealthIndicator`, a
-  custom one).
+  is a unit the probe aggregates (the one a resource the framework opens
+  attaches, a custom one).
 
 ## Other
 

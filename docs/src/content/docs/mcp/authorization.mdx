@@ -15,7 +15,7 @@ MCP request, and every operation it carries runs under the `Ability` they
 attached — the same guards HTTP and GraphQL run, in the same order, nothing
 re-implemented per transport.
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/assistant/src/module.rs"
 #[module(
     imports = [
         SeaOrmDatabaseModule,
@@ -153,7 +153,7 @@ Guarding the endpoint closes it; it does not tell a client how to open it. The
 MCP authorization spec requires the server to publish that, so add
 `OAuthResourceModule` and name the deployment:
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/assistant/src/module.rs"
 imports = [/* … */, OAuthResourceModule]
 ```
 

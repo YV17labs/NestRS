@@ -24,7 +24,7 @@ through a feature.
 
 | Provider state                                                          | Indicator behavior |
 |-------------------------------------------------------------------------|---------------------|
-| Provider lives in a module **imported** by `AppModule` (directly or transitively) | Runs on every matching probe |
+| Provider lives in a module **imported** by the app root (directly or transitively) | Runs on every matching probe |
 | Provider linked into the binary but in **no reachable module**          | Skipped; named **once at boot** on `nest_rs::health` — a `warn` when it is your app's own code, `debug` when it is a dependency's |
 
 Linking a crate without importing its module keeps every provider in
@@ -73,7 +73,7 @@ app does not import (`cause="dependency"`, with that module in the `hint`). A
 binary is not told about another binary's. The boot reads which modules your app imports,
 never a crate's name. Probing then skips in silence. When a shared crate's indicator does not appear, read
 `nest_rs::health` at `debug`: the usual cause is a missing `<Feature>HealthModule`
-import in `AppModule` — the feature's data module imports the service, not the
+import in the app root — the feature's data module imports the service, not the
 health adapter.
 
 A second check: the response body. With the indicator's module

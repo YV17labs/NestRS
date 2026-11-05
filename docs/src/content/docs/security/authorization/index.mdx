@@ -13,9 +13,9 @@ Authorization answers *what the caller may do*. You write one
 `Ability` — the per-request capability set. The framework reads that
 ability from three places: the query pre-filter on every read, the
 by-id binding when a route loads a row, and the response mask after
-the handler returns. None of them are opt-in per route — they apply
-to every handler whose controller imports the transport's authz
-module.
+the handler returns. Each is a line on the unit: its `#[authorize]` or
+`#[public(Action, Subject)]` names what it reads, and a unit naming nothing has
+the ability withheld from its reads, so what it did not declare fails closed.
 
 The engine is ability-based — grants, conditional rules, fields — but
 backed by one shared `Predicate` AST so the SQL filter and the
@@ -109,8 +109,8 @@ pub struct UsersController {
 Order matters: `AuthnGuard` attaches the principal; `AuthzGuard` reads
 it and builds the `Ability`. The route's `#[authorize]` class gate runs
 right after them, before any interceptor or filter the route declares, so
-nothing the route binds answers a caller the gate refuses. Every handler
-downstream sees an ambient `Ability` it does not have to thread.
+nothing the route binds answers a caller the gate refuses. A handler whose
+posture names what it reads sees an ambient `Ability` it does not have to thread.
 
 ## One class gate on every edge
 
@@ -169,11 +169,12 @@ included, and arms no mask, since there is no row to mask.
 
 A query of a service's own starts from `Repo::scoped`, which joins the
 `Condition` for it ([a custom query](/security/authorization/row-level-filtering/#when-you-really-do-need-a-custom-query)).
-A service method or any code the request reaches — a streaming body and
-a dataloader batch included — reads the ability directly:
+A service method or any code a masked unit reaches — a dataloader batch
+included — reads the ability directly:
 
 ```rust title="crates/features/src/users/service.rs"
 use nest_rs::authz::current_ability;
+use nest_rs::authz::Action;
 
 if let Some(ab) = current_ability() {
     if !ab.can::<user::Entity>(Action::Update, &model) {
@@ -191,6 +192,7 @@ row's primary key under the action's own condition, one indexed query.
 
 ```rust title="crates/features/src/users/service.rs"
 use nest_rs::seaorm::Repo;
+use nest_rs::authz::Action;
 
 if !Repo::<user::Entity>::can(Action::Update, &model).await? {
     return Err(ServiceError::forbidden("not permitted"));
@@ -209,6 +211,11 @@ tick, init or shutdown hook). That work runs **unscoped** by design — system
 work should not be filtered by a caller's ability. See
 [Threat model](/security/threat-model/) for what that buys and what
 it does not.
+
+It returns `None` as well on a unit no mask shapes, every `#[sse]` stream among
+them, and for a visitor anywhere but a unit naming what it reads: the ability is
+withheld there, so a `Repo` read fails closed. A check of your own that must hold
+on such a unit asks `Repo::can`, which refuses there, rather than skipping on `None`.
 
 ## What an `Ability` exposes
 
@@ -277,7 +284,7 @@ controller with the transport's authz module, and write a
   `#[authorize(A, bind = S)]` turning a path id into a loaded, authorized
   model.
 - [Response masking](/security/authorization/response-masking/) — the
-  fail-closed field mask every successful response goes through.
+  fail-closed field mask a posture arms on every successful response.
 
 ### All options
 

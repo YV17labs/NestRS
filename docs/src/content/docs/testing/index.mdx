@@ -26,7 +26,7 @@ Three categories, Rust's standard model plus the app e2e:
   exercised as an external consumer would. Shared fixtures sit in the suite's
   `main.rs`, beside its `mod` list.
 - **[End-to-end tests](/testing/e2e/)** — `TestApp` boots the real
-  `AppModule` on a throwaway database and a signing key of the test's own.
+  `ApiModule` on a throwaway database and a signing key of the test's own.
   The route table, the DI graph, the access-graph check, authn/authz, and the
   data path all run.
 
@@ -137,7 +137,7 @@ the examples in doc comments. Bare `nestrs run test` runs every kind, and
 - [Unit tests](/testing/unit/) — pure logic next to the code, no DI boot.
 - [Integration tests](/testing/integration/) — a crate's public API in
   process, no database and no network.
-- [End-to-end tests](/testing/e2e/) — the real `AppModule` against live
+- [End-to-end tests](/testing/e2e/) — the real `ApiModule` against live
   Postgres, Redis and S3.
 
 ### All options

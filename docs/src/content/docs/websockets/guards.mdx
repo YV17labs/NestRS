@@ -42,6 +42,7 @@ request, like any HTTP guard:
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 use nest_rs::ws::{gateway, messages};
 use crate::auth::AuthnGuard;
+use std::sync::Arc;
 
 #[gateway(path = "/ws")]
 #[use_guards(AuthnGuard)]

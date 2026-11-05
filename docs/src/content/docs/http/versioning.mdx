@@ -14,6 +14,8 @@ same thing.
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::{controller, routes};
+use std::sync::Arc;
+use nest_rs::http::Json;
 
 #[controller(path = "/posts", version = "1")]
 pub struct PostsV1Controller {

@@ -336,6 +336,8 @@ use nest_rs::seaorm::retry::{
     retry_on_conflict, DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF,
 };
 use sea_orm::{DatabaseConnection, TransactionTrait};
+use nest_rs::seaorm::ServiceError;
+use uuid::Uuid;
 
 impl PostsService {
     pub async fn publish(&self, id: Uuid) -> Result<post::Model, ServiceError> {

@@ -125,7 +125,7 @@ that would be a second, redundant gate, so there is not one.
 NestJS resolves the dependency graph as the app instantiates, and a bad wire
 often surfaces as a `Cannot resolve dependency` the first time a route runs.
 NestRS records every module's imports and every provider's dependencies at
-compile time. At startup, `App::build()` walks that graph.
+compile time. At startup, `App::builder().build()` walks that graph.
 
 A provider that injects something its module cannot reach fails startup with an
 error naming the missing dependency and the fix — never a runtime resolution
@@ -181,14 +181,14 @@ the readiness probe instead of surfacing as a mystery three requests later.
 In NestJS, authorization is a habit: you remember to add `@UseGuards` and a
 policy check on each route, and a forgotten one is a silent hole. NestRS moves
 the guarantee into composition. Once a feature imports the database and authz
-modules, every read through the data layer is filtered, every mutating write is
-gated, and every response body is masked.
+modules, every read through the data layer is filtered and every mutating write
+is gated, and what a unit answers is masked where its posture names what it
+reads. A unit naming nothing reads nothing a grant guards, so the line you forget
+fails closed.
 
-A feature does not opt in to authz per handler. It opts out by not importing
-the modules. You still bind guards explicitly with `#[use_guards(...)]`, and
-every posture stays greppable as one `#[authorize]` or `#[public]` site — but
-forgetting the filter on a query is a category error the framework prevents,
-not a review catch.
+You still bind guards explicitly with `#[use_guards(...)]`, and every posture
+stays greppable as one `#[authorize]` or `#[public]` site — but forgetting the
+filter on a query is a category error the framework prevents, not a review catch.
 
 ## A forgotten guard refuses the boot
 

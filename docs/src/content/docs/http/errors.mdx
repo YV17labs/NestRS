@@ -27,6 +27,7 @@ client branches on, and when you have one, a problem type of your own:
 ```rust title="crates/features/src/hello/error.rs"
 use nest_rs::core::{Problem, ToProblem, code};
 use thiserror::Error;
+use nest_rs::http::Json;
 
 const NAME_RESERVED: Problem = Problem::new(409, code::CONFLICT).with_type(
     "https://example.com/problems/name-reserved",
@@ -117,6 +118,7 @@ structured error body conforming to
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::{Json, Opaque, Path, ProblemDetails, Result};
+use uuid::Uuid;
 
 #[get("/posts/{id}")]
 async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Post>> {
@@ -231,6 +233,9 @@ response body.
 
 ```rust title="crates/features/src/reports/http/controller.rs"
 use nest_rs::http::Opaque;
+use nest_rs::http::Json;
+use nest_rs::http::Path;
+use uuid::Uuid;
 
 #[get("/reports/{id}")]
 #[authorize(Read, reports::Entity)]

@@ -229,3 +229,55 @@ and `users { posts { … } }` lists what a child's grant withholds the key of. A
 always done so. Closing the `belongs_to` half costs the mask a table of each relation's
 key; closing the `has_many` half refuses `orgs { users { name } }` to a grant of
 `[Id, Name]`, which reads as a granted selection, so it is the owner's.
+
+## 2026-11-05 — a row crosses no wire, by coherence
+
+The 2026-10-31 entry left one opening to review: a serde impl `#[expose]` cannot read,
+written by hand or derived above it. The owner's mandate of 2026-11-05 ("on ne veut pas
+d'angle mort") reopened it, public breaks agreed. Run first, at the tip: each of these
+compiled, and `#[query] fn row(&self) -> post::Model` answered through a `SimpleObject` on
+the row, so a GraphQL object was the same opening, on no list.
+
+- **`#[expose]` emits on the row the impl of every trait that carries it**: serde's
+  `Serialize` and `Deserialize`, `JsonSchema`, which publishes each hidden column's name
+  and type, and, in a build with async-graphql, `OutputType` and `InputType`; on the
+  `Model`, and on the `ModelEx` `#[sea_orm::model]` writes beside it, which holds every
+  column too. Each is bounded on `for<'a> HiddenColumns<'a>: AModelCrossesNoWire<fn(Model)
+  -> Wire>`, which has no impl and can have none.
+- **What that does, read through the real decorator.** A use, whatever holds the row
+  (`to_string(&model)`, `Vec<Model>`, a DTO's field, `Json<Model>`, a resolver's answer),
+  is `E0277` with the bound's own sentence, naming the exposed type. Another impl of
+  those traits is `E0119`: by hand, a derive above `#[expose]`, `#[output]` or `#[input]`
+  on either side of it, `#[Object]`. Answering the bound is `E0117`. The derives the
+  decorator can read keep their sentence, and it then emits none of these, so one
+  misuse is not said twice.
+- **The bound's shape is what makes it hold**, each part compiled. Everything it names is
+  foreign to the crate writing it: a trait local there reports an impl beside the emitted
+  one as `E0283`, `type annotations needed`, instead of `E0119`, so it lives in
+  `nest-rs-seaorm`'s `__private`. The lifetime keeps it from reading as trivially false,
+  `E0277` at the emitted impl itself. `fn(Model) -> Wire` names the exposed type in rustc's
+  sentence and stays foreign: the bare type as the parameter reports `E0283` too, and lets
+  the crate answer the bound.
+- **Nothing is called.** The bodies call the bound's `refused() -> !`, so an expansion
+  carries no panic path, and the mask's round trip needs no serde on a row.
+- **`macros.md`'s "naming no expansion item" takes an exception here**: `E0119`'s first
+  line is rustc's and its note names the bound, whose names read as the reason. Security
+  over diagnostics: nothing else refuses an impl that must not exist.
+
+**Refused:**
+
+- **The const probe** (`const _: () = assert!(!SerdeProbe::<Model>::IMPLEMENTS, "…")`).
+  Compiled through the real `#[expose]`, it has the better line for a hand-written impl,
+  `E0080` with the framework's sentence alone. But `to_string(&model)`, the misuse a
+  developer actually writes, stays serde's `E0277`, advising the derive `#[expose]`
+  refuses and listing 468 impls, and `impl Deserialize<'static> for Model` passes its
+  `for<'de>` bound in silence, and reads a row off a `&'static str`.
+- **The refusals of 2026-10-31 stand corrected**: its "`Serialize` impl bounded on a trait
+  never implemented reports serde's own missing-impl error" held for the form tried then.
+  A foreign trait under a higher-ranked bound reports the trait's own sentence.
+
+**The limit named:** a struct a body fills from a row's columns, `json!({ "hash":
+row.hash })`, and a `#[serde(remote)]` mirror are the body's own lines, which no type tells
+from `initials(row.name)`. `Debug` of a row in a log stays review. A `ModelEx` is read off
+the attribute's name, so a `#[sea_orm::model]` renamed on import leaves its `ModelEx` out:
+closing it takes sea-orm naming the type where a decorator can read it.

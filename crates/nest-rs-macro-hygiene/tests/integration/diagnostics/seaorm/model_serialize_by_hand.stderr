@@ -1,0 +1,11 @@
+error[E0119]: conflicting implementations of trait `serde::Serialize` for type `post::Model`
+  --> tests/integration/diagnostics/seaorm/model_serialize_by_hand.rs:9:5
+   |
+ 9 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `post::Model`
+...
+26 |     impl serde::Serialize for Model {
+   |     ------------------------------- first implementation here
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> post::Post>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)

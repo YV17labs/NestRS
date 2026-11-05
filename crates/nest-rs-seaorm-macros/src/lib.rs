@@ -51,9 +51,13 @@ mod wire;
 /// — under `graphql` — the relation loaders + `#[ComplexObject]` field
 /// resolvers for `#[expose]`d relations.
 ///
-/// A `Serialize` or `Deserialize` derived on the row — in `#[derive]` or
-/// sea-orm's `model_attrs` and `model_ex_attrs` — is refused at the derive: the
-/// row crosses a wire only as its exposed type, and a write only as its inputs.
+/// The row crosses a wire only as its exposed type, and a write only as its
+/// inputs. A `Serialize`, `Deserialize`, `JsonSchema`, `SimpleObject` or
+/// `InputObject` derived on it — in `#[derive]` or sea-orm's `model_attrs` and
+/// `model_ex_attrs` — is refused at the derive, and the expansion's own impls of
+/// those traits, on the `Model` and on the `ModelEx` beside it (known by the name
+/// of `#[sea_orm::model]`, written under the decorator), overlap one written by
+/// hand or derived above the decorator and report what to answer where one is used.
 ///
 /// A masked reply rebuilds every hidden column, so each one needs a
 /// placeholder: a `String`, `Option`, `bool` or number takes its `Default`, a

@@ -1,0 +1,76 @@
+error[E0119]: conflicting implementations of trait `nest_rs::mcp::rmcp::serde::Serialize` for type `post::Model`
+  --> tests/integration/diagnostics/seaorm/output_on_the_model.rs:10:5
+   |
+ 9 |     #[output]
+   |     --------- first implementation here
+10 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `post::Model`
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> post::Post>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0119]: conflicting implementations of trait `nest_rs::mcp::rmcp::serde::Serialize` for type `note::Model`
+  --> tests/integration/diagnostics/seaorm/output_on_the_model.rs:32:5
+   |
+31 |     #[expose(name = "Note")]
+   |     ------------------------ first implementation here
+32 |     #[output]
+   |     ^^^^^^^^^ conflicting implementation for `note::Model`
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(note::Model) -> note::Note>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the derive macro `::nest_rs::core::__private::serde::Serialize` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0119]: conflicting implementations of trait `nest_rs::mcp::rmcp::serde::Serialize` for type `draft::Model`
+  --> tests/integration/diagnostics/seaorm/output_on_the_model.rs:54:5
+   |
+53 |     #[input]
+   |     -------- first implementation here
+54 |     #[expose(name = "Draft")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `draft::Model`
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(draft::Model) -> draft::Draft>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0119]: conflicting implementations of trait `nest_rs::mcp::rmcp::serde::Deserialize<'_>` for type `draft::Model`
+  --> tests/integration/diagnostics/seaorm/output_on_the_model.rs:54:5
+   |
+53 |     #[input]
+   |     -------- first implementation here
+54 |     #[expose(name = "Draft")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `draft::Model`
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(draft::Model) -> draft::Draft>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0119]: conflicting implementations of trait `JsonSchema` for type `post::Model`
+  --> tests/integration/diagnostics/seaorm/output_on_the_model.rs:10:5
+   |
+ 9 |     #[output]
+   |     --------- first implementation here
+10 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `post::Model`
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> post::Post>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0119]: conflicting implementations of trait `JsonSchema` for type `note::Model`
+  --> tests/integration/diagnostics/seaorm/output_on_the_model.rs:32:5
+   |
+31 |     #[expose(name = "Note")]
+   |     ------------------------ first implementation here
+32 |     #[output]
+   |     ^^^^^^^^^ conflicting implementation for `note::Model`
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(note::Model) -> note::Note>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the derive macro `::nest_rs::core::__private::schemars::JsonSchema` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0119]: conflicting implementations of trait `JsonSchema` for type `draft::Model`
+  --> tests/integration/diagnostics/seaorm/output_on_the_model.rs:54:5
+   |
+53 |     #[input]
+   |     -------- first implementation here
+54 |     #[expose(name = "Draft")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `draft::Model`
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(draft::Model) -> draft::Draft>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)

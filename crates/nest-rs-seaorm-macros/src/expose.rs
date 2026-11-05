@@ -47,7 +47,11 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
-    let serde_refused = wire::serde_refusals(&item.attrs, &model);
+    let derive_refused = wire::derive_refusals(&item.attrs, &model);
+    // A derive just refused would overlap these too, one misuse said twice.
+    let refused_wires = derive_refused
+        .is_none()
+        .then(|| wire::refused_wires(&item.attrs, &model));
     let output = dto::emit(&model);
     let inputs = input::emit(&model);
     let active = active::emit(&model);
@@ -63,12 +67,13 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     quote! {
-        #serde_refused
+        #derive_refused
         #item
         #output
         #inputs
         #active
         #wire_defaults
+        #refused_wires
         #lifecycle
         #relations
     }

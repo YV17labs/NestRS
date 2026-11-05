@@ -206,7 +206,10 @@ and note say the whole fix; a `__private` impl rustc would list as a
 candidate, or a blanket that leads it to the wrong trait, is
 `#[diagnostic::do_not_recommend]`; and a bound one use site checks is not
 re-checked by every probe — what a decorator generates carries no probe its
-type cannot answer. Held by the hygiene snapshots, read when they move.
+type cannot answer. Held by the hygiene snapshots, read when they move. One
+exception, by the first value: an impl only coherence can refuse (a `Model`'s
+wire traits, `.claude/decisions/mask-provenance.md`) reports rustc's own `E0119`,
+whose note names the bound, so that bound's name says the reason.
 
 **Every layer attribute is one cell of `nest_rs_codegen::__private::layers`'
 table** — an exhaustive `match` over the pairs, each layer attribute and the

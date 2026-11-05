@@ -1,0 +1,101 @@
+error[E0599]: the method `into_result` exists for struct `nest_rs::http::__private::RouteReturn<nest_rs::http::Json<post::Model>>`, but its trait bounds were not satisfied
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:31:1
+   |
+31 | #[routes]
+   | ^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   |
+  ::: $WORKSPACE/crates/nest-rs-http/src/response.rs
+   |
+   | pub struct RouteReturn<R>(pub R);
+   | ------------------------- doesn't satisfy `_: RouteReturnFallback<_>`
+   |
+  ::: $WORKSPACE/crates/nest-rs-http/src/json.rs
+   |
+   | pub struct Json<T>(pub T);
+   | ------------------ doesn't satisfy `_: IntoResult<_>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `nest_rs::http::Json<post::Model>: nest_rs::http::__private::IntoResult<_>`
+           which is required by `nest_rs::http::__private::RouteReturn<nest_rs::http::Json<post::Model>>: nest_rs::http::__private::RouteReturnFallback<_>`
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:31:1
+   |
+31 | #[routes]
+   | ^^^^^^^^^ this carries every column, hidden ones included
+   |
+   = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
+help: the trait `FromRequest<'_>` is implemented for `nest_rs::http::Json<T>`
+  --> $WORKSPACE/crates/nest-rs-http/src/json.rs
+   |
+   | impl<'a, T: DeserializeOwned> FromRequest<'a> for Json<T> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `post::Model` to implement `for<'de> nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+...
+11 |     pub struct Model {
+   |                ^^^^^
+   = note: required for `post::Model` to implement `DeserializeOwned`
+   = note: required for `nest_rs::http::Json<post::Model>` to implement `FromRequest<'_>`
+   = note: this error originates in the attribute macro `routes` which comes from the expansion of the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:31:1
+   |
+31 | #[routes]
+   | ^^^^^^^^^ this carries every column, hidden ones included
+   |
+   = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
+help: the trait `JsonSchema` is implemented for `post::Model`
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `post::Model` to implement `JsonSchema`
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+...
+11 |     pub struct Model {
+   |                ^^^^^
+note: required by a bound in `nest_rs::http::__private::PayloadProbe::<R>::payload`
+  --> $WORKSPACE/crates/nest-rs-http/src/documented_payload.rs
+   |
+   |     pub fn payload(&self) -> Option<SchemaFn>
+   |            ------- required by a bound in this associated function
+   |     where
+   |         R::Payload: JsonSchema,
+   |                     ^^^^^^^^^^ required by this bound in `PayloadProbe::<R>::payload`
+   = note: this error originates in the macro `::nest_rs::http::__payload_of` which comes from the expansion of the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:41:37
+   |
+41 |     fn read(&self, Json(_row): Json<post::Model>) {}
+   |                                     ^^^^^^^^^^^ this carries every column, hidden ones included
+   |
+   = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
+help: the trait `JsonSchema` is implemented for `post::Model`
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `post::Model` to implement `JsonSchema`
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+...
+11 |     pub struct Model {
+   |                ^^^^^
+note: required by a bound in `nest_rs::http::__private::schema_of`
+  --> $WORKSPACE/crates/nest-rs-http/src/controller.rs
+   |
+   | pub fn schema_of<T: schemars::JsonSchema>(
+   |                     ^^^^^^^^^^^^^^^^^^^^ required by this bound in `schema_of`
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)

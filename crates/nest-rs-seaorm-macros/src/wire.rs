@@ -1,8 +1,10 @@
-//! Emit `WireModel`: the round trip a masked reply runs on the entity's rows.
+//! Emit `WireModel`: the round trip a masked reply runs on the entity's rows, and
+//! the impls that keep a row off every other wire.
 //!
-//! **Each column goes through its own serde impls**, so the `Model` derives
-//! none — a serde derive written on it is refused — and crosses no wire but as
-//! its exposed type. An exposed column is read
+//! **Each column goes through its own serde impls**, so the `Model` needs none
+//! and crosses no wire but as its exposed type: a wire derive written on it is
+//! refused where it is read, and the bounded impls emitted on it answer one that
+//! cannot be read. An exposed column is read
 //! back from the wire object; any other is rebuilt from its placeholder — its
 //! type's `Default` in a narrow set (empty string, `None`, `false`, `0`), a
 //! `Secret` taking its value's, or the `#[wire_default]` written on it — and a
@@ -14,25 +16,26 @@
 use nest_rs_codegen::__private::{site, type_label};
 use nest_rs_codegen::Refusals;
 use proc_macro2::{Span, TokenStream};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Ident, LitStr, Meta, Path, Token, Type};
 
 use crate::attr::{ResourceField, ResourceModel, holds_secret, secret_inner};
 
-/// Every serde derive written on the row, refused at its path: `Serialize`
-/// writes each column, a hidden one too, onto a wire no mask shapes, and
-/// `Deserialize` reads each one off a body no input validates. Read in
-/// `#[derive(…)]` and in sea-orm's `model_attrs(…)` and `model_ex_attrs(…)`,
-/// which put a derive on the `Model` and on the `ModelEx` beside it.
-pub(crate) fn serde_refusals(attrs: &[Attribute], model: &ResourceModel) -> Option<TokenStream> {
+/// Every wire derive written on the row, refused at its path: `Serialize` and
+/// `SimpleObject` write each column, a hidden one too, onto a wire no mask shapes,
+/// `Deserialize` and `InputObject` read each one off a body no input validates,
+/// and `JsonSchema` publishes each one's name and type. Read in `#[derive(…)]` and
+/// in sea-orm's `model_attrs(…)` and `model_ex_attrs(…)`, which put a derive on the
+/// `Model` and on the `ModelEx` beside it.
+pub(crate) fn derive_refusals(attrs: &[Attribute], model: &ResourceModel) -> Option<TokenStream> {
     let row = model.source_ident.to_string();
     let mut refusals = Refusals::default();
     for attr in attrs {
         if attr.path().is_ident("derive") {
             if let Ok(paths) = attr.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)
             {
-                refuse_serde(&mut refusals, &paths, &row, model);
+                refuse_wire_derives(&mut refusals, &paths, &row, model);
             }
         } else if attr.path().is_ident("sea_orm") {
             // sea-orm refuses its own attribute's syntax; only a derive it
@@ -61,7 +64,7 @@ pub(crate) fn serde_refusals(attrs: &[Attribute], model: &ResourceModel) -> Opti
                         && let Ok(paths) =
                             derive.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)
                     {
-                        refuse_serde(&mut refusals, &paths, &target, model);
+                        refuse_wire_derives(&mut refusals, &paths, &target, model);
                     }
                 }
             }
@@ -73,33 +76,38 @@ pub(crate) fn serde_refusals(attrs: &[Attribute], model: &ResourceModel) -> Opti
         .map(|refused| refused.to_compile_error())
 }
 
-/// Refuse each `Serialize` and `Deserialize` among `paths`, derived on `row`.
-fn refuse_serde(
+/// Refuse each wire derive among `paths`, derived on `row`.
+fn refuse_wire_derives(
     refusals: &mut Refusals,
     paths: &Punctuated<Path, Token![,]>,
     row: &str,
     model: &ResourceModel,
 ) {
     let exposed = &model.output_ident;
+    let writes = "writes every column, hidden ones included, onto a wire no mask shapes";
+    let reads = format!(
+        "reads every column, hidden ones included, off a body no input validates — a write \
+         takes `{create}` or `{update}`, the inputs `#[expose(input(create, update))]` declares",
+        create = model.create_ident,
+        update = model.update_ident,
+    );
     for path in paths {
         let Some(last) = path.segments.last() else {
             continue;
         };
-        let what = if last.ident == "Serialize" {
-            format!(
-                "writes every column, hidden ones included, onto a wire no mask shapes — a \
-                 reply answers `{exposed}` (`Json({exposed}::from(&model))`)"
-            )
-        } else if last.ident == "Deserialize" {
-            format!(
-                "reads every column, hidden ones included, off a body no input validates — a \
-                 write takes `{create}` or `{update}`, the inputs \
-                 `#[expose(input(create, update))]` declares",
-                create = model.create_ident,
-                update = model.update_ident,
-            )
-        } else {
-            continue;
+        let what = match last.ident.to_string().as_str() {
+            "Serialize" => {
+                format!("{writes} — a reply answers `{exposed}` (`Json({exposed}::from(&model))`)")
+            }
+            "SimpleObject" => {
+                format!("{writes} — a reply answers `{exposed}` (`{exposed}::from(&model)`)")
+            }
+            "Deserialize" | "InputObject" => reads.clone(),
+            "JsonSchema" => format!(
+                "publishes every column, hidden ones included, in a document no mask shapes — a \
+                 reply's schema is `{exposed}`'s"
+            ),
+            _ => continue,
         };
         refusals.push(syn::Error::new_spanned(
             path,
@@ -110,6 +118,136 @@ fn refuse_serde(
             ),
         ));
     }
+}
+
+/// The impl of every trait that carries a row across a wire, on the `Model` and on
+/// the `ModelEx` `#[sea_orm::model]` writes beside it, bounded on what nothing
+/// answers: using one reports the bound's sentence, and writing another, which a
+/// derive above `#[expose]` or an `#[Object]` does, overlaps it.
+pub(crate) fn refused_wires(attrs: &[Attribute], model: &ResourceModel) -> TokenStream {
+    let row = &model.source_ident;
+    let model_ex = attrs
+        .iter()
+        .any(writes_a_model_ex)
+        .then(|| format_ident!("{row}Ex"));
+    let refused = std::iter::once(row)
+        .chain(&model_ex)
+        .map(|target| refused_wires_of(target, model));
+    quote!(#(#refused)*)
+}
+
+/// Whether `attr` is `#[sea_orm::model]` or `#[sea_orm::compact_model]`, read by its
+/// last segment, since no value tells a macro that a `ModelEx` will exist.
+fn writes_a_model_ex(attr: &Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|last| last.ident == "model" || last.ident == "compact_model")
+}
+
+/// [`refused_wires`]' impls on one type, every one under the bound
+/// `nest-rs-seaorm`'s `hidden_columns.rs` explains the shape of.
+fn refused_wires_of(target: &Ident, model: &ResourceModel) -> TokenStream {
+    let private = quote!(::nest_rs_seaorm::__private);
+    let (source, output) = (&model.source_ident, &model.output_ident);
+    let answer = quote!(#private::AModelCrossesNoWire<fn(#source) -> #output>);
+    let bound = quote!(for<'__row> #private::HiddenColumns<'__row>: #answer);
+    let refused = quote!(<#private::HiddenColumns<'static> as #answer>::refused());
+    let graphql = refused_graphql_wires(target, &bound, &refused);
+    quote! {
+        impl #private::serde::Serialize for #target where #bound {
+            fn serialize<__S: #private::serde::Serializer>(
+                &self,
+                _: __S,
+            ) -> ::core::result::Result<__S::Ok, __S::Error> {
+                #refused
+            }
+        }
+
+        impl<'__de> #private::serde::Deserialize<'__de> for #target where #bound {
+            fn deserialize<__D: #private::serde::Deserializer<'__de>>(
+                _: __D,
+            ) -> ::core::result::Result<Self, __D::Error> {
+                #refused
+            }
+        }
+
+        impl #private::schemars::JsonSchema for #target where #bound {
+            fn schema_name() -> ::std::borrow::Cow<'static, str> {
+                #refused
+            }
+
+            fn json_schema(
+                _: &mut #private::schemars::SchemaGenerator,
+            ) -> #private::schemars::Schema {
+                #refused
+            }
+        }
+
+        #graphql
+    }
+}
+
+/// async-graphql's two wire traits, in a build that has them: GraphQL is a wire of
+/// its own, whichever entity declares `graphql`, since a row needs no key of
+/// `#[expose]`'s to take `#[derive(SimpleObject)]` above it.
+#[cfg(feature = "graphql")]
+fn refused_graphql_wires(
+    target: &Ident,
+    bound: &TokenStream,
+    refused: &TokenStream,
+) -> TokenStream {
+    let root = crate::attr::graphql_root();
+    quote! {
+        impl #root::OutputType for #target where #bound {
+            fn type_name() -> ::std::borrow::Cow<'static, str> {
+                #refused
+            }
+
+            fn create_type_info(_: &mut #root::registry::Registry) -> ::std::string::String {
+                #refused
+            }
+
+            async fn resolve(
+                &self,
+                _: &#root::ContextSelectionSet<'_>,
+                _: &#root::Positioned<#root::parser::types::Field>,
+            ) -> #root::ServerResult<#root::Value> {
+                #refused
+            }
+        }
+
+        impl #root::InputType for #target where #bound {
+            type RawValueType = Self;
+
+            fn type_name() -> ::std::borrow::Cow<'static, str> {
+                #refused
+            }
+
+            fn create_type_info(_: &mut #root::registry::Registry) -> ::std::string::String {
+                #refused
+            }
+
+            fn parse(
+                _: ::core::option::Option<#root::Value>,
+            ) -> #root::InputValueResult<Self> {
+                #refused
+            }
+
+            fn to_value(&self) -> #root::Value {
+                #refused
+            }
+
+            fn as_raw_value(&self) -> ::core::option::Option<&Self::RawValueType> {
+                #refused
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "graphql"))]
+fn refused_graphql_wires(_: &Ident, _: &TokenStream, _: &TokenStream) -> TokenStream {
+    TokenStream::new()
 }
 
 /// The value a masked reply rebuilds the hidden column `field` with, or the

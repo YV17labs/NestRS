@@ -2983,6 +2983,7 @@ dependencies = [
  "nest-rs",
  "sea-orm",
  "serde",
+ "serde_json",
  "tracing",
  "trybuild",
 ]

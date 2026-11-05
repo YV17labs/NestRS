@@ -1,0 +1,17 @@
+error: #[expose]: `Model` derives `JsonSchema`, which publishes every column, hidden ones included, in a document no mask shapes — a reply's schema is `Post`'s: drop the derive
+  --> tests/integration/diagnostics/seaorm/json_schema_on_the_model.rs:11:58
+   |
+11 |     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, JsonSchema)]
+   |                                                          ^^^^^^^^^^
+
+error[E0119]: conflicting implementations of trait `JsonSchema` for type `note::Model`
+  --> tests/integration/diagnostics/seaorm/json_schema_on_the_model.rs:34:5
+   |
+32 |     #[derive(JsonSchema)]
+   |              ---------- first implementation here
+33 |     #[schemars(crate = "nest_rs::http::schemars")]
+34 |     #[expose(name = "Note")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `note::Model`
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(note::Model) -> note::Note>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)

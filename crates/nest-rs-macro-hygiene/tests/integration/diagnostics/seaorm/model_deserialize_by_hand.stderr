@@ -1,0 +1,23 @@
+error[E0119]: conflicting implementations of trait `serde::Deserialize<'_>` for type `post::Model`
+  --> tests/integration/diagnostics/seaorm/model_deserialize_by_hand.rs:9:5
+   |
+ 9 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `post::Model`
+...
+26 |     impl<'de> serde::Deserialize<'de> for Model {
+   |     ------------------------------------------- first implementation here
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> post::Post>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0119]: conflicting implementations of trait `serde::Deserialize<'static>` for type `note::Model`
+  --> tests/integration/diagnostics/seaorm/model_deserialize_by_hand.rs:37:5
+   |
+37 |     #[expose(name = "Note")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `note::Model`
+...
+51 |     impl serde::Deserialize<'static> for Model {
+   |     ------------------------------------------ first implementation here
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(note::Model) -> note::Note>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)

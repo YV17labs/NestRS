@@ -64,6 +64,7 @@ mod database;
 mod error;
 mod executor;
 mod exposed;
+mod hidden_columns;
 mod insertion;
 mod module;
 mod page;
@@ -137,6 +138,7 @@ pub mod __private {
 
     pub use crate::column_default::ColumnDefaultRegistration;
     pub use crate::exposed::ExposeDeclared;
+    pub use crate::hidden_columns::{AModelCrossesNoWire, HiddenColumns};
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
     pub use crate::unique_key::UniqueKeyRegistration;
     pub use inventory;
@@ -162,9 +164,10 @@ pub mod __private {
 /// Expose a SeaORM entity to REST/OpenAPI (and optionally GraphQL) from one
 /// declaration: its wire DTO (`Serialize` + `JsonSchema`), its `Create`/`Update`
 /// inputs, and the round trip response masking reads a row through, each
-/// column by its own serde impls. The `Model` itself derives no serde — a
-/// `Serialize` or `Deserialize` derived on it is refused — so it serializes
-/// nowhere.
+/// column by its own serde impls. A `Model` crosses no wire but as that type: a
+/// wire derive written on it is refused, and one above the decorator or an impl
+/// written by hand does not compile beside what the decorator emits on it, so it
+/// serializes nowhere and answers no GraphQL field.
 ///
 /// **Exposure is opt-in:** a column reaches the wire only when its field
 /// carries `#[expose]` (or `#[expose(input(...))]`, which implies read). A field

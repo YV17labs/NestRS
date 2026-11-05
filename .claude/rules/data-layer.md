@@ -276,10 +276,14 @@ writes takes its op over, and a key only that op reads (`api(<op>(…))`,
 Exposure is `#[expose]` (`CLAUDE.md`, hard "no"); a column a later migration
 adds never leaks by omission, and the entity *is* the wire contract, so a
 handler returns the exposed type (`Json<User>`), never `Model`: **the `Model`
-derives no serde** — held by `#[expose]`, which refuses a serde derive on the
-row and writes the round trip a mask reads it through, column by column, in its
-own sealed seam; a serde impl it cannot read — written by hand, or derived
-above `#[expose]` — is the one way past it, read in review as an opening.
+crosses no wire**, held by rustc: `#[expose]` emits, on it and on its `ModelEx`,
+the impl of every trait that carries a row (serde's, `JsonSchema`,
+async-graphql's `OutputType` and `InputType`), bounded on what nothing answers,
+so using one reports what to answer instead and writing another overlaps it,
+and refuses at the derive what it can read there. It writes the round trip a
+mask reads a row through, column by column, in its own sealed seam. A struct a
+body fills from a row's columns stays that body's line, read in review
+(`.claude/decisions/mask-provenance.md`, 2026-11-05).
 
 The mask is `nest-rs-authz`'s `wire_mask`, value-level and **fail-closed**:
 each wire row is read back into a `Model`, judged by the ability, and cut to

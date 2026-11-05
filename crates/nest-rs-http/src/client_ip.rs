@@ -748,10 +748,7 @@ mod tests {
     /// pod, the peer and each hop of the chain alike.
     #[test]
     fn a_peer_inside_a_listed_range_is_trusted() {
-        let trusted: Vec<TrustedProxy> = ["10.0.0.0/8", "fd00::/8"]
-            .into_iter()
-            .map(|entry| entry.parse().expect("an entry"))
-            .collect();
+        let trusted = trusting(&["10.0.0.0/8", "fd00::/8"]).trusted_proxies;
         let of = |xff, peer: &str| {
             ClientOrigin::resolve(None, Some(xff), None, Some(ip(peer)), &trusted)
         };

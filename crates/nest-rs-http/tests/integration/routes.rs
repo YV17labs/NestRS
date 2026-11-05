@@ -5,10 +5,11 @@
 use nest_rs_core::__private::provide_meta;
 use nest_rs_core::{App, Transport, module};
 use nest_rs_http::{
-    BoxEndpoint, FromRequest, HttpConfig, HttpEndpointMeta, HttpRoutes, Method, Request, Response,
-    controller, endpoint_fn, routes,
+    BoxEndpoint, FromRequest, HttpConfig, HttpEndpointMeta, HttpRoutes, Json, Method, Request,
+    Response, controller, endpoint_fn, pipe_error, routes,
 };
 use nest_rs_http::{StatusCode, header};
+use validator::Validate;
 
 use crate::Client;
 use crate::transport::{PATIENCE, connect, read_head, serve_module};
@@ -367,7 +368,7 @@ async fn a_self_mount_registering_an_undeclared_path_fails_the_boot_naming_both(
     );
 }
 
-#[derive(serde::Deserialize, schemars::JsonSchema, validator::Validate)]
+#[derive(serde::Deserialize, schemars::JsonSchema, Validate)]
 struct Rated {
     #[validate(range(max = 5))]
     stars: u8,
@@ -384,8 +385,7 @@ async fn an_entry_decodes_and_validates_its_own_request() {
             "/unchecked",
             endpoint_fn(|req: Request| async move {
                 let (head, mut body) = req.split();
-                let nest_rs_http::Json(rated) =
-                    nest_rs_http::Json::<Rated>::from_request(&head, &mut body).await?;
+                let Json(rated) = Json::<Rated>::from_request(&head, &mut body).await?;
                 Ok(Response::builder().body(rated.stars.to_string()))
             }),
         );
@@ -394,10 +394,10 @@ async fn an_entry_decodes_and_validates_its_own_request() {
             "/checked",
             endpoint_fn(|req: Request| async move {
                 let (head, mut body) = req.split();
-                let nest_rs_http::Json(rated) =
-                    nest_rs_http::Json::<Rated>::from_request(&head, &mut body).await?;
-                validator::Validate::validate(&rated)
-                    .map_err(|errors| nest_rs_http::pipe_error(&errors.into()))?;
+                let Json(rated) = Json::<Rated>::from_request(&head, &mut body).await?;
+                rated
+                    .validate()
+                    .map_err(|errors| pipe_error(&errors.into()))?;
                 Ok(Response::builder().body(rated.stars.to_string()))
             }),
         );

@@ -159,7 +159,7 @@ async fn serve() -> Serving {
 
 /// [`serve`] for any module and config — the same transport.
 pub(crate) async fn serve_module<M: nest_rs_core::Module + 'static>(config: HttpConfig) -> Serving {
-    serve_app(App::builder().module::<M>(), config).await
+    serve_app(App::builder().module::<M>(), "127.0.0.1", config).await
 }
 
 /// [`serve_module`] listening on `host`, `config` also seeded in the container,
@@ -169,20 +169,11 @@ pub(crate) async fn serve_module_on<M: nest_rs_core::Module + 'static>(
     config: HttpConfig,
 ) -> Serving {
     let builder = App::builder().module::<M>().provide(config.clone());
-    serve_app_on(builder, host, config).await
+    serve_app(builder, host, config).await
 }
 
-/// [`serve_module`] for an app built as `builder` describes.
-async fn serve_app(builder: nest_rs_core::AppBuilder, config: HttpConfig) -> Serving {
-    serve_app_on(builder, "127.0.0.1", config).await
-}
-
-/// [`serve_app`] listening on `host`.
-async fn serve_app_on(
-    builder: nest_rs_core::AppBuilder,
-    host: &str,
-    config: HttpConfig,
-) -> Serving {
+/// [`serve_module`] for an app built as `builder` describes, listening on `host`.
+async fn serve_app(builder: nest_rs_core::AppBuilder, host: &str, config: HttpConfig) -> Serving {
     let app = builder.build().await.expect("module boots");
     let mut transport = crate::built(&HttpConfig {
         host: host.into(),
@@ -894,7 +885,7 @@ async fn an_upgrade_request_reaches_its_entry_with_its_socket() {
             false => App::builder().module::<UpgradeModule>(),
             true => App::builder().module::<LayeredUpgradeModule>(),
         };
-        let serving = serve_app(builder, HttpConfig::default()).await;
+        let serving = serve_app(builder, "127.0.0.1", HttpConfig::default()).await;
         let mut stream = connect(serving.port).await;
         stream
             .write_all(

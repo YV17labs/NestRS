@@ -81,6 +81,13 @@ fn policy(cors: HttpCors) -> HttpConfig {
     }
 }
 
+fn origin_only() -> HttpCors {
+    HttpCors {
+        origins: vec![LISTED.into()],
+        ..HttpCors::default()
+    }
+}
+
 fn listed() -> HttpCors {
     HttpCors {
         origins: vec![LISTED.into()],
@@ -291,11 +298,7 @@ async fn an_answer_to_any_origin_varies_on_it_and_on_what_compression_reads() {
 /// page cannot send; a method no route serves is refused.
 #[tokio::test]
 async fn a_policy_naming_no_method_lists_the_methods_the_app_routes() {
-    let client = crate::boot_on::<DocumentsModule>(policy(HttpCors {
-        origins: vec![LISTED.into()],
-        ..HttpCors::default()
-    }))
-    .await;
+    let client = crate::boot_on::<DocumentsModule>(policy(origin_only())).await;
 
     let routed = preflight(&client, "/documents/7", "PUT").await;
     assert!(routed.0.status().is_success(), "{}", routed.0.status());
@@ -311,11 +314,7 @@ async fn a_policy_naming_no_method_lists_the_methods_the_app_routes() {
 /// under a policy naming none — never a forbidden one.
 #[tokio::test]
 async fn a_mount_answering_every_method_admits_every_method_a_page_sends() {
-    let client = crate::boot_on::<EveryMethodModule>(policy(HttpCors {
-        origins: vec![LISTED.into()],
-        ..HttpCors::default()
-    }))
-    .await;
+    let client = crate::boot_on::<EveryMethodModule>(policy(origin_only())).await;
 
     let preflight = preflight(&client, "/rpc", "DELETE").await;
     assert!(
@@ -364,11 +363,7 @@ struct OptionsModule;
 /// reaches the entry that answers it, and the page may read the answer.
 #[tokio::test]
 async fn a_plain_options_from_a_listed_origin_reaches_what_answers_it() {
-    let client = crate::boot_on::<OptionsModule>(policy(HttpCors {
-        origins: vec![LISTED.into()],
-        ..HttpCors::default()
-    }))
-    .await;
+    let client = crate::boot_on::<OptionsModule>(policy(origin_only())).await;
 
     for (path, body) in [("/capabilities", "options"), ("/rpc", "rpc")] {
         let answered = client
@@ -397,11 +392,7 @@ async fn a_plain_options_from_a_listed_origin_reaches_what_answers_it() {
 /// list reaches nothing, whatever the method.
 #[tokio::test]
 async fn a_plain_options_from_an_unlisted_origin_is_refused() {
-    let client = crate::boot_on::<OptionsModule>(policy(HttpCors {
-        origins: vec![LISTED.into()],
-        ..HttpCors::default()
-    }))
-    .await;
+    let client = crate::boot_on::<OptionsModule>(policy(origin_only())).await;
 
     let refused = client
         .request(Method::OPTIONS, "/capabilities")
@@ -550,11 +541,7 @@ async fn the_cors_layer_and_the_origin_check_read_one_list_alike() {
 /// readers under a list, admitted by both under the wildcard alone.
 #[tokio::test]
 async fn null_is_refused_by_both_readers_but_under_the_wildcard() {
-    let listed = crate::boot_on::<BothReadersModule>(policy(HttpCors {
-        origins: vec![LISTED.into()],
-        ..HttpCors::default()
-    }))
-    .await;
+    let listed = crate::boot_on::<BothReadersModule>(policy(origin_only())).await;
     assert_eq!(
         verdicts(&listed, "null").await,
         (StatusCode::FORBIDDEN, StatusCode::FORBIDDEN)

@@ -54,12 +54,13 @@ impl TrustedProxy {
     /// `address` and its `prefix` length, a mapped range being the IPv4 range
     /// it carries; or the way they are no range this type holds.
     fn range(address: IpAddr, prefix: u8) -> Result<Self, NotATrustedProxy> {
-        let (network, prefix) = match address {
-            IpAddr::V6(v6) if prefix >= MAPPED_PREFIX => match v6.to_ipv4_mapped() {
-                Some(v4) => (IpAddr::V4(v4), prefix - MAPPED_PREFIX),
-                None => (address, prefix),
-            },
-            _ => (address, prefix),
+        let (network, prefix) = if let IpAddr::V6(v6) = address
+            && prefix >= MAPPED_PREFIX
+            && let Some(v4) = v6.to_ipv4_mapped()
+        {
+            (IpAddr::V4(v4), prefix - MAPPED_PREFIX)
+        } else {
+            (address, prefix)
         };
         if prefix > full_length(network) {
             return Err(NotATrustedProxy::PrefixLength);
@@ -128,22 +129,16 @@ impl FromStr for TrustedProxy {
 
     /// An IP address, or one and its prefix length (`10.0.0.0/8`, `fd00::/8`).
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let (address, prefix) = match text.split_once('/') {
-            Some((address, prefix)) => (address, Some(prefix)),
-            None => (text, None),
-        };
-        let address: IpAddr = address.parse().ok().ok_or(NotATrustedProxy::Grammar)?;
-        let Some(prefix) = prefix else {
-            return Ok(address.into());
+        let address = |text: &str| text.parse::<IpAddr>().ok().ok_or(NotATrustedProxy::Grammar);
+        let Some((network, prefix)) = text.split_once('/') else {
+            return address(text).map(Self::from);
         };
         // `u8`'s parser takes a leading `+`, which no CIDR notation writes.
-        let prefix = prefix
-            .bytes()
-            .all(|byte| byte.is_ascii_digit())
-            .then(|| prefix.parse::<u8>().ok())
-            .flatten()
+        let prefix = Some(prefix)
+            .filter(|digits| digits.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|digits| digits.parse::<u8>().ok())
             .ok_or(NotATrustedProxy::Grammar)?;
-        Self::range(address, prefix)
+        Self::range(address(network)?, prefix)
     }
 }
 

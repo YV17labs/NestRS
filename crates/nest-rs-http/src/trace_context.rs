@@ -296,7 +296,6 @@ pub(crate) fn record_failure(span: &tracing::Span, status: StatusCode) {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::TrustedProxy;
 
@@ -304,7 +303,7 @@ mod tests {
     const UPSTREAM: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
     const UPSTREAM_TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 
-    fn ip(s: &str) -> TrustedProxy {
+    fn proxy(s: &str) -> TrustedProxy {
         s.parse().expect("test literal is an entry")
     }
 
@@ -344,7 +343,7 @@ mod tests {
     #[test]
     fn a_trusted_traceparent_is_continued_with_the_caller_as_parent() {
         let req = req_from("10.0.0.1", &[(TRACEPARENT_HEADER, UPSTREAM)]);
-        let correlation = resolve(&req, &[ip("10.0.0.1")]);
+        let correlation = resolve(&req, &[proxy("10.0.0.1")]);
 
         assert_eq!(correlation.trace_id().to_hex(), UPSTREAM_TRACE);
         assert_eq!(
@@ -362,7 +361,7 @@ mod tests {
     fn an_inbound_traceparent_from_an_untrusted_peer_is_ignored() {
         let req = req_from("203.0.113.9", &[(TRACEPARENT_HEADER, UPSTREAM)]);
         assert_ne!(
-            resolve(&req, &[ip("10.0.0.1")]).trace_id().to_hex(),
+            resolve(&req, &[proxy("10.0.0.1")]).trace_id().to_hex(),
             UPSTREAM_TRACE,
         );
     }
@@ -370,7 +369,7 @@ mod tests {
     #[test]
     fn a_malformed_traceparent_restarts_rather_than_failing() {
         let req = req_from("10.0.0.1", &[(TRACEPARENT_HEADER, "not-a-traceparent")]);
-        let correlation = resolve(&req, &[ip("10.0.0.1")]);
+        let correlation = resolve(&req, &[proxy("10.0.0.1")]);
         assert!(correlation.parent_id().is_none());
         assert!(
             correlation.flags().is_sampled(),
@@ -387,7 +386,10 @@ mod tests {
                 (TRACESTATE_HEADER, "rojo=00f067aa0ba902b7"),
             ],
         );
-        assert_eq!(resolve(&req, &[ip("10.0.0.1")]).tracestate().as_str(), None);
+        assert_eq!(
+            resolve(&req, &[proxy("10.0.0.1")]).tracestate().as_str(),
+            None
+        );
     }
 
     #[test]
@@ -400,7 +402,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            resolve(&req, &[ip("10.0.0.1")]).tracestate().as_str(),
+            resolve(&req, &[proxy("10.0.0.1")]).tracestate().as_str(),
             Some("rojo=00f067aa0ba902b7,congo=t61rcWkgMzE"),
         );
     }
@@ -408,7 +410,7 @@ mod tests {
     #[test]
     fn a_request_with_no_trace_headers_still_starts_one() {
         let req = req_from("10.0.0.1", &[]);
-        let correlation = resolve(&req, &[ip("10.0.0.1")]);
+        let correlation = resolve(&req, &[proxy("10.0.0.1")]);
         assert_eq!(correlation.trace_id().to_hex().len(), 32);
         assert!(correlation.parent_id().is_none());
     }
@@ -423,13 +425,16 @@ mod tests {
         let untrusted = req_from("203.0.113.9", &headers);
 
         assert_eq!(
-            upstream_request_id(&trusted, ClientOrigin::of_with(&trusted, &[ip("10.0.0.1")])),
+            upstream_request_id(
+                &trusted,
+                ClientOrigin::of_with(&trusted, &[proxy("10.0.0.1")])
+            ),
             Some(NGINX_REQUEST_ID),
         );
         assert_eq!(
             upstream_request_id(
                 &untrusted,
-                ClientOrigin::of_with(&untrusted, &[ip("10.0.0.1")])
+                ClientOrigin::of_with(&untrusted, &[proxy("10.0.0.1")])
             ),
             None,
         );
@@ -440,7 +445,7 @@ mod tests {
     /// client could have written through the proxy, a secret's shape included.
     #[test]
     fn an_upstream_request_id_is_recorded_only_as_a_minted_id() {
-        let trusted = [ip("10.0.0.1")];
+        let trusted = [proxy("10.0.0.1")];
         let at_most = "f".repeat(64);
         let beyond = "f".repeat(65);
         for (sent, recorded) in [
@@ -473,7 +478,7 @@ mod tests {
     /// scheme the request arrived over.
     #[test]
     fn the_scheme_is_the_client_s_behind_a_trusted_proxy_else_the_listener_s() {
-        let trusted = [ip("10.0.0.1")];
+        let trusted = [proxy("10.0.0.1")];
         let over = |scheme: &str, peer: &str, headers: &[(HeaderName, &str)]| {
             let socket: std::net::SocketAddr =
                 format!("{peer}:40000").parse().expect("test literal");

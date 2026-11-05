@@ -399,7 +399,7 @@ async fn a_body_that_stops_within_the_budgets_last_gap_is_answered_the_budgets_5
     );
     let client = crate::boot_on::<ReadModule>(HttpConfig {
         max_body_bytes: CAP,
-        ..HttpConfig::default()
+        ..defaults
     })
     .await;
 

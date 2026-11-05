@@ -315,21 +315,19 @@ the adapter serves it, reads its edge's configuration and imports nothing
 more; `g events` imports `EventsModule` into the
 port that emits. The app's root keeps only the bindings it chooses, and the
 generator writes them there, in the same edit as the adapter, when the root has
-none. The queue's backend is one: `g queue` writes `RedisQueueModule`, and
-`RedisModule` beside it unless the root opens Redis's default instance, the
-one the bare binding reads — a root opening only a named instance
-(`RedisModule::<Cache>`) gains it. The data layer is the other: a `#[crud]` handler —
-`g resource`'s controller, `g http` or `g graphql` over a resource port — runs
-each call in the unit of work `SeaOrmDatabaseModule` binds over the pool
-`SeaOrmModule` opens, so the generator writes both. A root already naming one —
-bare, pinned with `for_root`, or a named instance — keeps its own line. And the
-auth adapter's token route: a generator that wrote the adapter on the way
+none. The queue's backend is one: `g queue` writes `RedisQueueModule`, which
+imports the Redis connection it runs on. The data layer is the other: a `#[crud]`
+handler — `g resource`'s controller, `g http` or `g graphql` over a resource
+port — runs each call in the unit of work `SeaOrmDatabaseModule` binds, so the
+generator writes it, and it imports the pool. A root already naming a binding —
+bare, pinned with `for_root`, or a named instance — keeps its own line, as one
+pinning a resource does. And the auth adapter's token route: a generator that wrote the adapter on the way
 writes `AuthnHttpModule`.
 
 ```text frame="terminal"
 $ nestrs g resource posts --app blog
 …
-  3. PostsHttpModule is wired into `blog`, beside SeaOrmModule, SeaOrmDatabaseModule and AuthnHttpModule.
+  3. PostsHttpModule is wired into `blog`, beside SeaOrmDatabaseModule and AuthnHttpModule.
 ```
 
 ### The columns `g resource` takes

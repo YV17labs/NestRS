@@ -43,8 +43,8 @@ impl PostsService {
 
 `#[injectable]` registers `PostsService` by `TypeId`. The
 `#[inject] db` field says: resolve `Arc<DatabaseConnection>` from the
-container when you build me — typically seeded by
-`SeaOrmModule::for_root(...)`.
+container when you build me — the pool `SeaOrmModule` opens, in an app importing
+it or a binding over it.
 
 Controllers, resolvers, and gateways are providers too — they just also
 mount on a transport:

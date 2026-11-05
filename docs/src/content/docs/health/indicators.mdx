@@ -107,12 +107,11 @@ import nothing beside it:
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::redis::RedisModule;
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::storage::StorageModule;
 
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
         RedisModule,
         StorageModule,
@@ -127,7 +126,7 @@ $ curl -s http://localhost:3000/health/ready | jq '.details | keys'
 [ "redis", "seaorm", "storage" ]
 ```
 
-A resource a feature opens is checked the same way. The demo's `audio` feature
+A resource a binding or a feature opens is checked the same way. The demo's `audio` feature
 opens the store and a second Valkey, `transcodes`; the `api` app imports the
 feature and `HealthModule`, never those resources, and its readiness reads
 `redis:transcodes` and `storage` beside its own. Two modules opening one

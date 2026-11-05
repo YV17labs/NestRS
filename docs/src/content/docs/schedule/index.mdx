@@ -235,15 +235,15 @@ imports `ScheduleModule` because that is what runs its ticks: the scheduler
 attaches once however many adapters import it.
 
 The app imports the adapter and, since the seed fires once across replicas,
-the occurrence lock it claims through: `RedisScheduleModule`, over the
-connection `RedisModule` opens. The lock is a backend the app chooses, so it
+the occurrence lock it claims through: `RedisScheduleModule`, which imports
+the `RedisModule` opening its connection. The lock is a backend the app chooses, so it
 stays at the root; leave it out and the boot fails, naming
 `AudioTasks::enqueue_transcode` and the binding to import.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
 // …
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
+use nest_rs::redis::{RedisQueueModule, RedisScheduleModule};
 // …
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 // …
@@ -251,7 +251,6 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
 #[module(
     imports = [
         // …
-        RedisModule,
         RedisQueueModule,
         // …
         RedisScheduleModule,
@@ -391,7 +390,7 @@ runs such a job:
 ```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
 // …
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
+use nest_rs::redis::{RedisQueueModule, RedisScheduleModule};
 // …
 
 use features::notifications::{NotificationsQueueModule, NotificationsScheduleModule};
@@ -399,7 +398,6 @@ use features::notifications::{NotificationsQueueModule, NotificationsScheduleMod
 #[module(
     imports = [
         // …
-        RedisModule,
         RedisQueueModule,
         RedisScheduleModule,
         // …
@@ -411,7 +409,7 @@ pub struct WorkerModule;
 ```
 
 `RedisScheduleModule` is a bare import: it owns no configuration, and runs over
-the connection `RedisModule` opens — the worker's queue bindings
+the connection the `RedisModule` it imports opens — the worker's queue bindings
 share that one `RedisConnection`. The boot holds you to it both ways: a
 reachable job declaring `replicas = "one"` with no lock bound fails the boot
 naming the job, and a second lock binding beside this one fails it too, naming

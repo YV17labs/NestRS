@@ -156,7 +156,9 @@ A resource an app may open more than once is generic over its instance:
 import typed (`AcmeModule::<Cache>`), the config queued with
 `ConfigModule::provide_feature::<I, C>` and read with
 `ConfigModule::resolved_for::<I, C>` under the instance's namespace — as
-`RedisModule::<Cache>` opens a second Valkey.
+`RedisModule::<Cache>` opens a second Valkey. A binding your package ships over
+the resource imports its module bare, from both phases, by its instance, so an
+app writes the binding and names the resource only to pin it.
 
 ## A registry it fills
 

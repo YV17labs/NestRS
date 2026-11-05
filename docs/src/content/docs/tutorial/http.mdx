@@ -225,7 +225,6 @@ generated code needs, beside the greeting the scaffold wired on page 1:
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::seaorm::SeaOrmDatabaseModule;
-use nest_rs::seaorm::SeaOrmModule;
 
 use features::authn::AuthnHttpModule;
 use features::blog::BlogHttpModule;
@@ -235,7 +234,6 @@ use features::posts::PostsHttpModule;
     imports = [
         BlogHttpModule,
         PostsHttpModule,
-        SeaOrmModule,
         SeaOrmDatabaseModule,
         AuthnHttpModule,
     ],
@@ -251,9 +249,8 @@ Each line is an edge `blog` serves or a backend its root chooses:
 - `PostsHttpModule` serves the five CRUD routes. It imports `AuthzModule`, and
   `AuthzModule` imports `AuthnModule`, so the root lists the edge and nothing
   it brings: the access graph checks each import where it is used.
-- `SeaOrmModule` and `SeaOrmDatabaseModule` are the data layer every route
-  `#[crud]` generates runs on — [the next page](/tutorial/database/) reads
-  them.
+- `SeaOrmDatabaseModule` is the data layer every route `#[crud]` generates
+  runs on — [the next page](/tutorial/database/) reads it.
 - `AuthnHttpModule` serves `POST /auth/dev-token`, the development token the
   next page's `curl`s carry. It refuses to boot outside development and test:
   delete it with `crates/features/src/authn/http/` the day you write the real

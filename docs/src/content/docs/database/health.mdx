@@ -13,16 +13,15 @@ handler to write.
 
 ## Wire it in
 
-Import `HealthModule` beside the pool:
+Import `HealthModule` beside the data layer:
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
         HealthModule,
     ],
@@ -30,7 +29,7 @@ use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 pub struct AppModule;
 ```
 
-That's it. `SeaOrmModule` attaches the pool's indicator, `seaorm`,
+That's it. `SeaOrmModule`, which the binding imports, attaches the pool's indicator, `seaorm`,
 to both the **readiness** and the **startup** probe — `HealthModule` runs it
 beside every other indicator the app opened, and refuses the boot when a second
 one claims the name. A pool a feature opens is checked the same way: there is

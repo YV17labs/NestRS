@@ -637,6 +637,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | `builder.provide_meta(TransportContribution { name: "MyTransport", build: \|c\| Ok(Box::new(MyTransport::new(c)?)) })` | `builder.provide_transport(\|c\| MyTransport::new(c))` — named `MyTransport`, read off the type |
    | a feature module importing `HttpModule` (or GraphQL's, OpenAPI's) to declare it serves over HTTP | a bare `HttpModule` (`GraphqlModule`, `OpenApiModule`) in its `imports`; the app keeps a `for_root` only to pin a config |
    | an edge adapter importing its port alone, and the app root importing `HttpModule`, `GraphqlModule`, `QueueModule` or `ScheduleModule` beside it | the adapter imports what serves its edge, bare — `HttpModule` (HTTP, WebSocket), plus `WsModule`, `GraphqlModule`, `McpModule`, `QueueModule` or `ScheduleModule` — and the root drops the line unless it pins a value (`McpModule::for_root` stays where it declares the identity or the opening); the queue's backend binding (`RedisQueueModule`) stays at the root. Nothing refuses the old shape: it still runs one transport of each type |
+   | `SeaOrmModule` beside `SeaOrmDatabaseModule`, or `RedisModule` beside a Redis binding, neither pinned | delete the resource's line: a binding imports the resource it runs on, by its instance. The pair still boots, and a root names the resource only to pin it (`RedisModule::for_root(cfg)`) or for a connection it injects with no binding |
+   | `ThrottlerModule` at the root for a controller binding `ThrottlerGuard` | `ThrottlerModule`, bare, in that controller's adapter, and the root drops the line unless it pins a policy; a root's `RedisThrottlerModule` still supersedes the in-process store |
    | a container built by hand importing `GraphqlModule`, `HealthModule`, `OpenApiModule`, `McpModule`, `StaticFilesModule` or `OAuthResourceModule`, seeding the module's config | seed `HttpConfig::default()` beside it: each imports `HttpModule` |
    | `McpModule::for_root(..)` declaring an identity or `McpAccess::Public` at two imports | declare each at one; the other imports leave it out, or import `McpModule` bare |
    | an `impl Module` or `impl DynamicModule` written by hand | the same with `_: Collecting<Self>` after the builder in `collect` and `_: Registering<Self>` in `register`; reach another module with `builder.import::<M>()` in both, and drop `mark_collected`, `mark_registered` and a leading `Self::collect` |
@@ -702,8 +704,8 @@ lists what the boot, a log or the wire shows when one is missed.
     themselves. An
     app reaching a `#[crud]` host, a route or field under `#[authorize(A, bind
     = S)]`, or the service a GraphQL-exposed entity names (`#[expose(service =
-    S, graphql)]`) imports `SeaOrmDatabaseModule` beside
-    `SeaOrmModule`: 6.x booted without it and failed every call
+    S, graphql)]`) imports `SeaOrmDatabaseModule`, which imports the
+    `SeaOrmModule` opening its pool: 6.x booted without it and failed every call
     such a host made; 7.0 refuses the boot naming it.
 
     | 6.x | 7.0 |
@@ -1308,6 +1310,10 @@ lists what the boot, a log or the wire shows when one is missed.
 
 ## What fails if you get it wrong
 
+- **A lone Redis binding over a seeded `RedisConnection`** now reads the
+  `RedisConfig` of the module it imports, so a suite with `<PREFIX>_REDIS__URL`
+  unset is refused naming the variable: seed the `RedisConfig` beside the
+  connection.
 - **An import of `Scoped` from an edge, of rmcp's macros or types from `nest_rs::mcp`'s
   root, an `McpIdentity` setter, of `wire_enum` from `nest_rs::resource`, or of an item
   through a module `nest_rs::core` or `nest_rs::social` no longer opens** fails to compile
@@ -1820,7 +1826,8 @@ lists what the boot, a log or the wire shows when one is missed.
   A provider injecting `Arc<Jobs>` with no queue backend names
   `RedisQueueModule`, one injecting the pool or the default instance's
   `RedisConnection` with no module opening it names `SeaOrmModule`
-  or `RedisModule` — where 6.x told it to add a provider or
+  or `RedisModule`, and a host binding `ThrottlerGuard` with nothing importing
+  the port names `ThrottlerModule` — where 6.x told it to add a provider or
   seed one. A GraphQL schema serving an exposed relation whose target's module
   the app does not import names the field, the entity declaring it and the
   module, where 6.x counted the loader at `warn` and erred on every query

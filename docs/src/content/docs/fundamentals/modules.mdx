@@ -156,8 +156,8 @@ PostsHttpModule
 ```
 
 Static modules dedupe automatically: if two branches of the import tree
-both reach `SeaOrmDatabaseModule` (the bare binding beside `SeaOrmModule`), its
-providers are built once. A dynamic import carries its own config, so each
+both reach `SeaOrmDatabaseModule` (a bare binding, which imports the
+`SeaOrmModule` opening its pool), its providers are built once. A dynamic import carries its own config, so each
 call is read — but what it wires once per app lives in the module it
 imports by type, so it is wired once (see [Safe to import twice](#safe-to-import-twice)).
 
@@ -204,7 +204,6 @@ providers — it only composes imports:
 ```rust title="apps/blog/src/module.rs"
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
         PostsHttpModule,
     ],
@@ -245,8 +244,8 @@ framework modules; let adapters own the handlers.
 ```mermaid
 flowchart TB
   BM[BlogModule]
-  BM --> SM[SeaOrmModule]
   BM --> DM[SeaOrmDatabaseModule]
+  DM --> SM[SeaOrmModule]
   BM --> PHM[PostsHttpModule]
   PHM --> HM[HttpModule]
   PHM --> PM[PostsModule]

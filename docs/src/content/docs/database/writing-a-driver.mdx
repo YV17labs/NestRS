@@ -260,16 +260,21 @@ impl Module for SeaOrmDatabaseModule {
             Ok(())
         });
         // …
-        builder
+        builder.import::<SeaOrmModule>()
     }
-    // …
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        // …
+        builder.import::<SeaOrmModule>()
+    }
 }
 ```
 
 `UnitInputs` names the pool and its config, so the boot builds the unit of
 work once both exist, wherever the imports fall. The pool itself is opened by
-the substrate, `SeaOrmModule`, which every SeaORM binding shares:
-its config is settable from `<PREFIX>_SEAORM__*` and from the struct the app
+the substrate, `SeaOrmModule`, which every SeaORM binding imports bare from both
+phases, so an app writes the binding alone and names the substrate only to pin
+it: its config is settable from `<PREFIX>_SEAORM__*` and from the struct the app
 pins, as every module's is.
 
 ### Close what it opened

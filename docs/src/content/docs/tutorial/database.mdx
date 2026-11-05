@@ -16,11 +16,10 @@ database to point at.
 
 ## The data layer in one import
 
-Two imports activate the SeaORM data layer, one per shape, and
-`nestrs g resource` wrote both into `blog`'s root on page 2:
-`SeaOrmModule` opens the pool from `<PREFIX>_SEAORM__URL`, and
-`SeaOrmDatabaseModule`, a bare import beside it, binds over that pool the
-unit of work each request and each job runs in. Every route `#[crud]`
+One import activates the SeaORM data layer, and `nestrs g resource` wrote it
+into `blog`'s root on page 2: `SeaOrmDatabaseModule` binds the unit of work each
+request and each job runs in, over the pool `SeaOrmModule` opens from
+`<PREFIX>_SEAORM__URL`, which it imports. Every route `#[crud]`
 generates runs its `Repo` call inside one — the transaction a `POST` commits
 in — so an app importing `PostsHttpModule` without the binding never boots: the
 access graph refuses it, naming the line to add, before a request could reach

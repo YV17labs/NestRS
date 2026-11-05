@@ -306,15 +306,14 @@ same block — same convention as `#[routes]` and `#[scheduled]`.
 
 ## Wire it in
 
-Three modules, three roles:
+Two modules, two roles:
 
-- **`RedisModule`** — opens the Redis connection every Redis
-  binding shares (`<PREFIX>_REDIS__URL`). Every app that touches Redis needs
-  it; a [second Valkey](/queue/topologies/#a-second-valkey) is a named
-  instance beside it.
-- **`RedisQueueModule`** — binds the queue port over that connection: the
+- **`RedisQueueModule`** — binds the queue port over the Redis connection: the
   `Jobs` handle a feature injects as `Arc<Jobs>`, and the consumer the worker
-  runs jobs through. Every app that enqueues or runs jobs imports it.
+  runs jobs through. Every app that enqueues or runs jobs imports it, and it
+  imports the `RedisModule` opening that connection (`<PREFIX>_REDIS__URL`),
+  which a root names only to pin it; a
+  [second Valkey](/queue/topologies/#a-second-valkey) is a named instance.
 - **`QueueModule`** — from `nest_rs::queue`, attaches the port's
   `QueueWorker` transport. At boot it discovers the reachable `#[process]`
   methods, runs each over the bound consumer, and drains them with the app.
@@ -325,7 +324,7 @@ Three modules, three roles:
 ```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
 // …
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
+use nest_rs::redis::{RedisQueueModule, RedisScheduleModule};
 // …
 
 use features::audio::AudioQueueModule;
@@ -334,7 +333,6 @@ use features::audio::AudioQueueModule;
 #[module(
     imports = [
         // …
-        RedisModule,
         RedisQueueModule,
         // …
         AudioQueueModule,

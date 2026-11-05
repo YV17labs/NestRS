@@ -441,7 +441,8 @@ to go (`.claude/decisions/one-execution-pipeline.md`).
 - the marker is `#[instance] pub struct Cache;`, named by its ident;
 - the resource, its setup and each binding take `I: Instance = Unnamed`, so
   one instance is the app's spelling unchanged; a binding is a hand-written
-  `impl<I: Instance> Module`, since `#[module]` is not generic;
+  `impl<I: Instance> Module`, since `#[module]` is not generic, importing its
+  instance's resource from both phases;
 - the bare import is the typed one (`RedisModule::<Cache>`), whose `collect`
   calls `ConfigModule::provide_feature::<I, C>`, and `for_root` takes `impl
   Into<ForInstance<I, C>>`, which `ConfigModule::provide_root` pins; both read

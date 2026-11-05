@@ -1,6 +1,6 @@
 # nest-rs-seaorm
 
-SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule` opens the one pool (`<PREFIX>_SEAORM__*`); `SeaOrmDatabaseModule` binds the `nest-rs-database` port over it (`SeaOrmUnitOfWork`, the unit of work every edge runs through, and `Repo` on its ambient executor); `#[expose]` makes an entity its wire DTO, inputs and GraphQL object. The loader a route's `#[authorize(A, bind = S)]` runs lives behind the `http` feature; beside `health`, `SeaOrmModule` attaches the pool's indicator, so an app importing `HealthModule` gates the readiness and startup probes on its `SELECT 1`, as `seaorm`, with no import of its own.
+SeaORM for NestRS: the adapter that wraps sea-orm. `SeaOrmModule` opens the one pool (`<PREFIX>_SEAORM__*`); `SeaOrmDatabaseModule` imports it and binds the `nest-rs-database` port over it (`SeaOrmUnitOfWork`, the unit of work every edge runs through, and `Repo` on its ambient executor); `#[expose]` makes an entity its wire DTO, inputs and GraphQL object. The loader a route's `#[authorize(A, bind = S)]` runs lives behind the `http` feature; beside `health`, `SeaOrmModule` attaches the pool's indicator, so an app importing `HealthModule` gates the readiness and startup probes on its `SELECT 1`, as `seaorm`, with no import of its own.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

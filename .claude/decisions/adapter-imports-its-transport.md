@@ -121,7 +121,9 @@ Adopted:
 - **An adapter whose host binds `ThrottlerGuard` imports `ThrottlerModule` bare**,
   the port behind that guard, so an app serving no such adapter pays no rate
   limiter. A root's `RedisThrottlerModule` still supersedes the in-process store
-  wherever the two fall, so swapping the backend still edits the root alone.
+  wherever the two fall, so swapping the backend still edits the root alone. A host
+  binding the guard with nothing importing the port is told `ThrottlerModule`
+  through the guard's `DependencyRemedy`.
 
 The binding itself stays the root's, as this page's adoption says of the queue's:
 it is what the root chooses, and what it runs on is not.

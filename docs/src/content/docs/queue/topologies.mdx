@@ -188,21 +188,22 @@ use nest_rs::redis::{RedisModule, RedisQueueModule};
 pub struct Cache;
 
 #[module(imports = [
-    RedisModule,
     RedisQueueModule,
     RedisModule::<Cache>,
 ])]
 pub struct ApiModule;
 ```
 
-The default connection reads `<PREFIX>_REDIS__*` as before; the cache reads the
+`RedisQueueModule` opens the default connection, which reads
+`<PREFIX>_REDIS__*` as before; the cache reads the
 same keys with its name after the vendor — `<PREFIX>_REDIS__CACHE__URL`,
 `<PREFIX>_REDIS__CACHE__CONNECT_TIMEOUT_SECS`, `<PREFIX>_REDIS__CACHE__TLS_*` —
 on any topology its URL declares. A provider of yours injects it as
 `Arc<RedisConnection<Cache>>`, beside the default's `Arc<RedisConnection>`.
 
-A binding runs on the default instance unless its import names another:
-`RedisScheduleModule::<Locks>` claims on the `locks` instance, and a queue there
+A binding runs on the default instance unless its import names another, and
+opens the one it runs on: `RedisScheduleModule::<Locks>` claims on the `locks`
+instance, reading `<PREFIX>_REDIS__LOCKS__*`, and a queue there
 reads its lease from `<PREFIX>_REDIS__LOCKS__QUEUE__LEASE_SECS`. A port still
 takes one binding, whichever instance it runs on, and the eviction table above
 holds on the server each binding reaches. Each instance is a connection of its

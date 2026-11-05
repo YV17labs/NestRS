@@ -17,7 +17,7 @@ graph from each app's root.
 
 | Module | Role | Imported by |
 |---|---|---|
-| `RedisModule` | Opens the Redis connection every Redis binding shares — the queue's producer and consumer, the rate-limit store, the schedule's lock; a [second Valkey](/queue/topologies/#a-second-valkey) is a named instance. A bare import reads `<PREFIX>_REDIS__*`; `for_root(cfg)` pins the base. | Every app that touches Redis. |
+| `RedisModule` | Opens the Redis connection every Redis binding shares — the queue's producer and consumer, the rate-limit store, the schedule's lock; a [second Valkey](/queue/topologies/#a-second-valkey) is a named instance. A bare import reads `<PREFIX>_REDIS__*`; `for_root(cfg)` pins the base. | Each Redis binding, bare, by the instance it runs on. A root names it to pin it, or for a connection it injects with no binding. |
 | `RedisQueueModule` | Binds the queue port over that connection: `Jobs`, the portable handle a feature injects to enqueue, and the consumer the worker runs jobs through. A bare import reads `<PREFIX>_REDIS__QUEUE__*`; `for_root(RedisQueueConfig { lease })` pins the base — see [Delivery on Redis](/queue/delivery/#configuration). | Every app that enqueues or runs jobs. |
 | `QueueModule` | From `nest_rs::queue`: contributes the port's `QueueWorker` transport, which discovers the reachable `#[process]` methods at boot and runs each over the bound consumer; its own setting is the drain window, `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, which `for_root(cfg)` pins at the app's root. | Each queue adapter (`AudioQueueModule`), bare — so only an app importing one runs a worker. |
 
@@ -51,9 +51,9 @@ four boot phases that resolve the connection before any transport attaches.
 The connection is built in the **collect** phase as an async factory, and
 every binding's factory declares that it runs after it — so `imports = [...]`
 order is a readability choice, and by the time `QueueWorker::configure` runs
-the connection is in the container. A worker app that forgot `RedisModule`
-fails fast at boot with an error naming it — and so does one whose
-`<PREFIX>_REDIS__URL` is unreachable: every connect attempt warns on
+the connection is in the container. A worker app with no
+`<PREFIX>_REDIS__URL` fails fast at boot with an error naming it — and so does
+one whose URL is unreachable: every connect attempt warns on
 `nest_rs::redis`, and the boot gives up after `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`
 (10 s by default) naming the redacted endpoint. A container that cannot reach
 its Redis crashes rather than parking forever between "not healthy" and "not
@@ -62,15 +62,15 @@ dead".
 
 ## The worker app
 
-The worker imports the connection, the queue's Redis binding and each
-feature's queue adapter. That's it — `AudioQueueModule` pulls in the
+The worker imports the queue's Redis binding, which opens the connection, and
+each feature's queue adapter. That's it — `AudioQueueModule` pulls in the
 `AudioModule` port and the `QueueModule` that runs its jobs; the backend
 binding is the one line the adapter leaves to the root, which chooses it.
 
 ```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
 // …
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
+use nest_rs::redis::{RedisQueueModule, RedisScheduleModule};
 // …
 
 use features::audio::AudioQueueModule;
@@ -79,7 +79,6 @@ use features::notifications::{NotificationsQueueModule, NotificationsScheduleMod
 #[module(
     imports = [
         // …
-        RedisModule,
         RedisQueueModule,
         // …
         AudioQueueModule,
@@ -96,9 +95,10 @@ over HTTP; the excerpt keeps the queue's lines.
 
 At boot:
 
-1. `RedisModule` reads `RedisConfig` from `<PREFIX>_REDIS__*` and registers
-   the factory that opens the `RedisConnection`; the first config the boot
-   loads registers the active environment.
+1. `RedisModule`, which `RedisQueueModule` imports, reads `RedisConfig` from
+   `<PREFIX>_REDIS__*` and registers the factory that opens the
+   `RedisConnection`; the first config the boot loads registers the active
+   environment.
 2. `RedisModule::<Cache>`, in an app opening a second Valkey, does the same
    under `<PREFIX>_REDIS__CACHE__*`.
 3. `RedisQueueModule` registers factories — declared to run after the
@@ -118,7 +118,7 @@ At boot:
 
 ## The producer-only app
 
-A producer-only binary imports `RedisModule` and `RedisQueueModule`, and no
+A producer-only binary imports `RedisQueueModule`, and no
 queue adapter — so no `QueueModule`. It gets
 `Arc<Jobs>` to push with — and no worker, no discovered
 inventory, no read of any queue.
@@ -126,8 +126,8 @@ inventory, no read of any queue.
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
 // …
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::redis::{RedisQueueModule, RedisScheduleModule};
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 // …
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 // …
@@ -135,9 +135,7 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
 #[module(
     imports = [
         // …
-        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule,
         RedisQueueModule,
         // …
         RedisScheduleModule,

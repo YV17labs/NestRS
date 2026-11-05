@@ -65,23 +65,35 @@ cargo add nest-rs --features redis-throttler
 
 ## Wire it in
 
-```rust title="apps/api/src/module.rs"
+The adapter whose controller binds the guard imports the port, as it imports
+the module serving its edge:
+
+```rust title="crates/features/src/posts/http/module.rs"
 use nest_rs::core::module;
+use nest_rs::http::HttpModule;
 use nest_rs::throttler::ThrottlerModule;
 
-#[module(imports = [ThrottlerModule])]
-pub struct ApiModule;
+use super::controller::PostsController;
+use crate::posts::PostsModule;
+
+#[module(
+    imports = [PostsModule, HttpModule, ThrottlerModule],
+    providers = [PostsController],
+)]
+pub struct PostsHttpModule;
 ```
 
 That import is the whole wiring. It registers the shared store **and** the
 `ThrottlerGuard` that reads it, both as global infrastructure — so the guard
 resolves from any module that binds it, and nothing goes in a controller
 module's `providers`. Listing `ThrottlerGuard` there as well is a duplicate
-registration and fails the boot naming it.
+registration and fails the boot naming it. Several adapters importing it share
+one store and one policy, and the app's root imports nothing for it.
 
 The bare import reads `ThrottlerConfig` from `<PREFIX>_THROTTLER__*` over its
 defaults (`60` requests per `60s` window), which apply when nothing is set.
-`ThrottlerModule::for_root(ThrottlerConfig { .. })` pins the limit in code —
+`ThrottlerModule::for_root(ThrottlerConfig { .. })`, at the root, pins the limit
+in code, superseding the adapters' bare imports —
 the pinned value is the base `<PREFIX>_THROTTLER__*` overlays, field by field,
 on the same dual-path rule the rest of the framework follows.
 
@@ -232,25 +244,25 @@ Enable it at the top of this page, then:
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisThrottlerModule};
-use nest_rs::throttler::ThrottlerModule;
+use nest_rs::redis::RedisThrottlerModule;
+
+use features::posts::PostsHttpModule;
 
 #[module(imports = [
-    ThrottlerModule,       // the policy and the guard — unchanged
-    RedisModule,           // the RedisConnection (<PREFIX>_REDIS__URL)
-    RedisThrottlerModule,  // the counters move to Redis
+    PostsHttpModule,
+    RedisThrottlerModule,
 ])]
 pub struct AppModule;
 ```
 
-Three lines, three shapes. `ThrottlerModule` stays exactly as it was:
-it owns the policy (`<PREFIX>_THROTTLER__*` — the limit and the window are the
+One line, at the root. `ThrottlerModule`, which the adapter imports, stays
+exactly as it was: it owns the policy (`<PREFIX>_THROTTLER__*` — the limit and the window are the
 throttler's whatever store counts them) and the `ThrottlerGuard` that applies it.
 `RedisThrottlerModule` is a bare import that *declares* `RedisThrottler` as the
 `dyn ThrottlerStore`, which supersedes the port's in-process default wherever
-the three fall in `imports`; it runs over the connection `RedisModule`
-opens, and an app that also queues shares that one `RedisConnection` with its
-producer. You add a line to move the counters off-process and remove none. A
+the two fall in the app's imports; it imports the `RedisModule` opening its
+connection (`<PREFIX>_REDIS__URL`), and an app that also queues shares that one
+`RedisConnection` with its producer. You add a line to move the counters off-process and remove none. A
 second vendor binding beside it is a named boot failure, never a silent
 last-one-wins.
 

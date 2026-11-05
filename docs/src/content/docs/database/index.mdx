@@ -190,7 +190,6 @@ The app root activates the database and lists the slice:
 ```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
         PostsHttpModule,
     ],
@@ -198,17 +197,18 @@ The app root activates the database and lists the slice:
 pub struct AppModule;
 ```
 
-Two lines, two shapes. `SeaOrmModule` opens the one pool: it
-reads `<PREFIX>_SEAORM__URL` and the other `<PREFIX>_SEAORM__*` keys from the
-environment, or a `SeaOrmConfig` you pass to set those values in code —
-still overridable per field by the real environment, though no longer by a
-`.env` file (see [the dual-path rule](/configuration/#the-dual-path-rule)). `SeaOrmDatabaseModule`, a bare
-import, then binds the data layer over it. Leave it out and an app reaching a
+`SeaOrmDatabaseModule`, a bare import, binds the data layer over the one pool,
+and imports `SeaOrmModule`, which opens it: that one reads
+`<PREFIX>_SEAORM__URL` and the other `<PREFIX>_SEAORM__*` keys from the
+environment. Name it only to set those values in code,
+`SeaOrmModule::for_root(SeaOrmConfig { .. })` — still overridable per field by
+the real environment, though no longer by a `.env` file (see
+[the dual-path rule](/configuration/#the-dual-path-rule)). Leave the binding out and an app reaching a
 `#[crud]` host, a route or field that loads a bound subject, or the service a
 GraphQL-exposed entity names (`#[expose(service = S, graphql)]`) does not boot: the refusal names `SeaOrmDatabaseModule`,
 since every `Repo` call those make needs the unit of work it binds. An app that
-only injects the pool — a strategy reading a table of its own — needs no
-binding. The
+only injects the pool — a strategy reading a table of its own — imports
+`SeaOrmModule` alone. The
 variable is named for the crate that parses it, exactly as the type is: from
 `<PREFIX>_SEAORM__URL` you find `SeaOrmConfig`, and from `SeaOrmModule` you find
 the variable.

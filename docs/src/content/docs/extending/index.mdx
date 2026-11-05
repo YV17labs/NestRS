@@ -16,16 +16,17 @@ author: what each seam asks of you, how the framework picks your
 implementation, and where your configuration lives.
 
 Replacing a backend is one import at the composition root. The port keeps
-its policy and its guard; the binding beside it moves the work elsewhere:
+its policy and its guard, which the adapter binding the guard imports; the
+binding at the root moves the work elsewhere, and imports what it runs on:
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisThrottlerModule};
-use nest_rs::throttler::ThrottlerModule;
+use nest_rs::redis::RedisThrottlerModule;
+
+use features::posts::PostsHttpModule;
 
 #[module(imports = [
-    ThrottlerModule,
-    RedisModule,
+    PostsHttpModule,
     RedisThrottlerModule,
 ])]
 pub struct ApiModule;
@@ -78,7 +79,7 @@ Three modes. They are not interchangeable, and which one a concern uses tells
 you where your configuration goes.
 
 **By import.** Exactly one implementation, chosen by which binding the app
-imports beside the port's module — the snippet above. Consumers inject
+imports — the snippet above. Consumers inject
 `dyn Port` and never name the backend, so swapping it edits the composition
 root alone. The port's own default is an ordinary factory, so a vendor
 binding supersedes it wherever it sits in `imports`; two vendor bindings

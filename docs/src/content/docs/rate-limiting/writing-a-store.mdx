@@ -87,7 +87,10 @@ contests it by name:
 
 ```rust title="from nest-rs-redis's throttler binding, abridged"
 impl<I: Instance> Module for RedisThrottlerModule<I> {
-    // …
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<RedisModule<I>>()
+    }
+
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
         // Declared: it supersedes the port's in-memory default, and a second
         // vendor binding contests it by name (`BACKEND_REMEDY`).
@@ -99,11 +102,14 @@ impl<I: Instance> Module for RedisThrottlerModule<I> {
                     Ok(Arc::new(RedisThrottler::new(conn)) as Arc<dyn ThrottlerStore>)
                 },
             )
+            .import::<RedisModule<I>>()
     }
 }
 ```
 
-The app imports it beside `ThrottlerModule`, which keeps the policy
+It imports the module opening what it runs on, bare, from both phases, so the app
+writes the binding alone at its root and names that module only to pin it. The
+adapters binding the guard import `ThrottlerModule`, which keeps the policy
 (`<PREFIX>_THROTTLER__*`) and the `ThrottlerGuard`, unchanged by the swap.
 
 ## Budget and net

@@ -436,7 +436,7 @@ pub struct OrgsHttpModule;
 
 The HTTP transport comes with the adapter, which imports `HttpModule`; the
 unit of work each request runs in activates at the app root with
-`SeaOrmModule::for_root(...)` and `SeaOrmDatabaseModule`.
+`SeaOrmDatabaseModule`, which imports the pool it runs on.
 Importing only `OrgsModule` (no HTTP module) gives a worker the same
 `OrgsService` without mounting the endpoints — that is the port + adapter
 split this framework is built around.

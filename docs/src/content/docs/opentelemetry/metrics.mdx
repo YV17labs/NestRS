@@ -112,8 +112,8 @@ same OTLP endpoint as the traces (set `OTEL_EXPORTER_OTLP_ENDPOINT`, or
 `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` for the metrics alone). Without an endpoint, or with
 `OTEL_METRICS_EXPORTER=none`, instrument construction still works — `counter()` and friends return real handles, so
 wiring compiles and runs — but the meter comes from a `NoopMeterProvider` and
-every reading is **dropped**. The SDK says so once, at `Meter was obtained from
-a NoopMeterProvider. No metrics will be recorded.` A test that needs to assert
+every reading is **dropped**. The SDK says so once, at `debug`: `Meter was obtained
+from a NoopMeterProvider. No metrics will be recorded.`, then how to set a provider. A test that needs to assert
 on an increment has to hold its own counter; there is nothing to read back
 here.
 

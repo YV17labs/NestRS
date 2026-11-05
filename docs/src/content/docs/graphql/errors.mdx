@@ -29,7 +29,7 @@ returns its service result and the wire shape just works.
 ## The smallest error
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
-use async_graphql::{Error, Result};
+use nest_rs::graphql::async_graphql::{Error, Result};
 use nest_rs::graphql::{operations, resolver};
 
 #[resolver]
@@ -157,8 +157,8 @@ A problem with a type of its own, `Problem::with_type(uri, title)`, adds
 `"type"` and `"title"` to the extensions, the URI a client keys on, and a field
 map, `with_errors`, `"errors"`. A problem without a detail says its code in
 words (`NOT_A_DRAFT` would read `not a draft`); a `5xx` never carries one — a `503` answers
-`"service unavailable"`, any other `"internal error"`, and the chain behind
-it is filed at `error` on `nest_rs::graphql`. `None` is the opaque answer:
+`"service unavailable"`, the chain behind it filed at `warn` on `nest_rs::graphql`, any
+other `"internal error"`, its chain at `error`. `None` is the opaque answer:
 `Index`'s chain is filed at `error`, the client reads the constant. A
 `Code` declared in a `const` is checked when it compiles: `Code::new("conflict")`
 is refused, and so is a `Problem` whose status is not a `4xx` or a `5xx`.
@@ -192,11 +192,14 @@ answers the map it wrote.
 
 ## `ServiceError`
 
-A `CrudService` method returns `Result<T, ServiceError>`, and `ServiceError`
-implements `ToProblem`: `NotFound` answers `NOT_FOUND`, `Conflict` `CONFLICT`,
+A service method the feature writes returns `Result<T, ServiceError>` — a
+`CrudService` read answers `DbErr`, which converts into no edge's error, so the method
+says `.map_err(ServiceError::from)` — and `ServiceError` implements `ToProblem`: `NotFound` answers `NOT_FOUND`, `Conflict` `CONFLICT`,
 `Forbidden` `FORBIDDEN`, `Invalid` and `Validation` `INVALID_ARGUMENT`, each with
 its own sentence, a validation failure's fields under `extensions.errors`; `Db`, `Masking` and `Internal` answer opaquely, their cause
-filed at `error`. A resolver returns the service's result as it is:
+filed at `error` — but for a statement Postgres cancelled at its bound, a `Db` answering
+`"service unavailable"` under `UNAVAILABLE`, with its `retryAfterSeconds` when the bound
+gives one, its cause at `warn`. A resolver returns such a method's result as it is:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
 use nest_rs::authz::Read;
@@ -240,7 +243,7 @@ use nest_rs::graphql::Opaque;
 
 #[query]
 #[authorize(Read, posts::Entity)]
-async fn post(&self, id: String) -> async_graphql::Result<Post> {
+async fn post(&self, id: String) -> nest_rs::graphql::async_graphql::Result<Post> {
     Ok(self.svc.find_by_id(&id).await.opaque()?)
 }
 ```
@@ -384,5 +387,4 @@ $ curl -s localhost:3000/graphql -H 'content-type: application/json' \
   `Result<T>` return shape at the top level.
 - [Security](/security/) — the guard chain that decides
   `UNAUTHENTICATED` / `FORBIDDEN` before a resolver runs.
-- [Database](/database/) — the service contract that
-  emits `ServiceError`.
+- [Database](/database/) — the service contract behind these errors.

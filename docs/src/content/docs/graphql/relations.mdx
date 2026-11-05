@@ -89,17 +89,17 @@ The schema you get:
 
 ```graphql title="the SDL it produces"
 type User {
-    id: ID!
-    orgId: ID!
+    id: String!
     name: String!
     org: Org             # belongs_to side — PK loader on OrgsService
+    orgId: String!
 }
 
 type Org {
-    id: ID!
+    id: String!
     name: String!
     # has_many side — FK loader on UsersService, paged
-    users(first: Int, after: String): UserConnection!
+    users(after: String, first: Int): UserConnection!
 }
 ```
 
@@ -194,7 +194,7 @@ macro adds the honest estimate for you — the page the client actually
 asked for, times the cost of each row:
 
 ```rust title="from the macro expansion"
-#[graphql(complexity = "first.unwrap_or(20) as usize * child_complexity")]
+#[graphql(complexity = "first.unwrap_or(20).clamp(1, 100) as usize * child_complexity")]
 ```
 
 So `posts(first: 5)` costs a twentieth of `posts(first: 100)`, and a
@@ -222,7 +222,7 @@ Cursor pagination is **not** on that list any more: the auto-emitted
 field already is a connection.
 
 ```rust title="crates/features/src/orgs/entity.rs"
-#[expose(name = "Org", service = …, graphql)]
+#[expose(name = "Org", service = …, graphql, complex)]
 #[sea_orm::model]
 pub struct Model {
     #[expose]
@@ -247,26 +247,30 @@ auto-resolved relations, the single-`ComplexObject` rule applies — see
 
 ## A custom shape: a filtered relation
 
-When the unexposed relation opens the slot, write the replacement on the resolver:
+When the unexposed relation opens the slot, write the replacement on the resolver.
+With no exposed relation left on the type, `complex` is what serves its
+`#[field_resolver]`s:
 
 ```rust title="crates/features/src/orgs/graphql/resolver.rs"
-use async_graphql::{Context, Result};
+use std::sync::Arc;
+
+use nest_rs::graphql::async_graphql::Result;
 use nest_rs::graphql::{operations, resolver};
 
 use crate::orgs::Org;
-use crate::users::User;
+use crate::users::{User, UsersService};
 
 #[resolver]
 pub struct OrgsResolver {
     #[inject]
-    users: Arc<crate::users::UsersService>,
+    svc: Arc<UsersService>,
 }
 
 #[operations]
 impl OrgsResolver {
     #[field_resolver]
-    async fn admins(&self, _ctx: &Context<'_>, parent: &Org) -> Result<Vec<User>> {
-        Ok(self.users.admins_in_org(parent.id).await?)
+    async fn admins(&self, parent: &Org) -> Result<Vec<User>> {
+        Ok(self.svc.admins_in_org(parent.id).await?)
     }
 }
 ```

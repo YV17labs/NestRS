@@ -98,7 +98,7 @@ async fn create_with_invalid_email_returns_400_with_field_errors() {
         .http()
         .post("/users")
         .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "email": "not-an-email" }))
+        .body_json(&json!({ "name": "Ada", "email": "not-an-email" }))
         .send()
         .await;
     resp.assert_status(StatusCode::BAD_REQUEST);

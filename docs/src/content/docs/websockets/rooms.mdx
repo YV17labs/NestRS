@@ -65,21 +65,21 @@ membership atomically — no stale rows, no cleanup hook to write.
 | `client.broadcast(event, &data)` | Every live connection, including this one. |
 | `client.registry()` | The underlying [`WsServer`](/websockets/server-push/) — for advanced cases. |
 
-Every method serializes `data` with `serde` and returns either a
-boolean (one connection) or a count of outboxes that accepted the
-frame. A closed outbox returns `false` / `0` silently — the writer
-task drops the channel on disconnect, so the dispatch loop never blocks
-on a slow client.
+Every method but `registry` serializes `data` with `serde` and returns a `Result`: a
+boolean (one connection) or a count of outboxes that accepted the frame, `Err` when
+`data` does not serialize. A frame an outbox refuses is shed rather than awaited, with
+one `warn` on `nest_rs::ws`, so the dispatch loop never blocks on a slow client.
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("say")]
-async fn say(&self, msg: SendMessage, client: &WsClient) {
+async fn say(&self, msg: SendMessageDto, client: &WsClient) {
     let _ = client.broadcast("said", &msg);
     let _ = client.to("lobby", "said", &msg);
 }
 ```
 
-`broadcast` reaches the whole gateway; `to` scopes by room.
+`broadcast` reaches every connection on the gateway's registry, any other gateway
+sharing it included; `to` scopes by room.
 `client.to(room, ...)` does **not** require the sender to be in
 `room` — a user can post into any room they know the name of, which is
 why authorization belongs in a [guard](/websockets/guards/) and not in
@@ -89,14 +89,13 @@ the membership table.
 A reply from a handler return value is independent of these calls.
 Returning `T` sends one frame on the request's event to the sender.
 Calling `client.broadcast(...)` sends frames on a different event to
-the room. A handler often does both in one call.
+every connection on the registry. A handler often does both in one call.
 </Aside>
 
 ## A worked example
 
-The `chat` gateway uses all four scopes — joining at connect,
-moving rooms by event, broadcasting peer-visible events, replying with
-a payload:
+The `chat` gateway joins a room at connect, broadcasts peer-visible events and
+replies with a payload:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs (from the demo)"
 #[gateway(path = "/ws")]
@@ -160,11 +159,11 @@ terminals at once, each holding a user's token, and the picture comes
 through:
 
 ```text frame="terminal"
-$ websocat ws://localhost:3000/ws       # tab A, Ada
+$ websocat ws://localhost:3004/ws       # tab A, Ada
 {"event":"message","data":{"author":"0192b6f0-7c1e-7a40-9d3e-5f1c2a8b4d61","text":"hi"}}
 {"event":"typing","data":{"author":"0192b6f1-02aa-7f13-8c55-1d9e7b3c0a42","text":"..."}}
 
-$ websocat ws://localhost:3000/ws       # tab B, Bob
+$ websocat ws://localhost:3004/ws       # tab B, Bob
 {"event":"typing","data":{"author":"0192b6f1-02aa-7f13-8c55-1d9e7b3c0a42","text":"..."}}
 {"event":"message","data":{"author":"0192b6f0-7c1e-7a40-9d3e-5f1c2a8b4d61","text":"hi"}}
 ```

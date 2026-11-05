@@ -55,8 +55,8 @@ throwaway database
 a database of its own, created and migrated at the boot and dropped after the
 app, and the app verifies the tokens of a key the test holds, so `sign` mints a
 bearer the guards admit ([below](#a-bearer-the-app-verifies)). Nothing else is
-configured: the api reads its audience and its issuer from its own `.env`
-layer, as `nestrs run dev` does.
+configured: the api reads its audience from its own `.env` layer and its issuer
+from the root's, as `nestrs run dev` does.
 
 Each test module reaches for that `boot()` and the `sign` helper beside it:
 
@@ -119,6 +119,7 @@ Its `mod` list is the suite's index:
 
 ```rust title="apps/api/tests/e2e/main.rs (from the demo, abridged)"
 mod audio;
+mod audit;
 mod graphql;
 mod health;
 mod http;
@@ -126,6 +127,7 @@ mod module;
 mod openapi;
 mod orgs;
 mod posts;
+mod schema;
 mod scopes;
 mod subscription;
 mod users;
@@ -313,7 +315,8 @@ let app = TestApp::builder()
 ```rust title="apps/api/tests/e2e/openapi.rs"
 let resp = app.http().get("/api-json").send().await;
 resp.assert_status_is_ok();
-let paths = resp.json().await.value().object().get("paths").object();
+let body = resp.json().await;
+let paths = body.value().object().get("paths").object();
 assert!(paths.get_opt("/users").is_some());
 ```
 
@@ -475,7 +478,9 @@ configured, held to a stop bound the kernel accepts, listening, then serving —
 so once it returns, what the transport listens on accepts, and a client needs
 no retry loop. `attached_transports()` names what the composition attaches
 without starting any of it, the way to hold that a binary serves the edges you
-meant: `["queue"]` for a worker, and no `http`.
+meant: `["queue"]` for a module serving the queue alone, and no `http`; the demo's
+worker, which also imports `HealthModule` and a schedule, attaches `http` and
+`schedule` too.
 
 ### A worker drains its whole Redis database
 

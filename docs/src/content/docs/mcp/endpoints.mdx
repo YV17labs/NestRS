@@ -23,6 +23,7 @@ exactly why peers share it.
 ```rust title="apps/assistant/src/module.rs"
 use features::audio::AudioMcpModule;
 use features::users::UsersMcpModule;
+use nest_rs::core::module;
 
 #[module(imports = [
     AudioMcpModule,
@@ -59,7 +60,7 @@ unreachable — it is a boot error naming the name and both hosts:
 
 ```text frame="terminal"
 duplicate MCP tool name on "/mcp": search (AudioTool and UsersTool) — a tool is
-addressed by bare name within an endpoint, so rename one of them or give each
+addressed by bare name within an endpoint, so rename one of them, or give each
 host its own path
 ```
 
@@ -83,6 +84,9 @@ name, version and description `#[nest_rs::main]` reads off the app's
 for every endpoint it exposes:
 
 ```rust title="apps/assistant/src/module.rs"
+use features::audio::AudioMcpModule;
+use features::posts::PostsMcpModule;
+use features::users::UsersMcpModule;
 use nest_rs::core::module;
 use nest_rs::mcp::{McpIdentity, McpModule};
 

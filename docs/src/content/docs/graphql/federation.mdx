@@ -18,8 +18,8 @@ impl PostsResolver {
     #[entity]
     #[authorize(Read, PostEntity)]
     async fn find_post_by_id(&self, id: Uuid) -> Result<Option<Post>> {
-        match self.svc.access(Action::Read, id).await? {
-            Access::Found(post) => Ok(Some(Post::from(post))),
+        match self.svc.access(Action::Read, id).await.opaque()? {
+            Access::Found(post) => Ok(Some(Post::from(&post))),
             Access::Denied | Access::Missing => Ok(None),
         }
     }
@@ -88,7 +88,7 @@ it would key a type with none of what an `#[entity]` owes.
 
 ## Turning it on
 
-```rust title="crates/features/src/graphql/module.rs"
+```rust title="apps/api/src/module.rs"
 GraphqlModule::for_root(GraphqlConfig {
     federation: true,
     ..GraphqlConfig::default()

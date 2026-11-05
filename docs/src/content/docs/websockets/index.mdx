@@ -14,8 +14,8 @@ event. List the gateway in `#[module(providers = [...])]` and you have
 real-time wired in.
 
 Read this section, then start from the working reference: the
-[`live`](/publish/) app in Publish — a chat gateway plus org-scoped
-notifications, running the exact shapes below.
+[`live`](/publish/) app in Publish — a chat gateway plus a namespaced
+notifications gateway, running the exact shapes below.
 
 `nest-rs-ws` speaks the protocol through
 [tokio-tungstenite](https://docs.rs/tokio-tungstenite), over the connection the
@@ -23,7 +23,7 @@ HTTP transport's own server hands across once it answers the handshake. It
 hides the handshake, the read/write split, the outbox writer task, the
 connection registry, and the dispatch plumbing behind one decorator.
 
-In the [**Publish**](/publish/) workspace, live comments and notifications
+In the [**Publish**](/publish/) workspace, chat and notifications
 run in [`live`](/publish/) on port **3004**.
 
 ## Install

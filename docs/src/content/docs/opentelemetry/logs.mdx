@@ -32,7 +32,8 @@ request.
 | GraphQL execution and subscriptions | `nest_rs::graphql` | `info` |
 | Queue / Schedule | `nest_rs::queue` / `nest_rs::schedule` | `info` |
 | Redis connection (the `RedisConnection` the queue, the worker, the rate-limit store and the schedule's lock share, one per instance, each line carrying its `instance`) | `nest_rs::redis` | `warn` per connect attempt while the boot budget runs |
-| Module lifecycle | `nest_rs::module` | `info` |
+| Module registration | `nest_rs::module` | `info` |
+| Lifecycle hooks (`#[hooks]`) | `nest_rs::lifecycle` | `error` for a hook that failed or panicked, `warn` for one abandoned at the budget |
 | Application spans | `<crate>::<feature>` (e.g. `features::users`) | `info` |
 
 Controllers, resolvers, gateways log at `info` on success. Services keep
@@ -139,7 +140,7 @@ DEBUG features::posts: creating post title="hello" trace_id=01a01569ae687353bc03
 ```
 
 ```json
-{"timestamp":"2026-08-18T15:07:22.601081Z","level":"DEBUG","fields":{"message":"creating post","title":"hello"},"target":"features::posts","trace_id":"01a01569ae697a718f7e41c79e0eefe6","span_id":"39d4f26e5d048754","actor_id":"01a0112ce24e75509be691162cbbab1f"}
+{"timestamp":"2026-08-18T15:07:22.601081Z","level":"DEBUG","fields":{"message":"creating post","title":"hello"},"target":"features::posts","trace_id":"01a01569ae697a718f7e41c79e0eefe6","span_id":"39d4f26e5d048754","trace_flags":"01","actor_id":"01a0112ce24e75509be691162cbbab1f"}
 ```
 
 This owes nothing to a collector, an exporter or this crate: the trace context is
@@ -190,14 +191,14 @@ lifecycle hook:
 | WS message | `ws.message` | event (`_OTHER` for one no handler serves), `conn_id` |
 | WS socket open | `ws.connect` | `conn_id` |
 | WS socket close | `ws.disconnect` | `conn_id` |
-| Scheduled tick | `schedule.tick` | provider, method, `replicas`, and the `occurrence` a job firing once claimed |
-| Queue job | `queue.job` | queue, processor, `job_id`, `backend_id`, attempt |
+| Scheduled tick | `schedule.tick` | `host`, `method`, `replicas`, and the `occurrence` a job firing once claimed |
+| Queue job | `queue.job` | `queue`, `host`, `method`, `job_id`, `backend_id`, `attempt` |
 | MCP operation | `mcp.operation` | the JSON-RPC method (`_OTHER` for a custom one), and for `tools/call` the tool a host declares (`_OTHER` for any other) |
 | GraphQL operation | `graphql.operation` | `operation_type` |
 | GraphQL root field | `graphql.field` | role, operation |
 | GraphQL subscription | `graphql.subscription` | the connection is the unit |
-| Event dispatch | `events.dispatch` | event, listener |
-| Lifecycle hook | `lifecycle.hook` | phase, provider, method, origin |
+| Event dispatch | `events.dispatch` | `event`, `host`, `method` |
+| Lifecycle hook | `lifecycle.hook` | `phase`, `host`, `method`, `origin` |
 
 A GraphQL document files one `graphql.operation` line per query or mutation
 it runs — `error` when its response carries an error — and one `graphql.field`
@@ -390,7 +391,7 @@ NESTRS_LOG_SOURCE_LOCATION=true
 Each event then carries the emitting `file:line`:
 
 ```text frame="terminal"
-DEBUG nest_rs::layers: crates/nest-rs-core/src/layer_chain.rs: layer declared at multiple scopes…
+DEBUG nest_rs::layers: crates/nest-rs-core/src/layer_chain.rs:702: redundant layer declaration deduped…
 ```
 
 Off by default — it widens every line and leaks source paths, so it stays out

@@ -64,11 +64,11 @@ differently to reflect the missing per-connection context:
 | `emit(conn_id, event, &data)` | One specific connection by id. | `client.emit(...)` (this connection) |
 | `connection_count()` | Live connection total. | — |
 
-Each method serializes `data` with `serde`, returns the number of
-outboxes that accepted the frame (`usize`) or whether the target
-connection still existed (`bool`). A serializer failure surfaces as
-`Err(serde_json::Error)`; a closed outbox is silently dropped — the
-writer task already moved on.
+Each method serializes `data` with `serde`, and returns the number of outboxes that
+accepted the frame (`usize`) or whether this connection's did (`bool`: `false` when it
+is gone or its outbox refused the frame). A serializer failure surfaces as
+`Err(serde_json::Error)`; a frame an outbox refuses is shed, with one `warn` on
+`nest_rs::ws` — see [Backpressure](#backpressure).
 
 ## A push is not masked
 
@@ -96,7 +96,6 @@ use nest_rs::core::injectable;
 use nest_rs::schedule::scheduled;
 use nest_rs::ws::WsServer;
 
-#[scheduled]
 #[injectable]
 pub struct Heartbeat {
     #[inject]
@@ -106,8 +105,9 @@ pub struct Heartbeat {
 #[scheduled]
 impl Heartbeat {
     #[every("5s")]
-    async fn tick(&self) {
-        let _ = self.server.broadcast("heartbeat", &chrono::Utc::now());
+    async fn tick(&self) -> anyhow::Result<()> {
+        self.server.broadcast("heartbeat", &chrono::Utc::now())?;
+        Ok(())
     }
 }
 ```
@@ -135,21 +135,32 @@ into a service that records state, and the service holds the registry
 and broadcasts the derived event. `crates/features/src/chat/service.rs`
 shows exactly this:
 
-```rust title="crates/features/src/chat/service.rs"
+```rust title="crates/features/src/chat/service.rs (from the demo, abridged)"
 #[injectable]
-pub struct RoomService {
+pub struct ChatService {
     #[inject]
     server: Arc<WsServer>,
-    history: Mutex<Vec<ChatMessage>>,
+    history: Mutex<VecDeque<ChatMessageDto>>,
+    // …
 }
 
-impl RoomService {
-    pub fn record(&self, author: Subject, msg: SendMessage) -> ChatMessage {
-        let stored = ChatMessage { author, text: msg.text };
-        self.history.lock().push(stored.clone());
-        let _ = self.server.broadcast("message", &stored);
-        stored
+impl ChatService {
+    // …
+    pub fn record(
+        &self,
+        author: Subject,
+        message: SendMessageDto,
+    ) -> Result<ChatMessageDto, serde_json::Error> {
+        let stored = ChatMessageDto {
+            author,
+            text: message.text,
+        };
+        // …
+        let reached = self.server.broadcast("message", &stored)?;
+        // …
+        Ok(stored)
     }
+    // …
 }
 ```
 

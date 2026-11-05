@@ -11,7 +11,7 @@ The bare `McpModule` an `#[mcp]` host brings resolves it, so an app reads it
 wherever it serves a tool; the root's `for_root` pins a base those variables
 overlay.
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/assistant/src/module.rs"
 #[module(imports = [
     McpModule::for_root(McpConfig {
         allowed_hosts: vec!["mcp.example.com".into()],
@@ -24,7 +24,7 @@ pub struct AssistantModule;
 Pinning options *and* declaring the app's identity is the same one call: the
 declaration first, the config last, as a tuple —
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/assistant/src/module.rs"
 McpModule::for_root((
     McpIdentity { title: Some("Acme assistant".into()), ..Default::default() },
     McpConfig {
@@ -260,8 +260,8 @@ upstream URL — and may repeat it.
 
 The `data` field accepts any JSON value — attach structured diagnostics there
 when the model would benefit from them (e.g. the validator's per-field errors).
-Anything beyond these six codes flows through `internal_error` — there is no
-custom-code constructor.
+Anything beyond these six codes is `McpError::new(ErrorCode(code), msg, data)`,
+with `ErrorCode` from `nest_rs::mcp::model`.
 
 ## Going further
 

@@ -33,7 +33,8 @@ per crate.
 | MCP operations | `nest_rs::mcp` |
 | Queue jobs | `nest_rs::queue` |
 | Scheduled jobs | `nest_rs::schedule` |
-| Module lifecycle | `nest_rs::module` |
+| Module registration | `nest_rs::module` |
+| Lifecycle hooks (`#[hooks]`) | `nest_rs::lifecycle` |
 | Application spans | `<crate>::<feature>` (e.g. `features::users`) |
 
 ## Custom spans
@@ -163,9 +164,9 @@ a half-streamed response and a client disconnect both still produce one access
 line and one complete span.
 
 The request span and the access event both belong to `nest-rs-http`, and exist
-whether or not this crate is installed. What the interceptor adds is the parent
-from an inbound `traceparent` and the sampler's verdict — the access
-line reads that header, which is the whole of the coupling between the two.
+whether or not this crate is installed. What this crate adds is the parent
+from an inbound `traceparent` and the sampler's verdict, seeded onto the span
+constructor: no interceptor, and no header the access line reads.
 Toggle the line with `<PREFIX>_HTTP__ACCESS_LOG=false`; nothing about propagation
 or OTLP export changes.
 

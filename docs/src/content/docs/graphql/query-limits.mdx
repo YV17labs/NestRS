@@ -9,7 +9,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 A GraphQL endpoint accepts whatever the client asks for. Without a
 ceiling, three shapes of query can take a production app down before
-auth even runs:
+a resolver even runs:
 
 - **Recursive** — `{ a { a { a { … 50 levels … } } } }`. Tiny payload,
   massive resolve work.
@@ -49,7 +49,7 @@ use nest_rs::graphql::{GraphqlConfig, GraphqlModule};
         ..Default::default()
     }),
 ])]
-pub struct AppModule;
+pub struct ApiModule;
 ```
 
 ```bash title=".env.production"
@@ -112,7 +112,7 @@ fanout, even though a hundred rows resolve.
 for rather than a guessed constant:
 
 ```rust title="from the macro expansion"
-#[graphql(complexity = "first.unwrap_or(20) as usize * child_complexity")]
+#[graphql(complexity = "first.unwrap_or(20).clamp(1, 100) as usize * child_complexity")]
 async fn users(&self, …, first: Option<u64>, after: Option<String>)
     -> Connection<String, User> { … }
 ```
@@ -155,8 +155,9 @@ Two shapes:
   uses async-graphql's expression grammar with the reserved
   `child_complexity` variable, plus **the field's own arguments**. An
   auto-emitted `HasMany` takes `first: Option<u64>` and
-  `after: Option<String>`, so `first.unwrap_or(20) as usize *
-  child_complexity` is available there; every other field has no
+  `after: Option<String>`, so `first.unwrap_or(20).clamp(1, 100) as usize *
+  child_complexity` is available there — keep the clamp, since `first` arrives as any
+  `u64` and the product can overflow; every other field has no
   arguments to name, and an unknown name is an unbound identifier that
   fails the expansion.
 
@@ -174,11 +175,8 @@ pub struct Model {
 ```
 
 <Aside type="caution">
-**`complexity` needs an exposed field.** An unexposed field (no
-`#[expose]`) has no wire-DTO column AND no auto-emitted resolver —
-nowhere for `#[graphql(complexity = …)]` to land. The macro rejects a
-`complexity` override on a field that isn't otherwise exposed at compile
-time. To attach a cost to a hand-rolled field resolver, leave the
+**`complexity` exposes its field.** `#[expose(complexity = …)]` is an
+`#[expose]`, so the field crosses the wire, and a relation is auto-resolved. To attach a cost to a hand-rolled field resolver, leave the
 relation unexposed and put `#[graphql(complexity = …)]` directly on the
 `#[field_resolver]` method instead.
 </Aside>
@@ -197,10 +195,11 @@ same with a regular `#[graphql(complexity = …)]`:
 pub posts: HasMany<crate::posts::Entity>,
 
 // in the resolver file:
-#[ComplexObject]
-impl User {
+#[operations]
+impl UsersResolver {
+    #[field_resolver]
     #[graphql(complexity = "limit as usize * child_complexity")]
-    async fn recent_posts(&self, limit: u32) -> Vec<Post> { … }
+    async fn recent_posts(&self, parent: &User, limit: u32) -> Result<Vec<Post>> { … }
 }
 ```
 
@@ -233,11 +232,11 @@ any other validation error.
    smaller literal, and an expensive computed scalar a larger one.
 
 <Aside type="tip">
-**Complexity scoring runs before authn.** The validation visitor
-fires during async-graphql's parse pipeline, which runs before guards.
-That means a depth or complexity violation rejects the query with no
-principal involved — the right behaviour for anti-DoS, since
-unauthenticated scrapers shouldn't even hit the auth chain.
+**Complexity scoring runs before every field's guards.** The validation visitor
+fires when async-graphql validates the document, inside the endpoint: after the
+guards the `/graphql` request runs, before any field's guard, pipe or resolver.
+A depth or complexity violation costs one request's guards and one parse, the
+right behaviour for anti-DoS.
 </Aside>
 
 ## Underlying library
@@ -258,7 +257,7 @@ for the full reference.
 - `crates/nest-rs-graphql/src/resolver.rs` — `build_schema` applies
   the limits to the `SchemaBuilder` before `.finish()`.
 - `crates/nest-rs-seaorm-macros/src/relations.rs` — the
-  `DEFAULT_HAS_MANY_COMPLEXITY` constant and the
+  `DEFAULT_HAS_MANY_COMPLEXITY` constant; `attr.rs` beside it — the
   `#[expose(complexity = …)]` parsing.
 
 ## Going further

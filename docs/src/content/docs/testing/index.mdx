@@ -6,8 +6,8 @@ sidebar:
   order: 1
 ---
 
-`nest-rs-testing` boots the **real** `AppBuilder` (the four-phase collect →
-factories → register → access-graph check) in-process, configures an
+`nest-rs-testing` boots the **real** `AppBuilder` (its four phases, seeds → collect →
+factories → register, then the access-graph check) in-process, configures an
 `HttpTransport` without a socket, and hands you `TestClient`, its own
 in-process client over the stack the server runs — the edge, the router, the
 guards and your handlers. GraphQL, OpenAPI, and MCP ride the same client

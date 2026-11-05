@@ -161,7 +161,7 @@ registry the macro wires:
 2026-06-08T10:23:14Z  INFO nest_rs::routes: mounted endpoint surface="ws" path="/notify"
 ```
 
-Listing both gateways' modules in `AppModule` is enough: each gateway brings
+Listing both gateways' modules in `LiveModule` is enough: each gateway brings
 `WsModule`, and its registry with it, so the first `broadcast` always has one to
 reach. The `WsModule` import is what a pushing service writes, as `AdminModule`
 does above.

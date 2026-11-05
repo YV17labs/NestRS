@@ -118,11 +118,13 @@ use nest_rs::graphql::{GraphqlConfig, GraphqlModule};
         ..Default::default()
     }),
 ])]
-pub struct AppModule;
+pub struct ApiModule;
 ```
 
 Mix both freely — pin the mount path in code (the reverse proxy
-depends on it), leave the limits to env. A pin closes nothing it does not name:
+depends on it), leave the limits to the deployment's environment. A pin takes its
+whole namespace off the `.env` cascade: the `.env.production` line above lands on the
+bare import only, and beside a pin the boot names it at `warn` and leaves it unread. A pin closes nothing it does not name:
 `..Default::default()` keeps the profile's surfaces under development and test,
 and opens none of them in a deployment.
 
@@ -149,7 +151,7 @@ operation in it succeeded, and every header a resolver set with
 The path is a route on the HTTP transport, which `GraphqlModule` imports bare,
 so the surrounding `HttpModule` config (host, port, CORS, TLS, the body cap)
 applies as usual.
-[HTTP / Configuration](/http/) covers the transport itself.
+[HTTP configuration](/http/configuration/) covers the transport itself.
 
 ## The playground
 

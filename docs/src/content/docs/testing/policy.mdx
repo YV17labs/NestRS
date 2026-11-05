@@ -28,7 +28,7 @@ line.
 
 ```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 use nest_rs::authz::{Ability, AbilityBuilder, FieldSet};
-use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
+use sea_orm::{DatabaseBackend, EntityTrait, IdenStatic, QueryFilter, QueryTrait};
 // …
 
 fn ability_for(roles: Vec<Role>, org_id: Uuid) -> Ability {
@@ -36,8 +36,12 @@ fn ability_for(roles: Vec<Role>, org_id: Uuid) -> Ability {
 }
 
 fn ability_scoped(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>) -> Ability {
+    ability_of(roles, org_id, scopes, Subject::User(Uuid::nil()))
+}
+
+fn ability_of(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>, sub: Subject) -> Ability {
     let claims = Claims {
-        sub: Subject::User(Uuid::nil()),
+        sub,
         client_id: None,
         org_id,
         roles,

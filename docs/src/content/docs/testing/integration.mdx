@@ -12,7 +12,9 @@ result. No app boot, no database, no network.
 ## One layout, two suite names
 
 A test binary is **always** the directory form `tests/<suite>/main.rs`,
-and `<suite>` is one of exactly two canonical names:
+and `<suite>` is one of two canonical names, but for a fixture that must link
+alone, which takes a directory named for it
+(`crates/nest-rs-social/tests/unreferenced_provider/main.rs`):
 
 - **`integration`** — in-process tests of the public API (this page);
 - **`e2e`** — tests that need live infrastructure, gated by the
@@ -75,7 +77,7 @@ pub fn request(headers: &[(&str, &str)]) -> Request { /* … */ }
 ```
 
 ```rust title="crates/nest-rs-authn/tests/integration/config.rs"
-use nest_rs::authn::{AuthnConfig, JwtKey, JwtService};
+use nest_rs_authn::{AuthnConfig, JwtKey, JwtService};
 
 #[test]
 fn into_options_selects_eddsa_from_key_pair() {
@@ -111,6 +113,6 @@ end-to-end against a real engine.
 
 ## Going further
 
-- [End-to-end tests](/testing/e2e/) — boot the real AppModule against live Postgres.
+- [End-to-end tests](/testing/e2e/) — boot the real `ApiModule` against live Postgres.
 - [Unit tests](/testing/unit/) — pure logic next to the code, no DI boot.
 - [Testing](/testing/) — the three categories and the `test` recipe group.

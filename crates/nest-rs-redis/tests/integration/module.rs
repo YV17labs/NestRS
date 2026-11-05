@@ -2,7 +2,8 @@
 //! process: two connections to two scripted servers, a named instance's budget
 //! held under each binding's net, a queue's config pinned on it, its refusals
 //! naming its own variables, its namespace refused when a linked config holds
-//! it, and its variables claimed by the read that resolved them.
+//! it, its variables claimed by the read that resolved them, and each binding
+//! opening the instance it runs on, under whatever pin the root names.
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -217,6 +218,10 @@ struct LockAlone;
 #[module(imports = [RedisThrottlerModule])]
 struct StoreAlone;
 
+/// The shape an app wrote before its binding imported the connection.
+#[module(imports = [RedisModule, RedisQueueModule])]
+struct QueueBesideItsResource;
+
 /// Whether `M`, naming no `RedisModule`, opened the default instance over
 /// `server`.
 async fn opens_the_default_instance<M: Module>(server: &DemotedRedis) -> bool {
@@ -241,6 +246,7 @@ async fn each_binding_alone_opens_the_connection_it_runs_on() {
     assert!(opens_the_default_instance::<QueueAlone>(&server).await);
     assert!(opens_the_default_instance::<LockAlone>(&server).await);
     assert!(opens_the_default_instance::<StoreAlone>(&server).await);
+    assert!(opens_the_default_instance::<QueueBesideItsResource>(&server).await);
 }
 
 #[module(imports = [RedisThrottlerModule::<Cache>, RedisModule::for_root((Cache, cache_config()))])]

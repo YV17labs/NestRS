@@ -6,6 +6,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use http::{Method, StatusCode};
+use nest_rs_config::Namespaced as _;
 use object_store::client::{HttpError, HttpErrorKind};
 use thiserror::Error;
 
@@ -33,10 +34,7 @@ pub enum StorageError {
         "refusing to address {endpoint} over plain HTTP: {allow_http_var} is false, or unset \
          outside a declared development or test profile, so credentials must not travel \
          unencrypted",
-        allow_http_var = ::nest_rs_config::var_name(
-            <crate::StorageConfig as ::nest_rs_config::Namespaced>::NAMESPACE,
-            crate::StorageConfig::ALLOW_HTTP.key(),
-        ),
+        allow_http_var = StorageConfig::ALLOW_HTTP.var(StorageConfig::NAMESPACE),
     )]
     PlaintextEndpoint {
         /// The offending endpoint, as

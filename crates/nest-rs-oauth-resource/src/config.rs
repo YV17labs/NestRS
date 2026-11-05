@@ -1,7 +1,7 @@
 //! [`OAuthResourceConfig`] — who this resource server is, and which
 //! authorization servers issue tokens for it (RFC 9728 §2).
 
-use nest_rs_config::__private::{RetiredKey, is_loopback};
+use nest_rs_config::__private::{RetiredKey, RetiredKeys, is_loopback};
 use nest_rs_config::{Environment, Namespaced, config};
 use nest_rs_guards::__private::is_scope_token;
 
@@ -21,23 +21,15 @@ const USERINFO: &str = "it carries userinfo, which RFC 9110 §4.2.4 forbids a se
 
 // A family puts its name first in its namespace: 6.x read `oauth_resource`.
 nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKeys::under("oauth_resource", &[
-        RetiredKey::moved("RESOURCE", "oauth__resource", "RESOURCE"),
-        RetiredKey::moved("AUTHORIZATION_SERVERS", "oauth__resource", "AUTHORIZATION_SERVERS"),
-        RetiredKey::moved("SCOPES_SUPPORTED", "oauth__resource", "SCOPES_SUPPORTED"),
-        RetiredKey::moved(
-            "BEARER_METHODS_SUPPORTED",
-            "oauth__resource",
-            "BEARER_METHODS_SUPPORTED",
-        ),
-        RetiredKey::moved("RESOURCE_NAME", "oauth__resource", "RESOURCE_NAME"),
-        RetiredKey::moved(
-            "RESOURCE_DOCUMENTATION",
-            "oauth__resource",
-            "RESOURCE_DOCUMENTATION",
-        ),
-        RetiredKey::moved("RESOURCE_POLICY_URI", "oauth__resource", "RESOURCE_POLICY_URI"),
-        RetiredKey::moved("RESOURCE_TOS_URI", "oauth__resource", "RESOURCE_TOS_URI"),
+    RetiredKeys::under("oauth_resource", &[
+        RetiredKey::moved("RESOURCE", "oauth__resource"),
+        RetiredKey::moved("AUTHORIZATION_SERVERS", "oauth__resource"),
+        RetiredKey::moved("SCOPES_SUPPORTED", "oauth__resource"),
+        RetiredKey::moved("BEARER_METHODS_SUPPORTED", "oauth__resource"),
+        RetiredKey::moved("RESOURCE_NAME", "oauth__resource"),
+        RetiredKey::moved("RESOURCE_DOCUMENTATION", "oauth__resource"),
+        RetiredKey::moved("RESOURCE_POLICY_URI", "oauth__resource"),
+        RetiredKey::moved("RESOURCE_TOS_URI", "oauth__resource"),
     ])
 }
 
@@ -90,7 +82,7 @@ impl OAuthResourceConfig {
     fn metadata_in(self, environment: Environment) -> Result<ProtectedResourceMetadata, AuthError> {
         let resource = self.resource.unwrap_or_default();
         let resource = resource.trim();
-        let resource_setting = nest_rs_config::spellings(Self::NAMESPACE, Self::RESOURCE.key());
+        let resource_setting = Self::RESOURCE.spellings(Self::NAMESPACE);
         if resource.is_empty() {
             return Err(AuthError::failed(format!(
                 "{resource_setting} must name this deployment's canonical URI \
@@ -109,7 +101,7 @@ impl OAuthResourceConfig {
             return Err(AuthError::failed(format!(
                 "{} must list at least one issuer — RFC 9728 metadata without \
                  `authorization_servers` tells a client nothing",
-                nest_rs_config::spellings(Self::NAMESPACE, Self::AUTHORIZATION_SERVERS.key()),
+                Self::AUTHORIZATION_SERVERS.spellings(Self::NAMESPACE),
             )));
         }
         for (index, issuer) in authorization_servers.iter().enumerate() {

@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use nest_rs_config::__private::RetiredKey;
+use nest_rs_config::__private::{RetiredKey, RetiredKeys};
 use nest_rs_config::{Bound, CountBounds, DurationBounds, Floor, Surface, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
@@ -107,7 +107,7 @@ const INTROSPECTION_OPEN: &str =
 // it closed would find it answering under a development profile, and a rename by
 // hand inverts it: refused, where the emit's two only move a committed artifact.
 nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKeys::under("graphql", &[
+    RetiredKeys::under("graphql", &[
         RetiredKey::renamed("EMIT_SDL", "EMIT"),
         RetiredKey::renamed("SCHEMA_PATH", "EMIT_PATH"),
         RetiredKey::refused(

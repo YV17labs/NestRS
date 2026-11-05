@@ -2,6 +2,8 @@
 //! [`StaticFilesModule`](crate::StaticFilesModule) was given: each names every
 //! way to set the directory, never its value.
 
+use nest_rs_config::Namespaced as _;
+
 use crate::config::StaticFilesConfig;
 
 /// Why the boot refused the files a
@@ -41,11 +43,7 @@ pub enum StaticFilesError {
 
 /// Every way [`StaticFilesConfig::root`] can be given, for a refusal to name.
 fn root_setting() -> String {
-    nest_rs_config::spellings_or_field(
-        <StaticFilesConfig as nest_rs_config::Namespaced>::NAMESPACE,
-        StaticFilesConfig::ROOT.key(),
-        StaticFilesConfig::ROOT.path(),
-    )
+    StaticFilesConfig::ROOT.spellings_or_field(StaticFilesConfig::NAMESPACE)
 }
 
 #[cfg(test)]

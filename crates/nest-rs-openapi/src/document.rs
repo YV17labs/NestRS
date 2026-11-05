@@ -3,6 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
+use nest_rs_config::Namespaced as _;
 use nest_rs_core::{Container, Discovery};
 use nest_rs_http::__private::{
     VersionLocation, declared_versions, join_path, route_denial_statuses, version_location,
@@ -400,10 +401,7 @@ fn contested_path_remedy() -> String {
     format!(
         "read the per-version document at /api-json/v{{n}}, or name the version /api-json \
          describes with {}",
-        nest_rs_config::var_name(
-            <nest_rs_http::HttpConfig as nest_rs_config::Namespaced>::NAMESPACE,
-            nest_rs_http::HttpConfig::DEFAULT_VERSION.key(),
-        ),
+        HttpConfig::DEFAULT_VERSION.var(HttpConfig::NAMESPACE),
     )
 }
 

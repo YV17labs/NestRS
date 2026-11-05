@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use nest_rs_config::__private::{RetiredKey, RetiredKeys};
 use nest_rs_config::{Bound, DurationBounds, Floor, config};
 
 /// Default drain window on shutdown: 20s, which with the hooks' 5s, the
@@ -29,12 +30,8 @@ const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
 
 // The drain window is the port's now, so it survives a backend swap.
 nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKeys::under("redis__worker", &[
-        nest_rs_config::__private::RetiredKey::moved(
-            "SHUTDOWN_TIMEOUT_SECS",
-            "queue",
-            "SHUTDOWN_TIMEOUT_SECS",
-        ),
+    RetiredKeys::under("redis__worker", &[
+        RetiredKey::moved("SHUTDOWN_TIMEOUT_SECS", "queue"),
     ])
 }
 

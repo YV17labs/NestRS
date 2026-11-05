@@ -23,6 +23,7 @@ use async_graphql::parser::types::{ExecutableDocument, OperationType, Selection,
 use async_graphql::{
     Error, Name, Positioned, Request, ServerError, ServerResult, Value, Variables,
 };
+use nest_rs_config::Namespaced as _;
 use nest_rs_core::__private::{
     GuardStage, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers, declare_handler,
     declare_site,
@@ -281,7 +282,7 @@ fn refuse_oversized_entity_calls(
     let setting = GraphqlConfig::MAX_REPRESENTATIONS;
     let (field, key) = (
         setting.field().path(),
-        setting.var(<GraphqlConfig as nest_rs_config::Namespaced>::NAMESPACE),
+        setting.var(GraphqlConfig::NAMESPACE),
     );
     Err(ServerError::new(
         format!(
@@ -289,8 +290,7 @@ fn refuse_oversized_entity_calls(
              schema's ceiling of {max}. Each one is resolved on its own — body, \
              posture gate and mask — so the total list length is the fan-out, \
              however many `_entities` fields it is spread across. Split the call, \
-             or raise `{field}` (`{key}`; `0` ⇒ \
-             unlimited).",
+             or raise `{field}` (`{key}`; `0` ⇒ unlimited).",
         ),
         position,
     ))

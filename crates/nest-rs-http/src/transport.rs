@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use http::Method;
 use http::header::{HeaderName, HeaderValue, SERVER};
+use nest_rs_config::Namespaced as _;
 use nest_rs_core::__private::{
     EdgeHosts, EdgeRuntime, GlobalLayers, GuardStage, SiteDeclaration, SiteLayers, UnitChains,
     attaches_transport, compose_site, registered_hosts,
@@ -17,6 +18,7 @@ use nest_rs_core::{Container, Discovery, Edge, Listening, Posture, Transport};
 use nest_rs_database::UnitOfWork;
 use tokio_util::sync::CancellationToken;
 
+use crate::HttpConfig;
 use crate::client_ip::trusted_proxies;
 use crate::compression::Compression;
 use crate::controller::HttpControllerMeta;
@@ -356,7 +358,7 @@ fn template_of(path: &str, controller: &str) -> Result<RouteTemplate, RouteError
 fn global_prefix_owner() -> String {
     format!(
         "the global prefix ({})",
-        crate::config::var(crate::HttpConfig::GLOBAL_PREFIX),
+        HttpConfig::GLOBAL_PREFIX.var(HttpConfig::NAMESPACE),
     )
 }
 
@@ -575,7 +577,7 @@ impl Transport for HttpTransport {
         {
             let declared = crate::versioning::declared_versions(container);
             if !declared.iter().any(|v| v == default) {
-                let var = crate::config::var(crate::HttpConfig::DEFAULT_VERSION);
+                let var = HttpConfig::DEFAULT_VERSION.var(HttpConfig::NAMESPACE);
                 anyhow::bail!(match declared.is_empty() {
                     true => format!(
                         "{var} names API version {default:?}, and no controller declares a \

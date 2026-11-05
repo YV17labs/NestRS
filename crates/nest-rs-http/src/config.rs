@@ -2,7 +2,7 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use http::HeaderName;
-use nest_rs_config::__private::RetiredKey;
+use nest_rs_config::__private::{RetiredKey, RetiredKeys};
 use nest_rs_config::{
     Bound, ConfigService, CountBounds, DurationBounds, Field, Floor, Namespaced, Result, config,
 };
@@ -450,7 +450,7 @@ impl HttpConfig {
     /// whatever the strategy, for a config that never met the environment.
     pub(crate) fn version_selector(&self) -> Result<Option<VersionSelector>> {
         let header = header_name(
-            nest_rs_config::var_name(Self::NAMESPACE, Self::VERSION_HEADER.key()),
+            Self::VERSION_HEADER.var(Self::NAMESPACE),
             Self::VERSION_HEADER,
             &self.version_header,
             "",
@@ -542,11 +542,6 @@ impl HttpConfig {
     }
 }
 
-/// The variable `field` is read from, for a sentence naming it.
-pub(crate) fn var(field: Field) -> String {
-    nest_rs_config::var_name(HttpConfig::NAMESPACE, field.key())
-}
-
 /// The server's own certificate, its vocabulary's `TLS_*` keys; a reading
 /// failure that names no variable is named under them, its I/O source kept.
 fn tls(env: &ConfigService, field: Field, base: Option<HttpTls>) -> Result<Option<HttpTls>> {
@@ -585,57 +580,36 @@ fn security_headers(
     HttpSecurityHeaders::from_env(env, base)
 }
 
-/// Why a security header set under its 6.x flat key fails the boot: read by
-/// nothing, it would leave the header to its default, a policy the deployment
-/// wrote not sent at all.
-const A_HEADER_UNSENT: &str =
-    "it was a security header's 6.x key, and the header it set would not be sent as set";
+/// A security header's 6.x key, flat beside `SECURITY_HEADERS`: it fails the boot,
+/// since read by nothing it would leave the header to its default, a policy the
+/// deployment wrote not sent at all.
+macro_rules! retired_header {
+    ($key:literal) => {
+        RetiredKey::refused(
+            $key,
+            concat!("SECURITY_HEADERS_", $key),
+            "it was a security header's 6.x key, and the header it set would not be sent as set",
+        )
+    };
+}
 
 // The vocabularies' other 6.x keys leave a policy more closed than the one set,
 // so the report says them at `warn`.
 nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKeys::under("http", &[
+    RetiredKeys::under("http", &[
         RetiredKey::renamed("CORS_EXPOSED", "CORS_EXPOSED_HEADERS"),
         RetiredKey::renamed("CORS_MAX_AGE", "CORS_MAX_AGE_SECS"),
         RetiredKey::renamed("SECURITY_HEADERS", "SECURITY_HEADERS_ENABLED"),
         RetiredKey::removed("FAIL_SECURE_STRICT"),
-        RetiredKey::refused("HSTS", "SECURITY_HEADERS_HSTS", A_HEADER_UNSENT),
-        RetiredKey::refused("FRAME_OPTIONS", "SECURITY_HEADERS_FRAME_OPTIONS", A_HEADER_UNSENT),
-        RetiredKey::refused(
-            "CONTENT_TYPE_OPTIONS",
-            "SECURITY_HEADERS_CONTENT_TYPE_OPTIONS",
-            A_HEADER_UNSENT,
-        ),
-        RetiredKey::refused(
-            "REFERRER_POLICY",
-            "SECURITY_HEADERS_REFERRER_POLICY",
-            A_HEADER_UNSENT,
-        ),
-        RetiredKey::refused(
-            "CROSS_ORIGIN_OPENER_POLICY",
-            "SECURITY_HEADERS_CROSS_ORIGIN_OPENER_POLICY",
-            A_HEADER_UNSENT,
-        ),
-        RetiredKey::refused(
-            "CROSS_ORIGIN_RESOURCE_POLICY",
-            "SECURITY_HEADERS_CROSS_ORIGIN_RESOURCE_POLICY",
-            A_HEADER_UNSENT,
-        ),
-        RetiredKey::refused(
-            "CROSS_ORIGIN_EMBEDDER_POLICY",
-            "SECURITY_HEADERS_CROSS_ORIGIN_EMBEDDER_POLICY",
-            A_HEADER_UNSENT,
-        ),
-        RetiredKey::refused(
-            "PERMISSIONS_POLICY",
-            "SECURITY_HEADERS_PERMISSIONS_POLICY",
-            A_HEADER_UNSENT,
-        ),
-        RetiredKey::refused(
-            "CONTENT_SECURITY_POLICY",
-            "SECURITY_HEADERS_CONTENT_SECURITY_POLICY",
-            A_HEADER_UNSENT,
-        ),
+        retired_header!("HSTS"),
+        retired_header!("FRAME_OPTIONS"),
+        retired_header!("CONTENT_TYPE_OPTIONS"),
+        retired_header!("REFERRER_POLICY"),
+        retired_header!("CROSS_ORIGIN_OPENER_POLICY"),
+        retired_header!("CROSS_ORIGIN_RESOURCE_POLICY"),
+        retired_header!("CROSS_ORIGIN_EMBEDDER_POLICY"),
+        retired_header!("PERMISSIONS_POLICY"),
+        retired_header!("CONTENT_SECURITY_POLICY"),
     ])
 }
 

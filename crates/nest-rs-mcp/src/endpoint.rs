@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use nest_rs_config::Namespaced as _;
 use nest_rs_core::{Container, Correlation, Posture, Problem, code, current_request_scope};
 use nest_rs_http::__private::{CanonicalHost, framework_sentence};
 use nest_rs_http::ResponseError as _;
@@ -128,7 +129,7 @@ impl McpMount {
                 hint = %format!(
                     "a Host outside this list is refused with 403; set {} to this \
                      deployment's own hostnames",
-                    nest_rs_config::var_name(<McpConfig as nest_rs_config::Namespaced>::NAMESPACE, McpConfig::ALLOWED_HOSTS.key()),
+                    McpConfig::ALLOWED_HOSTS.var(McpConfig::NAMESPACE),
                 ),
                 "mcp host allowlist resolved",
             );
@@ -344,7 +345,7 @@ fn host_refused() {
         reason = "host_not_allowed",
         hint = %format!(
             "set {} to this deployment's own hostnames",
-            nest_rs_config::var_name(<McpConfig as nest_rs_config::Namespaced>::NAMESPACE, McpConfig::ALLOWED_HOSTS.key()),
+            McpConfig::ALLOWED_HOSTS.var(McpConfig::NAMESPACE),
         ),
         "mcp request refused: its Host is outside the allowlist",
     );

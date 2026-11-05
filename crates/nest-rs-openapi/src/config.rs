@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use nest_rs_config::__private::{RetiredKey, RetiredKeys};
 use nest_rs_config::{ConfigError, ConfigService, Field, Result, Surface, config};
 use nest_rs_core::AppIdentity;
 
@@ -10,9 +11,9 @@ use crate::contact::OpenApiContact;
 use crate::license::OpenApiLicense;
 
 nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKeys::under("openapi", &[
-        nest_rs_config::__private::RetiredKey::renamed("EMIT_DOCUMENT", "EMIT"),
-        nest_rs_config::__private::RetiredKey::renamed("DOCUMENT_PATH", "EMIT_PATH"),
+    RetiredKeys::under("openapi", &[
+        RetiredKey::renamed("EMIT_DOCUMENT", "EMIT"),
+        RetiredKey::renamed("DOCUMENT_PATH", "EMIT_PATH"),
     ])
 }
 

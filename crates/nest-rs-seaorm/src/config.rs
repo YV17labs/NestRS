@@ -231,10 +231,7 @@ impl SeaOrmConfig {
     /// A refusal of the URL, naming `<PREFIX>_SEAORM__URL` and never the
     /// value, which carries the password.
     fn refuse_url(message: impl Into<String>) -> ConfigError {
-        ConfigError::parse(
-            nest_rs_config::var_name(Self::NAMESPACE, Self::URL.key()),
-            message,
-        )
+        ConfigError::parse(Self::URL.var(Self::NAMESPACE), message)
     }
 
     /// Whether the pool trusts the system's authorities: when the URL names no

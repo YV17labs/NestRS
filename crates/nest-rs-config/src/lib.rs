@@ -86,9 +86,10 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 /// names a `fn(&ConfigService, Field, T) -> Result<T>`, handed the field's
 /// binding. Every other field is bound too, as the associated [`Field`] named for
 /// it (`ReportsConfig::RECIPIENTS`), so a sentence naming a field or a check of a
-/// value set in code reads its key and path, never types them. On the struct, `validate = "manual"` leaves the
-/// `Validate` derive to a hand-written impl, and `from_env = "manual"` the
-/// whole `impl Config`, for an overlay whose fields depend on each other.
+/// value set in code reads its key and path, never types them. On the struct,
+/// `validate = "manual"` leaves the `Validate` derive to a hand-written impl, and
+/// `from_env = "manual"` the whole `impl Config`, for an overlay whose fields
+/// depend on each other.
 ///
 /// ```
 /// use std::time::Duration;

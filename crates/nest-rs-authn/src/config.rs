@@ -223,7 +223,7 @@ fn algorithms(
 pub(crate) fn spellings(field: Field) -> String {
     format!(
         "{}, or `{}` in an AuthnConfig or JwtOptions built in code",
-        nest_rs_config::spellings(AuthnConfig::NAMESPACE, field.key()),
+        field.spellings(AuthnConfig::NAMESPACE),
         bare(field),
     )
 }
@@ -300,9 +300,9 @@ fn static_key(
         (None, None, None) => Err(AuthError::failed(format!(
             "no JWT key configured: set {} for HS256, {} for EdDSA, or {} for an external \
              issuer's keys — or the same field in an AuthnConfig or JwtOptions built in code",
-            nest_rs_config::spellings(AuthnConfig::NAMESPACE, AuthnConfig::SECRET.key()),
-            nest_rs_config::spellings(AuthnConfig::NAMESPACE, AuthnConfig::PUBLIC_KEY.key()),
-            nest_rs_config::spellings(AuthnConfig::NAMESPACE, AuthnConfig::JWKS_URI.key()),
+            AuthnConfig::SECRET.spellings(AuthnConfig::NAMESPACE),
+            AuthnConfig::PUBLIC_KEY.spellings(AuthnConfig::NAMESPACE),
+            AuthnConfig::JWKS_URI.spellings(AuthnConfig::NAMESPACE),
         ))),
     }
 }

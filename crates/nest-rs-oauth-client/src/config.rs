@@ -1,21 +1,21 @@
 //! [`OAuthClientConfig`] — env-driven OAuth2 provider endpoints.
 
 use nest_rs_authn::AuthError;
-use nest_rs_config::__private::{RetiredKey, is_loopback};
+use nest_rs_config::__private::{RetiredKey, RetiredKeys, is_loopback};
 use nest_rs_config::{ClientTls, ConfigService, Environment, Field, config, endpoint_shown};
 use nest_rs_core::Secret;
 use oauth2::url::Url;
 
 // A family puts its name first in its namespace: 6.x read `oauth_client`.
 nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKeys::under("oauth_client", &[
-        RetiredKey::moved("CLIENT_ID", "oauth__client", "CLIENT_ID"),
-        RetiredKey::moved("CLIENT_SECRET", "oauth__client", "CLIENT_SECRET"),
-        RetiredKey::moved("AUTH_URL", "oauth__client", "AUTH_URL"),
-        RetiredKey::moved("TOKEN_URL", "oauth__client", "TOKEN_URL"),
-        RetiredKey::moved("REDIRECT_URL", "oauth__client", "REDIRECT_URL"),
-        RetiredKey::moved("USERINFO_URL", "oauth__client", "USERINFO_URL"),
-        RetiredKey::moved("SCOPES", "oauth__client", "SCOPES"),
+    RetiredKeys::under("oauth_client", &[
+        RetiredKey::moved("CLIENT_ID", "oauth__client"),
+        RetiredKey::moved("CLIENT_SECRET", "oauth__client"),
+        RetiredKey::moved("AUTH_URL", "oauth__client"),
+        RetiredKey::moved("TOKEN_URL", "oauth__client"),
+        RetiredKey::moved("REDIRECT_URL", "oauth__client"),
+        RetiredKey::moved("USERINFO_URL", "oauth__client"),
+        RetiredKey::moved("SCOPES", "oauth__client"),
     ])
 }
 
@@ -202,9 +202,7 @@ fn refuse_plaintext_redirect_in(
 /// under `variables`, by the field alone when its caller composed it.
 fn setting(variables: Option<&ConfigService>, field: Field) -> String {
     match variables {
-        Some(variables) => {
-            nest_rs_config::spellings_or_field(variables.namespace(), field.key(), field.path())
-        }
+        Some(variables) => field.spellings_or_field(variables.namespace()),
         None => format!("`{}`", field.path()),
     }
 }

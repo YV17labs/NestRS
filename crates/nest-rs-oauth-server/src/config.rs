@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use nest_rs_config::__private::RetiredKey;
+use nest_rs_config::__private::{RetiredKey, RetiredKeys};
 use nest_rs_config::{Config, ConfigService, Field, config};
 use serde::de::DeserializeOwned;
 use validator::{Validate, ValidationError, ValidationErrors, ValidationErrorsKind};
@@ -12,9 +12,7 @@ use crate::registry::RegisteredClient;
 
 // A family puts its name first in its namespace: 6.x's app read `oauth`.
 nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKeys::under("oauth", &[
-        RetiredKey::moved("CLIENTS", "oauth__server", "CLIENTS"),
-    ])
+    RetiredKeys::under("oauth", &[RetiredKey::moved("CLIENTS", "oauth__server")])
 }
 
 /// The clients this authorization server registers (RFC 6749 §2), generic over

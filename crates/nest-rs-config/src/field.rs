@@ -2,7 +2,7 @@
 //! its type.
 
 use crate::Result;
-use crate::service::ConfigService;
+use crate::service::{ConfigService, spellings, spellings_or_field, var_name};
 use crate::setting::FromSetting;
 
 /// A type a `#[config]` field holds, read from the environment under the
@@ -91,7 +91,9 @@ impl<T: FromSetting> ConfigField for Vec<T> {
 /// constant named for it (`HttpConfig::VERSION_HEADER`, `HttpConfig::PORT`), and
 /// hands it to a `with = reader`, so a sentence naming the field and a value set
 /// in code refused wherever it is checked read both off the struct, never type
-/// them; a [`BoundedSetting`](crate::BoundedSetting) holds one.
+/// them; a [`BoundedSetting`](crate::BoundedSetting) holds one. A sentence with
+/// no reader in hand names the variable through [`var`](Self::var) or
+/// [`spellings`](Self::spellings).
 ///
 /// ```
 /// use nest_rs_config::{ConfigError, ConfigService, Field, Result};
@@ -135,6 +137,25 @@ impl Field {
     pub const fn path(&self) -> &'static str {
         self.path
     }
+
+    /// The variable, fully qualified under `namespace` —
+    /// `<PREFIX>_<NAMESPACE>__<KEY>`.
+    pub fn var(&self, namespace: &str) -> String {
+        var_name(namespace, self.key)
+    }
+
+    /// Both spellings of the variable under `namespace`, as a sentence about a
+    /// setting a file may hold names them ([`spellings`]).
+    pub fn spellings(&self, namespace: &str) -> String {
+        spellings(namespace, self.key)
+    }
+
+    /// Every way the setting is given, as a sentence about it names them: both
+    /// spellings under `namespace`, then the field's path
+    /// ([`spellings_or_field`]).
+    pub fn spellings_or_field(&self, namespace: &str) -> String {
+        spellings_or_field(namespace, self.key, self.path)
+    }
 }
 
 /// A structured value under `key` decoded as JSON over `base`: what
@@ -159,6 +180,19 @@ mod tests {
 
     fn env(vars: &[(&str, &str)]) -> ConfigService {
         ConfigService::with_vars("fixture", vars.iter().copied())
+    }
+
+    /// A field says its variable as the free functions say a key and a path.
+    #[test]
+    fn a_field_names_its_variable_each_way_a_sentence_does() {
+        let (key, path) = ("SLOTS", "FixtureConfig::slots");
+        let field = Field::new(key, path);
+        assert_eq!(field.var("fixture"), var_name("fixture", key));
+        assert_eq!(field.spellings("fixture"), spellings("fixture", key));
+        assert_eq!(
+            field.spellings_or_field("fixture"),
+            spellings_or_field("fixture", key, path)
+        );
     }
 
     #[test]

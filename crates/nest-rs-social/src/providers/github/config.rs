@@ -1,5 +1,5 @@
 use nest_rs_authn::AuthError;
-use nest_rs_config::{ClientTls, Namespaced, config, endpoint_shown, spellings_or_field};
+use nest_rs_config::{ClientTls, Namespaced, config, endpoint_shown};
 use nest_rs_core::Secret;
 use nest_rs_oauth_client::{OAuthClientConfig, refuse_plaintext_redirect};
 
@@ -51,11 +51,7 @@ impl GithubSocialConfig {
     pub(crate) fn oauth2_config(&self) -> Result<OAuthClientConfig, AuthError> {
         refuse_plaintext_redirect(
             &self.redirect_url,
-            &spellings_or_field(
-                Self::NAMESPACE,
-                Self::REDIRECT_URL.key(),
-                Self::REDIRECT_URL.path(),
-            ),
+            &Self::REDIRECT_URL.spellings_or_field(Self::NAMESPACE),
         )?;
         Ok(OAuthClientConfig {
             client_id: self.client_id.clone(),

@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use nest_rs_config::__private::{RetiredKey, RetiredKeys};
 use nest_rs_config::{
     Bound, BoundedSetting, ClientTls, Config, ConfigError, ConfigField, ConfigService,
     DurationBounds, Environment, Field, Floor, Namespaced, Setting, Surface, config,
@@ -19,9 +20,7 @@ const DEFAULT_READ_TIMEOUT_SECS: u64 = 30;
 
 // The URL names the store whole now, its scheme picking the backend.
 nest_rs_core::inventory::submit! {
-    nest_rs_config::__private::RetiredKeys::under("storage", &[
-        nest_rs_config::__private::RetiredKey::renamed("BUCKET", "URL"),
-    ])
+    RetiredKeys::under("storage", &[RetiredKey::renamed("BUCKET", "URL")])
 }
 
 /// What the boot says when a deployment reaches its store over plain HTTP.
@@ -171,22 +170,8 @@ impl Config for StorageConfig {
 }
 
 impl StorageConfig {
-    /// One `warn` when a deployment reaches its store over plain HTTP: honoured,
-    /// since the deployment chose it, and said, since its credentials and presigned
-    /// URLs then cross the network in clear.
-    pub(crate) fn warn_when_open(&self) {
-        let Some(endpoint) = self.endpoint.as_deref().filter(|url| is_plaintext(url)) else {
-            return;
-        };
-        if let Some(environment) = self.allow_http.opened_in_deployment() {
-            tracing::warn!(
-                target: crate::TARGET,
-                environment = environment.as_str(),
-                endpoint = %endpoint_shown(endpoint),
-                "{PLAINTEXT_OPEN}",
-            );
-        }
-    }
+    // The overlay is written by hand, so each field is bound here as `#[config]`
+    // binds it.
 
     /// [`url`](Self::url)'s key and path.
     pub const URL: Field = Field::new("URL", "StorageConfig::url");
@@ -205,6 +190,23 @@ impl StorageConfig {
     pub const ALLOW_HTTP: Field = Field::new("ALLOW_HTTP", "StorageConfig::allow_http");
     /// [`tls`](Self::tls)'s key and path.
     pub const TLS: Field = Field::new("TLS", "StorageConfig::tls");
+
+    /// One `warn` when a deployment reaches its store over plain HTTP: honoured,
+    /// since the deployment chose it, and said, since its credentials and presigned
+    /// URLs then cross the network in clear.
+    pub(crate) fn warn_when_open(&self) {
+        let Some(endpoint) = self.endpoint.as_deref().filter(|url| is_plaintext(url)) else {
+            return;
+        };
+        if let Some(environment) = self.allow_http.opened_in_deployment() {
+            tracing::warn!(
+                target: crate::TARGET,
+                environment = environment.as_str(),
+                endpoint = %endpoint_shown(endpoint),
+                "{PLAINTEXT_OPEN}",
+            );
+        }
+    }
 
     /// The operation budget, bound to
     /// [`operation_timeout`](Self::operation_timeout) as `#[config(bounds = …)]`

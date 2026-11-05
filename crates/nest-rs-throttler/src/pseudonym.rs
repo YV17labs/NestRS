@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use aws_lc_rs::hmac;
+use nest_rs_config::Namespaced as _;
 
+use crate::ThrottlerConfig;
 use crate::error::ThrottlerStoreError;
 use crate::store::{Decision, ThrottlerStore};
 use crate::throttle::Throttle;
@@ -44,11 +46,8 @@ impl PseudonymStore {
                  keyed alike on every replica: set {} to the same 32 bytes or more on each \
                  (`openssl rand -base64 32`), or `{}` in code",
                 store.name(),
-                nest_rs_config::spellings(
-                    <crate::ThrottlerConfig as nest_rs_config::Namespaced>::NAMESPACE,
-                    crate::ThrottlerConfig::PSEUDONYM_KEY.key(),
-                ),
-                crate::ThrottlerConfig::PSEUDONYM_KEY.path(),
+                ThrottlerConfig::PSEUDONYM_KEY.spellings(ThrottlerConfig::NAMESPACE),
+                ThrottlerConfig::PSEUDONYM_KEY.path(),
             );
         };
         Ok(Arc::new(Self {

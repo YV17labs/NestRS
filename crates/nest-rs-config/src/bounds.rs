@@ -283,12 +283,12 @@ impl CountBounds {
 
     /// Which end `count` falls past, if either: past `off`, the floor is at
     /// least one, since `0` is what turns the field off, never a limit it holds.
-    fn outside<T: TryInto<u64>>(&self, count: T, off: Off) -> Option<Past> {
+    fn outside(&self, count: u64, off: Off) -> Option<Past> {
         let least = match off {
             Off::AtZero => Bound::new(self.least.count.max(1), self.least.why),
             Off::Absent => self.least,
         };
-        outside(least, self.most, count.try_into().unwrap_or(u64::MAX))
+        outside(least, self.most, count)
     }
 }
 
@@ -537,11 +537,13 @@ macro_rules! count_fields {
                     env: &ConfigService,
                     base: Self,
                 ) -> Result<Self, ConfigError> {
-                    match read_count::<Self, Self>(setting, env, Off::Absent)? {
-                        Some(read) => Ok(read),
-                        None => pinned_count(
+                    let key = setting.field.key();
+                    match read_count(&setting.bounds, env, key, Off::Absent)? {
+                        Some(Some(read)) => Ok(read),
+                        // Asked with no off to give, the read never answers it.
+                        Some(None) | None => pinned_count(
                             setting,
-                            env.var_name(setting.field.key()),
+                            env.var_name(key),
                             base,
                             "is not set, and ",
                             Off::Absent,
@@ -577,14 +579,14 @@ impl BoundedField for Option<usize> {
         env: &ConfigService,
         base: Self,
     ) -> Result<Self, ConfigError> {
-        match read_count::<Self, usize>(setting, env, Off::AtZero)? {
-            Some(0) => Ok(None),
-            Some(read) => Ok(Some(read)),
+        let key = setting.field.key();
+        match read_count(&setting.bounds, env, key, Off::AtZero)? {
+            Some(read) => Ok(read),
             None => base
                 .map(|base| {
                     pinned_count(
                         setting,
-                        env.var_name(setting.field.key()),
+                        env.var_name(key),
                         base,
                         "is not set, and ",
                         Off::AtZero,
@@ -706,26 +708,24 @@ fn pinned_duration<T: BoundedField<Bounds = DurationBounds>>(
     Ok(value)
 }
 
-/// The variable under `setting`'s key as a count held to its range, `None` when
-/// it is unset; where the field has an off, `0` comes back as it was written.
-fn read_count<T, C>(
-    setting: &BoundedSetting<T>,
+/// The variable under `key` as a count held to `bounds`: `None` when it is unset,
+/// and `Some(None)` for `0` where the field has an off.
+fn read_count<C: FromStr + Copy + TryInto<u64>>(
+    bounds: &CountBounds,
     env: &ConfigService,
+    key: &str,
     off: Off,
-) -> Result<Option<C>, ConfigError>
-where
-    T: BoundedField<Bounds = CountBounds>,
-    C: FromStr + Copy + TryInto<u64> + Default + PartialEq,
-{
-    let Some(read) = env.setting(setting.field.key())? else {
+) -> Result<Option<Option<C>>, ConfigError> {
+    let Some(read) = env.setting(key)? else {
         return Ok(None);
     };
     let count: C = read.parse()?;
-    if off == Off::AtZero && count == C::default() {
-        return Ok(Some(count));
+    let number = whole_number(count);
+    if off == Off::AtZero && number == 0 {
+        return Ok(Some(None));
     }
-    match setting.bounds.outside(count, off) {
-        None => Ok(Some(count)),
+    match bounds.outside(number, off) {
+        None => Ok(Some(Some(count))),
         Some(Past { must, bound, .. }) => Err(read.refuse(format_args!(
             "must be {must} {}{} — {}",
             bound.count,
@@ -749,7 +749,7 @@ where
     T: BoundedField<Bounds = CountBounds>,
     C: Copy + fmt::Display + TryInto<u64>,
 {
-    match setting.bounds.outside(count, off) {
+    match setting.bounds.outside(whole_number(count), off) {
         None => Ok(count),
         Some(Past { side, must, bound }) => Err(ConfigError::parse(
             var,
@@ -762,6 +762,11 @@ where
             ),
         )),
     }
+}
+
+/// `count` as a range holds it, what `u64` cannot hold being past every ceiling.
+fn whole_number<C: TryInto<u64>>(count: C) -> u64 {
+    count.try_into().unwrap_or(u64::MAX)
 }
 
 /// The end of a range a value falls past.

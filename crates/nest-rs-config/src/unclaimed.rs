@@ -65,7 +65,7 @@ use nest_rs_core::__private::RETIRED_VARIABLE;
 use nest_rs_core::EnvPrefix;
 
 use crate::error::ConfigError;
-use crate::service::{ConfigService, var_name};
+use crate::service::{ConfigService, file_key, var_name};
 
 /// The event for a variable under a namespace this binary read, naming a key no
 /// config read. Fields: `variable`, `namespace`, and `suggestion` when a key
@@ -321,7 +321,7 @@ fn retired_variables<'k>(
         }
         let spelled = [
             var_name(namespace, retired.key),
-            var_name(namespace, &format!("{}_FILE", retired.key)),
+            var_name(namespace, &file_key(retired.key)),
         ];
         out.extend(
             spelled
@@ -377,11 +377,8 @@ pub(crate) mod __private {
     pub(super) enum Successor {
         /// A key of the same namespace.
         Key(&'static str),
-        /// A key of another namespace.
-        Moved {
-            namespace: &'static str,
-            key: &'static str,
-        },
+        /// The same key of another namespace.
+        Moved(&'static str),
         /// A key of the same namespace, and the boot refuses the retired one
         /// set, losing it being weaker than the policy it set; `why` says what
         /// it would lose.
@@ -411,18 +408,11 @@ pub(crate) mod __private {
             }
         }
 
-        /// `key`, read as `read_as` in `namespace`.
-        pub const fn moved(
-            key: &'static str,
-            namespace: &'static str,
-            read_as: &'static str,
-        ) -> Self {
+        /// `key`, read under the same name in `namespace`.
+        pub const fn moved(key: &'static str, namespace: &'static str) -> Self {
             Self {
                 key,
-                successor: Successor::Moved {
-                    namespace,
-                    key: read_as,
-                },
+                successor: Successor::Moved(namespace),
             }
         }
 
@@ -448,7 +438,7 @@ pub(crate) mod __private {
         /// the one it sat in.
         pub(super) fn reader<'n>(&self, namespace: &'n str) -> &'n str {
             match self.successor {
-                Successor::Moved { namespace, .. } => namespace,
+                Successor::Moved(namespace) => namespace,
                 Successor::Key(_) | Successor::Refused { .. } | Successor::Nothing => namespace,
             }
         }
@@ -459,7 +449,7 @@ pub(crate) mod __private {
                 Successor::Key(key) | Successor::Refused { key, .. } => {
                     Some(var_name(namespace, key))
                 }
-                Successor::Moved { namespace, key } => Some(var_name(namespace, key)),
+                Successor::Moved(namespace) => Some(var_name(namespace, self.key)),
                 Successor::Nothing => None,
             }
         }
@@ -1108,7 +1098,7 @@ mod tests {
     const RETIRED: [__private::RetiredKey; 4] = [
         __private::RetiredKey::renamed("EXPOSED", "EXPOSED_HEADERS"),
         __private::RetiredKey::renamed("SWITCH", "SWITCH_ENABLED"),
-        __private::RetiredKey::moved("DRAIN", "fixture__port", "WINDOW"),
+        __private::RetiredKey::moved("DRAIN", "fixture__port"),
         __private::RetiredKey::removed("GONE"),
     ];
 
@@ -1149,7 +1139,7 @@ mod tests {
                 Unclaimed::Retired {
                     variable: var_name("fixture", "DRAIN"),
                     namespace: "fixture__port".to_owned(),
-                    read_as: Some(var_name("fixture__port", "WINDOW")),
+                    read_as: Some(var_name("fixture__port", "DRAIN")),
                 },
                 Unclaimed::Retired {
                     variable: var_name("fixture", "GONE"),

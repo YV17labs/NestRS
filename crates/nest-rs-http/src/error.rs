@@ -10,9 +10,11 @@ use std::time::Duration;
 
 use http::{Extensions, StatusCode};
 
+use nest_rs_config::Namespaced as _;
 use nest_rs_core::__private::Withheld;
 use nest_rs_core::{DecodeError, Problem, ToProblem, code};
 
+use crate::HttpConfig;
 use crate::endpoint_guards::NO_GUARD_REMEDY;
 use crate::headers::one_of;
 use crate::origin::OriginScheme;
@@ -1117,7 +1119,7 @@ impl OriginRefused {
             _ => Some(format!(
                 "list the page's origin in {origins}, or the proxy in front of this server \
                  in {}",
-                crate::config::var(crate::HttpConfig::TRUSTED_PROXIES),
+                HttpConfig::TRUSTED_PROXIES.var(HttpConfig::NAMESPACE),
             )),
         }
     }

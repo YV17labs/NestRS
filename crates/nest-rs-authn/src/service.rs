@@ -6,7 +6,7 @@ use jsonwebtoken::{
     DecodingKey, EncodingKey, Header, Validation, decode, decode_header, encode, errors::ErrorKind,
     get_current_timestamp,
 };
-use nest_rs_config::{Namespaced, endpoint_shown, var_name};
+use nest_rs_config::{Namespaced, endpoint_shown};
 use nest_rs_core::Secret;
 use serde::{Serialize, de::DeserializeOwned};
 use uuid::Uuid;
@@ -437,17 +437,14 @@ impl JwtService {
             if options.audience.is_some() {
                 return Err(AuthError::failed(format!(
                     "{} contradicts {}: an audience-agnostic verifier cannot also require an audience",
-                    var_name(
-                        AuthnConfig::NAMESPACE,
-                        AuthnConfig::ALLOW_ANY_AUDIENCE.key()
-                    ),
-                    var_name(AuthnConfig::NAMESPACE, AuthnConfig::AUDIENCE.key()),
+                    AuthnConfig::ALLOW_ANY_AUDIENCE.var(AuthnConfig::NAMESPACE),
+                    AuthnConfig::AUDIENCE.var(AuthnConfig::NAMESPACE),
                 )));
             }
             // Not silent: named once per boot, so the opt-out is actionable.
             tracing::warn!(
                 target: crate::TARGET,
-                var = %var_name(AuthnConfig::NAMESPACE, AuthnConfig::ALLOW_ANY_AUDIENCE.key()),
+                var = %AuthnConfig::ALLOW_ANY_AUDIENCE.var(AuthnConfig::NAMESPACE),
                 "audience validation is disabled — a token minted for another service verifies here",
             );
         }

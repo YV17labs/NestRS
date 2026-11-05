@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_config::{ConfigModule, ConfigSetup, Namespaced as _};
 use nest_rs_core::__private::{
     EdgeHosts, EdgeRuntime, RequestScopes, attaches_transport, refuse_site,
 };
@@ -187,10 +187,9 @@ fn wire_schema(container: &Container) -> anyhow::Result<()> {
     if let Some(resolver) = check_operations(&reachable).map_err(anyhow::Error::msg)?
         && !config.federation
     {
-        let namespace = <GraphqlConfig as nest_rs_config::Namespaced>::NAMESPACE;
-        let introspection = nest_rs_config::var_name(namespace, GraphqlConfig::INTROSPECTION.key());
+        let introspection = GraphqlConfig::INTROSPECTION.var(GraphqlConfig::NAMESPACE);
         let federation = GraphqlConfig::FEDERATION;
-        let federation_var = nest_rs_config::var_name(namespace, federation.key());
+        let federation_var = federation.var(GraphqlConfig::NAMESPACE);
         let federation_field = federation.path();
         anyhow::bail!(
             "`{resolver}` keys an entity — an `#[entity]`, or an object it returns carrying \
@@ -216,16 +215,11 @@ fn check_membership(reachable: &ReachableProviders, strict: bool) -> anyhow::Res
     }
     if strict {
         let strict = GraphqlConfig::STRICT_RESOLVER_MEMBERSHIP;
-        let var = nest_rs_config::var_name(
-            <GraphqlConfig as nest_rs_config::Namespaced>::NAMESPACE,
-            strict.key(),
-        );
-        let field = strict.path();
+        let (field, var) = (strict.path(), strict.var(GraphqlConfig::NAMESPACE));
         anyhow::bail!(
             "strict resolver-membership check failed: {unreachable:?} linked into the binary but \
              in no reachable module. Add each to a reachable feature module's \
-             `#[module(providers = [...])]`, or clear \
-             `{field}` (`{var}=false`) if the link is \
+             `#[module(providers = [...])]`, or clear `{field}` (`{var}=false`) if the link is \
              intentional — a workspace shipping several apps over one feature library \
              legitimately links resolvers a given binary does not serve."
         );

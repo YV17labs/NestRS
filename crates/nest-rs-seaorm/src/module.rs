@@ -338,7 +338,7 @@ fn classify(error: DbErr, endpoint: &str) -> Attempt<DbErr, ConnectError> {
     let DbErr::Conn(RuntimeErr::SqlxError(sqlx)) = &error else {
         return Attempt::Failed(error);
     };
-    let url = nest_rs_config::var_name(NAMESPACE, SeaOrmConfig::URL.key());
+    let url = SeaOrmConfig::URL.var(NAMESPACE);
     let reason = match &**sqlx {
         SqlxError::Database(server) => match server.code().as_deref() {
             Some(code @ ("28P01" | "28000")) => format!(
@@ -388,7 +388,7 @@ fn unproved(
             endpoint: endpoint.to_owned(),
             budget,
             attempts,
-            url: nest_rs_config::var_name(NAMESPACE, SeaOrmConfig::URL.key()),
+            url: SeaOrmConfig::URL.var(NAMESPACE),
             timeout: SeaOrmConfig::CONNECT_TIMEOUT.var(NAMESPACE),
             source: last,
         },

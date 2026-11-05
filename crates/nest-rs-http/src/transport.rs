@@ -15,12 +15,13 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::{Container, Discovery, Edge, Listening, Posture, Transport};
 use nest_rs_database::UnitOfWork;
+use nest_rs_guards::__private::identifying_guard;
 use tokio_util::sync::CancellationToken;
 
 use crate::HttpConfig;
 use crate::client_ip::trusted_proxies;
 use crate::compression::Compression;
-use crate::controller::HttpControllerMeta;
+use crate::controller::{HttpControllerMeta, HttpRouteMeta, access_is_implicit};
 use crate::cors::{CorsPolicy, HttpCors};
 use crate::detached::DetachedWork;
 use crate::drain::Drain;
@@ -476,7 +477,6 @@ impl Transport for HttpTransport {
         let unit_of_work = container.get_dyn::<dyn UnitOfWork>();
         let mut routes = HttpRoutes::new(prefix.as_deref(), unit_of_work.clone());
 
-        let global_guards = nest_rs_guards::__private::global_guards_active(container);
         let mut unguarded: Vec<String> = Vec::new();
         let mut prefix_owner: HashMap<String, String> = HashMap::new();
         // Routes mount flat (`<prefix>/<path>`), so distinct prefixes can still
@@ -497,6 +497,7 @@ impl Transport for HttpTransport {
         let hand_route = hand_route(container, unit_of_work.clone())?;
         for d in discovery.meta::<HttpControllerMeta>() {
             let controller = d.meta.controller();
+            let mut served: Vec<(&HttpRouteMeta, String)> = Vec::new();
             let at_root = literal_prefix(d.meta.path()) == "/";
             if !at_root {
                 // The address a non-URI version selector is called at.
@@ -553,19 +554,26 @@ impl Transport for HttpTransport {
                         version = version,
                         "mounted",
                     );
-                    if r.access_is_implicit(global_guards) {
-                        unguarded.push(format!(
+                    served.push((
+                        r,
+                        format!(
                             "{} {} ({})",
                             r.method().as_str(),
                             routes.served(&path),
                             r.handler()
-                        ));
-                    }
+                        ),
+                    ));
                 }
             }
             routes.for_controller(controller, Some(Arc::clone(&hand_route)));
             d.meta.mount(container, &mut routes);
             routes.settle()?;
+            // Past the settle: each site composed as its route mounted.
+            for (route, named) in served {
+                if access_is_implicit(container, route)? {
+                    unguarded.push(named);
+                }
+            }
         }
 
         // Unchecked, an undeclared default would silently send every caller that
@@ -675,11 +683,20 @@ impl Transport for HttpTransport {
                     }
                     None
                 }
-                RequestStage::Guarded(chain) => Some(Arc::new(HttpGuardStage::new(
-                    chain,
-                    Vec::new(),
-                    StageKind::SelfMount,
-                ))),
+                RequestStage::Guarded(chain) => {
+                    if handler.posture() == Posture::Gated
+                        && d.meta.carried().is_none()
+                        && !d.meta.decided_per_unit()
+                        && identifying_guard(&chain).is_none()
+                    {
+                        unguarded_mounts.push(format!("{} ({})", d.meta.path(), d.meta.label()));
+                    }
+                    Some(Arc::new(HttpGuardStage::new(
+                        chain,
+                        Vec::new(),
+                        StageKind::SelfMount,
+                    )))
+                }
                 RequestStage::Denied => {
                     no_guard_at_the_request(d.meta.label(), &served, "denies every unit");
                     Some(Arc::new(DeniedStage::new(served)))

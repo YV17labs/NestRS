@@ -54,6 +54,131 @@ async fn the_documented_two_steps_boot() {
     );
 }
 
+#[controller(path = "/silent")]
+#[use_guards(ThrottlerGuard)]
+struct SilentController;
+
+#[routes]
+impl SilentController {
+    #[get("/")]
+    async fn silent(&self) -> String {
+        "reached by any caller, with no line saying so".into()
+    }
+}
+
+#[module(imports = [ThrottlerModule], providers = [SilentController])]
+struct SilentModule;
+
+#[tokio::test]
+async fn a_route_under_the_throttler_alone_refuses_the_boot_naming_it() {
+    let Err(refused) = nest_rs_testing::TestApp::for_module::<SilentModule>().await else {
+        panic!("a rate limit identifies no one, so it opens the route with no line");
+    };
+    let said = format!("{refused:#}");
+    assert!(said.contains("GET /silent (silent)"), "{said}");
+    assert!(said.contains("#[public]"), "{said}");
+}
+
+/// The pool the rate-limiting page binds, over a route, a message and an operation
+/// each stating no posture, and a route saying what it opens.
+mod under_the_pool {
+    use nest_rs_core::module;
+    use nest_rs_guards::GlobalGuards;
+    use nest_rs_http::{HttpModule, controller, routes};
+    use nest_rs_mcp::{McpError, mcp, tools};
+    use nest_rs_testing::TestApp;
+    use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
+    use nest_rs_ws::{WsModule, gateway, messages};
+
+    #[controller(path = "/pooled")]
+    struct PooledController;
+
+    #[routes]
+    impl PooledController {
+        #[get("/silent")]
+        async fn silent(&self) -> &'static str {
+            "reached by any caller"
+        }
+
+        #[get("/said")]
+        #[public]
+        async fn said(&self) -> &'static str {
+            "the opening it says"
+        }
+    }
+
+    #[gateway(path = "/pooled/ws")]
+    struct PooledGateway;
+
+    #[messages]
+    impl PooledGateway {
+        #[subscribe_message("silent")]
+        async fn silent(&self) -> &'static str {
+            "reached by any caller"
+        }
+    }
+
+    #[mcp(path = "/pooled/mcp")]
+    #[derive(Clone, Default)]
+    struct PooledTool;
+
+    #[tools]
+    impl PooledTool {
+        /// Silent.
+        #[tool]
+        async fn silent(&self) -> Result<String, McpError> {
+            Ok("reached by any caller".to_owned())
+        }
+    }
+
+    async fn refusal<M: nest_rs_core::Module + 'static>() -> String {
+        match TestApp::for_module::<M>().await {
+            Ok(_) => panic!("a rate limit identifies no one, so it opens no unit"),
+            Err(refused) => format!("{refused:#}"),
+        }
+    }
+
+    #[module(imports = [HttpModule, ThrottlerModule], providers = [PooledController])]
+    struct RouteModule;
+
+    #[module(imports = [RouteModule], providers = [GlobalGuards<(ThrottlerGuard,)>])]
+    struct RouteApp;
+
+    #[tokio::test]
+    async fn a_route_refuses_the_boot_naming_it_and_not_the_one_saying_public() {
+        let said = refusal::<RouteApp>().await;
+        assert!(said.contains("GET /pooled/silent (silent)"), "{said}");
+        assert!(!said.contains("/pooled/said"), "{said}");
+    }
+
+    #[module(imports = [WsModule, ThrottlerModule], providers = [PooledGateway])]
+    struct MessageModule;
+
+    #[module(imports = [MessageModule], providers = [GlobalGuards<(ThrottlerGuard,)>])]
+    struct MessageApp;
+
+    #[tokio::test]
+    async fn a_message_refuses_the_boot_naming_it() {
+        let said = refusal::<MessageApp>().await;
+        assert!(
+            said.contains("/pooled/ws") && said.contains("silent"),
+            "{said}"
+        );
+    }
+
+    #[module(imports = [ThrottlerModule], providers = [PooledTool])]
+    struct OperationModule;
+
+    #[module(imports = [OperationModule], providers = [GlobalGuards<(ThrottlerGuard,)>])]
+    struct OperationApp;
+
+    #[tokio::test]
+    async fn an_operation_refuses_the_boot_naming_it() {
+        let said = refusal::<OperationApp>().await;
+        assert!(said.contains("PooledTool::silent"), "{said}");
+    }
+}
+
 // A guard nothing provides, injecting a trait object, whose dependency has no
 // name the graph can render.
 trait Nowhere: Send + Sync {}

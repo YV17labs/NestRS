@@ -107,6 +107,10 @@ impl GuardStage for MessageGuardStage {
             }
         })
     }
+
+    fn covers(&self) -> bool {
+        identifying_guard(&self.guards).is_some()
+    }
 }
 
 /// The refused message's answer: a guard's denial filed, rendered into the
@@ -178,21 +182,30 @@ pub(crate) fn validate_upgrade(
 }
 
 /// HTTP's posture grammar on the gateway at `path`, whose `upgrade` chain runs
-/// before any of its `messages`: one no guard covers says `#[public]`, and one
-/// saying it is reachable with no credential. A connection is a unit no message
-/// guards, so an upgrade no guard runs at needs a `#[public]` message to say so.
+/// before any of its `messages`: one no guard identifying a caller covers says
+/// `#[public]`, and one saying it is reachable with no credential. A connection
+/// is a unit no message guards, so an upgrade no such guard runs at needs a
+/// `#[public]` message to say so.
 pub(crate) fn check_posture(
+    container: &Container,
     path: &str,
     upgrade: &[ResolvedLayer<dyn Guard>],
     messages: &[DeclaredMessage],
-) -> Result<(), GatewayPostureError> {
+) -> nest_rs_core::anyhow::Result<()> {
     let path = path.to_owned();
-    if upgrade.is_empty() {
-        if let Some(messages) = events(messages, |m| !m.guarded && !is_public(m)) {
-            return Err(GatewayPostureError::Uncovered { path, messages });
+    if identifying_guard(upgrade).is_none() {
+        let mut uncovered = Vec::new();
+        for message in messages {
+            if !is_public(message) && !message.site.chains(container)?.covers() {
+                uncovered.push(message.site.handler().address());
+            }
+        }
+        if !uncovered.is_empty() {
+            let messages = uncovered.join(", ");
+            return Err(GatewayPostureError::Uncovered { path, messages }.into());
         }
         if !messages.iter().any(is_public) {
-            return Err(GatewayPostureError::Unopened { path });
+            return Err(GatewayPostureError::Unopened { path }.into());
         }
     }
     if let Some(entry) = identifying_guard(upgrade)
@@ -211,7 +224,8 @@ pub(crate) fn check_posture(
                 messages,
                 guard,
             }
-        });
+        }
+        .into());
     }
     Ok(())
 }

@@ -2434,6 +2434,83 @@ mod posture {
         answers::<DeclaredModule>("/mcp/covered", "answer", "answered").await;
     }
 
+    #[module(providers = [Throttle, UndeclaredTool])]
+    struct LimitedByThePoolModule;
+
+    #[module(imports = [LimitedByThePoolModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct LimitedByThePoolApp;
+
+    /// A rate limit identifies no one, so an operation under it alone is an opening
+    /// nothing says.
+    #[tokio::test]
+    async fn an_operation_under_a_pool_that_identifies_no_one_refuses_the_boot_naming_each() {
+        let said = refusal::<LimitedByThePoolApp>().await;
+        for named in ["answer", "draft", "file://{name}", "guarded"] {
+            assert!(said.contains(named), "names every such unit: {said}");
+        }
+        assert!(!said.contains("stated"), "that one opened itself: {said}");
+        assert!(
+            said.contains("phase()") && said.contains("GuardPhase::Authentication"),
+            "a guard of one's own declaring no phase is told: {said}",
+        );
+    }
+
+    #[module(providers = [Throttle, UndeclaredTool, EndpointGuards<McpView, (Throttle,)>])]
+    struct LimitedByTheEndpointModule;
+
+    #[tokio::test]
+    async fn endpoint_guards_that_identify_no_one_cover_no_operation() {
+        let said = refusal::<LimitedByTheEndpointModule>().await;
+        assert!(said.contains("answer"), "{said}");
+    }
+
+    /// Under a rate limit, a guard of its own covers an operation: its `check`
+    /// runs there, and fails closed for a caller its request never identified.
+    #[mcp(path = "/mcp/limited/own-guard")]
+    #[derive(Clone, Default)]
+    struct OwnGuardTool;
+
+    #[tools]
+    impl OwnGuardTool {
+        /// Guarded.
+        #[tool]
+        #[use_guards(Policy)]
+        async fn guarded(&self) -> Result<String, McpError> {
+            Ok("guarded".to_owned())
+        }
+    }
+
+    /// Decides who may call, on the operation.
+    #[injectable]
+    #[derive(Default)]
+    struct Policy;
+
+    impl Layer for Policy {}
+
+    #[async_trait]
+    impl Guard for Policy {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authorization
+        }
+    }
+
+    impl GuardFor<McpView> for Policy {}
+
+    #[module(providers = [Throttle, Policy, OwnGuardTool])]
+    struct OwnGuardModule;
+
+    #[module(imports = [OwnGuardModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct OwnGuardApp;
+
+    #[tokio::test]
+    async fn a_guard_of_its_own_covers_an_operation_under_a_limit() {
+        answers::<OwnGuardApp>("/mcp/limited/own-guard", "guarded", "guarded").await;
+    }
+
     #[mcp(path = "/mcp/public")]
     #[derive(Clone, Default)]
     struct PublicTool;

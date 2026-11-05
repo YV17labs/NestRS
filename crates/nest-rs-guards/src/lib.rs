@@ -25,7 +25,9 @@
 //! [`Posture`](nest_rs_core::Posture) is read through
 //! [`UnitContext::reflector`](nest_rs_core::UnitContext::reflector), and each
 //! guard decides what it means — an authentication guard admits an anonymous
-//! caller there, an ability guard builds the visitor's rules.
+//! caller there, an ability guard builds the visitor's rules. A guard's
+//! [`phase`](Guard::phase) is what makes it cover a unit: one identifying no one, a
+//! rate limit, leaves the unit to say `#[public]` or refuse the boot.
 //!
 //! ## Defining a guard
 //!

@@ -59,8 +59,6 @@ pub struct DeclaredMessage {
     pub site: &'static Site,
     /// `#[use_pipes]` beside the message.
     pub pipes: Vec<PipeSpec>,
-    /// Whether `#[use_guards]` stands beside the message.
-    pub guarded: bool,
 }
 
 /// Each of `messages` composes on `container` — its site, and its data pipes

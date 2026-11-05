@@ -246,6 +246,14 @@ impl UnitChains {
             .map_or_else(Vec::new, |stage| stage.denial_statuses(public))
     }
 
+    /// Whether the site's guard stage decides who reaches its units
+    /// ([`GuardStage::covers`]); it does not without one.
+    pub fn covers(&self) -> bool {
+        self.guard_stage
+            .as_ref()
+            .is_some_and(|stage| stage.covers())
+    }
+
     pub(crate) fn compose(
         container: &Container,
         handler: &Handler,

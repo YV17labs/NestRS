@@ -83,7 +83,6 @@ impl RequestBodyMeta {
 /// #   sets_next_link: false,
 /// #   response_headers: &[],
 /// #   success_status: 200,
-/// #   scoped_guarded: false,
 /// #   public: false,
 /// #   deprecation: None,
 /// #   site: todo!(),
@@ -122,7 +121,6 @@ pub struct HttpRouteParts {
     pub sets_next_link: bool,
     pub response_headers: &'static [(&'static str, &'static str)],
     pub success_status: u16,
-    pub scoped_guarded: bool,
     pub public: bool,
     pub deprecation: Option<DeprecationMeta>,
     /// The site the route dispatches through, whose guard stage the route's
@@ -145,6 +143,17 @@ pub fn route_denial_statuses(
 ) -> anyhow::Result<Vec<u16>> {
     let chains = route.parts.site.chains(container)?;
     Ok(chains.denial_statuses(route.parts.public))
+}
+
+/// Whether `route` leaves who reaches it unsaid: it is not `#[public]`, and no
+/// guard its site runs identifies or authorizes a caller, the chain as
+/// `container` composed it when the route mounted. A site that does not compose
+/// refuses the boot before this reads it.
+pub(crate) fn access_is_implicit(
+    container: &Container,
+    route: &HttpRouteMeta,
+) -> anyhow::Result<bool> {
+    Ok(!route.parts.public && !route.parts.site.chains(container)?.covers())
 }
 
 impl HttpRouteMeta {
@@ -274,14 +283,8 @@ impl HttpRouteMeta {
         self.parts.success_status
     }
 
-    /// A controller- or method-level `#[use_guards]` covers this route; read at
-    /// boot by the fail-secure posture check.
-    pub fn scoped_guarded(&self) -> bool {
-        self.parts.scoped_guarded
-    }
-
-    /// `#[public]` — an explicit, intentional public surface: a route no guard
-    /// covers boots only with it.
+    /// `#[public]`, named or bare — an explicit, intentional public surface: a
+    /// route no guard covers boots only with it.
     pub fn public(&self) -> bool {
         self.parts.public
     }
@@ -290,13 +293,6 @@ impl HttpRouteMeta {
     /// operation, and every answer carries the `Deprecation` header.
     pub fn deprecation(&self) -> Option<DeprecationMeta> {
         self.parts.deprecation
-    }
-
-    /// The route's access decision is **implicit**: no global guard pool covers
-    /// it, it binds no controller/method guard, and it is not marked
-    /// `#[public]`. The HTTP transport refuses to boot with one.
-    pub fn access_is_implicit(&self, global_guards: bool) -> bool {
-        !global_guards && !self.parts.scoped_guarded && !self.parts.public
     }
 }
 
@@ -547,7 +543,6 @@ mod tests {
             sets_next_link: false,
             response_headers: &[],
             success_status: 200,
-            scoped_guarded: false,
             public: false,
             deprecation: None,
             versions: &[],
@@ -599,7 +594,6 @@ mod tests {
             sets_next_link: true,
             response_headers: &[("x-kind", "user")],
             success_status: 201,
-            scoped_guarded: true,
             public: true,
             deprecation: Some(deprecation),
             site: &SHOW_SITE,
@@ -627,7 +621,6 @@ mod tests {
         assert!(route.sets_next_link());
         assert_eq!(route.response_headers(), &[("x-kind", "user")]);
         assert_eq!(route.success_status(), 201);
-        assert!(route.scoped_guarded());
         assert!(route.public());
         assert_eq!(route.deprecation(), Some(deprecation));
     }
@@ -652,30 +645,5 @@ mod tests {
         assert_eq!(CALLS.load(Ordering::SeqCst), 1);
         meta.mount(&container, &mut routes);
         assert_eq!(CALLS.load(Ordering::SeqCst), 2);
-    }
-
-    fn route(scoped_guarded: bool, public: bool) -> HttpRouteMeta {
-        http_route_meta(HttpRouteParts {
-            scoped_guarded,
-            public,
-            ..show_parts()
-        })
-    }
-
-    #[test]
-    fn access_is_implicit_only_when_uncovered_and_no_global_pool() {
-        assert!(route(false, false).access_is_implicit(false));
-    }
-
-    #[test]
-    fn a_global_pool_covers_every_route() {
-        assert!(!route(false, false).access_is_implicit(true));
-    }
-
-    #[test]
-    fn a_scoped_guard_or_public_marker_makes_the_decision_explicit() {
-        assert!(!route(true, false).access_is_implicit(false));
-        assert!(!route(false, true).access_is_implicit(false));
-        assert!(!route(true, true).access_is_implicit(false));
     }
 }

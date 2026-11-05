@@ -573,6 +573,167 @@ async fn the_global_guard_pool_covers_a_route_declaring_no_posture() {
     app.http().post("/thing").send().await.assert_status_is_ok();
 }
 
+/// Admits every caller and decides nothing about who it is, as a rate limit does:
+/// it declares no phase.
+#[injectable]
+#[derive(Default)]
+struct LimitGuard;
+
+impl Layer for LimitGuard {}
+
+#[async_trait]
+impl Guard for LimitGuard {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for LimitGuard {}
+
+#[controller(path = "/limited")]
+#[use_guards(LimitGuard)]
+struct LimitedByItsControllerController;
+
+#[routes]
+impl LimitedByItsControllerController {
+    #[get("/controller")]
+    async fn by_its_controller(&self) -> String {
+        "reached by any caller".into()
+    }
+
+    #[get("/public")]
+    #[public]
+    async fn opened(&self) -> String {
+        "the opening it says".into()
+    }
+}
+
+#[controller(path = "/limited/method")]
+struct LimitedByItsMethodController;
+
+#[routes]
+impl LimitedByItsMethodController {
+    #[get("/")]
+    #[use_guards(LimitGuard)]
+    async fn by_its_method(&self) -> String {
+        "reached by any caller".into()
+    }
+}
+
+#[module(providers = [LimitGuard, LimitedByItsControllerController, LimitedByItsMethodController])]
+struct LimitedRoutesModule;
+
+/// A rate limit, on the route or its controller, opens the route with no line.
+#[tokio::test]
+async fn a_route_under_guards_that_identify_no_one_refuses_the_boot_naming_each() {
+    let err = boot_error(
+        TestApp::for_module::<LimitedRoutesModule>().await,
+        "a guard identifying no one covers no route",
+    );
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("GET /limited/controller (by_its_controller)")
+            && chain.contains("GET /limited/method (by_its_method)"),
+        "{chain}",
+    );
+    assert!(!chain.contains("/limited/public"), "{chain}");
+    assert!(
+        chain.contains("phase()") && chain.contains("GuardPhase::Authentication"),
+        "a guard of one's own declaring no phase is told what to declare: {chain}",
+    );
+}
+
+#[module(imports = [OpenModule, LimitOnlyModule], providers = [GlobalGuards<(LimitGuard,)>])]
+struct LimitedByThePoolModule;
+
+#[module(providers = [LimitGuard])]
+struct LimitOnlyModule;
+
+#[tokio::test]
+async fn a_pool_of_guards_that_identify_no_one_covers_no_route() {
+    let err = boot_error(
+        TestApp::for_module::<LimitedByThePoolModule>().await,
+        "a pool identifying no one covers no route",
+    );
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("POST /thing (create)") && chain.contains("GET /thing (read)"),
+        "{chain}",
+    );
+    assert!(!chain.contains("/open"), "{chain}");
+}
+
+#[controller(path = "/limited-open")]
+#[use_guards(LimitGuard)]
+struct OpenUnderALimitController;
+
+#[routes]
+impl OpenUnderALimitController {
+    #[get("/")]
+    #[public]
+    async fn opened(&self) -> String {
+        "the opening it says".into()
+    }
+}
+
+#[module(providers = [LimitGuard, OpenUnderALimitController])]
+struct OpenUnderALimitModule;
+
+#[tokio::test]
+async fn public_under_a_guard_that_identifies_no_one_boots_and_answers_a_visitor() {
+    let app = TestApp::for_module::<OpenUnderALimitModule>()
+        .await
+        .expect("`#[public]` is the visible opening a rate limit stands beside");
+    app.http()
+        .get("/limited-open")
+        .send()
+        .await
+        .assert_text("the opening it says")
+        .await;
+}
+
+struct GatedFiles;
+
+static GATED_FILES: nest_rs_core::Handler = nest_rs_http::declare_endpoint::<GatedFiles>(
+    "GatedFiles",
+    "/gated-files",
+    nest_rs_core::Posture::Gated,
+);
+
+impl Discoverable for GatedFiles {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<Self, nest_rs_http::HttpEndpointMeta>(
+            nest_rs_http::HttpEndpointMeta::new(
+                &GATED_FILES,
+                "/gated-files",
+                "files",
+                |_container, _routes| {},
+            )
+            .owned_by("GatedFiles"),
+        )
+    }
+}
+
+#[module(providers = [LimitGuard, GatedFiles])]
+struct GatedFilesModule;
+
+#[module(imports = [GatedFilesModule], providers = [GlobalGuards<(LimitGuard,)>])]
+struct LimitedGatedFilesApp;
+
+/// A gated surface carrying no unit: the same opening with nothing written.
+#[tokio::test]
+async fn a_gated_self_mount_under_guards_that_identify_no_one_refuses_the_boot() {
+    let err = boot_error(
+        TestApp::for_module::<LimitedGatedFilesApp>().await,
+        "a rate limit opens a gated surface with no line",
+    );
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("/gated-files (files)") && chain.contains("phase()"),
+        "{chain}",
+    );
+}
+
 /// Two controllers claiming the same prefix: a boot refusal naming both, never
 /// a panic deep in route assembly.
 #[controller(path = "/dup")]

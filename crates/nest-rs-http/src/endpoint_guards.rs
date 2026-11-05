@@ -137,13 +137,16 @@ impl EndpointPosture {
     }
 }
 
-/// What an app writes for a surface no guard runs at: one sentence, whichever
-/// surface it is and whether the boot refuses it or files a line.
+/// What an app writes for a surface no guard identifying its caller runs at: one
+/// sentence, whichever surface it is and whether the boot refuses it or files a
+/// line.
 pub const NO_GUARD_REMEDY: &str = "list `GlobalGuards<(...)>` in the providers of the module the \
      app boots, bind `#[use_guards(...)]` on a controller or a gateway, \
      `EndpointGuards<View, (...)>` on an endpoint carrying units, or open it on purpose: \
      `#[public]` on a route, a message or a GraphQL operation, \
-     `McpModule::for_root(McpAccess::Public)` on an MCP endpoint";
+     `McpModule::for_root(McpAccess::Public)` on an MCP endpoint. A guard that identifies no one, \
+     a rate limit or one of your own declaring no `phase()`, covers nothing: declare its \
+     `GuardPhase::Authentication` or `Authorization`, or write `#[public]`";
 
 /// What runs at a self-mount's request, before its surface sees it.
 pub(crate) enum RequestStage {

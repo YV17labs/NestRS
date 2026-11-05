@@ -163,3 +163,22 @@ ability. The elegance value decided, the first having no objection.
 - **A boot refusal of `#[public(A, S)]` with no ability guard in its chain**: a guard of
   one's own may attach the ability under any phase, so the boot cannot tell; the class
   gate fails it closed, filed at `error` with the remedy, as it does `#[authorize]`.
+
+## 2026-11-05 — a guard identifying no one covers nothing
+
+Under the same words. This decision's first sentence, "a route either runs a guard … or
+says `#[public]`", read a rate limit as a guard, so a pool of them opened every unit with
+nothing written, the absence the first value forbids. **A guard covers a unit only if it
+identifies or authorizes.** Every edge reads `Guard::phase` through the site's composed
+stage (`GuardStage::covers`): `GuardPhase::Authentication` or `Authorization` covers,
+`Other` does not, on a route, a message, an operation, a hand-written MCP handler and a
+`Gated` self-mount. A guard declaring no phase is `Other`, so its unit refuses the boot
+and the sentence names both remedies: it errs closed, as a mislabel does above.
+
+`split_at_covered` keeps its word: it reads which of the pool's guards an endpoint also
+lists, by type, and decides no posture.
+
+**Refused:**
+
+- **`#[public]` refused beside any guard**, stands, for the reason given above; what
+  goes is the same opening with nothing written.

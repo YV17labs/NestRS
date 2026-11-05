@@ -99,13 +99,19 @@ guard, filter or interceptor loop of its own.
    opens refuses the boot, whatever guard stands beside it. **Elsewhere a guard
    covering the unit decides, and the posture is optional**: an HTTP route, a WS
    message under its gateway's `#[use_guards]` at the `Gated` upgrade, the pool
-   or a guard of its own, and an MCP operation under a `Gated` endpoint the pool
-   or `EndpointGuards` cover; `#[authorize]` adds the gate and the mask. A route
-   or a message no guard covers says `#[public]` or refuses the boot, one error
-   naming every such unit and each remedy, since an impl half cannot see the
-   pool; so does a gateway running no guard at its upgrade with no `#[public]`
-   message, whatever guards its messages bind: a connection is no message, and
-   its hooks and what the server emits reach any caller.
+   or a guard of its own, and an MCP operation under a `Gated` endpoint the pool,
+   `EndpointGuards` or a guard of its own cover; `#[authorize]` adds the gate and
+   the mask. **A guard covers a unit only if it identifies or authorizes**, its
+   `Guard::phase` `GuardPhase::Authentication` or `Authorization`, read off the
+   site's composed stage (`GuardStage::covers`): `Other`, a rate limit and a guard
+   declaring no phase, covers nothing. A route, a message or an operation no
+   such guard covers says `#[public]` or refuses the boot, one error naming every
+   such unit and each remedy, since an impl half cannot see the pool; so does a
+   gateway running no such guard at its upgrade with no `#[public]` message,
+   whatever guards its messages bind, a connection being no message, its hooks and
+   what the server emits reaching any caller; so does a hand-written `ServerHandler`
+   under guards at `/mcp` identifying no one, which writes no posture, and a `Gated`
+   self-mount carrying no unit.
    **`#[public]` that can open nothing refuses the boot**: on
    WS and MCP, behind a guard its request runs that declares
    `GuardPhase::Authentication` or `Authorization`, and on a `Gated` endpoint
@@ -375,7 +381,7 @@ adds no line to the root, and writing it is the visible opening.
   its operations gating themselves) get the request stage the transport
   composes in front of the endpoint; `Public` (OpenAPI, health, static files)
   is deliberately open; a `Gated` one carrying no unit and running no guard
-  refuses the boot, but a gateway's, whose messages answer for it (item 5). **The transport composes every self-mount's request
+  identifying a caller refuses the boot, but a gateway's, whose messages answer for it (item 5). **The transport composes every self-mount's request
   stage, one function for all** (`request_stage`): the global pool, the
   mount's own guards (a gateway's) and the `EndpointGuards<V, G>` the app's
   modules declare for the in-band units it carries, each guard once and in

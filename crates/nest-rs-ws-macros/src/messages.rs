@@ -303,13 +303,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 &#method_pipe_specs,
             );
         });
-        let guarded = !guards.is_empty();
         declared_messages.push(quote! {
             #(#cfgs)*
             __messages.push(::nest_rs_ws::__private::DeclaredMessage {
                 site: #site_ref,
                 pipes: #method_pipe_specs,
-                guarded: #guarded,
             });
         });
 

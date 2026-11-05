@@ -1053,7 +1053,6 @@ mod tests {
             sets_next_link: false,
             response_headers: &[],
             success_status: 200,
-            scoped_guarded: false,
             public: false,
             deprecation: None,
             versions: &[],

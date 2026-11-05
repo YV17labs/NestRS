@@ -127,8 +127,8 @@ pub fn wire_gateway(
     messages: &[DeclaredMessage],
 ) -> nest_rs_core::anyhow::Result<()> {
     let upgrade = crate::guard::validate_upgrade(container, path, upgrade)?;
-    crate::guard::check_posture(path, &upgrade, messages)?;
     crate::message::compose_declared(container, host_pipes, messages)?;
+    crate::guard::check_posture(container, path, &upgrade, messages)?;
     let window = container
         .get::<nest_rs_http::HttpConfig>()
         .unwrap_or_default()

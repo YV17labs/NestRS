@@ -285,7 +285,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(layers) => layers,
             Err(err) => return err.to_compile_error().into(),
         };
-        let method_guarded = !guards.is_empty();
         if let Err(err) = refuse_rust_deprecated(&method.attrs, "a `#[routes]` handler") {
             return err.to_compile_error().into();
         }
@@ -852,8 +851,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 sets_next_link: #sets_next_link,
                 response_headers: #response_headers,
                 success_status: #success_status,
-                scoped_guarded: #method_guarded
-                    || !<#self_ty>::__nestrs_controller_guard_specs().is_empty(),
                 public: #is_public,
                 deprecation: #deprecation_meta,
                 versions: #route_versions,

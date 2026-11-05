@@ -21,7 +21,8 @@ use nest_rs_core::{
     anyhow,
 };
 use nest_rs_guards::__private::{
-    GuardSpec, RefusalMark, check_guards, resolve_global_guards, validate_carried_chain,
+    GuardSpec, RefusalMark, check_guards, identifying_guard, resolve_global_guards,
+    validate_carried_chain,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::carried_request_chain;
@@ -208,6 +209,10 @@ impl GuardStage for OperationGuardStage {
             }
             Ok(())
         })
+    }
+
+    fn covers(&self) -> bool {
+        identifying_guard(&self.guards).is_some()
     }
 }
 

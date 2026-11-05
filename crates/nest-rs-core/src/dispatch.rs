@@ -79,6 +79,14 @@ pub trait GuardStage: Send + Sync {
         let _ = public;
         Vec::new()
     }
+
+    /// Whether one of the stage's guards decides who reaches the unit, so the
+    /// unit needs no posture to say so: a guard identifying or authorizing its
+    /// caller does, and a rate limit, identifying no one, does not. None by
+    /// default.
+    fn covers(&self) -> bool {
+        false
+    }
 }
 
 /// Builds a site's guard stage against a container; `None` when no guard

@@ -8,17 +8,20 @@ use thiserror::Error;
 /// what the impl half cannot, the app's pool.
 #[derive(Debug, Error)]
 pub(crate) enum GatewayPostureError {
-    /// Messages no guard covers and none opens, every one of them.
+    /// Messages no guard identifying a caller covers and none opens, every one
+    /// of them.
     #[error(
-        "messages no guard covers and none marks `#[public]` on the gateway at {path}: \
-         {messages} — a message runs a guard or is open on purpose; {NO_GUARD_REMEDY}"
+        "messages no guard identifying a caller covers and none marks `#[public]` on the gateway \
+         at {path}: {messages} — a message runs such a guard or is open on purpose; \
+         {NO_GUARD_REMEDY}"
     )]
     Uncovered { path: String, messages: String },
-    /// A gateway with no guard at its upgrade and no `#[public]` message to say so.
+    /// A gateway with no guard identifying a caller at its upgrade and no
+    /// `#[public]` message to say so.
     #[error(
-        "the gateway at {path} runs no guard at its upgrade and no message of it says \
-         `#[public]`: any caller connects, its connection hooks run and what the server emits \
-         reaches the socket, and no line says so — {NO_GUARD_REMEDY}"
+        "the gateway at {path} runs no guard identifying a caller at its upgrade and no message \
+         of it says `#[public]`: any caller connects, its connection hooks run and what the \
+         server emits reaches the socket, and no line says so — {NO_GUARD_REMEDY}"
     )]
     Unopened { path: String },
     /// `#[public]` messages no caller without a credential reaches, past a guard

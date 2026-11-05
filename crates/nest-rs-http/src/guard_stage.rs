@@ -18,7 +18,7 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::{AmbientValue, Failure, Handler, UnitContext};
 use nest_rs_guards::__private::{
-    RefusalMark, Refused, denial_code, denial_of, required_principal_absent,
+    RefusalMark, Refused, denial_code, denial_of, identifying_guard, required_principal_absent,
 };
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
 
@@ -179,6 +179,10 @@ impl GuardStage for HttpGuardStage {
         statuses.sort_unstable();
         statuses.dedup();
         statuses
+    }
+
+    fn covers(&self) -> bool {
+        identifying_guard(&self.guards).is_some()
     }
 }
 

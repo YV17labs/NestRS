@@ -207,11 +207,11 @@ pub fn host_chain(
     ))
 }
 
-/// The guard of a request's `chain` that a caller with no credential cannot get
-/// past: one declaring that it establishes or reads who the caller is
-/// ([`GuardPhase`]). A `#[public]` unit behind it can open nothing; a chain of
-/// [`Other`](GuardPhase::Other) guards — a rate limit — identifies no one, and
-/// still admits a visitor.
+/// The guard of a `chain` that decides who reaches what it covers: one declaring
+/// that it establishes or reads who the caller is ([`GuardPhase`]). A `#[public]`
+/// unit behind it at a request can open nothing; a chain of
+/// [`Other`](GuardPhase::Other) guards — a rate limit — identifies no one, so it
+/// covers nothing and still admits a visitor.
 pub fn identifying_guard(chain: &[ResolvedLayer<dyn Guard>]) -> Option<&ResolvedLayer<dyn Guard>> {
     chain.iter().find(|entry| {
         matches!(

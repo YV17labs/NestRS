@@ -349,19 +349,26 @@ fn wire_endpoints(container: &Container) -> anyhow::Result<()> {
                 .map(move |operation| (host, operation))
         })
         .collect();
-    check_postures(container, &operations)?;
     for (_, operation) in &operations {
         operation.site.chains(container)?;
     }
-    Ok(())
+    let hand_written: Vec<&'static str> = metas
+        .iter()
+        .filter(|discovered| discovered.meta.operations().is_empty())
+        .map(|discovered| discovered.meta.host())
+        .collect();
+    check_postures(container, &operations, &hand_written)
 }
 
-/// What `operations`, each with its host, declare against who may reach them:
-/// an endpoint the app opened runs no guard, so each says its posture; a gated
-/// one's `#[public]` admits a caller with no credential, or says what it cannot.
+/// What `operations`, each with its host, and the `hand_written` hosts, which
+/// declare none, declare against who may reach them: an endpoint the app opened
+/// runs no guard, so each says its posture; a gated one's `#[public]` admits a
+/// caller with no credential, or says what it cannot; and under guards that
+/// identify no one, a unit says `#[public]`, or a guard of its own covers it.
 fn check_postures(
     container: &Container,
     operations: &[(&'static str, DeclaredOperation)],
+    hand_written: &[&'static str],
 ) -> anyhow::Result<()> {
     if crate::module::posture(container) == Posture::Public {
         return match named(operations, |operation| !operation.declares_posture) {
@@ -369,23 +376,40 @@ fn check_postures(
             None => Ok(()),
         };
     }
-    let Some(operations) = named(operations, |operation| {
+    let public = named(operations, |operation| {
         operation.site.handler().posture() == Posture::Public
-    }) else {
-        return Ok(());
-    };
+    });
     let chain = carried_request_chain::<McpView>(container, "the MCP endpoints' request")?;
     if chain.is_empty() {
-        return Err(McpPostureError::PublicBehindDenial { operations }.into());
+        return match public {
+            Some(operations) => Err(McpPostureError::PublicBehindDenial { operations }.into()),
+            None => Ok(()),
+        };
     }
-    match identifying_guard(&chain) {
-        Some(entry) => Err(McpPostureError::PublicBehindGuard {
-            operations,
-            guard: nest_rs_core::__private::shorten(entry.name),
+    if let Some(entry) = identifying_guard(&chain) {
+        return match public {
+            Some(operations) => Err(McpPostureError::PublicBehindGuard {
+                operations,
+                guard: nest_rs_core::__private::shorten(entry.name),
+            }
+            .into()),
+            None => Ok(()),
+        };
+    }
+    let mut uncovered: Vec<String> = hand_written.iter().map(ToString::to_string).collect();
+    for (host, operation) in operations {
+        let handler = operation.site.handler();
+        if handler.posture() != Posture::Public && !operation.site.chains(container)?.covers() {
+            uncovered.push(format!("{host}::{}", handler.address()));
         }
-        .into()),
-        None => Ok(()),
     }
+    if !uncovered.is_empty() {
+        return Err(McpPostureError::Uncovered {
+            operations: uncovered.join(", "),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 /// The `operations` that `of` picks, each under its host, as a refusal lists

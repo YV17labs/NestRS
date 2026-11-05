@@ -684,18 +684,22 @@ pub(crate) enum RouteError {
         owner: String,
         remedy: String,
     },
-    /// Routes no guard covers and no `#[public]` opens, every one of them.
+    /// Routes no guard identifying a caller covers and no `#[public]` opens,
+    /// every one of them.
     #[error(
-        "routes no guard covers and none marks `#[public]`: {routes} — a route runs a guard or \
-         is open on purpose; {NO_GUARD_REMEDY}"
+        "routes no guard identifying a caller covers and none marks `#[public]`: {routes} — a \
+         route runs such a guard or is open on purpose; {NO_GUARD_REMEDY}"
     )]
     Unguarded { routes: String },
-    /// Self-mounts declared gated that run no guard and carry no unit, every
-    /// one of them.
+    /// Self-mounts declared gated that run no guard identifying a caller and
+    /// carry no unit, every one of them.
     #[error(
-        "self-mounts declared `Posture::Gated` that no guard covers: {mounts} — a gated surface \
-         runs a guard; declare the app's global pool (`GlobalGuards<(...)>` in the providers of \
-         the module the app boots), or declare the surface `Posture::Public` to open it on purpose"
+        "self-mounts declared `Posture::Gated` that no guard identifying a caller covers: \
+         {mounts} — a gated surface runs such a guard; declare the app's global pool \
+         (`GlobalGuards<(...)>` in the providers of the module the app boots), or declare the \
+         surface `Posture::Public` to open it on purpose. A guard that identifies no one, a rate \
+         limit or one of your own declaring no `phase()`, covers nothing: declare its \
+         `GuardPhase::Authentication` or `Authorization`"
     )]
     UnguardedMount { mounts: String },
     /// Two spellings of one address.

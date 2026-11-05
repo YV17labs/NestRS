@@ -699,6 +699,111 @@ mod posture {
         );
     }
 
+    #[gateway(path = "/ws/limited/gateway")]
+    #[use_guards(Throttle)]
+    struct LimitedGateway;
+
+    #[messages]
+    impl LimitedGateway {
+        #[on_connect]
+        async fn joined(&self, client: &WsClient) {
+            client.join("lobby");
+        }
+
+        #[subscribe_message("silent")]
+        async fn silent(&self, _client: &WsClient) -> String {
+            "reached by any caller, with no line saying so".into()
+        }
+
+        #[subscribe_message("also_silent")]
+        #[use_guards(Throttle)]
+        async fn also_silent(&self, _client: &WsClient) -> String {
+            "and neither here".into()
+        }
+
+        #[subscribe_message("said")]
+        #[public]
+        async fn said(&self, _client: &WsClient) -> String {
+            "the opening it says".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Throttle, LimitedGateway])]
+    struct LimitedModule;
+
+    /// A rate limit identifies no one, so a message under it alone is an opening
+    /// nothing says.
+    #[tokio::test]
+    async fn a_message_under_a_guard_that_identifies_no_one_refuses_the_boot_naming_each() {
+        let said = refusal::<LimitedModule>().await;
+        assert!(
+            said.contains("/ws/limited/gateway")
+                && said.contains("silent")
+                && said.contains("also_silent"),
+            "{said}",
+        );
+        assert!(!said.contains(": silent, also_silent, said"), "{said}");
+        assert!(
+            said.contains(nest_rs_http::__private::NO_GUARD_REMEDY),
+            "the one remedy, which names a guard's phase: {said}",
+        );
+        assert!(
+            said.contains("phase()") && said.contains("GuardPhase::Authentication"),
+            "{said}",
+        );
+    }
+
+    #[gateway(path = "/ws/limited/pool")]
+    struct LimitedByThePoolGateway;
+
+    #[messages]
+    impl LimitedByThePoolGateway {
+        #[subscribe_message("silent")]
+        async fn silent(&self, _client: &WsClient) -> String {
+            "reached by any caller, with no line saying so".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Throttle, LimitedByThePoolGateway])]
+    struct LimitedByThePoolModule;
+
+    #[module(imports = [LimitedByThePoolModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct LimitedByThePoolApp;
+
+    #[tokio::test]
+    async fn the_pool_of_a_guard_that_identifies_no_one_covers_no_message() {
+        let said = refusal::<LimitedByThePoolApp>().await;
+        assert!(
+            said.contains("/ws/limited/pool") && said.contains("silent"),
+            "{said}"
+        );
+    }
+
+    #[gateway(path = "/ws/limited/opened")]
+    #[use_guards(Throttle)]
+    struct OpenedUnderALimitGateway;
+
+    #[messages]
+    impl OpenedUnderALimitGateway {
+        #[subscribe_message("said")]
+        #[public]
+        async fn said(&self, _client: &WsClient) -> String {
+            "the opening it says".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Throttle, OpenedUnderALimitGateway])]
+    struct OpenedUnderALimitModule;
+
+    #[tokio::test]
+    async fn public_under_a_guard_that_identifies_no_one_boots_and_answers_a_visitor() {
+        let app = served::<OpenedUnderALimitModule>().await;
+        assert_eq!(
+            answer(&app, "/ws/limited/opened", "said").await,
+            "the opening it says",
+        );
+    }
+
     #[gateway(path = "/ws/mislabelled/authenticated")]
     #[use_guards(Authenticate)]
     struct MislabelledGateway;

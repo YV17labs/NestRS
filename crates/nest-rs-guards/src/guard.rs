@@ -148,7 +148,9 @@ pub trait Guard: Layer {
 
     /// The chain phase this guard declares. Boot-time validation refuses a
     /// chain listing an [`Authentication`](GuardPhase::Authentication) guard
-    /// after an [`Authorization`](GuardPhase::Authorization) one.
+    /// after an [`Authorization`](GuardPhase::Authorization) one, and only those
+    /// two cover a unit: under [`Other`](GuardPhase::Other) guards alone, the
+    /// default, a unit says `#[public]` or refuses the boot.
     fn phase(&self) -> GuardPhase {
         GuardPhase::Other
     }

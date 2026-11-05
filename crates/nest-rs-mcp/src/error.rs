@@ -563,6 +563,18 @@ pub(crate) enum McpPostureError {
          purpose, or leave the endpoint gated for its guards to cover it"
     )]
     Undeclared { operations: String },
+    /// Operations of a gated endpoint under guards that identify no one, none of
+    /// which a guard of its own covers or `#[public]` opens, every one of them.
+    #[error(
+        "operations no guard identifying a caller covers and none marks `#[public]`: {operations} \
+         — the MCP endpoint's request runs guards that identify no one, so any caller reaches \
+         them with no line saying so. A guard of your own declaring no `phase()` covers nothing: \
+         declare its `GuardPhase::Authentication` or `Authorization`; else list one in \
+         `GlobalGuards<(...)>` or `EndpointGuards<McpView, (...)>`, or open the operation on \
+         purpose with `#[public]`, and a host writing its own handler with \
+         `McpModule::for_root(McpAccess::Public)`"
+    )]
+    Uncovered { operations: String },
     /// `#[public]` operations behind a guard no caller without a credential
     /// passes.
     #[error(

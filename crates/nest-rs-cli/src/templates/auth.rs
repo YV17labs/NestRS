@@ -237,14 +237,14 @@ impl AbilityFactory for AuthzAbility {
     /// `if let Some(user_id) = actor.sub.user_id()` — a client owns none.
     fn define(&self, _actor: &Claims, _ab: &mut AbilityBuilder) {}
 
-    /// What an *unauthenticated* caller may do, on what `#[public]` opens.
-    /// Empty on purpose: nothing is public until you say so here, and a route
-    /// you open with `#[public]` still serves no row without a grant — a
+    /// What an *unauthenticated* caller may do, on what `#[public(Action, Entity)]`
+    /// opens. Empty on purpose: nothing is public until you say so here, and a
+    /// route naming its read still serves no row without a grant — a
     /// `can(Action::Read, …)` narrowed by `.when(…)` to the rows meant for
     /// anyone.
     ///
-    /// A `#[public]` route reached with a valid token uses `define` instead —
-    /// this branch answers only for the visitor.
+    /// Such a route reached with a valid token uses `define` instead — this branch
+    /// answers only for the visitor.
     fn define_visitor(&self, _ab: &mut AbilityBuilder) {}
 }
 "#;

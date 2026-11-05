@@ -59,8 +59,8 @@ Introducing a second data layer moves one impl, not the engine. A
 capability no table holds is the other kind, which `#[subject]` declares
 ([below](#subjects-no-table-holds)).
 
-`Subject` is used as a type-system guardrail in `Authorize<A, S>` and
-in the `condition_for::<E>` calls. Subjects are keyed by `TypeId`
+`Subject` is used as a type-system guardrail in a posture's
+`#[authorize(A, S)]` and `#[public(A, S)]` and in the `condition_for::<E>` calls. Subjects are keyed by `TypeId`
 under the hood; `Action::Manage` on a subject acts as a wildcard for
 every other action on that same subject.
 
@@ -93,8 +93,8 @@ a GraphQL field, a WebSocket message or an MCP tool alike. It is the
 same [class gate](/security/authorization/#one-class-gate-on-every-edge)
 as on an entity, with the same refusals and the same RFC 6750 scope
 challenge, and it arms **no mask**: the subject has no model, so the
-reply goes out as written. An HTTP route gated this way still withholds
-the ability from its reads, as every route no mask shapes does.
+reply goes out as written. A unit gated this way still withholds the
+ability from its reads, on every edge, as every unit no mask shapes does.
 
 The type system keeps the two kinds apart. `when` and `fields` narrow an
 entity's rows and columns, so a subject no table holds refuses them; so
@@ -123,8 +123,8 @@ pub enum Action { Read, Create, Update, Delete, Manage }
 `Manage` is the action wildcard — a grant on `Manage` matches every
 other action on the same subject. Each variant has a type marker
 (`Read`, `Create`, `Update`, `Delete`, `Manage`) implementing
-`ActionMarker`, so routes can name an action as a type parameter
-(`Authorize<Read, user::Entity>`).
+`ActionMarker`, so a posture can name an action as a type
+(`#[authorize(Read, user::Entity)]`).
 
 A grant on `Read` does not imply `Update`. A grant on `Manage` does.
 

@@ -111,6 +111,10 @@ through the reflector:
 ```rust title="crates/features/src/posts/guard.rs"
 #[async_trait]
 impl Guard for RolesGuard {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authorization
+    }
+
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let Some(Roles(required)) = cx.reflector().get::<Roles>() else {
             return Ok(());

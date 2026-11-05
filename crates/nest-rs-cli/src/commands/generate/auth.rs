@@ -385,7 +385,7 @@ static GRAPHQL_AUTHZ: AuthzAdapter = AuthzAdapter {
         "AuthzGraphqlModule runs authn and the ability at the /graphql request, and",
         "every operation runs under what they attach. Every resolver imports it, and",
         "each operation declares #[authorize(Action, Subject)] — an entity, or a",
-        "#[subject] no table holds — or #[public].",
+        "#[subject] no table holds — or #[public], naming what it reads the same way.",
     ],
     deps: &[&super::cargo::AUTHZ, &super::cargo::GRAPHQL],
     written_by_g_auth: false,

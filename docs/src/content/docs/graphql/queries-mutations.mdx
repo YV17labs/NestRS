@@ -34,16 +34,19 @@ impl UsersResolver {
 ```
 
 `#[public]` is the operation's **access posture**: every `#[query]` /
-`#[mutation]` declares one of two, and a method with none does not
+`#[mutation]` declares one of three, and a method with none does not
 compile:
 
-- `#[public]` — deliberately ungated.
-- `#[authorize(Action, Entity)]` — ability gate + automatic response
-  masking.
+- `#[public]` — a caller with no credential is admitted, and the operation reads
+  nothing a grant guards.
+- `#[authorize(Action, Subject)]` — ability gate + automatic response
+  masking, for a caller a principal backs.
+- `#[public(Action, Subject)]` — the same gate and mask on the ability a caller with
+  no credential has: [what a visitor reads](/security/authorization/public-reads/).
 
 The posture is **always** one of these visible attributes — a parameter
 type is never a posture. A bound mutation acts on a row named by id: it
-still carries `#[authorize(Action, Entity)]`, then loads the
+still carries `#[authorize(Action, Subject)]`, then loads the
 `Authorized<A, E>` subject in its body. See
 [Database / CRUD](/database/crud/#bound-mutations).
 

@@ -44,8 +44,9 @@ all — the SDL is unchanged until you declare one.
 
 ## The posture runs twice
 
-Every operation declares `#[authorize(Action, Entity)]` or `#[public]`,
-and a subscription with neither does not compile. What differs is *when*
+Every operation declares `#[authorize(Action, Subject)]`,
+`#[public(Action, Subject)]` or a bare `#[public]`, and a subscription with none
+does not compile. What differs is *when*
 the declaration is enforced, and this is the part worth reading twice.
 
 The **gate** runs once, at subscribe. A caller whose ability carries no

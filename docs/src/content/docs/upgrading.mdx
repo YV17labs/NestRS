@@ -509,8 +509,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | two `#[meta(Tag::new(..))]` on one method or one host | one: the boot refuses the second |
 
    An anonymous caller of an `#[authorize]` route that is not `#[public]` is
-   refused `401`, where the visitor's rules used to decide it: mark the route
-   `#[public]` and take `Authorize<A, E>` by hand to serve visitors.
+   refused `401`, where the visitor's rules used to decide it: declare the route
+   `#[public(A, E)]` to serve visitors.
 
 8. **Import a module bare to read its environment, pin a config as a struct
    literal, and open an instance by its type.** Every module owning a config is
@@ -1000,6 +1000,14 @@ lists what the boot, a log or the wire shows when one is missed.
     | `post: Bind<Update, PostsService>` on a route, `nest_rs::seaorm::Bind` | `#[authorize(Update, bind = PostsService)]` on the route and `post: Authorized<Update, PostEntity>` as its parameter, `nest_rs::seaorm::Authorized`; the route's whole path, its controller's included, names the id alone (`/{id}`, `/{id}/publish`) |
     | `nest_rs::seaorm::graphql::bind::<A, S>(ctx, &id)` or `bind_required::<A, S>(ctx, &id)` in a resolver | `#[authorize(A, bind = S)]` on the operation and an `Authorized<A, E>` parameter, its `id` argument synthesised; a nullable lookup is `#[crud]`'s generated query, or `CrudService::access` in the body |
     | a hand-written `Authorize<A, E>` parameter on a route that is not `#[public]` | `#[authorize(A, E)]` on the route, the parameter dropped |
+    | `#[public]` and `_authz: Authorize<Read, post::Entity>` on a route | `#[public(Read, post::Entity)]`, the parameter dropped: the same gate, the same mask, and no line a cleanup can take for unused |
+    | `#[public]` on a route loading its row with `CrudService::access` in the body | `#[public(Read, bind = PostsService)]` and a `post: Authorized<Read, PostEntity>` parameter |
+    | `#[public]` on a GraphQL operation, a WS message or an MCP operation reading rows under `define_visitor` | `#[public(Read, post::Entity)]`, returning the wire type: a read under a bare `#[public]` now answers nothing, and `.fields([...])` holds there. `unmasked` beside it where the body masks, as a `#[prompt]` or a `#[resources]` listing has to |
+    | a covered WS message or MCP operation stating no posture, or gated on a `#[subject]`, reading rows | `#[authorize(Read, Entity)]`: such a read now answers nothing, as on a route. `unmasked` where the body masks |
+    | a `#[field_resolver]` or a relation serving a visitor's rows | a root field naming them, `#[public(Read, Entity)]`, or a query returning what it read: a nested read answers a visitor nothing |
+    | a guard of your own covering a route, a message or an operation, its `phase()` left at the default | `fn phase(&self) -> GuardPhase { GuardPhase::Authentication }`, or `Authorization`: the boot reads it |
+    | a route, a message or an operation under `ThrottlerGuard` or another guard identifying no one, alone | `#[public]` on the unit, a guard identifying a caller beside it, or for an MCP host writing its own handler `McpModule::for_root(McpAccess::Public)` |
+    | `HttpRouteMeta::scoped_guarded`, `HttpRouteMeta::access_is_implicit`, `HttpRouteParts::scoped_guarded` | nothing public: the boot reads the composed chain |
     | `nest_rs::authz::http::AbilityShaping` | nothing public: `#[authorize]` arms the mask |
     | a hand-written `get` or `user` override on a `#[crud]` block, kept only for its `#[api]` text | `api(get(summary = "…", description = "…"))` in the `#[crud]` arguments, the override deleted |
     | `paginate = …` on a `#[crud]` block that writes its list operation by hand | the key dropped: nothing generated read it, and your method bounds its own list |
@@ -1228,8 +1236,9 @@ lists what the boot, a log or the wire shows when one is missed.
     An HTTP route no guard covers and no `#[public]` opens, which 6.x served
     after one `unguarded routes detected` warning, now stops the boot naming
     every such route: bind a guard on its controller, the route or the app's
-    global pool, or mark it `#[public]` where it is open on purpose. A WebSocket
-    message takes the same rule, and a `#[public]` message or MCP operation behind
+    global pool, or mark it `#[public]` where it is open on purpose. A guard counts
+    only if it identifies or authorizes, by its `phase()`. A WebSocket message and an MCP
+    operation take the same rule, and a `#[public]` message or MCP operation behind
     a guard that authenticates stops the boot, the word having nothing to open.
 
 18. **Regenerate every client from the 7.0 document**, and move what it read off
@@ -1630,11 +1639,37 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A route 6.x served unguarded** stops the boot:
 
   ```text frame="terminal"
-  Error: routes no guard covers and none marks `#[public]`: POST /thing (create), GET /thing (read) — a route runs a guard or is open on purpose; list `GlobalGuards<(...)>` in the providers of the module the app boots, bind `#[use_guards(...)]` on a controller or a gateway, `EndpointGuards<View, (...)>` on an endpoint carrying units, or open it on purpose: `#[public]` on a route, a message or a GraphQL operation, `McpModule::for_root(McpAccess::Public)` on an MCP endpoint
+  Error: routes no guard identifying a caller covers and none marks `#[public]`: POST /thing (create), GET /thing (read) — a route runs such a guard or is open on purpose; list `GlobalGuards<(...)>` in the providers of the module the app boots, bind `#[use_guards(...)]` on a controller or a gateway, `EndpointGuards<View, (...)>` on an endpoint carrying units, or open it on purpose: `#[public]` on a route, a message or a GraphQL operation, `McpModule::for_root(McpAccess::Public)` on an MCP endpoint. A guard that identifies no one, a rate limit or one of your own declaring no `phase()`, covers nothing: declare its `GuardPhase::Authentication` or `Authorization`, or write `#[public]`
   ```
 
   Bind a guard where the route should be closed, and write `#[public]` where it
   is open on purpose.
+- **A route under a rate limit alone**, or under a guard of your own declaring no
+  `phase()`, stops the boot the same way, as does a message under an upgrade running no
+  other guard, an operation under such a `/mcp`, a hand-written MCP handler there and a
+  gated self-mount:
+
+  | Edge | What stops | What boots |
+  |---|---|---|
+  | HTTP | `#[use_guards(ThrottlerGuard)]` or `GlobalGuards<(ThrottlerGuard,)>` and no posture | `#[public]` on the route, or an authentication guard beside it |
+  | WebSocket | a message under `ThrottlerGuard` alone, at the upgrade or beside it | `#[public]` on the message, or an authentication guard at the upgrade |
+  | MCP | an operation of a gated `/mcp` under `ThrottlerGuard` alone | `#[public]`, a guard of its own declaring its phase, or an authentication guard at the request |
+  | GraphQL | nothing new: its posture is already mandatory | — |
+
+  Write `GuardPhase::Authentication` or `Authorization` on a guard of your own that does
+  gate.
+- **A `#[public]` read answering nothing**, `200 []` on HTTP and an empty value in band,
+  with `no ambient Ability outside a worker job — denying all rows` at `warn` on
+  `nest_rs::orm`: the unit names no read. Write `#[public(Read, Entity)]`:
+
+  | Edge | Before | After |
+  |---|---|---|
+  | HTTP | `#[public]`, `_authz: Authorize<Read, E>` | `#[public(Read, E)]` |
+  | GraphQL | `#[public]` | `#[public(Read, E)]`, each stripped field `Option` on the wire type |
+  | WebSocket | `#[public]`, `#[use_guards(AuthzGuard)]` | `#[public(Read, E)]`, the guard kept |
+  | MCP | `#[public]` on an opened `/mcp` | `#[public(Read, E)]`, each stripped field `Option`; `unmasked` on a prompt or a listing |
+- **`Authorize<…>` is not a handler parameter**, `E0277` on a route keeping the parameter:
+  the error names `#[public(Action, Subject)]`.
 - **A gateway or an MCP endpoint whose guards authenticate, still saying `#[public]`**
   on a message or an operation, stops the boot, naming the guard:
 

@@ -371,7 +371,7 @@ an unguarded DB-backed controller mounts its routes and then serves nothing.
 A generated resource therefore answers **401** without a token and **403** until
 [`AuthzAbility`](/security/authorization/) grants a rule for its entity — the two
 lines the generator prints. A resource meant to be readable without a login is
-the same slice with one route marked `#[public]` and a rule in
+the same slice with one route marked `#[public(Read, Entity)]` and a rule in
 `define_visitor`; see [Public reads](/security/authorization/public-reads/).
 Before inventing a second layout, open
 [`crates/features/src/orgs/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/orgs)

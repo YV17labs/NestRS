@@ -53,8 +53,9 @@ pub struct {{controller}} {
 #[routes]
 impl {{controller}} {
     // Guarded by the two guards on the struct, so it needs no posture of its
-    // own; the boot refuses a route no guard covers. A route open on purpose
-    // says #[public]; one serving rows declares #[authorize(Action, Entity)].
+    // own; the boot refuses a route no guard identifying a caller covers. A route
+    // open on purpose says #[public], or #[public(Action, Entity)] where a visitor
+    // reads rows; one serving a caller's rows declares #[authorize(Action, Entity)].
     #[get("/")]
     #[api(summary = "Count {{kebab}} items")]
     async fn list(&self) -> String {
@@ -323,7 +324,9 @@ pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!
 //! `#[public]` admits a caller with no credential, so it belongs on an endpoint
 //! `McpAccess::Public` opens, where every operation states its posture; behind
-//! guards that authenticate it can open nothing, and the boot refuses it.
+//! guards that authenticate it can open nothing, and the boot refuses it. Bare, it
+//! reads nothing a grant guards: `#[public(Action, Entity)]` names what a visitor
+//! reads, with the same gate and mask.
 //!
 //! Arguments are held to the rules their type declares, as on every other
 //! transport: `Parameters<T>` runs `validator` before the body and answers a

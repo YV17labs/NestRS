@@ -124,12 +124,14 @@ impl ChatGateway {
 }
 ```
 
-**The boot reads the rest.** A message no guard covers says `#[public]` or fails
-the boot, which names every such message on the gateway and each remedy; a macro
-reading an `impl` cannot see the app's pool, so this is where it can be said. A
-gateway running no guard at its upgrade and with no `#[public]` message fails the
-same way, whatever guards its messages bind: a message's guard runs on that message,
-while any caller connects, its hooks run and what the server emits reaches the socket.
+**The boot reads the rest.** A message no guard identifying a caller covers says
+`#[public]` or fails the boot, which names every such message on the gateway and each
+remedy; a macro reading an `impl` cannot see the app's pool, so this is where it can
+be said. A rate limit identifies no one, so it covers nothing, and a guard of your own
+declaring no `phase()` is read the same way. A gateway running no such guard at its
+upgrade and with no `#[public]` message fails the same way, whatever guards its
+messages bind: a message's guard runs on that message, while any caller connects, its
+hooks run and what the server emits reaches the socket.
 
 **`#[public]` means a caller with no credential is admitted**, the word's one
 meaning on every edge. It is the line a gateway open on purpose writes, and a
@@ -154,6 +156,28 @@ guard. A guard of the app's pool runs at every upgrade, so a gateway opens benea
 it only by moving that guard onto the hosts it should cover. A guard that identifies
 no one — a rate limit — leaves it standing: a visitor does reach the message, and the
 word is true.
+
+**A bare `#[public]` reads nothing a grant guards.** A ticker keeps the bare word and
+pays nothing for it. A message serving rows to a visitor names them, with
+`#[authorize]`'s arguments and its mask:
+
+```rust title="crates/features/src/posts/ws/gateway.rs"
+#[gateway(path = "/feed")]
+pub struct FeedGateway;
+
+#[messages]
+impl FeedGateway {
+    #[subscribe_message("latest")]
+    #[public(Read, post::Entity)]
+    #[use_guards(AuthzGuard)]
+    async fn latest(&self) -> Result<Vec<Post>, WsError> { /* ... */ }
+}
+```
+
+The guard beside it builds the rules
+[`define_visitor`](/security/authorization/public-reads/) writes, since no ability
+reached a message under an upgrade no guard ran at: those rules answer every caller
+of such a socket.
 
 **`#[authorize(Action, Entity)]` emits two things you would otherwise
 write by hand.** Right after the message's guards, before any interceptor,

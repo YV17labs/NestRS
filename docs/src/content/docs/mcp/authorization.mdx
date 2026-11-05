@@ -97,10 +97,25 @@ operation states its posture, or the boot fails naming it. Behind a guard declar
 `GuardPhase::Authentication` or `Authorization` at the request, and on an endpoint
 denying every request, `#[public]` could open nothing, and the boot refuses it,
 saying which guard stands in the way. A guard that identifies no one — a rate limit
-in the pool — leaves it standing: a visitor does reach the operation. So does an
-`AuthzGuard` the pool folds over an opened endpoint's operation, which gives a
-`#[public]` tool the rules [`define_visitor`](/security/authorization/public-reads/)
-writes.
+in the pool — leaves it standing: a visitor does reach the operation. Under such
+guards alone an operation says `#[public]` or fails the boot, one error naming every
+such operation: a rate limit covers nothing. An `AuthzGuard` the pool folds over an
+opened endpoint's operation gives a tool the rules
+[`define_visitor`](/security/authorization/public-reads/) writes, where its line
+names what it reads:
+
+```rust title="crates/features/src/posts/mcp/tool.rs"
+#[tool(description = "The published posts.")]
+#[public(Read, post::Entity)]
+async fn feed(&self) -> Result<Json<Vec<Post>>, McpError> {
+    Ok(Json(self.svc.feed().await.opaque()?))
+}
+```
+
+It takes `#[authorize]`'s arguments and masks the same way, `unmasked` included on a
+prompt or a listing, and `bind = Service` on a `#[resource]`. A bare `#[public]`
+reads nothing a grant guards: its reads answer nothing, with a `warn` naming that
+line.
 
 For an answer that is a **capability** rather than a row — a presigned URL, a
 computed report — the posture names the capability itself: a subject

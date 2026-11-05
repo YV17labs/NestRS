@@ -95,15 +95,23 @@ service.
 context, attached by the `AbilityGuard` and by nothing else. Three install
 depths cooperate:
 
-- **HTTP** — the route's guards attach it, and the `Authorize` shaper reads
-  it there. The handler sees it, and so does a streaming body it returns.
+- **HTTP** — the route's guards attach it, and the class gate its posture
+  declares reads it there.
 - **GraphQL and MCP** — the [endpoint guards](/security/authorization/endpoint-guards/)
   an app's modules declare attach it at the request, and every operation
-  the request carries runs under it. Resolvers see it, and so do the
-  dataloader batches they trigger; a tool sees it across rmcp's own task.
+  the request carries runs under it: the dataloader batches a resolver
+  triggers, and a tool across rmcp's own task.
 - **WebSockets** — the gateway's upgrade guards attach it, and the
-  connection carries it into every message and connection hook. The
-  message handler sees it.
+  connection carries it into every message and connection hook.
+
+A handler's reads see it where its posture names what it reads:
+`#[authorize(Action, Entity)]` or `#[public(Action, Entity)]`, whose mask shapes
+the answer, or, on an edge taking it, either with `unmasked`, which leaves that to
+the body. **Anywhere else it is withheld**, a bare `#[public]`, a unit stating no posture, a
+`#[subject]`'s, a stream: `current_ability()` answers `None` and the reads fail
+closed, since no mask would shape what they answer. A visitor's ability is read
+only inside a unit naming its read, so a nested GraphQL field and a relation's
+batch read nothing for one.
 
 Outside any request (worker job, cron tick, init or shutdown hook),
 `current_ability()` returns `None` — the query runs **unscoped**.
@@ -113,8 +121,9 @@ caller. See [Threat model](/security/threat-model/) for what that
 buys you and what it does not.
 
 `with_ability(ability, body)` only ever narrows. In a job it scopes the
-body's reads to `ability`, a principal's the job acts for; inside a unit
-already holding an ability, the body runs under what both allow; in a
+body's reads to `ability`, a principal's or a visitor's the job acts for, and
+nothing is withheld from it there, since `None` in a job reads every row; inside
+a unit already holding an ability, the body runs under what both allow; in a
 request no ability guard authorized, it installs nothing and the reads
 still fail closed. No function hands a body a wider ability than the one it
 runs under — the guard is the one place an ability comes from — and work a
@@ -139,11 +148,13 @@ scope (`current_executor_scope()`):
   module, and write a [negative-path test](/testing/negative-path/)
   that pins the behavior.
 
-A public route uses `AbilityGuard` too: it builds the visitor's
-`Ability` from `AbilityFactory::define_visitor`, which grants nothing
-until you write a rule into it — so `Repo::scoped(Read)` returns
-nothing by default. Visitor-rule policy belongs in the factory, not in
-the filter. See [Public reads](/security/authorization/public-reads/).
+A unit naming its read with `#[public(Read, Entity)]` runs `AbilityGuard`
+too: it builds the visitor's `Ability` from
+`AbilityFactory::define_visitor`, which grants nothing until you write a
+rule into it — so its class gate refuses by default, and no row is read. A
+bare `#[public]` takes the second path above whatever that branch grants.
+Visitor-rule policy belongs in the factory, not in the filter. See
+[Public reads](/security/authorization/public-reads/).
 
 The sanctioned ability-less reads (pre-authentication credential
 lookup, `CrudService::access`'s existence probe) stay inside `Repo`

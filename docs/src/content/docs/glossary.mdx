@@ -62,8 +62,8 @@ deep on each.
   `#[use_exception_filters(...)]`, the method's tried first. The unit stays
   failed whatever it answers.
 - **Ability shaper** — the `Authorize<A, S>` wrapper the `#[routes]`
-  macro emits when a route declares `#[authorize(A, S)]` or takes that type
-  as a parameter; runs response masking after a 2xx. Innermost per-route layer, just outside
+  macro emits when a route declares `#[authorize(A, S)]` or `#[public(A, S)]`,
+  never a parameter; runs response masking after a 2xx. Innermost per-route layer, just outside
   the handler. [Layer order](/fundamentals/guards/#where-guards-run-in-the-chain).
 - **Unit** — one piece of work the framework dispatches and files one
   operation line for: an HTTP request, a GraphQL field, a WebSocket message,
@@ -193,7 +193,7 @@ deep on each.
   `#[query]` / `#[mutation]` / `#[field_resolver]` methods that compose
   into the schema at boot; every
   `#[query]` / `#[mutation]` declares an access posture —
-  `#[authorize(Action, Entity)]` or `#[public]`.
+  `#[authorize(Action, Subject)]`, `#[public(Action, Subject)]` or a bare `#[public]`.
 - **[Gateway (WS)](/websockets/messages/)** — a struct marked with
   `#[gateway(path = "/ws")]` whose `#[subscribe_message]` methods
   handle WS events; self-mounts on `HttpTransport`.

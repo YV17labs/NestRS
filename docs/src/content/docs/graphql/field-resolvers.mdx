@@ -107,6 +107,11 @@ its own `#[use_guards]`, and only the interceptors and exception filters
 declared on it: never the app's pool, nor the resolver's interceptors, which
 would run once per row.
 
+Nor does a mask reach it. A caller a token backs reads there by `define`, its rows
+filtered and its field grants not applied, so what it answers is chosen in its body;
+a caller with no credential reads nothing a grant guards there, whatever its root
+field names ([Public reads](/security/authorization/public-reads/#limits)).
+
 ## Its module is imported
 
 A field resolver is grafted onto its parent's GraphQL object when the crate

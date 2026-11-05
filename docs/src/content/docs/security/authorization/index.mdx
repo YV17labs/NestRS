@@ -85,7 +85,7 @@ one statement, no terminal `.add()` call. See
 [Policies](/security/authorization/policies/) for the full builder API.
 
 The trait has a second, defaulted branch — `define_visitor` — that the
-guard calls instead of `define` when what `#[public]` opens is reached with
+guard calls instead of `define` when what `#[public(Action, Subject)]` opens is reached with
 no credential. It grants nothing until you write into it; see
 [Public reads](/security/authorization/public-reads/).
 
@@ -160,7 +160,7 @@ included, and arms no mask, since there is no row to mask.
    decision is made in SQL, by the same predicate the list path
    joins. Missing row ⇒ 404, present but denied ⇒ 403. See
    [By-id binding](/security/authorization/by-id-binding/).
-3. **`Authorize<A, S>` — the response shaper.** After a 2xx, the
+3. **The response shaper `#[authorize(A, S)]` or `#[public(A, S)]` arms.** After a 2xx, the
    shaper reads each row of the body back into `S::Model`, judges it
    as `Ability::mask_many` does, and keeps only the exposed columns its
    grants permit. See [Response masking](/security/authorization/response-masking/).
@@ -237,7 +237,7 @@ A handler **without** the authz module imported has no request
 `#[authorize]` gate returns 500, and a `Repo` read on the request-scoped
 executor renders `1 = 0` — zero rows, plus a `warn` naming the entity and
 action. The access graph catches the missing import at boot, and a route
-that binds no guard at all and is not `#[public]` refuses the boot. Match every new
+that no guard identifying a caller covers and is not `#[public]` refuses the boot. Match every new
 controller with the transport's authz module, and write a
 [negative-path test](/testing/negative-path/) that pins the 403.
 </Aside>
@@ -256,7 +256,7 @@ controller with the transport's authz module, and write a
   round trip `#[expose]` writes and the mask's steps are documented as
   internals (skip on a first pass).
 - [Public reads](/security/authorization/public-reads/) —
-  `define_visitor`, the anonymous branch a `#[public]` unit reads.
+  `define_visitor`, the anonymous branch a `#[public(Action, Subject)]` unit reads.
 - [OAuth scopes](/security/authorization/scopes/) — `.requires_scope(...)`
   narrows a rule to the scope a *token* carries, and refuses with an
   `insufficient_scope` challenge naming what to request. Read it when

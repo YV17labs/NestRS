@@ -148,7 +148,9 @@ Such a host declares no operation for a layer to run on, so
 nothing. Its endpoint is guarded where every MCP request is — the app's
 global guards, or [`EndpointGuards<McpView, G>`](/security/authorization/endpoint-guards/)
 from a module, as `AuthzMcpModule` declares them — and every row it reads
-still comes through the ambient ability. Give it a path of its own, or share
+still comes through the ambient ability, a visitor's reading nothing. It writes no
+posture, so no mask shapes its answer: `masked_reply` is what it calls before
+answering a row. Give it a path of its own, or share
 one with the hosts that declare their operations: the endpoint offers a
 completion to each.
 

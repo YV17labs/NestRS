@@ -100,6 +100,13 @@ missing at the request means something else than at the unit. A guard whose
 decision is the request's alone admits the units that request carries with an
 explicit `Ok(())` in `check`: no guard admits by default.
 
+A guard also says what it does about the caller, through `phase()`:
+`GuardPhase::Authentication` establishes who it is, `GuardPhase::Authorization`
+decides what it may do, and `GuardPhase::Other`, the default, does neither: a rate
+limit, a feature gate. **Only the first two cover a unit.** `RateLimitGuard` above
+identifies no one, so a route under it alone says `#[public]`, or the boot refuses
+it; a guard of your own that does gate declares its phase.
+
 | Entry | Runs on | Reads it through |
 |-------|---------|------------------|
 | `check_http` | an HTTP request: a route, a WS upgrade, the `/graphql` and `/mcp` requests; `check` unless overridden | `HttpView::of(cx)` — the request, head and body, and the route it matched |
@@ -141,6 +148,10 @@ impl Guard for PostAuthorGuard {
             None => Err(Denial::forbidden("writing a post takes a token naming a user")
                 .with_reason("not_a_user")),
         }
+    }
+
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authorization
     }
 
     fn expected_principal(&self) -> Option<PrincipalClaim> {
@@ -235,10 +246,10 @@ impl PostsController {
 `AdminGuard` runs *on top of* the controller's two guards. Per-handler
 binding is **additive** — it does not replace the controller list.
 
-A route with no guards does not boot, since silence is not a decision: the boot
-refuses every route that binds no guard and is not marked `#[public]`, in one
-error naming them ([below](#declare-on-the-provider)). Declaring the posture — a
-guard, or `#[public]` — is what makes it intentional.
+A route no guard identifying a caller covers does not boot, since silence is not a
+decision: the boot refuses every such route not marked `#[public]`, in one error
+naming them ([below](#declare-on-the-provider)). Declaring the posture — such a
+guard, or `#[public]` — is what makes it intentional, and a rate limit is neither.
 
 The HTTP adapter imports the authz module transitively — same pattern as
 `UsersHttpModule` in the repo:
@@ -354,6 +365,10 @@ impl AmbientValue for Tenant {}
 
 #[async_trait]
 impl Guard for TenantGuard {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let tenant = HttpView::of(cx)?
             .request()
@@ -441,6 +456,10 @@ use nest_rs::guards::{Denial, Guard};
 
 #[async_trait]
 impl Guard for ApiKeyGuard {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand) {
             return Ok(());
@@ -609,9 +628,9 @@ Writing it on the struct is a compile error that says so.
 boundary.** A `crates/features` controller is designed to be portable — if
 it relies only on the app's `GlobalGuards<(...)>` to be secure, a second app
 without that declaration could not serve it. The compiler will not complain, but
-the boot refuses: with **no global guard pool active**, every route that
-binds no controller/method guard and is not marked `#[public]` is named in
-one boot error, which gives both remedies. Redeclare on `PostsController`
+the boot refuses: with **no guard identifying a caller in the pool**, every route
+that binds no such guard itself and is not marked `#[public]` is named in one boot
+error, which gives each remedy. Redeclare on `PostsController`
 to bind the policy to the code that needs it, or mark genuinely-open
 routes `#[public]` on purpose. The same convention serves interceptors
 and filters, which have no such refusal.

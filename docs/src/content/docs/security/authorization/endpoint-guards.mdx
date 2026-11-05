@@ -176,7 +176,8 @@ takes the ability guard's *visitor* branch, while a bearer that does not verify
 is refused with `401 invalid_token`. The line is held one step later, by the
 operation's own posture: `#[authorize(...)]` refuses an ability with no
 principal behind it (`unauthenticated`), whatever `define_visitor` granted, and
-only `#[public]` operations read those grants.
+only an operation naming that entity in its `#[public(Action, Entity)]` reads those
+grants.
 
 What the request's guards attach is ambient for every operation it carries, so
 a resolver reads the verified principal as a parameter, `claims: Ambient<Claims>`,
@@ -188,7 +189,9 @@ no guard at the request at all, the boot says so once, on `nest_rs::layers`:
 `no guard at the request`, with `surface="graphql"`,
 `then="each unit decides alone"` and what to write in its `hint`: a `#[public]`
 operation answers, and any other answers to the guards its resolver binds, or is
-refused for want of an ability.
+refused for want of an ability. A bare `#[public]` operation reads nothing a grant
+guards, whichever guards ran; `#[public(Action, Entity)]` is the line that names
+its read.
 
 A dataloader batch carries what its request carries, so relations that fan out
 across batches run under the same ability, on the pool — scoped without the
@@ -241,7 +244,8 @@ what a guard bound beside a `#[subscribe_message]` owes instead.
 
 **Above that, a message declares a posture where it gates more**, as a route
 does: the guards at the upgrade cover it, so it needs none of its own, and one no
-guard covers says `#[public]` or fails the boot. `#[authorize(Action, Entity)]`
+guard identifying a caller covers says `#[public]` or fails the boot; a rate limit
+identifies no one, so it covers nothing. `#[authorize(Action, Entity)]`
 emits the class gate (`nest_rs::authz::class_gate`, every edge's) before the payload
 is deserialized and the reply mask afterwards — so a handler answering with entity
 rows writes **no masking call**. It fails closed when no ambient ability is
@@ -275,13 +279,14 @@ pooled `AuthnGuard` refuses an anonymous call. **With no guard at its request �
 neither pool nor endpoint guards — it denies every request**, said once at boot
 on `nest_rs::layers` (`no guard at the request`, with `surface="mcp"` and
 `then="denies every unit"`) and once per refusal, so a missing wiring tells itself
-apart from a refused caller. A global `ThrottlerGuard` alone is enough to open it to
-whoever the throttler admits.
+apart from a refused caller. A global `ThrottlerGuard` alone identifies no one, so it
+covers no operation: each says `#[public]` there, or the boot refuses it, naming
+every such operation.
 
-An operation these guards cover needs no posture of its own, as a route needs none
-under a guard. `#[public]` means a caller with no credential is admitted, so behind
-a pooled `AuthnGuard` or an authorization guard, or on an endpoint denying every
-request, where it could open nothing, it fails the boot.
+An operation a guard identifying a caller covers needs no posture of its own, as a
+route needs none under such a guard. `#[public]` means a caller with no credential
+is admitted, so behind a pooled `AuthnGuard` or an authorization guard, or on an
+endpoint denying every request, where it could open nothing, it fails the boot.
 
 An endpoint meant for anyone is opened in code, where a reviewer sees it:
 
@@ -292,20 +297,20 @@ McpModule::for_root(McpAccess::Public)
 A public `/mcp` runs no guard at its request, the global pool's included. A
 module declaring `EndpointGuards<McpView, _>` beside that opening fails the
 boot, naming the declaration — an opening never drops guards silently.
-An `AuthzGuard` in the per-operation chain still runs: a `#[public]` tool reads
-the visitor's rules there, as a `#[public]` route does, and an `#[authorize]` one
-answers `UNAUTHENTICATED`.
+An `AuthzGuard` in the per-operation chain still runs: a `#[public(Read, Entity)]`
+tool reads the visitor's rules there, as such a route does, and an `#[authorize]`
+one answers `UNAUTHENTICATED`.
 
 What the endpoint runs is `check_http` — it holds a request, not an operation.
 A pooled guard's `check` runs in the **per-operation chain**, which folds the
 pool too, so a global guard overriding `check` gates every tool call even when
 the endpoint's guards already authenticated the caller who sent it.
 
-## Public handlers — opt out per transport
+## Public handlers — one line per unit
 
-A handler is "public" by **not** binding the transport's authz
-module's guard. The whole module import then becomes optional — the
-app lists `AuthzModule` only if other handlers need it.
+What a caller with no credential reaches is a line on the unit, on every edge:
+a bare `#[public]` for one reading nothing a grant guards, and
+`#[public(Action, Entity)]` for one reading what `define_visitor` grants.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[get("/health")]
@@ -314,11 +319,10 @@ async fn health(&self) -> &'static str { "ok" }
 ```
 
 `#[public]` makes `AuthnGuard` non-rejecting (anonymous requests pass
-through with no claims). The `AbilityGuard` then builds an empty
-`Ability` for the visitor; the row-level filter returns nothing
-unless `AbilityFactory` granted the visitor branch explicitly. See
-[Authorization](/security/authorization/) for the visitor-rule
-pattern.
+through with no claims). Bare, it withholds what the guards attached from the
+unit's reads, so the row-level filter returns nothing and no mask is owed. Named,
+the `AbilityGuard` builds the visitor's ability, the class gate reads it and the
+mask keeps what it grants: see [Public reads](/security/authorization/public-reads/).
 
 <Aside type="note">
 Cross-transport rule: **same `AuthzAbility` everywhere**. Each edge builds the

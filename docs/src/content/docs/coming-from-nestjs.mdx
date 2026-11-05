@@ -196,9 +196,9 @@ not a review catch.
 controller has no way to say it depends on that binding, so the app that forgets
 it serves the controller open. NestRS declares the app's pool in the module
 `main` boots, `GlobalGuards<(...)>` — never in a feature, which would choose
-what covers every route — and an HTTP route no guard covers —
-not the global pool, not a `#[use_guards]` on its controller or itself — refuses
-the boot unless it says `#[public]`. The refusal names every such route, so the
+what covers every route — and an HTTP route no guard identifying a caller covers —
+not the global pool, not a `#[use_guards]` on its controller or itself, a rate limit
+counting for nothing — refuses the boot unless it says `#[public]`. The refusal names every such route, so the
 omission is a failed start, never an open route.
 
 Declaring the guard on the controller, resolver or gateway that needs it is still

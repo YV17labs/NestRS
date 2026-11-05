@@ -94,6 +94,10 @@ pub struct RequireApiKey;
 
 #[async_trait]
 impl Guard for RequireApiKey {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         if HttpView::of(cx)?.request().header("x-api-key").is_some() {
             Ok(())
@@ -126,6 +130,10 @@ the request once the guards passed:
 ```rust title="crates/features/src/authn/guard.rs"
 #[async_trait]
 impl Guard for AuthnGuard {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let claims = verify_bearer(HttpView::of(cx)?.request())
             .map_err(|_| Denial::unauthorized("invalid token"))?;

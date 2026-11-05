@@ -205,7 +205,8 @@ calling one directly runs it in a unit of the app's own binding:
 `app.unit(ability, || svc.list())` as a request granted `ability`,
 `app.system_unit(|| svc.purge_expired())` as a job. The unit commits on the
 body's `Ok` and rolls back on its `Err`, as an edge's does — never an executor or
-an ability installed by hand.
+an ability installed by hand. It stands in for a unit naming its read, so a test of
+a `define_visitor` grant hands it the visitor's ability.
 
 ```rust title="crates/features/tests/e2e/orgs/service.rs (from the demo, abridged)"
 let app = data_app().await;

@@ -17,8 +17,11 @@ ambient ability — your tools live next to your controllers, not in a sidecar.
 
 That ambient ability covers **every** MCP capability, not tools alone. A
 prompt fetch, a resource read, a completion, a `tasks/*` call: each runs inside
-the caller's request scope, with the caller's ability installed and the
-operation's transaction around it. A handler writes no check on any of them.
+the caller's request scope, with the operation's transaction around it, and a
+handler writes no check on any of them. A declared operation's reads run under
+the caller's ability where its posture names what it reads, and read nothing a
+grant guards where it names nothing ([Authorization](/mcp/authorization/)); a
+host writing rmcp's handler by hand [reads under it unmasked](/mcp/resources-and-prompts/#what-stays-hand-written).
 
 `nest-rs-mcp` builds on [rmcp](https://docs.rs/rmcp) 3.x — the framework wraps
 it so a server is an `#[injectable]` struct that self-mounts on the HTTP
@@ -72,8 +75,8 @@ impl HelloTool {
 }
 ```
 
-`#[public]` is the operation's access posture: a greeting gates nothing, so a
-caller with no credential is admitted. On an endpoint the app's guards
+`#[public]` is the operation's access posture: a greeting gates nothing and reads
+nothing a grant guards, so a caller with no credential is admitted. On an endpoint the app's guards
 authenticate an operation needs no posture of its own, as a route needs none under
 a guard, and [Authorization](/mcp/authorization/) covers the form that gates one.
 
@@ -86,7 +89,7 @@ declare for it, either alone when the other is missing, and with neither it is
 leak unauthenticated. The boot says so once, on `nest_rs::layers`:
 
 ```text frame="terminal"
-WARN nest_rs::layers: no guard at the request surface="mcp" path="/mcp" then="denies every unit" hint="list `GlobalGuards<(...)>` in the providers of the module the app boots, bind `#[use_guards(...)]` on a controller or a gateway, `EndpointGuards<View, (...)>` on an endpoint carrying units, or open it on purpose: `#[public]` on a route, a message or a GraphQL operation, `McpModule::for_root(McpAccess::Public)` on an MCP endpoint"
+WARN nest_rs::layers: no guard at the request surface="mcp" path="/mcp" then="denies every unit" hint="list `GlobalGuards<(...)>` in the providers of the module the app boots, bind `#[use_guards(...)]` on a controller or a gateway, `EndpointGuards<View, (...)>` on an endpoint carrying units, or open it on purpose: `#[public]` on a route, a message or a GraphQL operation, `McpModule::for_root(McpAccess::Public)` on an MCP endpoint. A guard that identifies no one, a rate limit or one of your own declaring no `phase()`, covers nothing: declare its `GuardPhase::Authentication` or `Authorization`, or write `#[public]`"
 ```
 
 A `#[public]` operation there could open nothing, so the boot refuses it and names
@@ -125,8 +128,8 @@ A public `/mcp` runs no guard at its request, the global pool's included, so the
 opening belongs where the app is composed, never in a feature crate another app
 might import — and a module declaring guards for the endpoint beside it fails
 the boot rather than seeing them dropped. Every operation it serves states its
-posture, `#[public]` or `#[authorize]`: no guard covers it there, and one stating
-neither fails the boot too. The opening is made at one import: a
+posture, `#[public]`, `#[public(Action, Subject)]` or `#[authorize(Action, Subject)]`:
+no guard covers it there, and one stating none fails the boot too. The opening is made at one import: a
 second `McpModule::for_root` opening the endpoint fails the boot naming both,
 even when the two agree. `#[mcp]` mounts the tool on the existing HTTP transport —
 same port, same CORS, no second server. An MCP client pointed at
@@ -214,7 +217,7 @@ pub struct PostsTool {
 #[tools]
 impl PostsTool {
     #[tool(description = "List the titles of the latest published posts.")]
-    #[public]
+    #[public(Read, post::Entity, unmasked)]
     async fn latest_titles(
         &self,
         Parameters(p): Parameters<LatestParams>,
@@ -224,7 +227,7 @@ impl PostsTool {
     }
 
     #[tool(description = "Return a published post's summary, found by its slug.")]
-    #[public]
+    #[public(Read, post::Entity, unmasked)]
     async fn post_summary(
         &self,
         Parameters(p): Parameters<SlugParams>,
@@ -237,7 +240,10 @@ impl PostsTool {
 
 The client now sees two tools — `latest_titles` and `post_summary` — both
 sharing the injected `PostsService`. The `description` is what the model
-reads to decide when to call each.
+reads to decide when to call each. Each names what it reads, which
+[`define_visitor`](/security/authorization/public-reads/) grants; a bare `#[public]`
+would read nothing. `unmasked` leaves the field grants to the body, since each
+answers a `String` it wrote rather than a row.
 
 ## A validated tool
 
@@ -281,7 +287,7 @@ describes:
 
 ```rust title="crates/features/src/posts/mcp/tool.rs (abridged)"
 #[tool(description = "Search the published posts' titles, most recent first.")]
-#[public]
+#[public(Read, post::Entity, unmasked)]
 async fn search_posts(
     &self,
     Parameters(params): Parameters<SearchPostsDto>,

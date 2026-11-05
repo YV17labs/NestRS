@@ -27,6 +27,10 @@ impl Guard for PostAuthorGuard {
         }
     }
 
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authorization
+    }
+
     fn expected_principal(&self) -> Option<PrincipalClaim> {
         Some(PrincipalClaim::of::<Claims>())
     }

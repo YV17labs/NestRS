@@ -27,16 +27,16 @@ impl AbilityFactory for AuthzAbility {
 
 Everything downstream is the machinery you already have: the grant
 becomes the `WHERE` clause on the visitor's query, the class-level gate
-on the route, and the field set the response mask keeps.
+on the unit, and the field set the response mask keeps.
 
 ## Wire it in
 
-The route declares two things, and it needs both.
+The route says what it reads, in one line:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 #[get("/")]
-#[public]
-async fn list(&self, _authz: Authorize<Read, post::Entity>) -> Result<Json<Vec<Post>>> {
+#[public(Read, post::Entity)]
+async fn list(&self) -> Result<Json<Vec<Post>>> {
     Ok(Json(self.svc.feed().await?))
 }
 ```
@@ -52,38 +52,65 @@ pub async fn feed(&self) -> Result<Vec<Post>, ServiceError> {
 }
 ```
 
-`#[public]` is the posture. It tells `AuthnGuard` to admit a caller
-with no credential, and it tells `AuthzGuard` to build the ability from
-`define_visitor` instead of `define`.
+`#[public(Read, post::Entity)]` takes `#[authorize]`'s arguments and does what it
+does, for a caller with no credential as well: `AuthnGuard` admits that caller,
+`AuthzGuard` builds the ability from `define_visitor`, the class gate runs against
+it right after the guards, and the mask keeps the fields it grants. Every edge
+reads the line the same way, so a `#[query]`, a `#[subscribe_message]` and a
+`#[tool]` serve the same rows and the same fields:
 
-`Authorize<Read, post::Entity>` is the enforcement plumbing that
-posture needs: it runs the class gate against the visitor's grant, right
-after the guards, installs the ambient ability the data layer reads and
-arms the response mask. This is the one route shape where you write the
-extractor by hand — `#[authorize(...)]` and `#[public]` declare opposite
-postures, so the decorator form is a compile error here, and the
-hand-written parameter is refused beside anything but `#[public]`.
+```rust
+#[query]
+#[public(Read, post::Entity)]
+async fn feed(&self) -> GqlResult<Vec<Post>> { /* … */ }
 
-**Delete that parameter and the route answers `200 []`.** It is prefixed `_`
-and looks unused, so it is what a cleanup pass removes — and the symptom is the
-one symptom that does not point back at it. The visitor's ability still reaches
-the request; nothing installs it as the *ambient* one, so `Repo` falls back to
-its no-ability behaviour and renders `1 = 0`. Fail-closed, and not silent: the
-`warn` on `nest_rs::orm` names the entity, the action and the remedy.
+#[subscribe_message("feed")]
+#[public(Read, post::Entity)]
+#[use_guards(AuthzGuard)]
+async fn feed(&self) -> Result<Vec<Post>, WsError> { /* … */ }
+
+#[tool(description = "The published posts.")]
+#[public(Read, post::Entity)]
+async fn feed(&self) -> Result<Json<Vec<Post>>, McpError> { /* … */ }
+```
+
+A detail route loads its row by id the way an `#[authorize]` one does: the same
+key, the same parameter, the same `404` and `403`
+([by-id binding](/security/authorization/by-id-binding/)).
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[get("/{id}")]
+#[public(Read, bind = PostsService)]
+async fn show(&self, post: Authorized<Read, post::Entity>) -> Result<Json<Post>> {
+    Ok(Json(Post::from(&post.into_inner())))
+}
+```
+
+## An opening that reads nothing
+
+A sign-in, a health check or a ticker reads no row, and keeps the bare word:
+
+```rust
+#[post("/login")]
+#[public]
+async fn login(&self, Json(body): Json<LoginDto>) -> Result<Json<TokenDto>> { /* … */ }
+```
+
+**A bare `#[public]` reads nothing a grant guards, on every edge.** No mask would
+shape what it answers, so the ability is withheld from its reads: `Repo` renders
+`1 = 0`, the route answers `200 []`, and the `warn` on `nest_rs::orm` names the
+entity, the action and the line to write.
 
 ```text frame="terminal"
 WARN nest_rs::orm: no ambient Ability outside a worker job — denying all rows
   entity=features::posts::entity::Entity action=Read scope=Some(Request)
-  hint="bind #[use_guards(AuthnGuard, AuthzGuard)], or — on a #[public] route —
-        take the `Authorize<A, E>` parameter that arms the shaper"
+  hint="bind #[use_guards(AuthnGuard, AuthzGuard)], and declare what this unit
+        reads: #[authorize(Read, Entity)], or #[public(Read, Entity)] where a
+        caller with no credential is admitted"
 ```
 
 Grep that target the first time a route returns an empty collection you did not
-expect. A detail route takes the same parameter and loads its row through the
-service's `access` in the body, mapping `Denied` and `Missing` as
-[by-id binding](/security/authorization/by-id-binding/#the-access-outcome)
-does: `#[authorize(Read, bind = PostsService)]` is the gated posture, the
-opposite of `#[public]`, so the two are never written together.
+expect. The bare word costs a route that reads nothing nothing.
 
 ## A token still takes the authenticated branch
 
@@ -99,38 +126,25 @@ grants them, and a signed-in author sees their drafts too because
 
 ## Reviewing a `#[public]` route
 
-**The reach of `#[public]` grows with this feature, and that is the
-point of it.** Before, the marker could only widen authentication:
-`AuthzGuard` built an empty ability for the anonymous caller, so no
-`#[public]` route could return a row of a guarded entity, however it was
-written. Now the marker also selects which half of the policy runs.
+Reading the diff that adds an opening tells you what it exposes, from a pair:
 
-So reading the diff that adds `#[public]` no longer tells you what the
-route exposes. The pair does:
-
-1. the `#[public]` marker on the route, and
+1. the `#[public(Read, post::Entity)]` line on the route, and
 2. what `define_visitor` grants for that entity.
 
 Both are greppable, both stay in one file each, and neither is inferred.
-A route that turns `#[public]` while `define_visitor` stays empty
-exposes nothing — it answers `403`. A grant added to `define_visitor`
-reaches only the routes marked `#[public]`. Review the two together, and
-treat an edit to `define_visitor` with the weight of a route-exposure
-change, because that is what it is.
+A route that says `#[public(Read, post::Entity)]` while `define_visitor` stays
+empty exposes nothing — it answers `403`. A grant added to `define_visitor`
+reaches only the units naming that entity in their `#[public(...)]`. Review the
+two together, and treat an edit to `define_visitor` with the weight of a
+route-exposure change, because that is what it is.
 
 ## Limits
 
 **The default grants nothing, on every transport.** An app that never
 implements `define_visitor` behaves exactly as it did before the method
-existed: an anonymous caller on a `#[public]` route gets an ability with
-no rules, and the class gate answers `403`.
-
-**One correction covers HTTP, GraphQL and WebSockets.** The guards at the
-`/graphql` request and at the WS upgrade both run `AbilityGuard::check_http`
-on it, so the
-visitor branch reaches a `#[public]` query and a guest socket the same
-way. On WebSockets the visitor ability is captured at the upgrade and
-frozen for the connection, like any other.
+existed: an anonymous caller on a `#[public(Read, post::Entity)]` route gets an
+ability with no rules, and the class gate answers `403`, or the edge's rendering
+of it.
 
 **On GraphQL the operation's posture, not the endpoint, holds the
 line.** `/graphql` is one in-band endpoint (`Posture::InBand`), so a caller
@@ -139,15 +153,31 @@ ability, and one whose bearer does not verify is refused at the request. An
 operation declared `#[authorize(...)]` refuses it for want of a
 principal (`UNAUTHENTICATED`) before consulting a single grant — which
 is what keeps the sentence above true on that transport: a visitor grant
-opens the `#[public]` operations on that entity and no others.
+opens the operations naming that entity in their `#[public(...)]` and no others.
+
+**A nested GraphQL field reads nothing for a visitor.** A `#[field_resolver]` or a
+relation's loader runs off the operation that named the read, where no mask
+reaches, so a visitor's ability is withheld there and its read answers nothing,
+with the same `warn`. A caller a token backs reads there by `define`, its rows
+filtered and no mask applying its field grants, under an `#[authorize]` operation
+as under a `#[public]` one: a nested read has no posture of its own.
 
 **A gated `/mcp` refuses anonymous callers.** It carries no
 `Posture::InBand` (its requests read `Gated`), so an unauthenticated tool
 call is denied before the factory is consulted. `define_visitor` does not open it.
 `McpModule::for_root(McpAccess::Public)` does, and there an `AuthzGuard` the
-operation's chain runs — the pool's included — gives a `#[public]` tool these
-grants, as it does a `#[public]` WebSocket message under an upgrade no guard runs;
-an `#[authorize]` unit stays refused, no principal backing it.
+operation's chain runs — the pool's included — gives a `#[public(Read, Entity)]`
+tool these grants, as it does such a WebSocket message under an upgrade no guard
+identifying a caller runs; an `#[authorize]` unit stays refused, no principal
+backing it.
+
+**A socket and an opened `/mcp` serve no token.** A gateway whose upgrade
+authenticates admits no visitor, and an opened `/mcp` reads no bearer at its
+request, so on those edges a `#[public(...)]` unit answers by `define_visitor`
+alone. One app serving both audiences on one operation does it on HTTP or GraphQL.
+
+**An `#[sse]` stream takes a subject no table holds**, as `#[authorize]` there
+does: a mask reconciles a body, and an event stream is none.
 
 **A malformed visitor rule denies the request.** A rule whose relation
 predicate cannot be lowered fails ability construction, and the guard
@@ -162,3 +192,5 @@ fail-closed behavior the authenticated branch has.
   what the visitor's grant becomes in SQL.
 - [Response masking](/security/authorization/response-masking/) — how
   `.fields([...])` narrows a visitor's response.
+- [By-id binding](/security/authorization/by-id-binding/) — the `bind = Service`
+  a detail route takes.

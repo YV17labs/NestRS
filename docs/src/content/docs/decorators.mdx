@@ -62,9 +62,9 @@ host or a worker's impl block, and a method one of its handlers.
 | `#[use_exception_filters]` | host or method | Binds exception filters — a typed catch, or every error with `dyn Error + Send + Sync`; the method's tried first | [Error handling](/fundamentals/exception-filters/#exception-filters) |
 | `#[interceptor(stage = unit)]` | struct | Makes a struct an interceptor its module's import brings around the guards of every unit; at the handler stage, an app-wide one is the root's `GlobalInterceptors<(…)>` | [Interceptors](/fundamentals/interceptors/#the-unit-stage-interceptorstage--unit) |
 | `#[meta]` | host or method | Declares typed metadata, the method's over its host's (repeatable); read back by a layer through `cx.reflector()` | [Execution context](/fundamentals/execution-context/#read-what-the-site-declared) |
-| `#[public]` | method | Access posture: the unit admits a caller with no credential — guards relax, no mask; refused at boot where the request's guards would turn one away | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
+| `#[public]` | method | Access posture: the unit admits a caller with no credential — guards relax; bare it reads nothing a grant guards, and `#[public(Action, Subject)]` gates and masks on that caller's ability, as `#[authorize]` does; refused at boot where the request's guards would turn one away | [Public reads](/security/authorization/public-reads/) |
 | `#[authorize]` | method | Access posture: gates the unit by ability (`Action`, `Subject`) and, on an entity, masks the response; `bind = Service` also loads the row an id names into an `Authorized<Action, E>` parameter, on a route, a GraphQL operation or an MCP `#[resource]` | [Authorization](/security/authorization/), [Route model binding](/security/authorization/by-id-binding/) |
-| `#[subject]` | unit struct | Declares a capability no table holds as an authorization subject: a rule grants it whole, `#[authorize]` gates it on every edge and masks nothing | [Policies](/security/authorization/policies/#subjects-no-table-holds) |
+| `#[subject]` | unit struct | Declares a capability no table holds as an authorization subject: a rule grants it whole, a posture naming it gates on every edge and masks nothing | [Policies](/security/authorization/policies/#subjects-no-table-holds) |
 
 ## Authentication
 
@@ -114,8 +114,8 @@ payload, a WS message and a tool's arguments all take them, from one path:
 |---|---|---|---|
 | `#[resolver]` | struct | Marks a resolver provider and declares its resolver-scope guards, interceptors and exception filters | [GraphQL](/graphql/) |
 | `#[operations]` | impl block | Orchestrates the block's `#[query]` / `#[mutation]` / `#[subscription]` / `#[entity]` / `#[field_resolver]` methods | [GraphQL](/graphql/) |
-| `#[query]` | method | Root query operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
-| `#[mutation]` | method | Root mutation operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
+| `#[query]` | method | Root query operation; requires an access posture (`#[authorize(…)]`, `#[public(…)]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
+| `#[mutation]` | method | Root mutation operation; requires an access posture (`#[authorize(…)]`, `#[public(…)]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[subscription]` | method | Root subscription over graphql-ws; same posture, gated at subscribe and masked per item | [Subscriptions](/graphql/subscriptions/) |
 | `#[entity]` | method | Federation entity resolver — the router resolves it by reference through `_entities`; same mandatory posture, and its arguments are the `@key` | [Federation](/graphql/federation/) |
 | `#[field_resolver]` | method | Custom field resolver on a wire type; takes no posture attribute | [Field resolvers](/graphql/field-resolvers/) |

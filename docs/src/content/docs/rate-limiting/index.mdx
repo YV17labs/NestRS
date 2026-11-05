@@ -49,6 +49,10 @@ the same `#[meta(Throttle::…)]` — the guard pool runs post-routing, see
 *every* route the pool reaches at the module default, which is a wider
 decision than rate limiting usually is.
 
+**A rate limit opens nothing.** It identifies no one, so it covers no unit: a route, a
+message or an operation under `ThrottlerGuard` alone says `#[public]` or fails the
+boot, which names each. Beside an authentication guard, it needs nothing more.
+
 ## Install
 
 ```bash frame="terminal"
@@ -115,7 +119,7 @@ use nest_rs::http::controller;
 use nest_rs::throttler::ThrottlerGuard;
 
 #[controller(path = "/posts")]
-#[use_guards(ThrottlerGuard)]
+#[use_guards(AuthnGuard, ThrottlerGuard)]
 pub struct PostsController { /* … */ }
 ```
 
@@ -132,7 +136,7 @@ use nest_rs::http::{controller, routes};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
 #[controller(path = "/posts")]
-#[use_guards(ThrottlerGuard)]
+#[use_guards(AuthnGuard, ThrottlerGuard)]
 pub struct PostsController { /* … */ }
 
 #[routes]

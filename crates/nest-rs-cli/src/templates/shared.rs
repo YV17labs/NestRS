@@ -451,9 +451,13 @@ the caller:
   scope challenge, on a capability no table holds (`#[subject] pub struct
   Exporting;`, granted with `ab.can(Action::Manage, Exporting)`), and no mask:
   the answer is no row.
-- `#[public]` — no gate and no mask: a caller with no credential is admitted. It
-  is an opening, written on purpose; behind an upgrade or an MCP endpoint that
-  authenticates, where it could open nothing, it refuses the boot.
+- `#[public(Action, Subject)]` — the same arguments, the same gate and the same
+  mask, on the ability a caller with no credential has: `define_visitor`'s, or
+  `define`'s for a valid token. It is what a visitor's read says.
+- `#[public]` — a caller with no credential is admitted, and the unit reads
+  nothing a grant guards. It is an opening, written on purpose; behind an upgrade
+  or an MCP endpoint that authenticates, where it could open nothing, it refuses
+  the boot, and a rate limit, which identifies no one, covers no unit without it.
 
 **Rows are ability-scoped, and the guards are what install the scope.** `Repo`
 filters every read by the caller's ambient `Ability`; with none installed a read
@@ -461,12 +465,13 @@ denies every row rather than returning them unscoped. A scaffolded HTTP route or
 WebSocket gateway is guarded already — `nestrs g http` and `g ws` bind the two
 guards and write the auth adapter they come from — a GraphQL operation or an
 MCP tool `nestrs g graphql|mcp` writes over a port with no entity is gated on
-the `#[subject]` it writes beside the service, and an operation that declares
-`#[public]` answers no entity data. Before an operation serves real rows, it
-declares `#[authorize]` on the entity they come from — one gated on the port's
-`#[subject]` re-points its posture to the entity, since a subject masks
-nothing — and its edge is wired: the guards on the struct, and the edge's authz
-module imported in that adapter's `module.rs`:
+the `#[subject]` it writes beside the service, and an operation that declares a
+bare `#[public]` answers no entity data. Before an operation serves real rows, it
+declares `#[authorize]` on the entity they come from, or `#[public(Read, Entity)]`
+where a visitor reads them — one gated on the port's `#[subject]` re-points its
+posture to the entity, since a subject masks nothing — and its edge is wired: the
+guards on the struct, and the edge's authz module imported in that adapter's
+`module.rs`:
 
 | Edge | `#[use_guards(…)]` on the struct | Imported in `module.rs` |
 |---|---|---|
@@ -502,8 +507,8 @@ if let Some(user_id) = actor.sub.user_id() {
 ```
 
 `define` answers for an authenticated actor; `define_visitor` answers for a
-caller with no token, on what `#[public]` opens — a `#[public]` route reached
-*with* a valid token uses `define`. `nestrs g resource` prints the lines to paste
+caller with no token, on what `#[public(Action, Subject)]` opens — such a route
+reached *with* a valid token uses `define`. `nestrs g resource` prints the lines to paste
 for the resource it just generated.
 
 ## Errors

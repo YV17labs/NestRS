@@ -72,6 +72,16 @@ pub fn current_ability() -> Option<Arc<Ability>> {
     (!withheld || current_executor_scope() == Some(ExecutorScope::Job)).then_some(held)
 }
 
+/// Whether [`current_ability`] answers none because of a visitor's ability the
+/// running unit holds off the unit naming its read: a nested GraphQL field, a
+/// relation's batch. A unit whose own posture names no read says so by
+/// [`UnmaskedReply`], and a line there has a posture to ask for.
+pub fn visitors_read_unnamed() -> bool {
+    installed().is_some_and(|held| held.is_visitor())
+        && nest_rs_core::ambient::<VisitorReadNamed>().is_none()
+        && nest_rs_core::ambient::<UnmaskedReply>().is_none()
+}
+
 /// Ambient on a unit whose `#[public(Action, Entity)]` admitted a visitor: what
 /// that visitor reads is named, so its rows and its fields are its grant's. What
 /// runs off that unit, a nested GraphQL field or a relation's batch, names nothing,

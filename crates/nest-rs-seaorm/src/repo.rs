@@ -1,6 +1,7 @@
 use std::any::TypeId;
 use std::marker::PhantomData;
 
+use nest_rs_authz::__private::visitors_read_unnamed;
 use nest_rs_authz::{Action, Predicate, current_ability};
 use nest_rs_database::{ExecutorScope, atomic, current_executor_scope};
 use sea_orm::sea_query::{Condition, Expr, ExprTrait, OnConflict};
@@ -68,6 +69,19 @@ pub(crate) fn barred_from_class<E: EntityTrait>(action: Action) -> bool {
 /// The route answers `200 []`, or the write `RecordNotUpdated`, which reads as a
 /// business bug: this event is the only place the cause shows.
 fn denying_for_want_of_an_ability<E: EntityTrait>(action: Action) {
+    if visitors_read_unnamed() {
+        tracing::warn!(
+            target: crate::target::ORM,
+            entity = std::any::type_name::<E>(),
+            ?action,
+            scope = ?current_executor_scope(),
+            hint = "a visitor reads only inside the unit naming its read, #[public(Read, Entity)]: \
+                    a nested GraphQL field or a relation's batch names none and takes no posture, \
+                    so read it in that unit, or answer it to a caller a token backs",
+            "a visitor's read outside the unit naming it — denying all rows",
+        );
+        return;
+    }
     tracing::warn!(
         target: crate::target::ORM,
         entity = std::any::type_name::<E>(),
@@ -1232,6 +1246,39 @@ mod tests {
             "{updated:?}"
         );
         assert_eq!(hooked::SAVES.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A visitor's ability is held and withheld where no line names its read, a
+    /// nested field's or a relation's batch's, and that field has no posture to
+    /// write: the line says so rather than "no ambient Ability".
+    #[tokio::test]
+    async fn a_visitors_read_off_the_unit_naming_it_says_what_withheld_it() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let visitor = AbilityBuilder::new().build_visitor().expect("no rule");
+
+        let barred = nest_rs_core::with_ambient(
+            std::sync::Arc::new(nest_rs_authz::__private::AmbientAbility::new(visitor)),
+            async { barred_from_class::<widget::Entity>(Action::Read) },
+        )
+        .await;
+
+        assert!(barred, "a withheld read still fails closed");
+        logs.expect_none(
+            crate::target::ORM,
+            "no ambient Ability outside a worker job — denying all rows",
+        );
+        let event = logs.expect_one(
+            crate::target::ORM,
+            "a visitor's read outside the unit naming it — denying all rows",
+        );
+        assert_eq!(event.level, "warn");
+        assert!(
+            event
+                .field("hint")
+                .is_some_and(|hint| hint.contains("nested GraphQL field")),
+            "{:?}",
+            event.fields,
+        );
     }
 
     #[tokio::test]

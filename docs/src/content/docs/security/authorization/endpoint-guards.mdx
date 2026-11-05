@@ -185,8 +185,9 @@ as a route does — nothing copies it anywhere. The gate is the guard that
 attaches it, and that guard runs only through the module that declares it.
 Omit the module and there is nothing to read — the schema is anonymous because
 it was never authenticated, not because a guard was left out of a list. With
-no guard at the request at all, the boot says so once:
-`no guard runs at the /graphql request — graphql operations run unguarded`.
+no guard at the request at all, the boot says so once, on `nest_rs::layers`:
+`no guard at the request`, with `surface="graphql"`,
+`then="runs #[public] units only"` and what to write in its `hint`.
 
 A dataloader batch carries what its request carries, so relations that fan out
 across batches run under the same ability, on the pool — scoped without the
@@ -271,9 +272,9 @@ error in band (`isError: true`), and rolls back otherwise.
 `/mcp` is **gated** (`Posture::Gated`): no posture declared per request, so a
 pooled `AuthnGuard` refuses an anonymous call. **With no guard at its request —
 neither pool nor endpoint guards — it denies every request**, said once at boot
-on `nest_rs::layers` (`a gated endpoint runs no guard at its request; it denies
-every request`) and once per refusal, so a missing wiring tells itself apart
-from a refused caller. A global `ThrottlerGuard` alone is enough to open it to
+on `nest_rs::layers` (`no guard at the request`, with `surface="mcp"` and
+`then="denies every unit"`) and once per refusal, so a missing wiring tells itself
+apart from a refused caller. A global `ThrottlerGuard` alone is enough to open it to
 whoever the throttler admits.
 
 An operation these guards cover needs no posture of its own, as a route needs none

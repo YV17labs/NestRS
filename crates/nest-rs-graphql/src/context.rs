@@ -16,10 +16,9 @@ use nest_rs_core::__private::serde::Serialize;
 use nest_rs_core::__private::serde::de::DeserializeOwned;
 use nest_rs_core::code;
 use nest_rs_core::{
-    Container, Discovery, Handler, Posture, ReachableProviders, UngatedDiscoveryError, UnitContext,
+    Container, Handler, Posture, ReachableProviders, UngatedDiscoveryError, UnitContext,
 };
-use nest_rs_guards::__private::global_guards_active;
-use nest_rs_http::__private::{EndpointGuardsMeta, RequestDeadline, with_view};
+use nest_rs_http::__private::{RequestDeadline, with_view};
 use nest_rs_http::{
     Body, BodyError, Endpoint, HeaderValue, HttpError, Request, Response, ResponseError,
     StatusCode, current_body_limit, declare_endpoint, header,
@@ -28,7 +27,6 @@ use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
 
 use crate::module::GraphqlModule;
 use crate::operation_units::OperationUnits;
-use crate::view::GraphqlView;
 
 /// A per-request forwarder, submitted via `inventory`, attaching values from
 /// the HTTP request (and the container) to the GraphQL request.
@@ -120,25 +118,6 @@ impl OperationBridge {
     /// a container no app sealed.
     pub(crate) fn new(container: Container) -> Result<Self, UngatedDiscoveryError> {
         let active = active_seeds(&container)?;
-        let pool = global_guards_active(&container);
-        let endpoint_guards = Discovery::new(&container)
-            .meta::<EndpointGuardsMeta>()
-            .iter()
-            .any(|declared| declared.meta.endpoint() == TypeId::of::<GraphqlView>());
-        if pool || endpoint_guards {
-            tracing::debug!(
-                target: crate::TARGET,
-                pool,
-                endpoint_guards,
-                "graphql operations gated",
-            );
-        } else {
-            tracing::warn!(
-                target: crate::TARGET,
-                mode = "unguarded",
-                "no guard runs at the /graphql request — graphql operations run unguarded",
-            );
-        }
         let seeds: Arc<[_]> = active.iter().map(|reg| reg.seed).collect();
         let connection_seeds: Arc<[_]> = active
             .iter()

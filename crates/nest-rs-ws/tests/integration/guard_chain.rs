@@ -542,10 +542,8 @@ mod posture {
         );
         assert!(!said.contains("said"), "that one opened itself: {said}");
         assert!(
-            said.contains("#[use_guards")
-                && said.contains("GlobalGuards")
-                && said.contains("#[public]"),
-            "the refusal names every remedy: {said}",
+            said.contains(nest_rs_http::__private::NO_GUARD_REMEDY),
+            "the one remedy of a surface no guard runs at: {said}",
         );
     }
 
@@ -567,7 +565,8 @@ mod posture {
     async fn a_gateway_declaring_hooks_alone_refuses_the_boot() {
         let said = refusal::<HooksOnlyModule>().await;
         assert!(
-            said.contains("/ws/open/hooks") && said.contains("#[use_guards"),
+            said.contains("/ws/open/hooks")
+                && said.contains(nest_rs_http::__private::NO_GUARD_REMEDY),
             "its hooks run on any connection, and no line says so: {said}",
         );
     }
@@ -599,10 +598,8 @@ mod posture {
         let said = refusal::<GuardedMessagesModule>().await;
         assert!(said.contains("/ws/open/guarded-messages"), "{said}");
         assert!(
-            said.contains("#[use_guards")
-                && said.contains("GlobalGuards")
-                && said.contains("#[public]"),
-            "the refusal names every remedy: {said}",
+            said.contains(nest_rs_http::__private::NO_GUARD_REMEDY),
+            "the one remedy of a surface no guard runs at: {said}",
         );
     }
 

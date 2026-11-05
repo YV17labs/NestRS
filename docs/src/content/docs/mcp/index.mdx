@@ -86,7 +86,7 @@ declare for it, either alone when the other is missing, and with neither it is
 leak unauthenticated. The boot says so once, on `nest_rs::layers`:
 
 ```text frame="terminal"
-WARN nest_rs::layers: a gated endpoint runs no guard at its request; it denies every request path="/mcp" kind="mcp"
+WARN nest_rs::layers: no guard at the request surface="mcp" path="/mcp" then="denies every unit" hint="list `GlobalGuards<(...)>` in the providers of the module the app boots, bind `#[use_guards(...)]` on the host, `EndpointGuards<View, (...)>` on an endpoint carrying units, or open it on purpose: `#[public]` on a route, a message or a GraphQL operation, `McpModule::for_root(McpAccess::Public)` on an MCP endpoint"
 ```
 
 A `#[public]` operation there could open nothing, so the boot refuses it and names

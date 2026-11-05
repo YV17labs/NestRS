@@ -13,6 +13,7 @@ use http::{Extensions, StatusCode};
 use nest_rs_core::__private::Withheld;
 use nest_rs_core::{DecodeError, Problem, ToProblem, code};
 
+use crate::endpoint_guards::NO_GUARD_REMEDY;
 use crate::headers::one_of;
 use crate::origin::OriginScheme;
 use crate::problem::{ProblemDetails, problem_response, status_of};
@@ -684,9 +685,7 @@ pub(crate) enum RouteError {
     /// Routes no guard covers and no `#[public]` opens, every one of them.
     #[error(
         "routes no guard covers and none marks `#[public]`: {routes} — a route runs a guard or \
-         is open on purpose; bind a guard with `#[use_guards(...)]` on the controller or the \
-         route, or declare the app's global pool (`GlobalGuards<(...)>` in the providers of the \
-         module the app boots), or mark a route open on purpose with `#[public]`"
+         is open on purpose; {NO_GUARD_REMEDY}"
     )]
     Unguarded { routes: String },
     /// Self-mounts declared gated that run no guard and carry no unit, every

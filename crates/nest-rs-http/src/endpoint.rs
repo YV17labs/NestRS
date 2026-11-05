@@ -179,8 +179,6 @@ pub struct HttpEndpointMeta {
 pub(crate) struct Carried {
     /// The view's type, which [`EndpointGuards`](crate::EndpointGuards) names.
     pub(crate) view: TypeId,
-    /// The view's name, as a boot error says it.
-    pub(crate) name: &'static str,
 }
 
 /// The requests of a self-mount on which the transport checks a browser's
@@ -277,7 +275,6 @@ impl HttpEndpointMeta {
     pub fn carries<V: CarriedView>(mut self) -> Self {
         self.carried = Some(Carried {
             view: TypeId::of::<V>(),
-            name: std::any::type_name::<V>(),
         });
         self
     }

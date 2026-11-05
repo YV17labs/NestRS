@@ -25,7 +25,9 @@ use crate::detached::DetachedWork;
 use crate::drain::Drain;
 use crate::edge::EdgeEndpoint;
 use crate::endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta};
-use crate::endpoint_guards::{RequestStage, check_declarations_reached, request_stage};
+use crate::endpoint_guards::{
+    NO_GUARD_REMEDY, RequestStage, check_declarations_reached, no_guard_then, request_stage,
+};
 use crate::error::RouteError;
 use crate::fallback::{
     Claims, FALLBACK, FALLBACK_SITE, Fallback, HttpFallbackMeta, Unrouted, WithFallback,
@@ -440,6 +442,18 @@ impl HttpTransport {
     }
 }
 
+/// The one line of a surface the boot lets serve with no guard at its request.
+fn no_guard_at_the_request(surface: &str, path: &str, then: &'static str) {
+    tracing::warn!(
+        target: nest_rs_core::target::LAYERS,
+        surface,
+        path,
+        then,
+        hint = NO_GUARD_REMEDY,
+        "no guard at the request",
+    );
+}
+
 #[async_trait]
 impl Transport for HttpTransport {
     async fn configure(&mut self, container: &Container) -> Result<()> {
@@ -661,16 +675,20 @@ impl Transport for HttpTransport {
                     StageKind::SelfMount,
                 ))),
                 RequestStage::Denied => {
-                    tracing::warn!(
-                        target: nest_rs_core::target::LAYERS,
-                        path = d.meta.path(),
-                        kind = d.meta.label(),
-                        units = d.meta.carried().map(|units| units.name),
-                        hint = "list a global guard pool, declare EndpointGuards for these \
-                                units, or open the endpoint in code",
-                        "a gated endpoint runs no guard at its request; it denies every request",
+                    no_guard_at_the_request(
+                        d.meta.label(),
+                        &routes.served(d.meta.path()),
+                        no_guard_then::DENIES_EVERY_UNIT,
                     );
-                    Some(Arc::new(DeniedStage::new(d.meta.path().to_owned())))
+                    Some(Arc::new(DeniedStage::new(routes.served(d.meta.path()))))
+                }
+                RequestStage::InBand => {
+                    no_guard_at_the_request(
+                        d.meta.label(),
+                        &routes.served(d.meta.path()),
+                        no_guard_then::RUNS_PUBLIC_UNITS_ONLY,
+                    );
+                    None
                 }
             };
             let chains = compose_site(container, handler, &SELF_MOUNT, stage)?;

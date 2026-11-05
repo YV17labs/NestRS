@@ -96,7 +96,9 @@ async fn resolver_reads_a_per_request_value_a_guard_attached() {
 /// API is a legitimate shape.
 mod an_unguarded_schema_announces_itself {
     use nest_rs_core::module;
-    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_core::target::LAYERS;
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+    use nest_rs_http::__private::NO_GUARD_REMEDY;
     use nest_rs_testing::{LogCapture, TestApp};
 
     #[resolver]
@@ -115,13 +117,34 @@ mod an_unguarded_schema_announces_itself {
     struct OpenModule;
 
     #[tokio::test]
-    async fn at_warn_naming_the_mode() {
+    async fn at_warn_saying_what_runs_and_what_to_write() {
         let logs = LogCapture::install();
         let app = TestApp::for_module::<OpenModule>()
             .await
             .expect("an unguarded schema boots — that is the point");
 
         assert_unguarded(&app, &logs).await;
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(GraphqlConfig {
+            path: "/gql".into(),
+            ..GraphqlConfig::default()
+        })],
+        providers = [OpenResolver],
+    )]
+    struct MovedModule;
+
+    /// The line says where the surface is served, wherever a deployment moves it.
+    #[tokio::test]
+    async fn at_the_path_it_is_served() {
+        let logs = LogCapture::install();
+        let _app = TestApp::for_module::<MovedModule>()
+            .await
+            .expect("an unguarded schema boots");
+
+        let event = logs.expect_one(LAYERS, "no guard at the request");
+        assert_eq!(event.field("path").as_deref(), Some("/gql"));
     }
 
     async fn assert_unguarded(app: &TestApp, logs: &LogCapture) {
@@ -133,12 +156,15 @@ mod an_unguarded_schema_announces_itself {
             .await;
         resp.assert_status_is_ok();
 
-        let event = logs.expect_one(
-            "nest_rs::graphql",
-            "no guard runs at the /graphql request — graphql operations run unguarded",
-        );
+        let event = logs.expect_one(LAYERS, "no guard at the request");
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("mode").as_deref(), Some("unguarded"));
+        assert_eq!(event.field("surface").as_deref(), Some("graphql"));
+        assert_eq!(event.field("path").as_deref(), Some("/graphql"));
+        assert_eq!(
+            event.field("then").as_deref(),
+            Some("runs #[public] units only")
+        );
+        assert_eq!(event.field("hint").as_deref(), Some(NO_GUARD_REMEDY));
     }
 }
 

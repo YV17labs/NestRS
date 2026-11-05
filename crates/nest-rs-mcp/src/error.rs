@@ -579,8 +579,8 @@ pub(crate) enum McpPostureError {
     #[error(
         "`#[public]` on {operations} can open nothing: no guard runs at the MCP endpoint's \
          request, so it denies every request — open the endpoint with \
-         `McpModule::for_root(McpAccess::Public)`, or list a global guard pool or \
-         `EndpointGuards<McpView, _>` and drop `#[public]`"
+         `McpModule::for_root(McpAccess::Public)`, or list `GlobalGuards<(...)>` or \
+         `EndpointGuards<McpView, (...)>` and drop `#[public]`"
     )]
     PublicBehindDenial { operations: String },
 }

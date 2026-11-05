@@ -543,12 +543,8 @@ async fn a_route_with_no_guard_and_no_public_refuses_the_boot_naming_every_such_
         "a route marked #[public] is open on purpose: {chain}",
     );
     assert!(
-        chain.contains("#[use_guards(") && chain.contains("GlobalGuards<(...)>"),
-        "the remedy names both ways to bind a guard: {chain}",
-    );
-    assert!(
-        chain.contains("#[public]"),
-        "…and the explicit opening: {chain}",
+        chain.contains(nest_rs_http::__private::NO_GUARD_REMEDY),
+        "the one remedy of a surface no guard runs at: {chain}",
     );
 }
 

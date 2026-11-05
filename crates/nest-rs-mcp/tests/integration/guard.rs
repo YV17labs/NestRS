@@ -83,12 +83,18 @@ async fn an_empty_pool_and_no_endpoint_guards_deny_initialize() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 
-    let announced = logs.expect_one(
-        "nest_rs::layers",
-        "a gated endpoint runs no guard at its request; it denies every request",
-    );
+    let announced = logs.expect_one("nest_rs::layers", "no guard at the request");
     assert_eq!(announced.level, "warn");
+    assert_eq!(announced.field("surface").as_deref(), Some("mcp"));
     assert_eq!(announced.field("path").as_deref(), Some("/mcp"));
+    assert_eq!(
+        announced.field("then").as_deref(),
+        Some("denies every unit")
+    );
+    assert_eq!(
+        announced.field("hint").as_deref(),
+        Some(nest_rs_http::__private::NO_GUARD_REMEDY)
+    );
     let denied = logs.expect_one(
         "nest_rs::layers",
         "request denied: the endpoint runs no guard at its request",

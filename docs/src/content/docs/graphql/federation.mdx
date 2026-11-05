@@ -152,20 +152,28 @@ overlaps `@key(fields: "id")`.
 
 `_entities` and `_service` are resolved by async-graphql's own `Query` root,
 *above* the merged root this framework composes — so the chain `#[operations]`
-emits inside a resolver body is not where they are gated. **The app-wide guard
-pool runs in front of both**, once per field, through a schema extension
-`GraphqlModule` installs on a subgraph and wherever the app lists a pool. Each
+emits inside a resolver body is not where they are gated. **Guards run in front of
+both**, once per field, through a schema extension `GraphqlModule` installs on a
+subgraph and wherever the app lists a pool: on `_entities` the app-wide pool, and on
+`_service` every guard the `/graphql` request ran, its `EndpointGuards` included. Each
 field is a `graphql.field` unit of role `federation`, inside the app's exception
-filters and interceptors. A `GlobalGuards<(AuthnGuard,)>` therefore refuses
-`_service` and `_entities` exactly as it refuses a `#[query]`, with the same
-native GraphQL error frame.
+filters and interceptors. `/graphql` admits an anonymous request, so this is where one
+is refused: a `GlobalGuards<(AuthnGuard,)>` answers `_service` and `_entities` as it
+answers a gated `#[query]`, `UNAUTHENTICATED` in the same native GraphQL error frame,
+and a router presents the token a caller would. An `AuthzGuard` with no `AuthnGuard`
+beside it refuses them too, a visitor's ability having no posture to answer to there.
 
-Two consequences worth reading twice:
+Four consequences worth reading twice:
 
-- **The pool is the whole chain there, because a federation field belongs to no
-  resolver.** The router calls it on the schema, so there is no `#[use_guards]`
-  scope to compose and no posture to read. An `#[entity]`'s own `#[use_guards]`
-  and `#[authorize]`/`#[public]` still run in its body, per reference.
+- **The pool is the whole chain on `_entities`, because a federation field belongs to
+  no resolver.** The router calls it on the schema, so there is no `#[use_guards]`
+  scope to compose and no posture to read. An `#[entity]`'s own `#[use_guards]` and
+  `#[authorize]`/`#[public]` still run in its body, per reference, and a pooled
+  `AuthnGuard` reaches none of them for an anonymous caller, its `#[public]` included.
+- **`EndpointGuards` alone leave `_entities` to each `#[entity]`.** Its posture is
+  mandatory, so what one opens is a line you read; `_service` has none, and refuses.
+- **A guard of your own decides in its `check`.** One admitting the anonymous
+  `/graphql` request reads `Posture::Gated`, the posture of both fields, to refuse them.
 - **A pooled guard runs once per `_entities` operation, not once per
   representation.** The gate runs it at the field; the `#[entity]` bodies
   reached through it compose everything *except* the pool, precisely so the
@@ -174,10 +182,10 @@ Two consequences worth reading twice:
 <Aside type="danger" title="A subgraph sits behind a router, not on the internet">
 **`_service` is not covered by `<PREFIX>_GRAPHQL__INTROSPECTION`** — that
 switch gates `__schema`, and `_service`'s field is unconditionally visible. A
-subgraph with no guards therefore publishes its own SDL to anyone who can reach
-it, introspection on or off. Guards close that (above); the network is
-still the outer answer — serve a subgraph where the router is, and let the
-router be the thing clients reach.
+subgraph whose guards identify no one therefore publishes its own SDL to anyone who
+can reach it, introspection on or off. An authentication guard closes that (above);
+the network is still the outer answer — serve a subgraph where the router is, and let
+the router be the thing clients reach.
 
 That is why federation is opt-in and why the demo app in this repo leaves it
 off: it is a standalone API on a public address with no router in front of it,

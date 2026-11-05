@@ -225,8 +225,9 @@ pub struct GraphqlConfig {
     /// this is `false` **fails the boot**.
     ///
     /// Default `false`: **`_service` cannot be switched off** —
-    /// `introspection` does not cover it — so a subgraph publishes its
-    /// SDL to anyone who can reach it, and belongs behind a router.
+    /// `introspection` does not cover it — so a subgraph whose guards identify
+    /// no one publishes its SDL to anyone who can reach it, and belongs behind a
+    /// router.
     ///
     /// Read from `<PREFIX>_GRAPHQL__FEDERATION`.
     pub federation: bool,

@@ -759,21 +759,40 @@ async fn a_strategy_reads_the_routed_request_and_leaves_its_body_to_the_handler(
         .assert_status(StatusCode::UNAUTHORIZED);
 }
 
-mod graphql {
-    use async_trait::async_trait;
-    use nest_rs_authn::{AuthError, AuthnGuard, Strategy};
-    use nest_rs_core::{injectable, module};
-    use nest_rs_graphql::async_graphql::Result as GraphqlResult;
-    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+/// Authenticates `Bearer good`, refuses any other bearer, and reports a
+/// request carrying none as missing credentials.
+#[injectable]
+#[derive(Default)]
+struct BearerStrategy;
 
-    use nest_rs_http::HttpModule;
-    use nest_rs_http::Request;
+#[async_trait]
+impl Strategy for BearerStrategy {
+    type Principal = Who;
+
+    async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError> {
+        match req.headers().get(nest_rs_http::header::AUTHORIZATION) {
+            None => Err(AuthError::MissingCredentials),
+            Some(bearer) if bearer == "Bearer good" => Ok(Who("ada")),
+            Some(_) => Err(AuthError::InvalidToken),
+        }
+    }
+}
+
+type BearerAuthn = AuthnGuard<BearerStrategy>;
+
+mod graphql {
+    use nest_rs_core::module;
+    use nest_rs_graphql::async_graphql::{Result as GraphqlResult, SimpleObject};
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
+
+    use nest_rs_http::{EndpointGuards, HttpModule};
     use nest_rs_http::{StatusCode, header};
     use nest_rs_testing::{LogCapture, TestApp};
 
     use super::{
-        REACHED, StalledAuthn, StalledStrategy, assert_refused_at_the_bound,
-        assert_the_strategy_was_waited_out, edge, within_twice_the_bound,
+        BearerAuthn, BearerStrategy, REACHED, StalledAuthn, StalledStrategy,
+        assert_refused_at_the_bound, assert_the_strategy_was_waited_out, edge,
+        within_twice_the_bound,
     };
 
     #[resolver]
@@ -828,27 +847,6 @@ mod graphql {
         assert_the_strategy_was_waited_out(&logs);
     }
 
-    /// Authenticates `Bearer good`, refuses any other bearer, and reports a
-    /// request carrying none as missing credentials.
-    #[injectable]
-    #[derive(Default)]
-    struct BearerStrategy;
-
-    #[async_trait]
-    impl Strategy for BearerStrategy {
-        type Principal = super::Who;
-
-        async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError> {
-            match req.headers().get(header::AUTHORIZATION) {
-                None => Err(AuthError::MissingCredentials),
-                Some(bearer) if bearer == "Bearer good" => Ok(super::Who("ada")),
-                Some(_) => Err(AuthError::InvalidToken),
-            }
-        }
-    }
-
-    type BearerAuthn = AuthnGuard<BearerStrategy>;
-
     #[module(
         imports = [GraphqlModule],
         providers = [BearerStrategy, BearerAuthn, TickResolver],
@@ -860,6 +858,152 @@ mod graphql {
         providers = [nest_rs_guards::GlobalGuards<(BearerAuthn,)>],
     )]
     struct TheGraphqlPostAdmitsAnAnonymousCallerAndRefusesABadBearerApp;
+
+    /// A subgraph: `Widget`'s `@key` is what its `#[entity]` takes, and `#[public]`
+    /// says what an anonymous reference may reach once the fields a router calls
+    /// let it through.
+    #[derive(SimpleObject)]
+    #[graphql(crate = "::nest_rs_graphql::async_graphql")]
+    struct Widget {
+        id: i32,
+    }
+
+    #[resolver]
+    struct WidgetsResolver;
+
+    #[operations]
+    impl WidgetsResolver {
+        #[entity]
+        #[public]
+        async fn find_widget_by_id(&self, id: i32) -> GraphqlResult<Widget> {
+            Ok(Widget { id })
+        }
+    }
+
+    fn subgraph() -> nest_rs_graphql::GraphqlSetup {
+        GraphqlModule::for_root(GraphqlConfig {
+            federation: true,
+            ..GraphqlConfig::default()
+        })
+    }
+
+    #[module(
+        imports = [subgraph()],
+        providers = [BearerStrategy, BearerAuthn, WidgetsResolver],
+    )]
+    struct BearerSubgraphModule;
+
+    #[module(
+        imports = [BearerSubgraphModule],
+        providers = [nest_rs_guards::GlobalGuards<(BearerAuthn,)>],
+    )]
+    struct PooledSubgraphApp;
+
+    #[module(
+        imports = [BearerSubgraphModule],
+        providers = [EndpointGuards<GraphqlView, (BearerAuthn,)>],
+    )]
+    struct EndpointGuardedSubgraphApp;
+
+    const SDL: &str = "{ _service { sdl } }";
+    const REFERENCE: &str = r#"{ _entities(representations: [{ __typename: "Widget", id: 7 }]) { ... on Widget { id } } }"#;
+
+    /// `query` over `/graphql`, under `bearer` when one is presented.
+    async fn subgraph_answer(
+        app: &TestApp,
+        query: &str,
+        bearer: Option<&str>,
+    ) -> serde_json::Value {
+        let mut request = app.http().post("/graphql");
+        if let Some(bearer) = bearer {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {bearer}"));
+        }
+        let answered = request
+            .body_json(&serde_json::json!({ "query": query }))
+            .send()
+            .await;
+        answered.assert_status(StatusCode::OK);
+        answered
+            .json()
+            .await
+            .value()
+            .deserialize::<serde_json::Value>()
+    }
+
+    /// `body` refused for want of a principal, as every gated unit is.
+    fn assert_anonymous_refused(body: &serde_json::Value, field: &str) {
+        assert!(body["data"][field].is_null(), "{field} answered: {body}");
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "UNAUTHENTICATED",
+            "{body}",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_anonymous_caller_is_refused_the_sdl_under_a_pooled_authn_guard() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<PooledSubgraphApp>()
+            .await
+            .expect("a subgraph under a pooled AuthnGuard boots");
+
+        let anonymous = subgraph_answer(&app, SDL, None).await;
+        assert_anonymous_refused(&anonymous, "_service");
+        let line = logs.expect_one(nest_rs_authn::TARGET, "guard denied the federation field");
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("field").as_deref(), Some("_service"));
+        assert_eq!(line.field("reason").as_deref(), Some("anonymous_caller"));
+
+        let router = subgraph_answer(&app, SDL, Some("good")).await;
+        assert!(
+            router["data"]["_service"]["sdl"]
+                .as_str()
+                .is_some_and(|sdl| sdl.contains("Widget")),
+            "a caller the guard identified reads it: {router}",
+        );
+    }
+
+    /// The reference composition lists no pool: `/graphql`'s `EndpointGuards` admit
+    /// the anonymous request, and `_service` states no posture to refuse it with.
+    #[tokio::test]
+    async fn an_anonymous_caller_is_refused_the_sdl_under_endpoint_guards() {
+        let app = TestApp::for_module::<EndpointGuardedSubgraphApp>()
+            .await
+            .expect("a subgraph under EndpointGuards boots");
+
+        let anonymous = subgraph_answer(&app, SDL, None).await;
+        assert_anonymous_refused(&anonymous, "_service");
+
+        let router = subgraph_answer(&app, SDL, Some("good")).await;
+        assert!(
+            router["data"]["_service"]["sdl"].is_string(),
+            "a caller the guard identified reads it: {router}",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_anonymous_reference_is_refused_under_a_pooled_authn_guard() {
+        let app = TestApp::for_module::<PooledSubgraphApp>()
+            .await
+            .expect("a subgraph under a pooled AuthnGuard boots");
+
+        let anonymous = subgraph_answer(&app, REFERENCE, None).await;
+        assert_anonymous_refused(&anonymous, "_entities");
+
+        let router = subgraph_answer(&app, REFERENCE, Some("good")).await;
+        assert_eq!(router["data"]["_entities"][0]["id"], 7, "{router}");
+    }
+
+    /// `EndpointGuards` add to the request alone: each `#[entity]` states its own
+    /// posture, so what this one opens stays open.
+    #[tokio::test]
+    async fn an_anonymous_reference_reaches_a_public_entity_under_endpoint_guards() {
+        let app = TestApp::for_module::<EndpointGuardedSubgraphApp>()
+            .await
+            .expect("a subgraph under EndpointGuards boots");
+
+        let anonymous = subgraph_answer(&app, REFERENCE, None).await;
+        assert_eq!(anonymous["data"]["_entities"][0]["id"], 7, "{anonymous}");
+    }
 
     /// `/graphql` is in band: an anonymous caller reaches a `#[public]` query,
     /// while a bearer the caller presented is still verified, and a bad one is
@@ -908,12 +1052,13 @@ mod mcp {
     use nest_rs_http::HttpModule;
     use nest_rs_http::StatusCode;
     use nest_rs_mcp::{McpError, mcp, tools};
-    use nest_rs_testing::mcp::initialize_request;
+    use nest_rs_testing::mcp::{call_tool, initialize_request};
     use nest_rs_testing::{LogCapture, TestApp};
 
     use super::{
-        REACHED, StalledAuthn, StalledStrategy, assert_refused_at_the_bound,
-        assert_the_strategy_was_waited_out, edge, within_twice_the_bound,
+        BearerAuthn, BearerStrategy, REACHED, StalledAuthn, StalledStrategy,
+        assert_refused_at_the_bound, assert_the_strategy_was_waited_out, edge,
+        within_twice_the_bound,
     };
 
     #[mcp]
@@ -965,6 +1110,32 @@ mod mcp {
         refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
         assert_the_strategy_was_waited_out(&logs);
     }
+
+    #[module(providers = [
+        BearerStrategy,
+        BearerAuthn,
+        TickTool,
+        nest_rs_guards::GlobalGuards<(BearerAuthn,)>,
+    ])]
+    struct PooledBearerApp;
+
+    /// The operation runs on rmcp's task, so the pool's unit check reads the
+    /// principal the `/mcp` request attached across it.
+    #[tokio::test]
+    async fn a_pooled_guard_admits_the_operation_its_request_identified() {
+        let app = TestApp::for_module::<PooledBearerApp>()
+            .await
+            .expect("an #[mcp] host under a pooled AuthnGuard boots");
+
+        let answered = call_tool(
+            app.http(),
+            nest_rs_mcp::DEFAULT_PATH,
+            "tick",
+            Some("Bearer good"),
+        )
+        .await;
+        assert!(answered.contains(REACHED), "{answered}");
+    }
 }
 
 mod ws {
@@ -975,8 +1146,9 @@ mod ws {
     use nest_rs_ws::{WsModule, gateway, messages};
 
     use super::{
-        REACHED, StalledAuthn, StalledStrategy, assert_refused_at_the_bound,
-        assert_the_strategy_was_waited_out, edge, within_twice_the_bound,
+        BearerAuthn, BearerStrategy, REACHED, StalledAuthn, StalledStrategy,
+        assert_refused_at_the_bound, assert_the_strategy_was_waited_out, edge,
+        within_twice_the_bound,
     };
 
     const PATH: &str = "/ws/stalled";
@@ -1028,6 +1200,50 @@ mod ws {
 
         // Filed once, on the guard's target: one denial, one line.
         logs.expect_none(nest_rs_core::target::LAYERS, super::DENIED);
+    }
+
+    #[gateway(path = "/ws/bearer")]
+    struct BearerGateway;
+
+    #[messages]
+    impl BearerGateway {
+        #[subscribe_message("tick")]
+        async fn tick(&self) -> &'static str {
+            REACHED
+        }
+    }
+
+    #[module(
+        imports = [WsModule],
+        providers = [
+            BearerStrategy,
+            BearerAuthn,
+            BearerGateway,
+            nest_rs_guards::GlobalGuards<(BearerAuthn,)>,
+        ],
+    )]
+    struct PooledBearerApp;
+
+    /// A message is a unit of its own, so the pool's unit check reads the
+    /// principal the upgrade attached across the connection.
+    #[tokio::test]
+    async fn a_pooled_guard_admits_the_message_its_upgrade_identified() {
+        let app = TestApp::builder()
+            .module::<PooledBearerApp>()
+            .build_ws()
+            .await
+            .expect("a gateway under a pooled AuthnGuard boots");
+
+        let mut socket = app
+            .socket("/ws/bearer")
+            .header("authorization", "Bearer good")
+            .connect()
+            .await;
+        socket.send("tick", serde_json::Value::Null).await;
+        let answered = socket.next_envelope().await;
+        assert_eq!(answered["data"], REACHED, "{answered}");
+
+        app.shutdown().await.expect("the transport stops cleanly");
     }
 }
 

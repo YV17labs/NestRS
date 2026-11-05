@@ -7,9 +7,10 @@
 //! front of a root field: the field's unit runs on `resolve`, the ceiling on
 //! `parse_query`.
 //!
-//! A federation field belongs to no resolver, so its guard stage is the
+//! A federation field belongs to no resolver. `_entities`' guard stage is the
 //! app-wide pool alone, which an `#[entity]`'s own site therefore stops
-//! composing.
+//! composing; `_service` states no posture and has no member stating one, so its
+//! stage is every guard the `/graphql` request ran.
 
 use std::any::TypeId;
 use std::sync::{Arc, Mutex};
@@ -25,19 +26,20 @@ use async_graphql::{
 };
 use nest_rs_config::Namespaced as _;
 use nest_rs_core::__private::{
-    GuardStage, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers, declare_handler,
-    declare_site,
+    GuardStage, GuardStageFactory, HandlerDeclaration, MetaLevels, Site, SiteDeclaration,
+    SiteLayers, declare_handler, declare_site,
 };
 use nest_rs_core::anyhow;
 use nest_rs_core::{Container, Handler, Posture};
 use nest_rs_guards::__private::{global_guards_active, resolve_global_chain};
+use nest_rs_http::__private::carried_request_chain;
 
 use crate::config::GraphqlConfig;
 use crate::error::{FieldFailure, Unserved, opaque_error};
 use crate::operation::{
     DENIED_FEDERATION_FIELD, FieldGuardStage, FieldUnit, ROOT_FIELD, in_field_unit,
 };
-use crate::view::FieldRole;
+use crate::view::{FieldRole, GraphqlView};
 
 /// The `Query`-root field a router calls to read a subgraph's SDL.
 pub(crate) const SERVICE_FIELD: &str = "_service";
@@ -58,19 +60,20 @@ static SERVICE: Handler = federation_field(SERVICE_FIELD);
 static ENTITIES: Handler = federation_field(ENTITIES_FIELD);
 
 /// The site `_service` runs.
-static SERVICE_SITE: Site = declare_site(&SERVICE, FEDERATION_FIELD);
+static SERVICE_SITE: Site = declare_site(&SERVICE, federation_field_site(service_guard_stage));
 /// The site `_entities` runs.
-static ENTITIES_SITE: Site = declare_site(&ENTITIES, FEDERATION_FIELD);
+static ENTITIES_SITE: Site = declare_site(&ENTITIES, federation_field_site(entities_guard_stage));
 
 /// A federation root field's declaration: a root field no resolver declares,
-/// gated by the app-wide pool alone, inside the app's filters and
-/// interceptors.
-const FEDERATION_FIELD: SiteDeclaration = SiteDeclaration {
-    layers: SiteLayers::default,
-    global: ROOT_FIELD,
-    guard_stage: Some(federation_guard_stage),
-    class_gate: None,
-};
+/// gated by `guard_stage` alone, inside the app's filters and interceptors.
+const fn federation_field_site(guard_stage: GuardStageFactory) -> SiteDeclaration {
+    SiteDeclaration {
+        layers: SiteLayers::default,
+        global: ROOT_FIELD,
+        guard_stage: Some(guard_stage),
+        class_gate: None,
+    }
+}
 
 /// A federation root field's handler: a field no resolver declares.
 const fn federation_field(field: &'static str) -> Handler {
@@ -85,16 +88,27 @@ const fn federation_field(field: &'static str) -> Handler {
     })
 }
 
+/// Every guard the `/graphql` request ran, the pool and its `EndpointGuards`:
+/// `_service` answers the whole SDL and no member's posture stands behind it, so
+/// a guard admitting the anonymous request is the one thing left to refuse it.
+fn service_guard_stage(
+    container: &Container,
+    _: &Handler,
+) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
+    let chain = carried_request_chain::<GraphqlView>(container, "POST /graphql (_service)")?;
+    Ok(FieldGuardStage::of(chain, DENIED_FEDERATION_FIELD))
+}
+
 /// The app-wide pool, the whole chain of a field that belongs to no resolver;
 /// none when the app lists no pool, so an `#[entity]` folds it itself.
-fn federation_guard_stage(
+fn entities_guard_stage(
     container: &Container,
     _: &Handler,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
     if !gate_runs(container) {
         return Ok(None);
     }
-    let chain = resolve_global_chain(container, "POST /graphql (federation)");
+    let chain = resolve_global_chain(container, "POST /graphql (_entities)");
     Ok(FieldGuardStage::of(chain, DENIED_FEDERATION_FIELD))
 }
 

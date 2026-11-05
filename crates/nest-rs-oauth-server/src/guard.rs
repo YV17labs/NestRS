@@ -5,9 +5,8 @@ use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::Poll;
 
-use nest_rs_authn::__private::{Verdict, authenticate};
+use nest_rs_authn::__private::{Verdict, authenticate, check_unit};
 use nest_rs_authn::{AUTHENTICATE_TIMEOUT, Strategy};
 use nest_rs_core::{
     ChallengeScheme, Container, ContainerBuilder, DenialDocument, Discoverable, Layer, Net,
@@ -186,13 +185,12 @@ impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {
         }
     }
 
-    /// Its decision is the request's: a unit reaches this check only from the
-    /// pool, whose `check_http` already authenticated the request carrying it.
-    // Not an `async fn`: its zero-sized future boxes into no allocation on
-    // every unit the pool runs it on.
+    /// A unit reaches this check only from the pool, whose `check_http` already
+    /// authenticated the request carrying it, and a request running no guard
+    /// (`McpAccess::Public`) carries a gated unit no principal reached.
     fn check<'s, 'c, 'u, 'fut>(
         &'s self,
-        _cx: &'c mut UnitContext<'u>,
+        cx: &'c mut UnitContext<'u>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
     where
         's: 'fut,
@@ -200,7 +198,7 @@ impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {
         'u: 'fut,
         Self: 'fut,
     {
-        Box::pin(std::future::poll_fn(|_| Poll::Ready(Ok(()))))
+        check_unit::<S::Principal>(cx)
     }
 
     fn phase(&self) -> GuardPhase {
@@ -336,19 +334,35 @@ mod tests {
         meta: MetaLevels::default,
     });
 
-    #[tokio::test]
-    async fn it_admits_each_unit_of_the_request_it_authenticated_without_allocating() {
+    /// The guard's `check` on a gated unit, the future's size read before it runs.
+    async fn checked() -> (usize, Result<(), Denial>) {
         let guard = ClientAuthenticationGuard::new(Arc::new(Never));
         let mut view = Operation;
         let mut cx = nest_rs_core::__private::new_unit_context(&OPERATION, &mut view, None, None);
+        let check = guard.check(&mut cx);
+        (std::mem::size_of_val(&*check), check.await)
+    }
 
-        let admitted = guard.check(&mut cx);
+    /// A zero-sized future boxes into no allocation, on every unit the pool
+    /// admits.
+    #[tokio::test]
+    async fn it_admits_a_gated_unit_its_client_reached_without_allocating() {
+        let client = crate::AuthenticatedClient {
+            client_id: "ci".to_owned(),
+            scopes: Vec::new(),
+            resources: Vec::new(),
+            payload: (),
+        };
+        let (size, admitted) = nest_rs_core::with_ambient(Arc::new(client), checked()).await;
+        assert_eq!(size, 0);
+        assert!(admitted.is_ok());
+    }
 
-        assert_eq!(
-            std::mem::size_of_val(&*admitted),
-            0,
-            "a zero-sized future boxes into no allocation on every unit the pool runs it on",
-        );
-        assert!(admitted.await.is_ok());
+    /// A request running no guard, `McpAccess::Public`'s, carries units the pool
+    /// still folds.
+    #[tokio::test]
+    async fn it_refuses_a_gated_unit_no_client_reached() {
+        let (_, refused) = checked().await;
+        assert_eq!(refused.expect_err("no client").http_status(), 401);
     }
 }

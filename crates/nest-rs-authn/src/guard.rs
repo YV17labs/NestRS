@@ -11,6 +11,7 @@ use nest_rs_core::{
     AmbientValue, Container, ContainerBuilder, Discoverable, Layer, Net, Posture,
     ProviderResidency, Unanswered, UnitContext, async_trait, within,
 };
+use nest_rs_guards::__private::{ANONYMOUS_CALLER, UNAUTHENTICATED};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardFor, GuardPhase, PrincipalClaim};
 use nest_rs_http::__private::RejectedCredential;
 use nest_rs_http::HttpView;
@@ -37,7 +38,8 @@ mod reason {
 /// strategy `S`. Bind it via `#[use_guards]` / `GlobalGuards`; on a
 /// `#[public]` route it authenticates opportunistically but never rejects, and
 /// on an in-band endpoint (`/graphql`) it admits an anonymous request while
-/// still refusing a credential that does not verify.
+/// still refusing a credential that does not verify, and refuses that caller on
+/// each gated unit the request carries.
 ///
 /// It waits for the strategy no longer than [`AUTHENTICATE_TIMEOUT`]: a
 /// strategy silent past it, or one that panics, is denied on every route,
@@ -170,13 +172,11 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         }
     }
 
-    /// Its decision is the request's: a unit reaches this check only from the
-    /// pool, whose `check_http` already authenticated the request carrying it.
-    // Not an `async fn`: its zero-sized future boxes into no allocation on
-    // every unit the pool runs it on.
+    /// A unit reaches this check only from the pool, whose `check_http` already
+    /// authenticated the request carrying it, so it reads what that found.
     fn check<'s, 'c, 'u, 'fut>(
         &'s self,
-        _cx: &'c mut UnitContext<'u>,
+        cx: &'c mut UnitContext<'u>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
     where
         's: 'fut,
@@ -184,7 +184,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         'u: 'fut,
         Self: 'fut,
     {
-        Box::pin(std::future::poll_fn(|_| Poll::Ready(Ok(()))))
+        check_unit::<S::Principal>(cx)
     }
 
     fn phase(&self) -> GuardPhase {
@@ -228,6 +228,25 @@ pub enum Verdict {
     /// the `503` the request is refused with, its reason and cause on it for
     /// the edge to file (a panic is filed on its own line besides).
     Unavailable(Denial),
+}
+
+/// A guard over a [`Strategy`] on a unit its request carries: the request's
+/// `check_http` decided, and may have admitted a caller with no credential where
+/// the request is in band, so a `Gated` unit no principal `P` reached is refused
+/// `401`, whatever else the chain would admit. A federation root field states no
+/// posture of its own, so this is what refuses it an anonymous caller.
+///
+/// Not an `async` function: its zero-sized future boxes into no allocation on
+/// every unit the pool admits.
+#[doc(hidden)]
+pub fn check_unit<'fut, P: AmbientValue>(
+    cx: &UnitContext<'_>,
+) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>> {
+    if cx.reflector().posture() == Posture::Gated && cx.ambient::<P>().is_none() {
+        let refused = Denial::unauthorized(UNAUTHENTICATED).with_reason(ANONYMOUS_CALLER);
+        return Box::pin(std::future::ready(Err(refused)));
+    }
+    Box::pin(std::future::poll_fn(|_| Poll::Ready(Ok(()))))
 }
 
 /// Run `strategy` on the request `cx` dispatches, as every guard over a
@@ -331,7 +350,7 @@ impl<S: Strategy> GuardFor<HttpView> for AuthnGuard<S> {}
 mod tests {
     use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, declare_unit};
     use nest_rs_core::operation_log::Kind;
-    use nest_rs_core::{Handler, UnitView};
+    use nest_rs_core::{Handler, UnitView, with_ambient};
     use nest_rs_http::Request;
 
     use super::*;
@@ -369,34 +388,61 @@ mod tests {
 
     impl UnitView for Field {}
 
-    static FIELD: Handler = declare_handler(HandlerDeclaration {
-        unit: declare_unit(
-            "nest-rs-graphql",
-            "nest_rs::graphql",
-            Kind::Server,
-            "graphql.field",
-        ),
-        host: TypeId::of::<Field>(),
-        host_name: "Field",
-        method: "me",
-        address: "me",
-        posture: Posture::Gated,
-        meta: MetaLevels::default,
-    });
+    /// A unit of `posture`, as an in-band edge's site declares it.
+    const fn unit(posture: Posture) -> Handler {
+        declare_handler(HandlerDeclaration {
+            unit: declare_unit(
+                "nest-rs-graphql",
+                "nest_rs::graphql",
+                Kind::Server,
+                "graphql.field",
+            ),
+            host: TypeId::of::<Field>(),
+            host_name: "Field",
+            method: "me",
+            address: "me",
+            posture,
+            meta: MetaLevels::default,
+        })
+    }
 
-    #[tokio::test]
-    async fn it_admits_each_unit_of_the_request_it_authenticated_without_allocating() {
+    static GATED: Handler = unit(Posture::Gated);
+    static PUBLIC: Handler = unit(Posture::Public);
+    static IN_BAND: Handler = unit(Posture::InBand);
+
+    /// The guard's `check` on `handler`, the future's size read before it runs.
+    async fn checked(handler: &'static Handler) -> (usize, Result<(), Denial>) {
         let guard = AuthnGuard::new(Arc::new(Admits));
         let mut view = Field;
-        let mut cx = nest_rs_core::__private::new_unit_context(&FIELD, &mut view, None, None);
+        let mut cx = nest_rs_core::__private::new_unit_context(handler, &mut view, None, None);
+        let check = guard.check(&mut cx);
+        (std::mem::size_of_val(&*check), check.await)
+    }
 
-        let admitted = guard.check(&mut cx);
+    /// A zero-sized future boxes into no allocation, on every unit the pool
+    /// admits.
+    #[tokio::test]
+    async fn it_admits_a_gated_unit_a_principal_reached_without_allocating() {
+        let (size, admitted) = with_ambient(Arc::new(Anyone), checked(&GATED)).await;
+        assert_eq!(size, 0);
+        assert!(admitted.is_ok());
+    }
 
-        assert_eq!(
-            std::mem::size_of_val(&*admitted),
-            0,
-            "a zero-sized future boxes into no allocation on every unit the pool runs it on",
-        );
-        assert!(admitted.await.is_ok());
+    #[tokio::test]
+    async fn it_admits_what_states_its_own_posture_without_allocating() {
+        for handler in [&PUBLIC, &IN_BAND] {
+            let (size, admitted) = checked(handler).await;
+            assert_eq!(size, 0);
+            assert!(admitted.is_ok(), "{:?}", handler.posture());
+        }
+    }
+
+    #[tokio::test]
+    async fn it_refuses_a_gated_unit_no_principal_reached() {
+        let (_, refused) = checked(&GATED).await;
+        let denial = refused.expect_err("nothing identified the caller");
+        assert_eq!(denial.http_status(), 401);
+        assert_eq!(denial.message(), UNAUTHENTICATED);
+        assert_eq!(denial.reason(), Some(ANONYMOUS_CALLER));
     }
 }

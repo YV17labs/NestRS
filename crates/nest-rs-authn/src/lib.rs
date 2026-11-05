@@ -132,7 +132,7 @@ pub mod __private {
 
     pub use crate::binding::ResourceBinding;
     pub use crate::ephemeral_signing_key::EphemeralSigningKey;
-    pub use crate::guard::{Verdict, authenticate};
+    pub use crate::guard::{Verdict, authenticate, check_unit};
     pub use crate::principal::{
         Actor, ActorField, ActorRefusal, IdentifierAnswer, IdentifierProbe, ScopeList, Tenant,
         TenantField, TenantRefusal, scope_list,

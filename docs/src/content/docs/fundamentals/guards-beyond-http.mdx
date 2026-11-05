@@ -67,8 +67,9 @@ carries — so a global `ThrottlerGuard` rate-limits the `/mcp` request and each
 tool call. A global guard writing only `check` runs it on every request too,
 the route, the WS upgrade and the `/graphql` and `/mcp` requests included; one
 whose decision is the unit's alone admits the request in `check_http`, and one
-whose decision is the request's alone — `AuthnGuard` — admits the units that
-request carries in `check`.
+whose decision is the request's alone admits the units that request carries in
+`check`. `AuthnGuard` reads there what the request found: a gated unit no principal
+reached is refused `401`, since `/graphql` admits an anonymous request.
 
 The three multiplexed edges need one thing on top: the guards that build
 the caller's `Ability` at the request, because a unit below the request does

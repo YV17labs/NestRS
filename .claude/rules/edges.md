@@ -201,7 +201,10 @@ guard, filter or interceptor loop of its own.
    (`.claude/decisions/check-http-stays-on-guard.md`). **`check` has no default**, so no guard admits a unit it
    never decided — one whose decision is the request's alone admits the
    units it carries in one visible `Ok(())` — held by the trait, with a
-   trybuild snapshot per in-band edge. Each emitter asserts
+   trybuild snapshot per in-band edge. **A guard over a `Strategy` refuses a `Gated`
+   unit no principal reached**, `401`, since its request may have admitted that
+   caller in band and a federation root field states no posture to refuse it with.
+   Each emitter asserts
    `GuardFor<<Edge>View>` (`guard_capability_bounds`; HTTP has three:
    `#[controller]`, `#[routes]`, and `#[gateway]` for the upgrade), so a guard
    runs only on the units its decision was written for, with a trybuild
@@ -503,9 +506,11 @@ developer's method, so a bare `T` answers through a `Result` like any other
 `_entities` resolve in async-graphql's own root, out of reach of any
 `#[operations]` body, so a schema `Extension` — a subgraph's, and any
 schema's under a guard pool, the condition an `#[entity]`'s site reads to skip
-it — dispatches each through its own `Site`, a `graphql.field` unit of role `federation`: the
-app-wide pool its whole guard stage, since the field belongs to no resolver,
-the app's filters and interceptors around it. An `#[entity]` body therefore composes everything but the pool, and a
+it — dispatches each through its own `Site`, a `graphql.field` unit of role `federation`, the
+app's filters and interceptors around it. `_entities`' guard stage is the app-wide pool,
+since the field belongs to no resolver and each `#[entity]` states its posture;
+`_service`'s is every guard its request ran, since no member's posture stands behind
+its answer. An `#[entity]` body therefore composes everything but the pool, and a
 `#[field_resolver]` too, naming where the pool ran (the root field that produced
 its parent) — never once per parent row; its resolver's own `#[use_guards]` still
 run. No site subtracts a bucket without naming where it ran. A guard's `check`

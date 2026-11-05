@@ -139,3 +139,44 @@ GraphQL field's posture being its own, never its request's.
 What it leaves: an attaching guard bound at the unit alone, whose `check` attaches
 nothing (`AuthnGuard` on a resolver, which `GuardFor` already refuses), passes the
 boot and answers `401`, as it would for a visitor.
+
+## 2026-11-05 — a gated unit no principal reached is refused at the unit
+
+Under the owner's words of 2026-11-05 ("on ne veut pas d'angle mort"). The 2026-10-30
+entry let a guard whose decision is the request's admit every unit it carries in one
+visible `Ok(())`. That held only where the request itself refuses: `/graphql` is
+`InBand`, so `AuthnGuard` admits an anonymous request there, and `_service`, which
+states no posture and has no class gate, then ran a constant `Ok` and answered the
+whole SDL; an `AuthzGuard` beside it found the visitor's ability and passed too. Seen
+red, under a pooled `AuthnGuard` and under `EndpointGuards` alike.
+
+**A guard over a `Strategy` refuses a `Gated` unit no principal of its type reached**,
+`401` in the class gate's own sentence and reason; `AuthnGuard` and
+`ClientAuthenticationGuard` run one function, so neither restates it. A `Public` or
+`InBand` unit states its own posture and is admitted as before. **`AbilityGuard`
+refuses a visitor's ability on a federation root field**, read off `FieldRole`, the one
+unit a visitor's ability reaches with no posture after it. **`_service` runs every
+guard its request ran**, the pool and `EndpointGuards`, since the reference composition
+lists no pool and no member's posture stands behind its answer. `_entities` keeps the
+pool alone: each `#[entity]` states its posture, so what one opens beneath
+`EndpointGuards` is a line a reviewer reads.
+
+What it costs: one ambient read on each gated unit a pool runs this guard on. The
+admitting future stays zero-sized, so it still allocates nothing.
+
+**Refused:**
+
+- **A refusal in the guard stage, reading `produced_principal`**: the ambient context
+  has no read by `TypeId`, and the stage would decide for a hand-written guard whose
+  `check` is its own decision.
+- **`AbilityGuard` refusing a visitor on every `Gated` unit**: a `#[field_resolver]` is
+  `Gated` and legitimately carries a visitor under a `#[public]` root, and on a gated
+  root field the class gate's line, which names the action and the subject, would give
+  way to the guard's.
+- **Moving the field resolver to `InBand`** to make that sentence true: its posture is
+  its operation's, and the line is still lost.
+
+What it leaves: a subgraph whose guards identify no one publishes its SDL to whoever
+reaches it, as the federation page warns; `federation: true` is the line that opens it.
+A guard of one's own that admits an in-band request decides these units in its own
+`check`, where `Posture::Gated` is what it reads.

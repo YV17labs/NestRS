@@ -15,7 +15,8 @@ use nest_rs_core::__private::{
 use nest_rs_core::LayerSite;
 use nest_rs_core::{Container, Handler, Posture};
 use nest_rs_guards::__private::{
-    GuardSpec, boot_validate_guards, resolve_global_guards, validate_route_chain,
+    GuardSpec, boot_validate_guards, resolve_global_guards, validate_gate_reached,
+    validate_route_chain,
 };
 use nest_rs_guards::Guard;
 use nest_rs_pipes::__private::PipeSpec;
@@ -175,6 +176,9 @@ pub fn route_guard_stage(
     );
     if !declared.method.is_empty() || !declared.force.is_empty() {
         validate_route_chain(&label, &chain).map_err(anyhow::Error::msg)?;
+    }
+    if !declared.gates.is_empty() {
+        validate_gate_reached(&label, &chain, || Ok(Vec::new())).map_err(anyhow::Error::msg)?;
     }
     log_effective_chain(&label, "guards", &chain);
     Ok(stage(chain, declared.gates, declared.masked))

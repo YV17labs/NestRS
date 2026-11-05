@@ -606,6 +606,8 @@ struct FieldSite<'a> {
     /// Whether the posture withholds the ability from the field's reads, a
     /// `bool` expression.
     withheld: TokenStream2,
+    /// Whether the posture declares a class gate.
+    gated: bool,
 }
 
 /// The hidden items declaring a field's site beside its handler: the function
@@ -626,6 +628,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         exception_filters,
         gate,
         withheld,
+        gated,
     } = site;
     let name = site_const_ident("site", method);
     let layers_fn = site_fn_ident("layers", method);
@@ -680,6 +683,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
                     site: #site_kind,
                     label: #label,
                     withheld: #withheld,
+                    gated: #gated,
                 },
             )
         }
@@ -1075,6 +1079,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 exception_filters: &method_exception_filters,
                 gate: quote!(::core::option::Option::None),
                 withheld: quote!(false),
+                gated: false,
             }));
             site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
             let FieldMethod {
@@ -1340,6 +1345,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 exception_filters: &method_exception_filters,
                 gate,
                 withheld,
+                gated: authorize_spec.is_some(),
             }));
             site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
             // After the class gate, so a class-denied caller never reaches the database.

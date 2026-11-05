@@ -195,6 +195,29 @@ pub fn validate_carried_chain(
     Ok(())
 }
 
+/// Refuse a class gate no guard reaching its unit attaches the ability for, in its
+/// `unit` chain or the chain its `request` ran: every call would answer `500`. The
+/// closure composes the request only where the unit's chain holds no such guard; a
+/// route, whose request is its unit, passes one composing nothing.
+pub fn validate_gate_reached(
+    label: &str,
+    unit: &[ResolvedLayer<dyn Guard>],
+    request: impl FnOnce() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
+) -> Result<(), String> {
+    let attaches = |chain: &[ResolvedLayer<dyn Guard>]| {
+        chain.iter().any(|entry| entry.layer.__attaches_ability())
+    };
+    if attaches(unit) || attaches(&request()?) {
+        return Ok(());
+    }
+    Err(format!(
+        "{label} declares a class gate (`#[authorize]` or `#[public(Action, Subject)]`), and no \
+         guard in its chain or at its request attaches the ability the gate reads, so every call \
+         would answer `500`: bind `AbilityGuard` over your `AbilityFactory` with `#[use_guards]`, \
+         `GlobalGuards<(...)>` or, on an in-band endpoint, `EndpointGuards<View, (...)>`"
+    ))
+}
+
 /// Whether a unit an in-band edge carries needs no guard stage: its `unit` chain
 /// is empty, and a posture that `withheld` its reads has nothing to withhold, with
 /// no guard at its `request` either to have attached anything.
@@ -313,6 +336,19 @@ mod tests {
         }
     }
 
+    /// Attaches what a class gate reads.
+    struct Ability;
+    impl Layer for Ability {}
+    #[async_trait]
+    impl Guard for Ability {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+        fn __attaches_ability(&self) -> bool {
+            true
+        }
+    }
+
     struct AuthzWantsB;
     impl Layer for AuthzWantsB {}
     #[async_trait]
@@ -399,36 +435,6 @@ mod tests {
     }
 
     #[test]
-    fn a_unit_with_nothing_to_require_never_composes_its_requests_chain() {
-        validate_carried_chain("field", &[entry(Authz, "Authz")], || {
-            panic!("an expectation with a visitor branch reads nothing at boot")
-        })
-        .expect("it does without");
-    }
-
-    #[test]
-    fn a_carried_unit_keeps_a_stage_for_its_guards_or_for_what_it_withholds() {
-        let idle = |unit: &[ResolvedLayer<dyn Guard>], withheld, request_guarded| {
-            carried_stage_idle(unit, withheld, || {
-                Ok(if request_guarded {
-                    vec![entry(Authn, "Authn")]
-                } else {
-                    Vec::new()
-                })
-            })
-            .expect("the request composes")
-        };
-        assert!(idle(&[], false, false));
-        assert!(idle(&[], false, true), "nothing to withhold");
-        assert!(idle(&[], true, false), "nothing was attached to withhold");
-        assert!(!idle(&[], true, true), "what the request attached");
-        assert!(
-            !idle(&[entry(Authn, "Authn")], false, false),
-            "its own guard"
-        );
-    }
-
-    #[test]
     fn a_carried_chain_listing_authentication_after_authorization_is_refused() {
         let refused = validate_carried_chain(
             "field",
@@ -466,6 +472,58 @@ mod tests {
             || Ok(Vec::new()),
         )
         .expect("a forced replay read what the first run attached");
+    }
+
+    #[test]
+    fn a_unit_with_nothing_to_require_never_composes_its_requests_chain() {
+        validate_carried_chain("field", &[entry(Authz, "Authz")], || {
+            panic!("an expectation with a visitor branch reads nothing at boot")
+        })
+        .expect("it does without");
+    }
+
+    #[test]
+    fn a_class_gate_finds_its_ability_guard_in_its_chain_or_at_its_request() {
+        let refused = validate_gate_reached("field", &[entry(Authn, "Authn")], || {
+            Ok(vec![entry(Authz, "Authz")])
+        })
+        .expect_err("neither attaches the ability");
+        assert!(
+            refused.contains("field") && refused.contains("AbilityGuard"),
+            "{refused}"
+        );
+        validate_gate_reached("field", &[entry(Ability, "Ability")], || {
+            panic!("the unit's own chain already answers")
+        })
+        .expect("its chain attaches it");
+        validate_gate_reached("field", &[], || Ok(vec![entry(Ability, "Ability")]))
+            .expect("its request attaches it");
+        validate_gate_reached("field", &[entry(Arc::new(Ability), "Ability")], || {
+            Ok(Vec::new())
+        })
+        .expect("a shared guard answers as the guard it holds");
+    }
+
+    #[test]
+    fn a_carried_unit_keeps_a_stage_for_its_guards_or_for_what_it_withholds() {
+        let idle = |unit: &[ResolvedLayer<dyn Guard>], withheld, request_guarded| {
+            carried_stage_idle(unit, withheld, || {
+                Ok(if request_guarded {
+                    vec![entry(Authn, "Authn")]
+                } else {
+                    Vec::new()
+                })
+            })
+            .expect("the request composes")
+        };
+        assert!(idle(&[], false, false));
+        assert!(idle(&[], false, true), "nothing to withhold");
+        assert!(idle(&[], true, false), "nothing was attached to withhold");
+        assert!(!idle(&[], true, true), "what the request attached");
+        assert!(
+            !idle(&[entry(Authn, "Authn")], false, false),
+            "its own guard"
+        );
     }
 
     #[test]

@@ -55,6 +55,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }
@@ -95,6 +99,10 @@ impl Layer for ListAbilityInjector {}
 
 #[async_trait]
 impl Guard for ListAbilityInjector {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }
@@ -408,6 +416,10 @@ impl Layer for PostAbilityInjector {}
 
 #[async_trait]
 impl Guard for PostAbilityInjector {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }

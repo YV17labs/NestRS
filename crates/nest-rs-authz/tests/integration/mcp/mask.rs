@@ -65,6 +65,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }

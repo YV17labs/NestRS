@@ -3,8 +3,9 @@
 //! cause exists — and where the class gate it declares runs.
 
 use nest_rs_authz::Read;
-use nest_rs_core::module;
-use nest_rs_http::{Json, StatusCode, controller, routes};
+use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
+use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::{HttpView, Json, StatusCode, controller, routes};
 use nest_rs_testing::{LogCapture, TestApp};
 
 mod widget {
@@ -26,7 +27,29 @@ mod widget {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+/// Answers for an ability and attaches none: what the boot cannot tell from a guard
+/// that does, so the gate fails closed.
+#[injectable]
+#[derive(Default)]
+struct AttachesNothing;
+
+impl Layer for AttachesNothing {}
+
+#[async_trait]
+impl Guard for AttachesNothing {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for AttachesNothing {}
+
 #[controller(path = "/widgets")]
+#[use_guards(AttachesNothing)]
 #[derive(Default)]
 struct WidgetsController;
 
@@ -39,15 +62,15 @@ impl WidgetsController {
     }
 }
 
-#[module(providers = [WidgetsController])]
+#[module(providers = [AttachesNothing, WidgetsController])]
 struct WidgetsModule;
 
 #[tokio::test]
-async fn a_route_whose_ability_guard_never_ran_says_so_at_error_with_the_remedy() {
+async fn a_route_whose_ability_guard_attached_nothing_says_so_at_error_with_the_remedy() {
     let logs = LogCapture::install();
     let app = TestApp::for_module::<WidgetsModule>()
         .await
-        .expect("a public route boots with no guard");
+        .expect("the guard answers for an ability");
 
     let refused = app.http().get("/widgets").send().await;
     refused.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
@@ -124,6 +147,10 @@ mod gate_order {
 
     #[async_trait]
     impl Guard for Grants {
+        fn __attaches_ability(&self) -> bool {
+            true
+        }
+
         fn phase(&self) -> nest_rs_guards::GuardPhase {
             nest_rs_guards::GuardPhase::Authorization
         }
@@ -342,7 +369,7 @@ mod gate_order {
             panic!("a gate with no guard to attach its ability would answer every call 500");
         };
         let chain = format!("{refused:#}");
-        assert!(chain.contains("GET /unguarded (list)"), "{chain}");
-        assert!(chain.contains("#[use_guards("), "{chain}");
+        assert!(chain.contains("GET /unguarded"), "{chain}");
+        assert!(chain.contains("#[use_guards]"), "{chain}");
     }
 }

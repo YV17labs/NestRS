@@ -81,6 +81,10 @@ impl Layer for NarrowToken {}
 
 #[async_trait]
 impl Guard for NarrowToken {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }
@@ -107,6 +111,10 @@ impl Layer for DeniedToken {}
 
 #[async_trait]
 impl Guard for DeniedToken {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }
@@ -387,5 +395,176 @@ async fn a_denial_no_when_narrows_is_refused_plainly_on_every_edge_and_runs_no_b
         CREATED.load(Ordering::SeqCst),
         0,
         "a create body ran for a caller its policy denies outright",
+    );
+}
+
+/// Identifies its caller on every edge and attaches no ability: all a class gate
+/// reads stays absent, whichever guards stand beside it.
+#[injectable]
+#[derive(Default)]
+struct OnlyIdentifies;
+
+impl Layer for OnlyIdentifies {}
+
+#[async_trait]
+impl Guard for OnlyIdentifies {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for OnlyIdentifies {}
+impl GuardFor<nest_rs_graphql::GraphqlView> for OnlyIdentifies {}
+impl GuardFor<nest_rs_ws::WsView> for OnlyIdentifies {}
+impl GuardFor<nest_rs_mcp::McpView> for OnlyIdentifies {}
+
+/// A class gate no ability guard reaches names its site and the guard to bind.
+fn assert_refused_naming(boot: nest_rs_core::anyhow::Result<impl Sized>, site: &str) {
+    let Err(refused) = boot else {
+        panic!("{site}: every call would answer `500`, so the boot refuses it");
+    };
+    let refused = format!("{refused:#}");
+    assert!(refused.contains(site), "{refused}");
+    assert!(refused.contains("attaches the ability"), "{refused}");
+    assert!(refused.contains("AbilityGuard"), "{refused}");
+}
+
+#[controller(path = "/unreached")]
+#[use_guards(OnlyIdentifies)]
+#[derive(Default)]
+struct UnreachedController;
+
+#[routes]
+impl UnreachedController {
+    #[get("/")]
+    #[authorize(Read, widget::Entity)]
+    async fn list(&self) -> String {
+        "widgets".to_owned()
+    }
+}
+
+#[module(providers = [OnlyIdentifies, UnreachedController])]
+struct UnreachedRouteModule;
+
+#[tokio::test]
+async fn a_route_gate_no_ability_guard_reaches_refuses_the_boot() {
+    assert_refused_naming(
+        TestApp::for_module::<UnreachedRouteModule>().await,
+        "GET /unreached",
+    );
+}
+
+#[controller(path = "/unreached-public")]
+#[derive(Default)]
+struct UnreachedPublicController;
+
+#[routes]
+impl UnreachedPublicController {
+    #[get("/")]
+    #[public(Read, widget::Entity)]
+    async fn list(&self) -> String {
+        "widgets".to_owned()
+    }
+}
+
+#[module(providers = [UnreachedPublicController])]
+struct UnreachedPublicRouteModule;
+
+#[tokio::test]
+async fn a_public_read_no_ability_guard_reaches_refuses_the_boot() {
+    assert_refused_naming(
+        TestApp::for_module::<UnreachedPublicRouteModule>().await,
+        "GET /unreached-public",
+    );
+}
+
+#[resolver]
+struct UnreachedResolver;
+
+#[operations]
+impl UnreachedResolver {
+    #[query]
+    #[authorize(Read, widget::Entity, unmasked)]
+    async fn unreached(&self) -> GqlResult<i32> {
+        Ok(0)
+    }
+}
+
+#[module(
+    imports = [GraphqlModule],
+    providers = [
+        OnlyIdentifies,
+        nest_rs_http::EndpointGuards<nest_rs_graphql::GraphqlView, (OnlyIdentifies,)>,
+        UnreachedResolver,
+    ],
+)]
+struct UnreachedOperationModule;
+
+#[tokio::test]
+async fn an_operation_gate_no_ability_guard_reaches_refuses_the_boot() {
+    assert_refused_naming(
+        TestApp::for_module::<UnreachedOperationModule>().await,
+        "query unreached",
+    );
+}
+
+#[gateway(path = "/ws/unreached")]
+#[use_guards(OnlyIdentifies)]
+#[derive(Default)]
+struct UnreachedGateway;
+
+#[messages]
+impl UnreachedGateway {
+    #[subscribe_message("read")]
+    #[authorize(Read, widget::Entity)]
+    async fn read(&self) -> Result<String, WsError> {
+        Ok("widgets".to_owned())
+    }
+}
+
+#[module(providers = [OnlyIdentifies, UnreachedGateway])]
+struct UnreachedMessageModule;
+
+#[tokio::test]
+async fn a_message_gate_no_ability_guard_reaches_refuses_the_boot() {
+    assert_refused_naming(
+        TestApp::builder()
+            .module::<UnreachedMessageModule>()
+            .build_ws()
+            .await,
+        "UnreachedGateway::read",
+    );
+}
+
+#[mcp(path = "/mcp/unreached")]
+#[derive(Clone, Default)]
+struct UnreachedTool;
+
+#[tools]
+impl UnreachedTool {
+    /// List the widgets.
+    #[tool]
+    #[authorize(Read, widget::Entity)]
+    async fn read_unreached(&self) -> Result<String, McpError> {
+        Ok("widgets".to_owned())
+    }
+}
+
+#[module(providers = [
+    OnlyIdentifies,
+    nest_rs_http::EndpointGuards<nest_rs_mcp::McpView, (OnlyIdentifies,)>,
+    UnreachedTool,
+])]
+struct UnreachedToolModule;
+
+#[tokio::test]
+async fn a_tool_gate_no_ability_guard_reaches_refuses_the_boot() {
+    assert_refused_naming(
+        TestApp::for_module::<UnreachedToolModule>().await,
+        "read_unreached",
     );
 }

@@ -1271,9 +1271,34 @@ async fn a_field_resolver_masks_a_visitors_answer_by_its_grant() {
     assert!(!read.to_string().contains(SECRET_EMAIL), "{read}");
 }
 
+/// The parent a field resolver answers under in an app with no ability guard.
+#[derive(Clone, SimpleObject)]
+#[graphql(complex, crate = "::nest_rs_graphql::async_graphql")]
+struct UngrantedReading {
+    id: i32,
+}
+
+/// Gates nothing, so an app attaching no ability boots it.
+#[resolver]
+struct UngrantedLibraryResolver;
+
+#[operations]
+impl UngrantedLibraryResolver {
+    #[query]
+    #[public]
+    async fn ungranted_reading(&self) -> UngrantedReading {
+        UngrantedReading { id: 1 }
+    }
+
+    #[field_resolver]
+    async fn lead(&self, _parent: &UngrantedReading) -> GqlResult<Option<writer::Writer>> {
+        Ok(Some(lead_row()))
+    }
+}
+
 #[module(
     imports = [GraphqlModule, SeaOrmDatabaseModule],
-    providers = [BooksService, ShelvesService, Rows, LibraryResolver],
+    providers = [BooksService, ShelvesService, Rows, UngrantedLibraryResolver],
 )]
 struct UngrantedLibraryModule;
 
@@ -1286,8 +1311,11 @@ async fn a_field_resolver_answers_as_it_did_where_no_ability_is_attached() {
         .await
         .expect("boots");
 
-    let read = answer(&app, "", "{ reading { lead { email } } }").await;
+    let read = answer(&app, "", "{ ungrantedReading { lead { email } } }").await;
 
     assert!(read.get("errors").is_none(), "{read}");
-    assert_eq!(read["data"]["reading"]["lead"]["email"], SECRET_EMAIL);
+    assert_eq!(
+        read["data"]["ungrantedReading"]["lead"]["email"],
+        SECRET_EMAIL
+    );
 }

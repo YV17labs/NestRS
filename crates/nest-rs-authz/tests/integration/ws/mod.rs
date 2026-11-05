@@ -32,6 +32,10 @@ impl Layer for RoleUpgrade {}
 
 #[async_trait]
 impl Guard for RoleUpgrade {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }

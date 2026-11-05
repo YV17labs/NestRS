@@ -8,8 +8,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::module;
+use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_database::{Executor, OpenUnit, Settlement, Unhonoured, UnitOfWork, UnitSpec};
+use nest_rs_guards::{Denial, GlobalGuards, Guard};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
@@ -337,7 +338,28 @@ async fn a_crud_host_with_no_unit_of_work_binding_is_refused_at_boot_naming_it()
     }
 }
 
-#[module(imports = [MemosHttpModule, MemosGraphqlModule, SeaOrmDatabaseModule])]
+/// Answers for the ability the `#[crud]` gates read, which this boot never serves.
+#[injectable]
+#[derive(Default)]
+struct MemosAbilityGuard;
+
+impl Layer for MemosAbilityGuard {}
+
+#[async_trait]
+impl Guard for MemosAbilityGuard {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [MemosHttpModule, MemosGraphqlModule, SeaOrmDatabaseModule],
+    providers = [GlobalGuards<(MemosAbilityGuard,)>],
+)]
 struct BoundMemosModule;
 
 #[tokio::test]

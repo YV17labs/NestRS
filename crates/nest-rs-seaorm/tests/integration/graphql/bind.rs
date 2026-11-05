@@ -1,13 +1,14 @@
 //! Covers `src/graphql/bind.rs`: the service `bind = Service` loads through is
 //! inside the access contract the boot checks, as a route's is, and an
-//! operation no guard attaches an ability to answers opaquely, the remedy on
+//! operation its guards attached no ability to answers opaquely, the remedy on
 //! the operator's line. A visitor's `#[public(A, bind = S)]` loads and masks by
 //! its grant, as `#[authorize]`'s does a principal's.
 
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read, Update};
-use nest_rs_core::{AccessGraphError, async_trait, injectable, module};
+use nest_rs_core::{AccessGraphError, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::EndpointGuards;
 use nest_rs_seaorm::{Access, Authorized, CrudService};
 use nest_rs_testing::{LogCapture, TestApp};
@@ -91,7 +92,7 @@ impl CrudService for ListedService {
     type Entity = note::Entity;
 }
 
-/// Bound, and behind no guard: nothing attaches the ability its gate reads.
+/// Bound, and nothing attaches the ability its gate reads.
 #[resolver]
 struct UngatedResolver;
 
@@ -130,11 +131,42 @@ async fn a_bound_field_with_no_unit_of_work_binding_is_refused_at_boot_naming_it
     );
 }
 
+/// Answers for an ability and attaches none, what the boot cannot tell apart.
+#[injectable]
+#[derive(Default)]
+struct AttachesNothing;
+
+impl Layer for AttachesNothing {}
+
+#[async_trait]
+impl Guard for AttachesNothing {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for AttachesNothing {}
+
+#[module(
+    imports = [GraphqlModule, nest_rs_seaorm::SeaOrmDatabaseModule],
+    providers = [
+        ListedService,
+        UngatedResolver,
+        AttachesNothing,
+        EndpointGuards<GraphqlView, (AttachesNothing,)>,
+    ],
+)]
+struct UngatedModule;
+
 #[module(
     imports = [GraphqlModule, nest_rs_seaorm::SeaOrmDatabaseModule],
     providers = [ListedService, UngatedResolver],
 )]
-struct UngatedModule;
+struct UnreachedModule;
 
 async fn answer(app: &TestApp, field: &str) -> serde_json::Value {
     let query = format!(r#"{{ {field}(id: "{}") }}"#, uuid::Uuid::now_v7());
@@ -145,6 +177,23 @@ async fn answer(app: &TestApp, field: &str) -> serde_json::Value {
         .send()
         .await;
     resp.json().await.value().deserialize()
+}
+
+/// Nothing to attach what its gate reads, so every call would answer opaquely.
+#[tokio::test]
+async fn a_bind_no_ability_guard_reaches_refuses_the_boot() {
+    let Err(refused) = crate::over_an_unconnected_pool()
+        .module::<UnreachedModule>()
+        .build()
+        .await
+    else {
+        panic!("no guard attaches the ability its gate reads");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains("query listed_note") && said.contains("AbilityGuard"),
+        "{said}"
+    );
 }
 
 #[tokio::test]

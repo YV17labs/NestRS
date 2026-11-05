@@ -29,6 +29,10 @@ impl Layer for Granting {}
 
 #[async_trait]
 impl Guard for Granting {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let mut ability = AbilityBuilder::new();
         ability.can(Action::Read, Inspection);

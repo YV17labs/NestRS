@@ -29,6 +29,10 @@ impl Layer for Granting {}
 
 #[nest_rs_core::async_trait]
 impl Guard for Granting {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("granted");
         let mut ability = AbilityBuilder::new();
@@ -302,6 +306,10 @@ mod bound {
 
     #[async_trait]
     impl Guard for OwnNotes {
+        fn __attaches_ability(&self) -> bool {
+            true
+        }
+
         fn phase(&self) -> nest_rs_guards::GuardPhase {
             nest_rs_guards::GuardPhase::Authorization
         }

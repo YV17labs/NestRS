@@ -119,6 +119,10 @@ impl Layer for GrantsCreate {}
 
 #[async_trait]
 impl Guard for GrantsCreate {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }

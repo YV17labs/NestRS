@@ -178,8 +178,5 @@ async fn a_gated_message_no_guard_covers_refuses_the_boot() {
         panic!("no guard attaches the ability its gate reads");
     };
     let said = format!("{refused:#}");
-    assert!(
-        said.contains("/ws/gate/uncovered") && said.contains("read"),
-        "{said}",
-    );
+    assert!(said.contains("UncoveredGateway::read"), "{said}");
 }

@@ -119,8 +119,11 @@ route, a GraphQL operation, a WebSocket message, an MCP tool — because every
 decorator emits the same function, `nest_rs::authz::class_gate::<Action,
 Entity>`, run on the unit right after its guards:
 
-- no ability reached the unit — no ability guard ran: refused opaquely, and
-  one `error` on `nest_rs::authz` names the site and the remedy;
+- no ability guard in the unit's chain or at its request: the boot refuses, naming
+  the site and the guard to bind;
+- no ability reached the unit all the same — a guard answering for one attached
+  none: refused opaquely, and one `error` on `nest_rs::authz` names the site and the
+  remedy;
 - the caller is anonymous and the site is not `#[public]`: `401`, whatever
   the visitor's rules grant — a grant written for
   [public reads](/security/authorization/public-reads/) never satisfies an
@@ -246,7 +249,7 @@ the four, `condition_for` conjoins their conditions, and `mask` and
 <Aside type="caution">
 A handler **without** the authz module imported has no request
 `Ability`, and every path fails closed rather than open: an
-`#[authorize]` gate returns 500, and a `Repo` read on the request-scoped
+`#[authorize]` gate refuses the boot, and a `Repo` read on the request-scoped
 executor renders `1 = 0` — zero rows, plus a `warn` naming the entity and
 action. The access graph catches the missing import at boot, and a route
 that no guard identifying a caller covers and is not `#[public]` refuses the boot. Match every new

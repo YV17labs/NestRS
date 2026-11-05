@@ -145,8 +145,10 @@ guard, filter or interceptor loop of its own.
    `Posture::System` and runs no guard stage.
 6. **A class gate the posture emits** — `nest_rs_authz::class_gate::<A, S>`,
    one function for every edge and ungated by any edge feature, run on the unit
-   right after its guards, so `#[authorize]` cannot mean several things; a
-   missing ambient ability fails closed. `S` is any subject: an entity, or a
+   right after its guards, so `#[authorize]` cannot mean several things. A gate
+   no guard in its chain or at its request attaches the ability for refuses the
+   boot, at each edge's site composition; one still reaching a unit with none fails
+   closed. `S` is any subject: an entity, or a
    capability no table holds that `#[subject]` declares, gated the same way —
    its scope challenge included — and never by a hand-written guard
    (`.claude/decisions/subject-no-table-holds.md`). `A` is `Manage` for a site needing

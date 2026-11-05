@@ -21,7 +21,7 @@ use nest_rs_core::{
 };
 use nest_rs_guards::__private::{
     GuardSpec, RefusalMark, carried_stage_idle, check_guards, identifying_guard,
-    resolve_global_guards, validate_carried_chain,
+    resolve_global_guards, validate_carried_chain, validate_gate_reached,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::carried_request_chain;
@@ -140,6 +140,8 @@ pub struct OperationGuards {
     /// The posture withholds the ability from the operation's reads: no mask
     /// shapes its answer.
     pub withheld: bool,
+    /// The posture declares a class gate, which reads the ability a guard attached.
+    pub gated: bool,
 }
 
 /// The guard stage of the operation `handler` declares: the app-wide pool, the
@@ -179,6 +181,9 @@ pub fn operation_guard_stage(
             .map_err(|unresolved| unresolved.to_string()),
     };
     validate_carried_chain(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
+    if declared.gated {
+        validate_gate_reached(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
+    }
     if carried_stage_idle(&chain, declared.withheld, request_chain).map_err(anyhow::Error::msg)? {
         return Ok(None);
     }
@@ -426,6 +431,7 @@ mod tests {
                 force: Vec::new(),
                 kind: McpOperationKind::Tool,
                 withheld: true,
+                gated: false,
             },
         )
         .expect("no guard to resolve");

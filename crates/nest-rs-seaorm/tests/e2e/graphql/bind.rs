@@ -193,6 +193,10 @@ mod ability_of_the_unit {
 
     #[async_trait]
     impl Guard for FieldAbility {
+        fn __attaches_ability(&self) -> bool {
+            true
+        }
+
         async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             let mut builder = AbilityBuilder::new();
             builder.can(Action::Read, ghost::Entity);

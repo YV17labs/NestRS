@@ -152,6 +152,10 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         Some(PrincipalClaim::of::<F::Actor>().or_visitor())
     }
 
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     /// None: a request is refused here only for a wiring defect, a `500`. The
     /// `403` an ability earns is answered by what reads it — the route's class
     /// gate, the row its `bind` loads, its service.

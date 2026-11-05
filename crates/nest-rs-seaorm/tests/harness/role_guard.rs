@@ -18,6 +18,10 @@ impl Layer for RoleGuard {}
 
 #[async_trait]
 impl Guard for RoleGuard {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         let role = HttpView::of(cx)?
             .request()

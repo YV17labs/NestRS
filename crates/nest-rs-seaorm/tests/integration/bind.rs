@@ -105,6 +105,10 @@ impl Layer for RoleGrants {}
 
 #[async_trait]
 impl Guard for RoleGrants {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }

@@ -58,6 +58,9 @@
 //! # impl Layer for Grants {}
 //! # #[async_trait]
 //! # impl Guard for Grants {
+//! #     fn __attaches_ability(&self) -> bool {
+//! #         true
+//! #     }
 //! #     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
 //! #         let mut ab = AbilityBuilder::new();
 //! #         if nest_rs_http::HttpView::of(cx)?.request().header("x-viewer").is_some() {

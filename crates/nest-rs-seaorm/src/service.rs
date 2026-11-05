@@ -257,8 +257,20 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// #     type Update = users::UpdateUser;
 /// # }
 /// # impl Deletable for UsersService {}
+/// # #[derive(Clone)]
+/// # struct Caller;
+/// # impl nest_rs_core::AmbientValue for Caller {}
+/// # #[injectable]
+/// # #[derive(Default)]
+/// # struct AuthzAbility;
+/// # impl nest_rs_authz::AbilityFactory for AuthzAbility {
+/// #     type Actor = Caller;
+/// #     fn define(&self, _actor: &Caller, _ability: &mut nest_rs_authz::AbilityBuilder) {}
+/// # }
+/// # type AuthzGuard = nest_rs_authz::AbilityGuard<AuthzAbility>;
 ///
 /// #[resolver]
+/// #[use_guards(AuthzGuard)]
 /// struct UsersResolver {
 ///     #[inject]
 ///     svc: Arc<UsersService>,
@@ -274,7 +286,7 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// #         }),
 /// #         nest_rs_seaorm::SeaOrmDatabaseModule,
 /// #     ],
-/// #     providers = [UsersService, UsersResolver],
+/// #     providers = [UsersService, AuthzAbility, AuthzGuard, UsersResolver],
 /// # )]
 /// # struct AppModule;
 /// # async fn fields(app: &TestApp, root: &str) -> Vec<String> {

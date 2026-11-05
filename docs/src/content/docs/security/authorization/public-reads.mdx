@@ -55,7 +55,8 @@ pub async fn feed(&self) -> Result<Vec<Post>, ServiceError> {
 `#[public(Read, post::Entity)]` takes `#[authorize]`'s arguments and does what it
 does, for a caller with no credential as well: `AuthnGuard` admits that caller,
 `AuthzGuard` builds the ability from `define_visitor`, the class gate runs against
-it right after the guards, and the mask keeps the fields it grants. Every edge
+it right after the guards, and the mask keeps the fields it grants; with no
+`AuthzGuard` to build it, the boot refuses. Every edge
 reads the line the same way, so a `#[query]`, a `#[subscribe_message]` and a
 `#[tool]` serve the same rows and the same fields:
 

@@ -223,3 +223,38 @@ A root's pool stays for what no host binds, an API key or an IP allow-list.
 - **`ThrottlerGuard` first on the audio routes**, which this change would have made true:
   a move of what an anonymous caller answers and of whose budget it spends, decided by a
   cleanup rather than for its own reason.
+
+## 2026-11-05 — a class gate no ability guard reaches refuses the boot
+
+Under the owner's words of 2026-11-05 ("on ne veut pas d'angle mort"), replacing the
+refusal above, "a boot refusal of `#[public(A, S)]` with no ability guard in its chain".
+Its reason, that a guard of one's own may attach the ability under any phase, no longer
+holds: `AmbientAbility` is built by authz alone, so what remains is a guard delegating
+to `AbilityGuard`. A gate nothing attaches for answered `500` on every call, on
+`#[authorize]` as on `#[public(A, S)]`, found by the first caller.
+
+**Every edge's site composition now refuses it**, naming the site and the guard to bind,
+reading the unit's chain, then the chain its request ran: a route, a message under its
+upgrade, a GraphQL field or an MCP operation under `/graphql`'s or `/mcp`'s request. A
+hidden `Guard::__attaches_ability` is what it reads, since the chain holds `dyn Guard`:
+`AbilityGuard` answers `true`, `Arc<T>` forwards, and a guard delegating to it answers as
+it does. The gate's own fail-closed `500` stays, for a guard answering `true` that
+attached nothing and for a unit driven with no boot behind it.
+
+The reference roots' entry above says a field needs its resolver's `AuthzGuard` "since
+`AuthnGuard::check` admits every unit". That guard now refuses a gated unit no principal
+reached (`check-http-stays-on-guard.md`, the same date); what puts the `AuthzGuard` there
+is that `AuthnGuard` declares no `GuardFor<GraphqlView>`.
+
+**Refused:**
+
+- **A public `Guard` method**: a name in the trait's documentation teaches a third place
+  an ability comes from, where the framework has one. A delegating guard is rare enough
+  for the method's own note.
+- **A marker trait**: the chain erases to `dyn Guard`, so nothing could read it there.
+
+What it leaves: an ability guard bound at the unit alone under `#[authorize]`, with none at
+the request, boots and answers `401`, its sentence naming the guard to bind at the request:
+`AbilityGuard::check` builds on a `#[public]` unit only, and this entry does not make a
+gated unit's rules depend on where the guard is listed.
+

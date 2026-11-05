@@ -103,6 +103,10 @@ impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let role = nest_rs_http::HttpView::of(cx)?
             .request()
@@ -1123,6 +1127,10 @@ mod ability_of_the_unit {
 
     #[async_trait]
     impl Guard for FieldAbility {
+        fn __attaches_ability(&self) -> bool {
+            true
+        }
+
         async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
             let mut builder = AbilityBuilder::new();
             builder

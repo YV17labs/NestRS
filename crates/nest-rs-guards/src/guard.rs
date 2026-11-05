@@ -171,6 +171,15 @@ pub trait Guard: Layer {
         None
     }
 
+    /// Whether this guard attaches the caller's ability, which a class gate
+    /// reads: the boot refuses a gate no guard answering `true` reaches, in its
+    /// chain or at its request. `nest_rs::authz::AbilityGuard` does, and a guard
+    /// delegating to it answers as it does; nothing else builds that ability.
+    #[doc(hidden)]
+    fn __attaches_ability(&self) -> bool {
+        false
+    }
+
     /// The statuses [`check_http`](Self::check_http) can refuse a request
     /// with on a route that is `#[public]` (`public`) or not, each one a
     /// [`Denial::http_status`] or the status of the error a refusing guard
@@ -274,6 +283,10 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
 
     fn expected_principal(&self) -> Option<PrincipalClaim> {
         (**self).expected_principal()
+    }
+
+    fn __attaches_ability(&self) -> bool {
+        (**self).__attaches_ability()
     }
 
     fn denial_statuses(&self, public: bool) -> &'static [u16] {

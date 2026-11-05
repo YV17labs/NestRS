@@ -16,7 +16,7 @@ use nest_rs_core::{Container, Failure, Handler, LayerSite, Peer, Posture, UnitCo
 use nest_rs_guards::__private::{
     GlobalBucket, GuardSpec, Refused, SiteChainSources, carried_stage_idle, check_guards,
     client_message, compose_site_chain, denial_code, denial_of, denial_reason, host_chain,
-    identifying_guard, validate_carried_chain, validate_guard_chain,
+    identifying_guard, validate_carried_chain, validate_gate_reached, validate_guard_chain,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::OriginRefused;
@@ -68,6 +68,10 @@ pub fn message_guard_stage(
     let upgrade_chain = || host_chain(container, &declared.upgrade, &site);
     validate_carried_chain(&site, &guards, upgrade_chain)
         .map_err(nest_rs_core::anyhow::Error::msg)?;
+    if declared.gate.is_some() {
+        validate_gate_reached(&site, &guards, upgrade_chain)
+            .map_err(nest_rs_core::anyhow::Error::msg)?;
+    }
     if declared.gate.is_none()
         && carried_stage_idle(&guards, declared.withheld, upgrade_chain)
             .map_err(nest_rs_core::anyhow::Error::msg)?

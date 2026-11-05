@@ -130,7 +130,7 @@ pub mod __private {
     pub use crate::stage::{RefusalMark, Refused, check_guards};
     pub use crate::validate::{
         boot_validate_guards, carried_stage_idle, host_chain, identifying_guard,
-        validate_carried_chain, validate_guard_chain, validate_route_chain,
+        validate_carried_chain, validate_gate_reached, validate_guard_chain, validate_route_chain,
     };
 
     pub use nest_rs_core::__private::{ResolvedLayer, compose_chain};

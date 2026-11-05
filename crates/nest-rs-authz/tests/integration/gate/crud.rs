@@ -48,6 +48,10 @@ impl Layer for OrgManager {}
 
 #[async_trait]
 impl Guard for OrgManager {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
     fn phase(&self) -> nest_rs_guards::GuardPhase {
         nest_rs_guards::GuardPhase::Authorization
     }

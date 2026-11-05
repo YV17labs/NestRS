@@ -2,11 +2,12 @@
 //!
 //! `#[dataloader]` generates one batching loader per method and submits a
 //! [`GraphqlLoaderRegistration`]; [`LoaderSeeds`] rebuilds it per request and
-//! seeds it into the GraphQL context for a `#[field_resolver]` to read. A field
-//! whose resolver reads one — an exposed relation, a `#[field_resolver]`'s
-//! `&DataLoader<L>` parameter — submits a [`GraphqlRelationRegistration`], so a
-//! served field whose loader's owner the app does not reach refuses the boot
-//! rather than every query selecting it.
+//! seeds it into the GraphQL context for a field to read. A field whose
+//! resolver reads one — an exposed relation, a `#[field_resolver]`'s
+//! `&DataLoader<L>` parameter — submits a [`GraphqlRelationRegistration`], a
+//! root field's parameter a [`GraphqlRootLoaderRegistration`], so a served field
+//! whose loader's owner the app does not reach refuses the boot rather than
+//! every query selecting it.
 //!
 //! async-graphql runs every batch on a task of its own, so batches run in the
 //! `/graphql` mount's [`DetachedWork`], which the transport stops at the close
@@ -75,6 +76,26 @@ pub struct GraphqlRelationRegistration {
 }
 
 inventory::collect!(GraphqlRelationRegistration);
+
+/// One root field whose method reads a loader — a `#[query]`, `#[mutation]`,
+/// `#[subscription]` or `#[entity]`'s `&DataLoader<L>` parameter. The schema
+/// serves it whenever the app reaches its resolver, and an `#[entity]` is no
+/// field of any object, so it is read against the resolver, never the objects.
+pub struct GraphqlRootLoaderRegistration {
+    /// The resolver declaring the field, read against the reachable providers,
+    /// and its name.
+    pub resolver: fn() -> (TypeId, &'static str),
+    /// The field as a chain's log line and a refusal name it (`query label`).
+    pub field: &'static str,
+    /// The loader's owner type, read against the reachable providers, and its
+    /// name ([`LoaderOwner::owner`]).
+    pub owner: fn() -> (TypeId, &'static str),
+    /// Where the field is declared (`module_path!()`), which tells the app's
+    /// own declaration from a dependency's.
+    pub origin: &'static str,
+}
+
+inventory::collect!(GraphqlRootLoaderRegistration);
 
 /// The request's `L` loader for the field `ctx` resolves. Its absence fails the
 /// field, never panics: the schema build refuses a field whose loader's owner
@@ -227,6 +248,13 @@ pub(crate) fn check_served_relations(
             Some(unreached_relation(container, relation, parent))
         })
         .collect();
+    unreached.extend(
+        inventory::iter::<GraphqlRootLoaderRegistration>()
+            .filter(|read| {
+                reachable.reaches((read.resolver)().0) && !reachable.reaches((read.owner)().0)
+            })
+            .map(|read| unreached_root_read(container, read)),
+    );
     if !unreached.is_empty() {
         unreached.sort_unstable();
         anyhow::bail!(
@@ -252,6 +280,18 @@ fn unreached_relation(
         "`{parent}.{}` (declared on `{}`) reads a loader of `{owner}`: {remedy}",
         relation.field,
         (relation.entity)(),
+    )
+}
+
+/// What a refusal says of one root field: its name, the resolver declaring it,
+/// the loader's owner and the import its cause prescribes.
+fn unreached_root_read(container: &Container, read: &GraphqlRootLoaderRegistration) -> String {
+    let (owner_type, owner) = (read.owner)();
+    let (_, resolver) = (read.resolver)();
+    let remedy = import_remedy(container, read.origin, owner_type, resolver);
+    format!(
+        "`{}` (declared on `{resolver}`) reads a loader of `{owner}`: {remedy}",
+        read.field,
     )
 }
 

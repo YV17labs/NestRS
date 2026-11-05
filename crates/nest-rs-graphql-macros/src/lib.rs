@@ -48,10 +48,11 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// what a guard attached — a miss of either answers the opaque internal error,
 /// the type filed at `error`.
 ///
-/// A `#[field_resolver]`'s `&DataLoader<L>` parameter, read the same way, is the
-/// request's loader. It declares the need, as the method itself does for its
-/// resolver: the schema build refuses a served field whose resolver, or whose
-/// loader's owner, the app does not reach, naming the module to import.
+/// A `&DataLoader<L>` parameter, read the same way, on a root field as on a
+/// `#[field_resolver]`, is the request's loader, and no argument of the schema.
+/// It declares the need, as the method itself does for its resolver: the schema
+/// build refuses a served field whose resolver, or whose loader's owner, the app
+/// does not reach, naming the module to import.
 ///
 /// **Every `#[query]`/`#[mutation]`/`#[subscription]` declares its access
 /// posture** — forgetting one is a compile error, never a silently ungated
@@ -162,10 +163,10 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `Result<HashMap<K, V>, E>`) generates a hidden `Loader` named
 /// `<Owner><Name>` and registers it with the link-time registry — no
 /// `#[module(providers = [...])]` entry. The loader is
-/// **request-scoped**, seeded into the GraphQL context and read by a
-/// `#[field_resolver]` through a `&DataLoader<…>` parameter, which also declares
-/// the need: the schema build refuses a served field whose loader's owner the
-/// app does not reach, naming the module to import.
+/// **request-scoped**, seeded into the GraphQL context and read by a root field
+/// or a `#[field_resolver]` through a `&DataLoader<…>` parameter, which also
+/// declares the need: the schema build refuses a served field whose loader's
+/// owner the app does not reach, naming the module to import.
 ///
 /// # Generated loader names
 ///
@@ -178,7 +179,7 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// | `UsersService` | `by_org_id` | `UsersServiceByOrgId` |
 /// | `PostsService` | `author` | `PostsServiceAuthor` |
 ///
-/// Name the loader exactly that from the `#[field_resolver]` that reads it:
+/// Name the loader exactly that from the field that reads it:
 /// `author: &DataLoader<UsersServiceById>`. An answer holding an `#[expose]`d wire
 /// type's rows is masked by the field's selection, whatever read them.
 ///

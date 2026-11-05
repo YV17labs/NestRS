@@ -240,9 +240,7 @@ no pipe is handed it.
 
 ## Reading the request context
 
-A resolver method takes an optional `ctx: &Context<'_>` first
-non-receiver argument, the entry point to typed batch loaders. What the
-request needs beyond the document is a parameter, as on a route, and no
+What the request needs beyond the document is a parameter, as on a route, and no
 schema argument:
 
 - **What a guard attached** is `Ambient<T>` — the principal the endpoint's
@@ -252,9 +250,17 @@ schema argument:
 - **A request-scoped provider** is `Scoped<T>`, and the boot checks its
   provider like an `#[inject]`ed one — see
   [Providers](/fundamentals/providers/).
+- **A batch loader** is `&DataLoader<L>`, and the boot refuses a field whose
+  loader's owner the app does not import — see
+  [Dataloaders](/database/dataloaders/#reading-a-loader).
 
-The caller's `Ability` is neither: the field's unit carries it, the one its
+The caller's `Ability` is none of them: the field's unit carries it, the one its
 class gate checked, and its mask and every read under it see that one.
+
+An optional `ctx: &Context<'_>`, the first argument after `&self`, reaches what
+async-graphql itself offers: the selection a field looks ahead at, a header to
+set. The boot reads no body, so a type read off it by hand and absent from the
+request answers the opaque internal error, the type filed at `error`.
 
 ```rust title="crates/features/src/profile/graphql/resolver.rs"
 use nest_rs::core::Scoped;

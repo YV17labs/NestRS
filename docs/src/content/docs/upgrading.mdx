@@ -918,7 +918,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | a presign `ttl` past 7 days, or under 1 second | a `ttl` within SigV4's bounds: anything else is `StorageError::Unsignable` |
     | keeping the content type supplied at upload, since `head` could not read it | `storage.head(&key).await?.and_then(\|meta\| meta.content_type)` |
     | `Scoped::<T>::from_context(ctx)?` in a resolver, a message or a tool body | a `cache: Scoped<T>` parameter on the method; a miss is answered opaquely and filed |
-    | `ctx.data_unchecked::<DataLoader<L>>()` in a `#[field_resolver]` | a `loader: &DataLoader<L>` parameter, which the boot checks |
+    | `ctx.data::<DataLoader<L>>()?` or `ctx.data_unchecked::<DataLoader<L>>()` in a resolver | a `loader: &DataLoader<L>` parameter, on a root field as on a `#[field_resolver]`, which the boot checks |
     | a `#[field_resolver]`'s `&DataLoader<L>` parameter, `L` a `Loader` written by hand and seeded through `GraphqlContextSeed` | `L` as a method of a `#[dataloader]` impl block, the parameter naming the loader it generates; or a `ctx: &Context<'_>` parameter and `ctx.data::<DataLoader<L>>()?`, which the boot does not check |
     | a `tokio::sync::broadcast` provider, and a `#[listeners]` host feeding it, behind a `#[subscription]` | `#[inject] bus: Arc<EventBus>` and `self.bus.stream::<E>()`, from `nest_rs::events`; a subscription needing no `Err` returns the bare `impl Stream` |
     | `nest_rs::ws::WsScopeError` | nothing |
@@ -1351,6 +1351,10 @@ lists what the boot, a log or the wire shows when one is missed.
   `@include(if: $x)` dropping it, and an argument's root field alone failing. Send the
   variable, or declare it a default. A client relying on `@skip` or `@include` ignoring
   a default now reads what its document says.
+- **A `Data` type a resolver reads off its `Context` and its request does not hold**
+  answers the opaque internal error, the type filed at `error`, where the client read
+  ``Data `…` does not exist.`` A loader read so whose owner the app does not import
+  moves to a `&DataLoader<L>` parameter, and its boot says which import.
 - **A guard declaring a status outside `400` to `599` in `denial_statuses`** refuses the
   boot, naming the guard and the status: list what its `Err` paths answer, an error each.
 - **A `(StatusCode, Json<T>)` route whose `T` has no schema** does not compile (`E0277`), as a

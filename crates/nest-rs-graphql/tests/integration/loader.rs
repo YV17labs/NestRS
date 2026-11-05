@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use nest_rs_core::{AmbientValue, Layer, UnitContext, ambient, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::dataloader::{DataLoader, Loader};
-use nest_rs_graphql::async_graphql::{self, Context};
 use nest_rs_graphql::{GraphqlModule, GraphqlView, dataloader, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{EndpointGuards, HttpConfig, HttpModule, HttpView};
@@ -111,26 +110,23 @@ struct TraceShelfResolver;
 impl TraceShelfResolver {
     #[query]
     #[public]
-    async fn batch_trace(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
-        let loader = ctx.data::<DataLoader<TraceShelfTraces>>()?;
+    async fn batch_trace(&self, id: i32, loader: &DataLoader<TraceShelfTraces>) -> String {
         let Ok(found) = loader.load_one(id).await;
-        Ok(found.unwrap_or_default())
+        found.unwrap_or_default()
     }
 
     #[query]
     #[public]
-    async fn batch_caller(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
-        let loader = ctx.data::<DataLoader<TraceShelfCallers>>()?;
+    async fn batch_caller(&self, id: i32, loader: &DataLoader<TraceShelfCallers>) -> String {
         let Ok(found) = loader.load_one(id).await;
-        Ok(found.unwrap_or_default())
+        found.unwrap_or_default()
     }
 
     #[query]
     #[public]
-    async fn batch_span(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
-        let loader = ctx.data::<DataLoader<TraceShelfSpans>>()?;
+    async fn batch_span(&self, id: i32, loader: &DataLoader<TraceShelfSpans>) -> String {
         let Ok(found) = loader.load_one(id).await;
-        Ok(found.unwrap_or_default())
+        found.unwrap_or_default()
     }
 }
 
@@ -258,10 +254,9 @@ struct SlowShelfResolver;
 impl SlowShelfResolver {
     #[query]
     #[public]
-    async fn label(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
-        let loader = ctx.data::<DataLoader<SlowShelfLabels>>()?;
+    async fn label(&self, id: i32, loader: &DataLoader<SlowShelfLabels>) -> String {
         let Ok(found) = loader.load_one(id).await;
-        Ok(found.unwrap_or_default())
+        found.unwrap_or_default()
     }
 }
 
@@ -331,7 +326,6 @@ mod panicking_batch {
 
     use nest_rs_core::{injectable, module};
     use nest_rs_graphql::async_graphql::dataloader::DataLoader;
-    use nest_rs_graphql::async_graphql::{self, Context};
     use nest_rs_graphql::{GraphqlModule, dataloader, operations, resolver};
     use nest_rs_testing::{LogCapture, TestApp};
 
@@ -354,10 +348,9 @@ mod panicking_batch {
     impl BrokenShelfResolver {
         #[query]
         #[public]
-        async fn broken_label(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
-            let loader = ctx.data::<DataLoader<BrokenShelfLabels>>()?;
+        async fn broken_label(&self, id: i32, loader: &DataLoader<BrokenShelfLabels>) -> String {
             let Ok(found) = loader.load_one(id).await;
-            Ok(found.unwrap_or_default())
+            found.unwrap_or_default()
         }
     }
 
@@ -585,6 +578,513 @@ mod field_parameter {
         assert_eq!(
             body["data"]["volumes"][0]["shelfLabel"], "shelf 1",
             "{body}"
+        );
+    }
+}
+
+/// A root field reads a loader through a `&DataLoader<L>` parameter as a
+/// `#[field_resolver]` does: no argument of the schema, one batch across its
+/// selections, and a need the schema build checks.
+mod root_parameter {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use nest_rs_core::{injectable, module};
+    use nest_rs_graphql::async_graphql::dataloader::DataLoader;
+    use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
+    use nest_rs_graphql::async_graphql::{self, SimpleObject};
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, dataloader, operations, resolver};
+    use nest_rs_testing::TestApp;
+
+    #[injectable]
+    #[derive(Default)]
+    struct Almanac {
+        batches: AtomicUsize,
+    }
+
+    #[dataloader]
+    impl Almanac {
+        async fn entries(&self, keys: &[i32]) -> HashMap<i32, String> {
+            self.batches.fetch_add(1, Ordering::SeqCst);
+            keys.iter()
+                .map(|key| (*key, format!("entry {key}")))
+                .collect()
+        }
+    }
+
+    #[module(providers = [Almanac])]
+    struct AlmanacModule;
+
+    #[resolver]
+    struct EntryResolver;
+
+    #[operations]
+    impl EntryResolver {
+        #[query]
+        #[public]
+        async fn entry(&self, id: i32, entries: &DataLoader<AlmanacEntries>) -> String {
+            let Ok(found) = entries.load_one(id).await;
+            found.unwrap_or_default()
+        }
+
+        #[mutation]
+        #[public]
+        async fn touch_entry(
+            &self,
+            id: i32,
+            entries: &DataLoader<AlmanacEntries>,
+        ) -> async_graphql::Result<String> {
+            let Ok(found) = entries.load_one(id).await;
+            Ok(found.unwrap_or_default())
+        }
+    }
+
+    #[resolver]
+    struct EntryFeedResolver;
+
+    #[operations]
+    impl EntryFeedResolver {
+        #[query]
+        #[public]
+        async fn entry_feed_up(&self) -> bool {
+            true
+        }
+
+        #[subscription]
+        #[public]
+        async fn entry_feed(
+            &self,
+            id: i32,
+            entries: &DataLoader<AlmanacEntries>,
+        ) -> impl Stream<Item = String> {
+            let Ok(found) = entries.load_one(id).await;
+            stream::iter(found)
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule, AlmanacModule],
+        providers = [EntryResolver, EntryFeedResolver],
+    )]
+    struct EntryApp;
+
+    #[tokio::test]
+    async fn a_root_fields_loader_parameter_is_no_argument_and_batches_its_selections() {
+        let app = TestApp::for_module::<EntryApp>()
+            .await
+            .expect("the owner is reached");
+
+        let body = crate::graphql_answer(&app, "{ a: entry(id: 1) b: entry(id: 2) }").await;
+
+        assert_eq!(
+            body["data"],
+            serde_json::json!({ "a": "entry 1", "b": "entry 2" }),
+            "{body}",
+        );
+        let almanac = app.container().get::<Almanac>().expect("provided");
+        assert_eq!(almanac.batches.load(Ordering::SeqCst), 1, "one batch");
+
+        let arguments = crate::graphql_answer(&app, r#"{ entry(id: 1, entries: "sent") }"#).await;
+        assert_eq!(
+            arguments["errors"][0]["message"],
+            r#"Unknown argument "entries" on field "entry" of type "Query"."#,
+            "{arguments}",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mutations_loader_parameter_reads_it() {
+        let app = TestApp::for_module::<EntryApp>()
+            .await
+            .expect("the owner is reached");
+
+        let body = crate::graphql_answer(&app, "mutation { touchEntry(id: 3) }").await;
+
+        assert_eq!(body["data"]["touchEntry"], "entry 3", "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_subscriptions_loader_parameter_reads_it_at_its_opening() {
+        let app = TestApp::for_module::<EntryApp>()
+            .await
+            .expect("the owner is reached");
+        let mut socket = app.graphql_socket().open();
+        socket.connect().await;
+
+        socket.subscribe("feed", "subscription { entryFeed(id: 4) }");
+        let item = socket.next_item("feed").await.expect("the item");
+
+        assert_eq!(item["data"]["entryFeed"], "entry 4", "{item}");
+    }
+
+    #[derive(Clone, SimpleObject)]
+    struct Chapter {
+        id: i32,
+        title: String,
+    }
+
+    #[resolver]
+    struct ChapterResolver;
+
+    #[operations]
+    impl ChapterResolver {
+        #[query]
+        #[public]
+        async fn chapter_of_the_day(&self) -> Chapter {
+            Chapter {
+                id: 1,
+                title: "the first".to_owned(),
+            }
+        }
+
+        #[entity]
+        #[public]
+        async fn find_chapter_by_id(
+            &self,
+            id: i32,
+            entries: &DataLoader<AlmanacEntries>,
+        ) -> async_graphql::Result<Chapter> {
+            let Ok(found) = entries.load_one(id).await;
+            Ok(Chapter {
+                id,
+                title: found.unwrap_or_default(),
+            })
+        }
+    }
+
+    #[module(
+        imports = [
+            GraphqlModule::for_root(GraphqlConfig {
+                federation: true,
+                ..GraphqlConfig::default()
+            }),
+            AlmanacModule,
+        ],
+        providers = [ChapterResolver],
+    )]
+    struct ChapterApp;
+
+    #[tokio::test]
+    async fn an_entitys_loader_parameter_joins_no_key_and_reads_it() {
+        let app = TestApp::for_module::<ChapterApp>()
+            .await
+            .expect("the owner is reached");
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({
+                "query": "query($reps: [_Any!]!) { \
+                          _entities(representations: $reps) { ... on Chapter { title } } }",
+                "variables": { "reps": [{ "__typename": "Chapter", "id": 5 }] },
+            }))
+            .send()
+            .await;
+        let body: serde_json::Value = resp.json().await.value().deserialize();
+
+        assert_eq!(body["data"]["_entities"][0]["title"], "entry 5", "{body}");
+    }
+
+    /// Each role's resolver, its loader's owner in no module its app imports.
+    mod unreached {
+        use std::collections::HashMap;
+
+        use nest_rs_core::{injectable, module};
+        use nest_rs_graphql::async_graphql::dataloader::DataLoader;
+        use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
+        use nest_rs_graphql::async_graphql::{self, SimpleObject};
+        use nest_rs_graphql::{GraphqlConfig, GraphqlModule, dataloader, operations, resolver};
+        use nest_rs_testing::TestApp;
+
+        #[injectable]
+        #[derive(Default)]
+        struct Ledger;
+
+        #[dataloader]
+        impl Ledger {
+            async fn lines(&self, keys: &[i32]) -> HashMap<i32, String> {
+                keys.iter().map(|key| (*key, String::new())).collect()
+            }
+        }
+
+        #[module(providers = [Ledger])]
+        struct LedgerModule;
+
+        #[resolver]
+        struct QueryReader;
+
+        #[operations]
+        impl QueryReader {
+            #[query]
+            #[public]
+            async fn line(&self, id: i32, lines: &DataLoader<LedgerLines>) -> String {
+                let Ok(found) = lines.load_one(id).await;
+                found.unwrap_or_default()
+            }
+        }
+
+        #[module(imports = [GraphqlModule], providers = [QueryReader])]
+        struct QueryReaderApp;
+
+        #[resolver]
+        struct MutationReader;
+
+        #[operations]
+        impl MutationReader {
+            #[query]
+            #[public]
+            async fn mutation_reader_up(&self) -> bool {
+                true
+            }
+
+            #[mutation]
+            #[public]
+            async fn post_line(&self, id: i32, lines: &DataLoader<LedgerLines>) -> String {
+                let Ok(found) = lines.load_one(id).await;
+                found.unwrap_or_default()
+            }
+        }
+
+        #[module(imports = [GraphqlModule], providers = [MutationReader])]
+        struct MutationReaderApp;
+
+        #[resolver]
+        struct SubscriptionReader;
+
+        #[operations]
+        impl SubscriptionReader {
+            #[query]
+            #[public]
+            async fn subscription_reader_up(&self) -> bool {
+                true
+            }
+
+            #[subscription]
+            #[public]
+            async fn line_feed(
+                &self,
+                id: i32,
+                lines: &DataLoader<LedgerLines>,
+            ) -> impl Stream<Item = String> {
+                let Ok(found) = lines.load_one(id).await;
+                stream::iter(found)
+            }
+        }
+
+        #[module(imports = [GraphqlModule], providers = [SubscriptionReader])]
+        struct SubscriptionReaderApp;
+
+        #[derive(Clone, SimpleObject)]
+        struct Line {
+            id: i32,
+        }
+
+        #[resolver]
+        struct EntityReader;
+
+        #[operations]
+        impl EntityReader {
+            #[query]
+            #[public]
+            async fn entity_reader_up(&self) -> Line {
+                Line { id: 1 }
+            }
+
+            #[entity]
+            #[public]
+            async fn find_line_by_id(
+                &self,
+                id: i32,
+                lines: &DataLoader<LedgerLines>,
+            ) -> async_graphql::Result<Line> {
+                let Ok(_) = lines.load_one(id).await;
+                Ok(Line { id })
+            }
+        }
+
+        #[module(
+            imports = [GraphqlModule::for_root(GraphqlConfig {
+                federation: true,
+                ..GraphqlConfig::default()
+            })],
+            providers = [EntityReader],
+        )]
+        struct EntityReaderApp;
+
+        async fn refusal_of<M: nest_rs_core::Module + 'static>() -> String {
+            match TestApp::for_module::<M>().await {
+                Err(refused) => nest_rs_core::error_message(refused.as_ref()),
+                Ok(_) => panic!("every operation reading the loader would fail"),
+            }
+        }
+
+        #[tokio::test]
+        async fn each_root_role_whose_loader_owner_is_not_reached_is_refused_naming_the_import() {
+            for (refused, field, resolver) in [
+                (
+                    refusal_of::<QueryReaderApp>().await,
+                    "`query line`",
+                    "QueryReader",
+                ),
+                (
+                    refusal_of::<MutationReaderApp>().await,
+                    "`mutation post_line`",
+                    "MutationReader",
+                ),
+                (
+                    refusal_of::<SubscriptionReaderApp>().await,
+                    "`subscription line_feed`",
+                    "SubscriptionReader",
+                ),
+                (
+                    refusal_of::<EntityReaderApp>().await,
+                    "`entity find_line_by_id`",
+                    "EntityReader",
+                ),
+            ] {
+                let declared = format!("(declared on `{resolver}`)");
+                let import = format!("import `LedgerModule` into the module serving `{resolver}`");
+                for named in [field, &declared, "Ledger", &import] {
+                    assert!(refused.contains(named), "names {named}: {refused}");
+                }
+            }
+        }
+
+        #[module(imports = [QueryReaderApp, LedgerModule])]
+        struct LedgerApp;
+
+        #[tokio::test]
+        async fn a_root_field_whose_loader_owner_is_imported_boots() {
+            let app = TestApp::for_module::<LedgerApp>()
+                .await
+                .expect("the loader `line` reads is reached");
+
+            let body = crate::graphql_answer(&app, "{ line(id: 1) }").await;
+
+            assert_eq!(body["data"]["line"], "", "{body}");
+        }
+
+        /// An app that does not reach the resolver does not serve the field, so
+        /// the need is not its own.
+        #[tokio::test]
+        async fn a_root_field_whose_resolver_is_not_reached_refuses_nothing() {
+            #[resolver]
+            struct Elsewhere;
+
+            #[operations]
+            impl Elsewhere {
+                #[query]
+                #[public]
+                async fn elsewhere_up(&self) -> bool {
+                    true
+                }
+            }
+
+            #[module(imports = [GraphqlModule], providers = [Elsewhere])]
+            struct ElsewhereApp;
+
+            TestApp::for_module::<ElsewhereApp>()
+                .await
+                .expect("it serves no field reading a loader");
+        }
+    }
+}
+
+/// A body reading its loader off the context by hand is unreadable by the boot:
+/// nothing refuses it, so the request does. The client reads no Rust type.
+mod hand_read {
+    use std::collections::HashMap;
+
+    use nest_rs_core::{injectable, module};
+    use nest_rs_graphql::async_graphql::dataloader::DataLoader;
+    use nest_rs_graphql::async_graphql::{self, Context};
+    use nest_rs_graphql::{GraphqlModule, dataloader, operations, resolver};
+    use nest_rs_testing::{LogCapture, TestApp};
+
+    #[injectable]
+    #[derive(Default)]
+    struct Cellar;
+
+    #[dataloader]
+    impl Cellar {
+        async fn bottles(&self, keys: &[i32]) -> HashMap<i32, String> {
+            keys.iter().map(|key| (*key, String::new())).collect()
+        }
+    }
+
+    #[resolver]
+    struct BottleResolver;
+
+    #[operations]
+    impl BottleResolver {
+        #[query]
+        #[public]
+        async fn bottle(&self, ctx: &Context<'_>, id: i32) -> async_graphql::Result<String> {
+            let loader = ctx.data::<DataLoader<CellarBottles>>()?;
+            let Ok(found) = loader.load_one(id).await;
+            Ok(found.unwrap_or_default())
+        }
+    }
+
+    #[module(imports = [GraphqlModule], providers = [BottleResolver])]
+    struct BottleApp;
+
+    #[tokio::test]
+    async fn a_type_a_context_does_not_hold_answers_opaquely_and_tells_the_operator() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<BottleApp>()
+            .await
+            .expect("the boot cannot read a body");
+
+        let body = crate::graphql_answer(&app, "{ aliasTheClientWrote: bottle(id: 1) }").await;
+
+        assert_eq!(
+            body["errors"][0]["message"],
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+            "{body}",
+        );
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "INTERNAL",
+            "{body}"
+        );
+        assert!(!body.to_string().contains("DataLoader"), "{body}");
+        let filed = logs.expect_one("nest_rs::graphql", "graphql operation failed");
+        let said = filed.field("error").unwrap_or_default();
+        assert!(said.contains("CellarBottles"), "names the type: {said}");
+        assert!(
+            !said.contains("aliasTheClientWrote"),
+            "no name the client wrote reaches a line: {said}",
+        );
+    }
+
+    /// A deliberate error that only looks like it opens the same way is left
+    /// as built.
+    #[tokio::test]
+    async fn a_deliberate_error_is_not_read_as_one() {
+        #[resolver]
+        struct DeliberateResolver;
+
+        #[operations]
+        impl DeliberateResolver {
+            #[query]
+            #[public]
+            async fn deliberate(&self) -> async_graphql::Result<i32> {
+                Err("Data `the archive` is on the way.".into())
+            }
+        }
+
+        #[module(imports = [GraphqlModule], providers = [DeliberateResolver])]
+        struct DeliberateApp;
+
+        let app = TestApp::for_module::<DeliberateApp>()
+            .await
+            .expect("the schema boots");
+
+        let body = crate::graphql_answer(&app, "{ deliberate }").await;
+
+        assert_eq!(
+            body["errors"][0]["message"], "Data `the archive` is on the way.",
+            "{body}",
         );
     }
 }

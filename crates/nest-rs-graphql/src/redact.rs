@@ -12,6 +12,11 @@
 //! document parsed under the GraphQL Name grammar — a field, an argument, a
 //! fragment, a variable — stays, as the specification's own errors name it.
 //!
+//! `Context::data`'s refusal names a Rust type, and a resolver's `?` hands it on
+//! as an answer of its own: it answers the opaque error, the type filed. The line
+//! names no field: an error's path holds the aliases the client wrote, and the
+//! field's own `graphql.field` line, under one trace, names it as it is served.
+//!
 //! An [`Executor`] wrapper rather than an extension, which would be entered on
 //! every field of every request.
 
@@ -21,6 +26,8 @@ use async_graphql::futures_util::StreamExt;
 use async_graphql::futures_util::stream::BoxStream;
 use async_graphql::{Data, Executor, Request, Response, ServerError};
 use nest_rs_core::DecodeError;
+
+use crate::error::UnheldData;
 
 /// The schema, answering with every error message redacted; a batch goes
 /// through [`execute`](Executor::execute), the trait's default.
@@ -49,6 +56,9 @@ fn redacted(mut response: Response) -> Response {
     response
 }
 
+/// How `Context::data`'s refusal reads, the Rust type's path between the two.
+const NO_DATA: (&str, &str) = ("Data `", "` does not exist.");
+
 /// How async-graphql's refusal of an unknown `operationName` opens, the
 /// `operationName` following it.
 const UNKNOWN_OPERATION_QUOTED: &str = "Unknown operation named \"";
@@ -60,6 +70,18 @@ const UNKNOWN_OPERATION: &str = "Unknown operation named by operationName";
 /// anyhow chain; any other source is read by serde's wording alone.
 fn redact(error: &mut ServerError) {
     if error.source.is_none() {
+        if let Some(data) = error
+            .message
+            .strip_prefix(NO_DATA.0)
+            .and_then(|rest| rest.strip_suffix(NO_DATA.1))
+        {
+            let opaque = crate::error::opaque_error(&UnheldData {
+                data: data.to_owned(),
+            });
+            error.message = opaque.message;
+            error.extensions = opaque.extensions;
+            return;
+        }
         if error.path.is_empty() && error.message.starts_with(UNKNOWN_OPERATION_QUOTED) {
             UNKNOWN_OPERATION.clone_into(&mut error.message);
             return;

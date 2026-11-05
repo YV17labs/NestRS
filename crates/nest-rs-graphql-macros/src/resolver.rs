@@ -833,7 +833,9 @@ fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> sy
     let ctx = ctx_param_ident(sig);
     let keys = sig.inputs.iter().filter(|arg| match arg {
         FnArg::Receiver(_) => false,
-        FnArg::Typed(pt) if tail_param(&pt.ty).is_some() => false,
+        FnArg::Typed(pt) if tail_param(&pt.ty).is_some() || loader_read_by(&pt.ty).is_some() => {
+            false
+        }
         FnArg::Typed(pt) => match &*pt.pat {
             syn::Pat::Ident(pi) => Some(&pi.ident) != ctx.as_ref(),
             _ => true,
@@ -1240,15 +1242,21 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             }
             let piped = piped_args(&sig);
             // On the wire, the bound subject becomes its `id` string and each pipe its
-            // `T`; a `Scoped<T>` or an `Ambient<T>` is no argument at all.
+            // `T`; a `Scoped<T>`, an `Ambient<T>` or a `&DataLoader<L>` is no argument
+            // at all.
             let wrapper_sig = {
                 let mut s = sig.clone();
                 s.inputs = s
                     .inputs
                     .into_iter()
-                    .filter(
-                        |input| !matches!(input, FnArg::Typed(pt) if tail_param(&pt.ty).is_some()),
-                    )
+                    .filter(|input| {
+                        !matches!(
+                            input,
+                            FnArg::Typed(pt)
+                                if tail_param(&pt.ty).is_some()
+                                    || loader_read_by(&pt.ty).is_some()
+                        )
+                    })
                     .collect();
                 for input in s.inputs.iter_mut() {
                     let FnArg::Typed(pt) = input else { continue };
@@ -1424,6 +1432,17 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             let bound_id = bind_info.as_ref().map(|(_, _, id_ident, _)| id_ident);
             let validate_prelude = validate_args(&wrapper_sig.inputs, bound_id.as_slice());
             let tail_prelude = tail_bindings(&tail);
+            let loaders = loader_args(&sig);
+            field_needs.extend(
+                loaders.iter().map(|(_, loader)| {
+                    root_loader_read(&self_ty, &base, &route_label, loader, &cfgs)
+                }),
+            );
+            let loader_prelude = loaders.iter().map(|(ident, loader)| {
+                quote! {
+                    let #ident = ::nest_rs_graphql::__private::seeded_loader::<#loader>(#gctx)?;
+                }
+            });
             // Bare on purpose: `graphql` is an inert helper the `#[Object]` derive
             // strips, not a path to resolve.
             let entity_attr = is_entity.then(|| quote!(#[graphql(entity)]));
@@ -1460,6 +1479,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     #run(#site, #gctx, #site_kind, move || async move {
                         #(#tail_prelude)*
                         #(#validate_prelude)*
+                        #(#loader_prelude)*
                         #bind_prelude
                         #(#pipe_prelude)*
                         #body
@@ -1666,6 +1686,53 @@ fn loader_read(parent: &Type, field: &str, loader: &Type, cfgs: &[TokenStream2])
     }
 }
 
+/// The need a root field's `&DataLoader<loader>` parameter declares: the schema
+/// build refuses it when the app reaches `self_ty` and not the loader's owner.
+fn root_loader_read(
+    self_ty: &Type,
+    resolver: &Ident,
+    field: &str,
+    loader: &Type,
+    cfgs: &[TokenStream2],
+) -> TokenStream2 {
+    let resolver = resolver.to_string();
+    quote! {
+        #(#cfgs)*
+        ::nest_rs_graphql::__private::inventory::submit! {
+            ::nest_rs_graphql::__private::GraphqlRootLoaderRegistration {
+                resolver: || (::core::any::TypeId::of::<#self_ty>(), #resolver),
+                field: #field,
+                owner: <#loader as ::nest_rs_graphql::__private::LoaderOwner>::owner,
+                origin: ::core::module_path!(),
+            }
+        }
+    }
+}
+
+/// The `L` of a `&DataLoader<L>` parameter, which reads the request's loader
+/// rather than a schema argument.
+fn loader_read_by(ty: &Type) -> Option<&Type> {
+    let Type::Reference(reference) = ty else {
+        return None;
+    };
+    nth_generic_type(&reference.elem, "DataLoader", 0)
+}
+
+/// Each `&DataLoader<L>` parameter of a root field, by its binding name, off
+/// the normalized signature.
+fn loader_args(sig: &Signature) -> Vec<(Ident, Type)> {
+    sig.inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            FnArg::Typed(pt) => match (&*pt.pat, loader_read_by(&pt.ty)) {
+                (syn::Pat::Ident(pi), Some(loader)) => Some((pi.ident.clone(), loader.clone())),
+                _ => None,
+            },
+            FnArg::Receiver(_) => None,
+        })
+        .collect()
+}
+
 /// Build a field resolver's `#[ComplexObject]` method, the parent as `&self`,
 /// run through its site. Owned args become GraphQL field arguments,
 /// `&`-reference args are injected, a `&DataLoader<L>` reads the request's
@@ -1732,7 +1799,7 @@ fn field_method(
         if let Type::Reference(reference) = &*pt.ty {
             let dep_ty = &*reference.elem;
             let dep = format_ident!("__dep_{}", ident);
-            if let Some(loader) = nth_generic_type(dep_ty, "DataLoader", 0) {
+            if let Some(loader) = loader_read_by(&pt.ty) {
                 dep_bindings.push(quote! {
                     let #dep = ::nest_rs_graphql::__private::seeded_loader::<#loader>(__ctx)?;
                 });

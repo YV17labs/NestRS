@@ -131,6 +131,8 @@ Three properties make this loader correct:
   applies, so a batch on behalf of one caller never returns another
   tenant's rows.
 
+## Reading a loader
+
 A `#[field_resolver]` takes the loader as a parameter and calls `.load_one(key)`
 per parent — the runtime batches every call into a single query:
 
@@ -142,6 +144,21 @@ async fn namesakes(
     posts: &DataLoader<PostsServiceByName>,
 ) -> Result<Vec<Post>, ServiceError> {
     Ok(posts.load_one(author.name.clone()).await?.unwrap_or_default())
+}
+```
+
+A root field — `#[query]`, `#[mutation]`, `#[subscription]`, `#[entity]` — takes it the
+same way, and the parameter is no argument of the schema, nor part of an entity's key:
+
+```rust title="crates/features/src/posts/graphql/resolver.rs"
+#[query]
+#[authorize(Read, posts::Entity)]
+async fn posts_named(
+    &self,
+    name: String,
+    posts: &DataLoader<PostsServiceByName>,
+) -> Result<Vec<Post>, ServiceError> {
+    Ok(posts.load_one(name).await?.unwrap_or_default())
 }
 ```
 
@@ -159,6 +176,8 @@ for an [exposed relation](/graphql/relations/), naming the line to add:
 ```text frame="terminal"
 a served field reads a loader this app does not reach, so every query selecting it would fail: `Author.namesakes` (declared on `features::authors::Author`) reads a loader of `features::posts::PostsService`: import `PostsModule` into the module serving `Author`
 ```
+
+A root field is named by its role, `query posts_named` (declared on its resolver).
 
 The loader's name comes from `#[dataloader]`, so the parameter takes only one
 `#[dataloader]` generated: the macro's own association is what the boot reads,

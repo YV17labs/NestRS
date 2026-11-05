@@ -292,6 +292,17 @@ pub(crate) struct UnseededLoader {
     pub(crate) loader: &'static str,
 }
 
+/// What a field read off its `Context` by hand and its request does not hold:
+/// the type goes on the operator's line, never to the client.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "a field read `{data}` off its context, which this request does not hold; a loader read as a \
+     `&DataLoader<L>` parameter instead refuses the boot naming the import"
+)]
+pub(crate) struct UnheldData {
+    pub(crate) data: String,
+}
+
 /// A federation field reached on a schema that carries no container, so no
 /// site to run it on: refused rather than served past its guards.
 #[derive(Debug, thiserror::Error)]

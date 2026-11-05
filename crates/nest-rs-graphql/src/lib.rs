@@ -65,8 +65,8 @@ pub mod __private {
     pub use crate::context::{ENDPOINT, connection_data};
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate, FieldFailure};
     pub use crate::loader::{
-        GraphqlLoaderRegistration, GraphqlRelationRegistration, LoaderOwner, batch_spawner,
-        seeded_loader,
+        GraphqlLoaderRegistration, GraphqlRelationRegistration, GraphqlRootLoaderRegistration,
+        LoaderOwner, batch_spawner, seeded_loader,
     };
     pub use crate::module::RUNTIME;
     pub use crate::operation::{

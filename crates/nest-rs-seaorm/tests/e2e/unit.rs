@@ -14,8 +14,8 @@ use nest_rs_core::{
 };
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{HttpConfig, HttpError, HttpModule, HttpView, StatusCode};
-use nest_rs_seaorm::__private::current_executor;
-use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmExecutor, SeaOrmModule};
+use nest_rs_seaorm::__private::{SeaOrmExecutor, current_executor};
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::TestApp;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 

@@ -11,7 +11,6 @@ use nest_rs_core::{Continuation, RequestContinuation};
 use nest_rs_database::{AtomicBlock, Deferred};
 
 use crate::atomic::AtomicExecutor;
-use crate::error::CommitError;
 use crate::savepoint::Savepoint;
 use crate::turn::Turn;
 use sea_orm::{
@@ -22,33 +21,23 @@ use sea_orm::{
 /// The label an atomic block's own transaction logs under: it serves no edge.
 const ATOMIC: &str = "atomic";
 
-/// The connection a request's queries run against: the shared pool, the
-/// per-request [`DatabaseTransaction`], a transaction opened lazily on first
-/// use, or the savepoint an atomic block opened inside one. Cheap to clone.
+/// The connection a request's queries run against: the shared pool, a
+/// transaction opened lazily on first use, or the savepoint an atomic block
+/// opened inside one. Cheap to clone.
 ///
-/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm.
+/// Tier 2, for this crate's suites: nothing public installs or hands one out.
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum SeaOrmExecutor {
     /// The shared connection pool — safe (read) methods and system/job work run
     /// here, outside any transaction.
     Pool(DatabaseConnection),
-    /// A transaction the **caller** opened and installed itself — a framework
-    /// suite, through the port's plumbing; no unit the framework opens holds
-    /// one.
-    ///
-    /// Its commit is the caller's, so work handed to
-    /// [`after_commit`](nest_rs_database::after_commit) inside it runs at once:
-    /// the caller emits after its own `commit`. Inside a unit of work, a
-    /// listener reached before it still runs as a unit of its own, never in
-    /// this transaction; outside every unit, it runs bare in this one.
-    Txn(Arc<DatabaseTransaction>),
     /// A transaction opened on **first data-layer touch**: what
     /// [`SeaOrmUnitOfWork`](crate::SeaOrmUnitOfWork) installs for a unit of
     /// work of its own, so a unit a guard denies (or one that never queries)
     /// costs no `BEGIN`/`ROLLBACK` round-trip at all.
-    /// An [`atomic`](fn@nest_rs_database::atomic) block on the pool, or inside a
-    /// caller's [`Txn`](SeaOrmExecutor::Txn), runs on one of its own.
+    /// An [`atomic`](fn@nest_rs_database::atomic) block on the pool runs on one
+    /// of its own.
     Lazy(Arc<LazyTransaction>),
     /// The savepoint an [`atomic`](fn@nest_rs_database::atomic) block opened
     /// inside a [`Lazy`](SeaOrmExecutor::Lazy) transaction or another block's
@@ -56,12 +45,12 @@ pub enum SeaOrmExecutor {
     Savepoint(Arc<Savepoint>),
 }
 
-/// The deferred-`BEGIN` state behind [`SeaOrmExecutor::Lazy`]: what to open on, and
-/// the transaction once something touched the data layer. Concurrent first
+/// The deferred-`BEGIN` state behind [`SeaOrmExecutor::Lazy`]: the pool to open on,
+/// and the transaction once something touched the data layer. Concurrent first
 /// touches race through a [`tokio::sync::OnceCell`], so exactly one
 /// transaction opens per request.
 pub struct LazyTransaction {
-    opener: Opener,
+    pool: DatabaseConnection,
     /// The edge this boundary serves, named by every event it emits.
     transport: &'static str,
     cell: tokio::sync::OnceCell<Arc<DatabaseTransaction>>,
@@ -90,15 +79,6 @@ pub struct LazyTransaction {
     outbox: Option<Arc<crate::queue::SeaOrmOutbox>>,
 }
 
-/// What a [`LazyTransaction`] sends its `BEGIN` on.
-enum Opener {
-    /// A transaction of its own on the pool.
-    Pool(DatabaseConnection),
-    /// A savepoint nested in a transaction the caller opened, through sea-orm's
-    /// own nesting: an atomic block inside a [`SeaOrmExecutor::Txn`].
-    Caller(Arc<DatabaseTransaction>),
-}
-
 /// No statement on this transaction has failed.
 pub(crate) const POISON_CLEAN: u8 = 0;
 /// One failed on something a re-run would hit again — a constraint violation, a
@@ -115,18 +95,8 @@ impl LazyTransaction {
     /// A lazy transaction over `pool` — nothing is opened yet. `transport` names
     /// the edge for every event this boundary emits.
     pub fn new(pool: DatabaseConnection, transport: &'static str) -> Self {
-        Self::opening(Opener::Pool(pool), transport)
-    }
-
-    /// An atomic block inside a caller's own transaction: its `BEGIN` is a
-    /// `SAVEPOINT` there, its commit a `RELEASE`.
-    pub(crate) fn nested_in(caller: Arc<DatabaseTransaction>, transport: &'static str) -> Self {
-        Self::opening(Opener::Caller(caller), transport)
-    }
-
-    fn opening(opener: Opener, transport: &'static str) -> Self {
         Self {
-            opener,
+            pool,
             transport,
             cell: tokio::sync::OnceCell::new(),
             settled: std::sync::atomic::AtomicBool::new(false),
@@ -153,49 +123,21 @@ impl LazyTransaction {
         self.outbox.as_ref().filter(|outbox| outbox.is_armed())
     }
 
-    /// The pool this boundary draws from; a caller's transaction names none.
-    pub(crate) fn pool(&self) -> Option<&DatabaseConnection> {
-        match &self.opener {
-            Opener::Pool(pool) => Some(pool),
-            Opener::Caller(_) => None,
-        }
+    /// The pool this boundary draws from.
+    pub(crate) fn pool(&self) -> &DatabaseConnection {
+        &self.pool
     }
 
     /// The pool handle whatever leaves this boundary runs on — its
     /// after-commit work, a step out of its transaction — keeping the
-    /// binding's outbox for a block of its own and a cancel; `None` for a
-    /// caller's transaction.
-    pub(crate) fn pool_handle(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
-        let pool = self.pool()?.clone();
+    /// binding's outbox for a block of its own and a cancel.
+    pub(crate) fn pool_handle(&self) -> Arc<dyn nest_rs_database::Executor> {
+        let pool = self.pool.clone();
         #[cfg(feature = "queue")]
         if let Some(outbox) = &self.outbox {
-            return Some(Arc::new(crate::queue::KeepingPool::new(
-                pool,
-                Arc::clone(outbox),
-            )));
+            return Arc::new(crate::queue::KeepingPool::new(pool, Arc::clone(outbox)));
         }
-        Some(SeaOrmExecutor::Pool(pool).into())
-    }
-
-    pub(crate) fn backend(&self) -> DbBackend {
-        match &self.opener {
-            Opener::Pool(pool) => pool.get_database_backend(),
-            Opener::Caller(caller) => caller.get_database_backend(),
-        }
-    }
-
-    fn support_returning(&self) -> bool {
-        match &self.opener {
-            Opener::Pool(pool) => pool.support_returning(),
-            Opener::Caller(caller) => caller.support_returning(),
-        }
-    }
-
-    fn is_mock_connection(&self) -> bool {
-        match &self.opener {
-            Opener::Pool(pool) => pool.is_mock_connection(),
-            Opener::Caller(caller) => caller.is_mock_connection(),
-        }
+        SeaOrmExecutor::Pool(pool).into()
     }
 
     pub(crate) fn transport(&self) -> &'static str {
@@ -257,13 +199,7 @@ impl LazyTransaction {
     async fn txn_ref(&self) -> Result<&DatabaseTransaction, DbErr> {
         Ok(self
             .cell
-            .get_or_try_init(|| async {
-                match &self.opener {
-                    Opener::Pool(pool) => pool.begin().await,
-                    Opener::Caller(caller) => caller.begin().await,
-                }
-                .map(Arc::new)
-            })
+            .get_or_try_init(|| async { self.pool.begin().await.map(Arc::new) })
             .await?
             .as_ref())
     }
@@ -425,7 +361,7 @@ impl LazyTransaction {
         if success {
             match txn.commit().await {
                 Ok(()) => FinalizeOutcome::Committed,
-                Err(err) => FinalizeOutcome::CommitFailed(CommitError(err)),
+                Err(err) => FinalizeOutcome::CommitFailed(err),
             }
         } else {
             if let Err(err) = txn.rollback().await {
@@ -454,19 +390,15 @@ impl Drop for LazyTransaction {
 /// [`Commit`](Continuation::Commit), captured here where it is registered — the
 /// scope, the unit's binding, the ability, every value that crosses — with the
 /// boundary's own `pool` handle installed inside, outside the transaction it
-/// waited for; bare without one.
+/// waited for.
 pub(crate) fn held_for_commit(
     work: Deferred,
-    pool: Option<Arc<dyn nest_rs_database::Executor>>,
+    pool: Arc<dyn nest_rs_database::Executor>,
 ) -> Deferred {
-    let carried = RequestContinuation::capture(Continuation::Commit);
-    match (carried, pool) {
-        (Some(carried), Some(pool)) => {
-            Box::pin(carried.scope(nest_rs_database::__private::with_executor(pool, work)))
-        }
-        (Some(carried), None) => Box::pin(carried.scope(work)),
-        (None, Some(pool)) => Box::pin(nest_rs_database::__private::with_executor(pool, work)),
-        (None, None) => work,
+    let on_pool = nest_rs_database::__private::with_executor(pool, work);
+    match RequestContinuation::capture(Continuation::Commit) {
+        Some(carried) => Box::pin(carried.scope(on_pool)),
+        None => Box::pin(on_pool),
     }
 }
 
@@ -657,24 +589,6 @@ fn report_abandoned(transport: &'static str) {
 }
 
 /// How [`LazyTransaction::finalize`] settled the boundary's transaction.
-///
-/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm —
-/// one that fails the boundary, since only the arms it names are known to have
-/// kept what the boundary wrote:
-///
-/// ```compile_fail,E0004
-/// use nest_rs_seaorm::FinalizeOutcome;
-///
-/// fn kept(outcome: FinalizeOutcome) -> bool {
-///     match outcome {
-///         FinalizeOutcome::NoTransaction | FinalizeOutcome::Committed => true,
-///         FinalizeOutcome::RolledBack
-///         | FinalizeOutcome::Escaped
-///         | FinalizeOutcome::CommitFailed(_)
-///         | FinalizeOutcome::Poisoned { .. } => false,
-///     }
-/// }
-/// ```
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FinalizeOutcome {
@@ -692,7 +606,7 @@ pub enum FinalizeOutcome {
     /// a transaction and write later.
     Escaped,
     /// The commit itself failed — the caller classifies and logs it.
-    CommitFailed(CommitError),
+    CommitFailed(DbErr),
     /// A statement failed inside the transaction, yet the boundary reported
     /// success: nothing was committed. The caller fails the outcome loudly, like
     /// [`CommitFailed`](Self::CommitFailed). Already logged at `error`.
@@ -711,18 +625,12 @@ pub enum FinalizeOutcome {
 #[async_trait]
 impl ConnectionTrait for SeaOrmExecutor {
     fn get_database_backend(&self) -> DbBackend {
-        match self {
-            SeaOrmExecutor::Pool(c) => c.get_database_backend(),
-            SeaOrmExecutor::Txn(t) => t.get_database_backend(),
-            SeaOrmExecutor::Lazy(l) => l.backend(),
-            SeaOrmExecutor::Savepoint(s) => s.root().backend(),
-        }
+        self.pool().get_database_backend()
     }
 
     async fn execute_raw(&self, stmt: Statement) -> Result<ExecResult, DbErr> {
         match self {
             SeaOrmExecutor::Pool(c) => c.execute_raw(stmt).await,
-            SeaOrmExecutor::Txn(t) => t.execute_raw(stmt).await,
             SeaOrmExecutor::Lazy(l) => l.run(|txn| txn.execute_raw(stmt)).await,
             SeaOrmExecutor::Savepoint(s) => s.run(|txn| txn.execute_raw(stmt)).await,
         }
@@ -731,7 +639,6 @@ impl ConnectionTrait for SeaOrmExecutor {
     async fn execute_unprepared(&self, sql: &str) -> Result<ExecResult, DbErr> {
         match self {
             SeaOrmExecutor::Pool(c) => c.execute_unprepared(sql).await,
-            SeaOrmExecutor::Txn(t) => t.execute_unprepared(sql).await,
             SeaOrmExecutor::Lazy(l) => l.run(|txn| txn.execute_unprepared(sql)).await,
             SeaOrmExecutor::Savepoint(s) => s.run(|txn| txn.execute_unprepared(sql)).await,
         }
@@ -740,7 +647,6 @@ impl ConnectionTrait for SeaOrmExecutor {
     async fn query_one_raw(&self, stmt: Statement) -> Result<Option<QueryResult>, DbErr> {
         match self {
             SeaOrmExecutor::Pool(c) => c.query_one_raw(stmt).await,
-            SeaOrmExecutor::Txn(t) => t.query_one_raw(stmt).await,
             SeaOrmExecutor::Lazy(l) => l.run(|txn| txn.query_one_raw(stmt)).await,
             SeaOrmExecutor::Savepoint(s) => s.run(|txn| txn.query_one_raw(stmt)).await,
         }
@@ -749,40 +655,28 @@ impl ConnectionTrait for SeaOrmExecutor {
     async fn query_all_raw(&self, stmt: Statement) -> Result<Vec<QueryResult>, DbErr> {
         match self {
             SeaOrmExecutor::Pool(c) => c.query_all_raw(stmt).await,
-            SeaOrmExecutor::Txn(t) => t.query_all_raw(stmt).await,
             SeaOrmExecutor::Lazy(l) => l.run(|txn| txn.query_all_raw(stmt)).await,
             SeaOrmExecutor::Savepoint(s) => s.run(|txn| txn.query_all_raw(stmt)).await,
         }
     }
 
     fn support_returning(&self) -> bool {
-        match self {
-            SeaOrmExecutor::Pool(c) => c.support_returning(),
-            SeaOrmExecutor::Txn(t) => t.support_returning(),
-            SeaOrmExecutor::Lazy(l) => l.support_returning(),
-            SeaOrmExecutor::Savepoint(s) => s.root().support_returning(),
-        }
+        self.pool().support_returning()
     }
 
     fn is_mock_connection(&self) -> bool {
-        match self {
-            SeaOrmExecutor::Pool(c) => c.is_mock_connection(),
-            SeaOrmExecutor::Txn(t) => t.is_mock_connection(),
-            SeaOrmExecutor::Lazy(l) => l.is_mock_connection(),
-            SeaOrmExecutor::Savepoint(s) => s.root().is_mock_connection(),
-        }
+        self.pool().is_mock_connection()
     }
 }
 
 impl SeaOrmExecutor {
     /// The pool this handle's statements run on, a block's or a lazy
-    /// transaction's included; `None` inside a caller's own transaction.
-    pub(crate) fn pool(&self) -> Option<&DatabaseConnection> {
+    /// transaction's included.
+    pub(crate) fn pool(&self) -> &DatabaseConnection {
         match self {
-            SeaOrmExecutor::Pool(pool) => Some(pool),
+            SeaOrmExecutor::Pool(pool) => pool,
             SeaOrmExecutor::Lazy(lazy) => lazy.pool(),
             SeaOrmExecutor::Savepoint(block) => block.root().pool(),
-            SeaOrmExecutor::Txn(_) => None,
         }
     }
 
@@ -802,7 +696,7 @@ impl SeaOrmExecutor {
         match self {
             SeaOrmExecutor::Lazy(lazy) => lazy.outbox(),
             SeaOrmExecutor::Savepoint(block) => block.root().outbox(),
-            SeaOrmExecutor::Pool(_) | SeaOrmExecutor::Txn(_) => None,
+            SeaOrmExecutor::Pool(_) => None,
         }
     }
 
@@ -818,14 +712,13 @@ impl SeaOrmExecutor {
     /// the data.
     pub(crate) fn non_transactional(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
         match self {
-            SeaOrmExecutor::Lazy(lazy) if !lazy.is_opened() => lazy.pool_handle(),
+            SeaOrmExecutor::Lazy(lazy) if !lazy.is_opened() => Some(lazy.pool_handle()),
             _ => None,
         }
     }
 
     /// A lazy transaction or a block's savepoint holds the work for its
-    /// settling; a pool and a caller's [`Txn`](SeaOrmExecutor::Txn) hand it
-    /// back to run at once.
+    /// settling; a pool hands it back to run at once.
     pub(crate) fn after_commit(&self, work: Deferred) -> Option<Deferred> {
         match self {
             SeaOrmExecutor::Lazy(lazy) => {
@@ -836,14 +729,13 @@ impl SeaOrmExecutor {
                 block.hold(work);
                 None
             }
-            SeaOrmExecutor::Pool(_) | SeaOrmExecutor::Txn(_) => Some(work),
+            SeaOrmExecutor::Pool(_) => Some(work),
         }
     }
 
     /// A lazy transaction or a block's savepoint writes the records on its
     /// transaction, in its turn, and wakes the relay once it committed; a pool
-    /// and a caller's [`Txn`](SeaOrmExecutor::Txn) keep none, so the jobs are
-    /// filed at once.
+    /// keeps none, so the jobs are filed at once.
     #[cfg(feature = "queue")]
     pub(crate) fn write_outbox(
         &self,
@@ -858,7 +750,7 @@ impl SeaOrmExecutor {
             match self {
                 SeaOrmExecutor::Lazy(lazy) => lazy.hold(wake),
                 SeaOrmExecutor::Savepoint(block) => block.hold(wake),
-                SeaOrmExecutor::Pool(_) | SeaOrmExecutor::Txn(_) => {}
+                SeaOrmExecutor::Pool(_) => {}
             }
             Ok(())
         }))
@@ -890,18 +782,14 @@ impl SeaOrmExecutor {
         ))
     }
 
-    /// A block on the pool is a transaction of its own; inside a caller's
-    /// [`Txn`](SeaOrmExecutor::Txn), a savepoint sea-orm nests there; inside a
-    /// lazy transaction or another block, a savepoint of its own sent on the
-    /// same connection.
+    /// A block on the pool is a transaction of its own; inside a lazy
+    /// transaction or another block, a savepoint of its own sent on the same
+    /// connection.
     pub(crate) fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
         let block = match self {
             SeaOrmExecutor::Pool(pool) => {
                 AtomicExecutor::own(Arc::new(LazyTransaction::new(pool.clone(), ATOMIC)))
             }
-            SeaOrmExecutor::Txn(caller) => AtomicExecutor::own(Arc::new(
-                LazyTransaction::nested_in(Arc::clone(caller), ATOMIC),
-            )),
             SeaOrmExecutor::Lazy(lazy) => {
                 AtomicExecutor::savepoint(Arc::new(Savepoint::in_boundary(Arc::clone(lazy))))
             }
@@ -912,6 +800,39 @@ impl SeaOrmExecutor {
         Some(Arc::new(block))
     }
 }
+
+/// Nothing public installs or hands out the handle a unit runs on, so nothing
+/// public names it: a service reads the ambient executor through
+/// [`Repo`](crate::Repo) (`decisions/visibility-tiers.md`).
+///
+/// ```compile_fail,E0425
+/// fn named(_: nest_rs_seaorm::SeaOrmExecutor) {}
+/// ```
+///
+/// ```compile_fail,E0425
+/// fn named(_: nest_rs_seaorm::LazyTransaction) {}
+/// ```
+///
+/// ```compile_fail,E0425
+/// fn named(_: nest_rs_seaorm::FinalizeOutcome) {}
+/// ```
+///
+/// ```compile_fail,E0425
+/// fn named(_: nest_rs_seaorm::Savepoint) {}
+/// ```
+///
+/// ```compile_fail,E0425
+/// fn named(_: nest_rs_seaorm::CommitError) {}
+/// ```
+///
+/// Nor does this crate's tier 2 keep a handle a caller builds around a
+/// transaction of its own.
+///
+/// ```compile_fail,E0599
+/// let _ = nest_rs_seaorm::__private::SeaOrmExecutor::Txn;
+/// ```
+#[cfg(doctest)]
+struct NoPublicHandle;
 
 /// A SeaORM executor as the ambient context holds it, and the type its
 /// `as_any` hands out: private to this crate, so a service downcasting
@@ -976,9 +897,8 @@ impl nest_rs_database::Executor for Installed {
     }
 }
 
-/// The handle installed, the one way a SeaORM executor of a caller's own
-/// building reaches the port: a framework suite's, through the port's
-/// plumbing.
+/// The handle installed, the one way a SeaORM executor built outside this crate
+/// reaches the port: a framework suite's, through the port's plumbing.
 impl From<SeaOrmExecutor> for Arc<dyn nest_rs_database::Executor> {
     fn from(executor: SeaOrmExecutor) -> Self {
         Arc::new(Installed(executor))

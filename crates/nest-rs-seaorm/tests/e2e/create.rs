@@ -6,7 +6,8 @@ use std::sync::Arc;
 use nest_rs_authz::__private::install_ability;
 use nest_rs_authz::{AbilityBuilder, Action};
 use nest_rs_database::__private::with_request_executor;
-use nest_rs_seaorm::{Creatable, CreateModel, CrudService, SeaOrmExecutor};
+use nest_rs_seaorm::__private::{FinalizeOutcome, LazyTransaction, SeaOrmExecutor};
+use nest_rs_seaorm::{Creatable, CreateModel, CrudService};
 use sea_orm::prelude::Uuid;
 use sea_orm::{
     ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set, TransactionTrait,
@@ -127,7 +128,7 @@ async fn a_create_that_cannot_open_its_savepoint_poisons_the_boundary() {
     let starved = crate::harness::starved_pool().await;
     let hog = starved.begin().await.expect("the only connection is held");
 
-    let lazy = Arc::new(nest_rs_seaorm::LazyTransaction::new(starved, "test"));
+    let lazy = Arc::new(LazyTransaction::new(starved, "test"));
     let result = with_request_executor(
         SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
         install_ability(org_scoped_ability(1), async {
@@ -148,10 +149,7 @@ async fn a_create_that_cannot_open_its_savepoint_poisons_the_boundary() {
     // Swallowed, as `let _ = svc.create(..)` would.
     let outcome = lazy.finalize(true).await;
     assert!(
-        matches!(
-            outcome,
-            nest_rs_seaorm::FinalizeOutcome::Poisoned { retryable: true }
-        ),
+        matches!(outcome, FinalizeOutcome::Poisoned { retryable: true }),
         "a boundary that reported success over a create which never opened must \
          settle as poisoned, not as `NoTransaction` — and *retryable*, since a \
          pool that handed out no connection ran no statement and left nothing \

@@ -218,10 +218,9 @@ async fn an_sse_streams_repo_read_fails_closed() {
     );
 }
 
-/// What a listener ran on: its emitter's own transaction, or a unit of its own.
+/// What a listener ran on: a unit of its own, or anything else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RanOn {
-    TheCallersTransaction,
     ItsOwnTransaction,
     Another,
 }
@@ -246,8 +245,7 @@ impl TxnListeners {
     #[on_event]
     async fn on_recorded(&self, _event: Recorded) {
         let ran_on = match nest_rs_seaorm::__private::current_executor() {
-            Some(nest_rs_seaorm::SeaOrmExecutor::Txn(_)) => RanOn::TheCallersTransaction,
-            Some(nest_rs_seaorm::SeaOrmExecutor::Lazy(_)) => RanOn::ItsOwnTransaction,
+            Some(nest_rs_seaorm::__private::SeaOrmExecutor::Lazy(_)) => RanOn::ItsOwnTransaction,
             _ => RanOn::Another,
         };
         self.probe
@@ -309,11 +307,16 @@ async fn a_listener_run_at_once_under_a_callers_own_transaction_runs_in_a_unit_o
                 .begin()
                 .await
                 .expect("the caller opens its own transaction");
-            nest_rs_database::__private::with_request_executor(
-                nest_rs_seaorm::SeaOrmExecutor::Txn(std::sync::Arc::new(txn)).into(),
-                bus.emit(Recorded),
-            )
-            .await;
+            bus.emit(Recorded).await;
+            assert_eq!(
+                *probe
+                    .seen
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                [RanOn::ItsOwnTransaction],
+                "run at once, before the caller's commit, in a transaction of its own",
+            );
+            txn.commit().await.expect("the caller commits its own");
             Ok::<(), ()>(())
         },
         Result::is_ok,
@@ -321,15 +324,6 @@ async fn a_listener_run_at_once_under_a_callers_own_transaction_runs_in_a_unit_o
     )
     .await
     .expect("the request's unit settles");
-
-    assert_eq!(
-        *probe
-            .seen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-        [RanOn::ItsOwnTransaction],
-        "run at once, before the caller's commit, in a transaction of its own",
-    );
 }
 
 #[module(imports = [SeaOrmModule])]
@@ -356,8 +350,11 @@ async fn a_rollback_after_a_statement_postgres_cancelled_is_said_at_warn() {
         .container()
         .get::<sea_orm::DatabaseConnection>()
         .expect("the pool");
-    let lazy = std::sync::Arc::new(nest_rs_seaorm::LazyTransaction::new((*db).clone(), "ws"));
-    let executor = nest_rs_seaorm::SeaOrmExecutor::Lazy(std::sync::Arc::clone(&lazy));
+    let lazy = std::sync::Arc::new(nest_rs_seaorm::__private::LazyTransaction::new(
+        (*db).clone(),
+        "ws",
+    ));
+    let executor = nest_rs_seaorm::__private::SeaOrmExecutor::Lazy(std::sync::Arc::clone(&lazy));
     let cut = tokio::time::timeout(
         std::time::Duration::from_millis(200),
         executor.execute_unprepared("SELECT pg_sleep(3)"),
@@ -368,7 +365,10 @@ async fn a_rollback_after_a_statement_postgres_cancelled_is_said_at_warn() {
 
     let settled = lazy.finalize(false).await;
     assert!(
-        matches!(settled, nest_rs_seaorm::FinalizeOutcome::RolledBack),
+        matches!(
+            settled,
+            nest_rs_seaorm::__private::FinalizeOutcome::RolledBack
+        ),
         "{settled:?}"
     );
     let line = logs.expect_one(

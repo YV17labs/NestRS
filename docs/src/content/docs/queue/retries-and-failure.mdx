@@ -126,8 +126,8 @@ What decides, in order:
 4. Anything else retries within the budget.
 
 A method returning `Result<(), ServiceError>` dead-letters a `NotFound`, a
-`404`, too. A job filed at once — pushed on the pool, or inside a transaction the
-caller opened itself — can run before that write commits and find nothing: push from a
+`404`, too. A job filed at once — pushed on the pool, whatever transaction you opened
+yourself beside it — can run before that write commits and find nothing: push from a
 listener on the event the commit announces, or return the error as `JobError::retry`.
 One pushed inside the unit's own transaction waits in the outbox for its commit
 ([A push inside a transaction](/queue/producing-jobs/#a-push-inside-a-transaction)).

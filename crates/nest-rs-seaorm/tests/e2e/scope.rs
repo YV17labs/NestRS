@@ -3,7 +3,8 @@
 
 use nest_rs_authz::Action;
 use nest_rs_database::__private::{with_job_executor, with_request_executor};
-use nest_rs_seaorm::{SeaOrmExecutor, scope_for};
+use nest_rs_seaorm::__private::SeaOrmExecutor;
+use nest_rs_seaorm::scope_for;
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter};
 
 mod widget {

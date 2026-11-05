@@ -153,3 +153,12 @@ feature's; the data-layer rule names it as an escape, read by grepping
 - **`RequestContinuation` and `TaskContext` moved to `__private`.** The
   transport and driver pages hand them to third parties, which tier 2 does
   not serve.
+
+## 2026-11-05 — the enum leaves with the handle
+
+A `SeaOrmExecutor` could be named by anyone and obtained by no one, so a tier-1
+type had nothing to serve. It moved to `__private` beside its reader, and
+`Txn`, which only two framework tests built, is gone
+(`visibility-tiers.md`, 2026-11-05). What the tests above still spell,
+`SeaOrmExecutor::Pool(pool).into()`, is the suite's plumbing through both
+`__private`s.

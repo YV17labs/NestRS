@@ -26,9 +26,9 @@ async fn on_post_published(&self, event: PostPublishedEvent) -> anyhow::Result<(
 
 An event a listener emits waits for **its** commit. With no unit of work
 around the emitter — an app with no database, a task you spawned, a binary of
-your own — there is none to open: the listener runs bare, on whatever its
-emitter installed. [Transactions](/database/transactions/) has the unit's
-commit rules.
+your own — there is none to open: the listener runs bare, with no executor, so
+a `Repo` call in it fails closed. [Transactions](/database/transactions/) has
+the unit's commit rules.
 
 ## Each call files one line
 
@@ -94,16 +94,17 @@ event has no caller, so `#[use_guards]` there is a compile error naming why.
 
 ## A transaction you opened yourself
 
-A transaction you open yourself — `db.begin()` inside `retry_on_conflict`, an
-`SeaOrmExecutor::Txn` you install — is committed by you, out of the framework's
-sight, so nothing waits for it: emit after your own `commit`. Inside a unit of
-work, a listener you reach sooner still runs in a transaction of its own,
-never in yours, and that has a price. It runs on another connection, so it
-does not see the rows you have not committed. It waits on any row you locked —
-you are awaiting `emit` — until its statement budget or its timeout cuts it.
-And its commit stands if you roll back afterwards. Outside every unit of work,
-it runs bare, inside your transaction, where its `Err` cannot undo what it
-wrote.
+A transaction you open yourself — `db.begin()` inside `retry_on_conflict` — is
+committed by you, out of the framework's sight, so nothing waits for it: emit
+after your own `commit`. An emit before it follows the unit around you, never
+your transaction. A unit holding a transaction keeps the dispatch for that
+unit's commit; a unit on the pool runs the listener at once, in a transaction
+of its own, and that has a price. It runs on another connection, so it does not
+see the rows you have not committed. It waits on any row you locked — you are
+awaiting `emit` — until its statement budget or its timeout cuts it. And its
+commit stands if you roll back afterwards. Outside every unit of work, it runs
+bare, as any listener there does: never in your transaction, and a `Repo` call
+in it fails closed.
 
 ## Going further
 

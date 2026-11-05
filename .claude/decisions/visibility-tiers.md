@@ -182,3 +182,19 @@ test stays a developer's line: an item whose module the pages teach keeps that m
 path, and the root drops it.
 
 **2026-11-05 — HTTP's denial renderer is tier 2.** `denial_to_http_response` sits in `nest_rs_http::__private`, and `problem_error` has no HTTP member. `denial_to_graphql_error`, `denial_to_ws_error` and `denial_to_mcp_error` stay tier 1.
+
+**2026-11-05 — the SeaORM executor is tier 2, with what settles it.** The entry
+in `repo-hands-out-no-connection.md` closed the reader and the downcast and left
+the types at tier 1 with nothing public to obtain one from: `SeaOrmExecutor`,
+`LazyTransaction`, `FinalizeOutcome`, and `Savepoint`, which has no public
+function at all. With the owner's agreement ("Je veux que tu corriges absolument
+tout", 2026-11-05) the four sit in `nest_rs_seaorm::__private`, for the crate's
+suites. `CommitError` is deleted rather than moved: its one reason was to keep a
+sea-orm bump out of `FinalizeOutcome`'s semver, and tier 2 has none, so the
+variant carries the `DbErr` and `retry::is_retryable_conflict` reads it. A
+hidden `compile_fail` doctest per name holds the tier, one each since a fence
+refuses on its first unresolved name and says nothing of the next. A trybuild
+fixture was refused for the same fact: a name-resolution error is no refusal a
+developer reads from a decorator, and `testing.md` keeps such errors out of a
+snapshot. `#[non_exhaustive]` stays on the two enums, as `exhaustive_enums`
+asks of a tier-2 enum no other framework crate matches.

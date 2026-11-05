@@ -9,8 +9,8 @@ use std::sync::Arc;
 use nest_rs_database::{
     ExecutorScope, Settlement, TransactionPolicy, UnitOfWork, UnitSpec, run_unit,
 };
-use nest_rs_seaorm::__private::current_executor;
-use nest_rs_seaorm::{SeaOrmConfig, SeaOrmExecutor, SeaOrmUnitOfWork};
+use nest_rs_seaorm::__private::{SeaOrmExecutor, current_executor};
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmUnitOfWork};
 use sea_orm::ConnectionTrait;
 
 use crate::harness::{committed_rows, fresh_table};

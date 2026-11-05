@@ -9,7 +9,8 @@ use std::sync::Arc;
 use nest_rs_authz::__private::install_ability;
 use nest_rs_authz::{AbilityBuilder, Action};
 use nest_rs_database::__private::{with_job_executor, with_request_executor};
-use nest_rs_seaorm::{Creatable, CrudService, Repo, SeaOrmExecutor};
+use nest_rs_seaorm::__private::SeaOrmExecutor;
+use nest_rs_seaorm::{Creatable, CrudService, Repo};
 use sea_orm::prelude::Uuid;
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseConnection, EntityTrait, Set};
 

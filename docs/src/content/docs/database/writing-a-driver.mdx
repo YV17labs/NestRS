@@ -38,8 +38,10 @@ its binding instead of `SeaOrmDatabaseModule`.
 
 The executor is what a unit's body reads: an enum of your store's handles, so
 one query helper returns one type whichever mode the unit is in. SeaORM's,
-`SeaOrmExecutor`, has a variant for the pool, a transaction opened on the
-unit's first statement, and an atomic block's savepoint.
+`SeaOrmExecutor` in `crates/nest-rs-seaorm/src/executor.rs`, has a variant for
+the pool, a transaction opened on the unit's first statement, and an atomic
+block's savepoint. It is no part of that crate's API: an app has nothing to do
+with it, so nothing about it freezes with a release.
 
 What `as_any` hands out is private to your crate. `current_executor` is
 public, so whatever it downcasts to is in every service's reach: a public
@@ -65,8 +67,7 @@ commit, which the wrapper forwards to the enum:
 
 ```rust title="from nest-rs-seaorm's executor"
 /// A lazy transaction or a block's savepoint holds the work for its
-/// settling; a pool and a caller's [`Txn`](SeaOrmExecutor::Txn) hand it
-/// back to run at once.
+/// settling; a pool hands it back to run at once.
 pub(crate) fn after_commit(&self, work: Deferred) -> Option<Deferred> {
     match self {
         SeaOrmExecutor::Lazy(lazy) => {
@@ -77,7 +78,7 @@ pub(crate) fn after_commit(&self, work: Deferred) -> Option<Deferred> {
             block.hold(work);
             None
         }
-        SeaOrmExecutor::Pool(_) | SeaOrmExecutor::Txn(_) => Some(work),
+        SeaOrmExecutor::Pool(_) => Some(work),
     }
 }
 ```
@@ -190,9 +191,6 @@ pub(crate) fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
         SeaOrmExecutor::Pool(pool) => {
             AtomicExecutor::own(Arc::new(LazyTransaction::new(pool.clone(), ATOMIC)))
         }
-        SeaOrmExecutor::Txn(caller) => AtomicExecutor::own(Arc::new(
-            LazyTransaction::nested_in(Arc::clone(caller), ATOMIC),
-        )),
         SeaOrmExecutor::Lazy(lazy) => {
             AtomicExecutor::savepoint(Arc::new(Savepoint::in_boundary(Arc::clone(lazy))))
         }
@@ -340,7 +338,7 @@ a retry replays the whole job body, side effects included:
   open transaction nothing is durable yet, so a connection lost mid-attempt
   left nothing behind: retryable. At commit the same error means the commit
   may have landed: deterministic. SeaORM splits them as
-  `retry::is_transient_failure` against `CommitError::is_retryable_conflict`.
+  `retry::is_transient_failure` against `retry::is_retryable_conflict`.
 
 **Say your errors without their values.** A database server words its
 refusal around the input it refused, and every framework log line, a dead

@@ -43,8 +43,8 @@ pub trait Executor: Any + Send + Sync + 'static {
     ///
     /// An executor that holds the work owes all of it: run after a commit (or a
     /// boundary that opened none), dropped on every other outcome. The default
-    /// hands it back — right for a pool and for a transaction a caller opened
-    /// itself; a driver whose boundaries settle a transaction overrides it.
+    /// hands it back — right for a pool; a driver whose boundaries settle a
+    /// transaction overrides it.
     ///
     /// Held work runs where the boundary settles, so it runs under what the
     /// unit carried where it was registered: the executor captures that here,
@@ -67,9 +67,9 @@ pub trait Executor: Any + Send + Sync + 'static {
 
     /// Write `records` on the transaction this executor's unit holds, so they
     /// commit or roll back with its writes — or `None` when it keeps no
-    /// outbox: a pool, a transaction its caller opened, a driver binding no
-    /// [`OutboxStore`](crate::OutboxStore), or one whose store no relay armed.
-    /// The queue port then files the jobs at once.
+    /// outbox: a pool, a driver binding no [`OutboxStore`](crate::OutboxStore),
+    /// or one whose store no relay armed. The queue port then files the jobs at
+    /// once.
     ///
     /// `records` are built as they are read, each job sealed then: a handle
     /// answering `None` reads none, so a push it files at once pays nothing

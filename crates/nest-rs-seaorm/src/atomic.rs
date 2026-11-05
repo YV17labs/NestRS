@@ -109,7 +109,7 @@ impl AtomicBlock for AtomicExecutor {
                     Some(on_pool) if ok && own.is_opened() => on_pool.commit(own).await,
                     _ => settled(own.finalize(ok).await),
                 },
-                SeaOrmExecutor::Pool(_) | SeaOrmExecutor::Txn(_) => Ok(()),
+                SeaOrmExecutor::Pool(_) => Ok(()),
             }
         })
     }
@@ -155,7 +155,7 @@ fn settled(outcome: FinalizeOutcome) -> Result<(), AtomicError> {
         | FinalizeOutcome::Committed
         | FinalizeOutcome::RolledBack => Ok(()),
         FinalizeOutcome::Escaped => Err(AtomicError::Escaped),
-        FinalizeOutcome::CommitFailed(err) => Err(AtomicError::Database(Box::new(err.0))),
+        FinalizeOutcome::CommitFailed(err) => Err(AtomicError::Database(Box::new(err))),
         FinalizeOutcome::Poisoned { retryable } => Err(AtomicError::Poisoned { retryable }),
     }
 }

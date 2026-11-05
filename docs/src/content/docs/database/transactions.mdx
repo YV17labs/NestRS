@@ -25,15 +25,15 @@ provides the `TransactionTrait` the programmatic boundary builds on.
 The edge classifies the HTTP method and branches:
 
 ```text
-GET / HEAD / OPTIONS / TRACE   → SeaOrmExecutor::Pool,  no transaction
-POST / PUT / PATCH / DELETE    → SeaOrmExecutor::Lazy, BEGIN on the first
-                                                       data-layer touch;
-                                                       commit on 2xx/3xx,
-                                                       rollback otherwise
+GET / HEAD / OPTIONS / TRACE   → the pool, no transaction
+POST / PUT / PATCH / DELETE    → a lazy transaction, BEGIN on the first
+                                                     data-layer touch;
+                                                     commit on 2xx/3xx,
+                                                     rollback otherwise
 ```
 
-Inside the handler, every `Repo` call runs on whichever variant the unit
-installed — same code, different mode. The decision matrix:
+Inside the handler, every `Repo` call runs on whichever the unit installed —
+same code, different mode. The decision matrix:
 
 | Outcome                  | Decision  |
 |--------------------------|-----------|
@@ -265,10 +265,6 @@ open, since a statement of its own would land inside the savepoint, and a
 statement issued from inside the block on the unit's own transaction is
 refused, whether or not the block has opened yet, rather than left to wait for
 the block that holds it.
-
-A transaction a caller installed through the port's plumbing (`SeaOrmExecutor::Txn`, a
-framework suite's, since no public function installs one) is not held back that way: a
-statement issued on it beside an open block lands inside the block and rolls back with it. Await the block before writing on.
 
 <Aside type="caution">
 A block dropped before it settles — cancelled by a timeout or a `select!` —

@@ -228,7 +228,7 @@ pub(crate) async fn write_and_hold(
         let committed = committed_rows(&*observer, table).await;
         let on_pool = matches!(
             nest_rs_seaorm::__private::current_executor(),
-            Some(nest_rs_seaorm::SeaOrmExecutor::Pool(_))
+            Some(nest_rs_seaorm::__private::SeaOrmExecutor::Pool(_))
         );
         sightings
             .lock()

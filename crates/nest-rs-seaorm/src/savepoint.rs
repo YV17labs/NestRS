@@ -152,8 +152,10 @@ impl Savepoint {
             self.enclosing.turn().for_block().await?;
             self.holds_turn.store(true, Ordering::Release);
         }
-        let statement =
-            Statement::from_string(self.root().backend(), format!("SAVEPOINT {}", self.name()));
+        let statement = Statement::from_string(
+            self.root().pool().get_database_backend(),
+            format!("SAVEPOINT {}", self.name()),
+        );
         let mut unsettled = Unsettled::armed(&self.enclosing, self.transport());
         let sent = self
             .enclosing

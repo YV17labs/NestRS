@@ -146,3 +146,10 @@ owner's "Tout faire" of 2026-10-28.
   arms, and runs no transport a test did not spawn.
 - **Arming behind an opt-in builder step**: a suite forgetting it would file
   jobs nothing drains, the leak the 2026-10-23 entry closed for one suite.
+
+## 2026-11-05 — no caller's handle is left to keep none
+
+`Executor::Txn`, and a block nested in it, are gone (`visibility-tiers.md`,
+2026-11-05), so "what a caller opened itself" above is a pool, or a `db.begin()`
+the framework never sees: a push beside one reads the ambient handle, which is
+the unit's, and a pool files it at once. Nothing else about that line moved.

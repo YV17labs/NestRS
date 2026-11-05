@@ -5,8 +5,9 @@
 use std::sync::Arc;
 
 use nest_rs_database::__private::with_request_executor;
-use nest_rs_seaorm::__private::current_executor;
-use nest_rs_seaorm::{LazyTransaction, SeaOrmExecutor};
+use nest_rs_seaorm::__private::{
+    FinalizeOutcome, LazyTransaction, SeaOrmExecutor, current_executor,
+};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
 #[tokio::test]
@@ -75,7 +76,7 @@ async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
         .await;
 
     match lazy.finalize(reported_success).await {
-        nest_rs_seaorm::FinalizeOutcome::Poisoned { retryable } => assert!(
+        FinalizeOutcome::Poisoned { retryable } => assert!(
             retryable,
             "a pool acquire timeout wrote nothing, so the attempt is worth repeating",
         ),
@@ -138,7 +139,7 @@ async fn a_backend_terminated_mid_attempt_is_retryable() {
         .await;
 
     match lazy.finalize(reported_success).await {
-        nest_rs_seaorm::FinalizeOutcome::Poisoned { retryable } => assert!(
+        FinalizeOutcome::Poisoned { retryable } => assert!(
             retryable,
             "a connection the server closed rolled the attempt back, so a replay \
              cannot write twice",
@@ -231,8 +232,8 @@ async fn a_commit_whose_outcome_is_unknown_stays_deterministic() {
     crate::harness::terminate_backend(&killer, pid).await;
 
     match lazy.finalize(true).await {
-        nest_rs_seaorm::FinalizeOutcome::CommitFailed(err) => assert!(
-            !err.is_retryable_conflict(),
+        FinalizeOutcome::CommitFailed(err) => assert!(
+            !nest_rs_seaorm::retry::is_retryable_conflict(&err),
             "a commit that may have landed is never replayed, whatever the \
              statement-level classification says about the same error: {err}",
         ),

@@ -780,7 +780,7 @@ mod tests {
         let ability = Arc::new(b.build().expect("a valid ability"));
 
         let created = with_request_executor(
-            crate::SeaOrmExecutor::Pool(DatabaseConnection::default()).into(),
+            crate::executor::SeaOrmExecutor::Pool(DatabaseConnection::default()).into(),
             install_ability(ability, NotesService.create(CreateNote)),
         )
         .await;
@@ -807,7 +807,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
 
         let created = with_request_executor(
-            crate::SeaOrmExecutor::Pool(DatabaseConnection::default()).into(),
+            crate::executor::SeaOrmExecutor::Pool(DatabaseConnection::default()).into(),
             NotesService.create(CreateNote),
         )
         .await;

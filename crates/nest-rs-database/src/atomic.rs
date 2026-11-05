@@ -50,9 +50,7 @@ use crate::executor::{Executor, current_executor, with_executor};
 /// the block would land inside its savepoint and roll back with it. A
 /// statement issued from inside a block on an enclosing unit's executor would
 /// wait for itself, so the driver refuses it. A long block holds its unit for
-/// its whole length. A transaction the caller opened and installed itself is
-/// not held back: a statement the caller issues on it beside an open block
-/// lands inside the block and rolls back with it, so await the block first.
+/// its whole length.
 ///
 /// A block dropped before it settles — cancelled by a timeout or a `select!` —
 /// rolls back; inside a unit of work it leaves that unit unable to commit, so

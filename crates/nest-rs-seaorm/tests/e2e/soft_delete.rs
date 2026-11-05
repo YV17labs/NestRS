@@ -8,9 +8,8 @@ use std::sync::Arc;
 use nest_rs_authz::__private::install_ability;
 use nest_rs_authz::{Ability, AbilityBuilder, Action};
 use nest_rs_database::__private::with_request_executor;
-use nest_rs_seaorm::{
-    Access, Creatable, CrudService, Deletable, Repo, SeaOrmExecutor, SoftDeletable,
-};
+use nest_rs_seaorm::__private::SeaOrmExecutor;
+use nest_rs_seaorm::{Access, Creatable, CrudService, Deletable, Repo, SoftDeletable};
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
 use sea_orm::{

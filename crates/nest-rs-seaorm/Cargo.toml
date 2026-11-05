@@ -151,8 +151,8 @@ nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql", "ws", "mcp"]
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "orm", "queue", "tls", "ws"] }
 # The pool's default budget is pinned below the authentication guard's net.
 nest-rs-authn = { path = "../nest-rs-authn" }
-# The `executor` e2e emits under a caller's own transaction: the bus dispatches
-# through this crate's `after_commit`, and only a live `BEGIN` makes a `Txn`.
+# The `executor` e2e emits under a caller's own transaction, a live `BEGIN`: the
+# bus dispatches through this crate's `after_commit`.
 nest-rs-events = { path = "../nest-rs-events" }
 # The `ws` and `mcp` e2e boot a gateway and a tool host over the binding, which
 # their edges open each message's and each operation's unit through.

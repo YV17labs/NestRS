@@ -14,7 +14,7 @@ use nest_rs_database::{
     AtomicBlock, ExecutorScope, OpenUnit, Settlement, TransactionPolicy, Unhonoured, UnitOfWork,
     UnitSpec,
 };
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, DbErr};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -22,7 +22,6 @@ use tokio_util::task::TaskTracker;
 
 use crate::SeaOrmConfig;
 use crate::atomic::{AtomicExecutor, PoolCommit};
-use crate::error::CommitError;
 use crate::executor::{FinalizeOutcome, Installed, LazyTransaction, SeaOrmExecutor};
 #[cfg(any(feature = "http", feature = "graphql"))]
 use crate::unique_key::UniqueKeys;
@@ -449,12 +448,8 @@ fn classify(
 /// A commit lost mid-`COMMIT` may have landed, so only a serialization failure
 /// or a deadlock is worth running again; nothing retries a request here, since
 /// its body is not replayable once it ran.
-fn commit_failed(
-    err: &CommitError,
-    transport: &'static str,
-    observe_conflicts: bool,
-) -> Settlement {
-    let retryable = err.is_retryable_conflict();
+fn commit_failed(err: &DbErr, transport: &'static str, observe_conflicts: bool) -> Settlement {
+    let retryable = crate::retry::is_retryable_conflict(err);
     if observe_conflicts && retryable {
         tracing::warn!(
             target: crate::target::ORM,

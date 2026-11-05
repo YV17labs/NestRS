@@ -449,7 +449,7 @@ fn unavailable() -> nest_rs_core::Problem {
     let problem = Problem::new(503, code::UNAVAILABLE);
     let bound = crate::executor::current_executor()
         .as_ref()
-        .and_then(crate::executor::SeaOrmExecutor::pool)
+        .map(crate::executor::SeaOrmExecutor::pool)
         .and_then(crate::module::statement_bound);
     match bound {
         Some(bound) => problem.with_retry_after(retry_after_secs(bound)),
@@ -1548,7 +1548,6 @@ pub(crate) mod tests {
             Box::new(JobShaped(nest_rs_core::boxed_error(anyhow::Error::from(
                 bad_uuid(),
             )))),
-            Box::new(CommitError(bad_uuid())),
         ];
         for error in wrapped {
             let said = error_message(&*error);
@@ -1558,6 +1557,15 @@ pub(crate) mod tests {
             let redacted = nest_rs_core::DecodeError::redact(&displayed, Some(&*error));
             assert!(!redacted.contains("secret-123"), "{redacted}");
         }
+    }
+
+    #[test]
+    fn a_bare_database_error_rendered_as_text_is_redacted_to_its_sentence() {
+        let error = bad_uuid();
+        let displayed = error.to_string();
+        assert!(displayed.contains("secret-123"), "{displayed}");
+        let redacted = nest_rs_core::DecodeError::redact(&displayed, Some(&error));
+        assert_eq!(redacted, "Execution Error: database error 22P02");
     }
 
     #[test]
@@ -1792,31 +1800,6 @@ pub(crate) mod tests {
             None,
             "only a validation failure carries a field map",
         );
-    }
-}
-
-/// A commit-time database failure, opaque over `DbErr` so a sea-orm bump is not
-/// a semver break through [`FinalizeOutcome`](crate::FinalizeOutcome).
-#[derive(Debug)]
-pub struct CommitError(pub(crate) DbErr);
-
-impl CommitError {
-    /// Whether the commit failed on a retryable serialization/deadlock conflict
-    /// (a typed SQLSTATE `40001`/`40P01`/…).
-    pub fn is_retryable_conflict(&self) -> bool {
-        crate::retry::is_retryable_conflict(&self.0)
-    }
-}
-
-impl std::fmt::Display for CommitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for CommitError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
     }
 }
 

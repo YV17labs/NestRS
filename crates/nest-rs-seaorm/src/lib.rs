@@ -11,8 +11,8 @@
 //!   the `nest-rs-database` port: [`SeaOrmUnitOfWork`], which every edge — an
 //!   HTTP request, a WS message, an MCP operation, a queue attempt, a scheduled
 //!   tick — and every lifecycle hook runs its unit of work through, on an ambient
-//!   [`SeaOrmExecutor`]: the pool, or a transaction opened on the unit's first
-//!   data-layer touch.
+//!   executor: the pool, or a transaction opened on the unit's first data-layer
+//!   touch.
 //! - Under the `queue` feature, [`SeaOrmDatabaseModule`] also keeps the queue
 //!   port's outbox, `queue::SeaOrmOutbox`: a job pushed inside a unit's
 //!   transaction is written there and filed after its commit;
@@ -22,7 +22,7 @@
 //! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability),
 //! and an entity declared `#[expose(..., soft_delete)]` keeps its deleted rows
 //! out of every read but [`Repo::with_tombstones`].
-//! [`nest_rs_database::atomic`] runs a block inside a [`Savepoint`] of that
+//! [`nest_rs_database::atomic`] runs a block inside a savepoint of that
 //! executor's transaction, or a transaction of its own on the pool.
 //! An entity crosses the wire through [`macro@expose`], and a column's enum
 //! through `nest_rs_core`'s `#[wire_enum]`.
@@ -92,14 +92,12 @@ pub mod queue;
 
 pub use config::SeaOrmConfig;
 pub use database::SeaOrmDatabaseModule;
-pub use error::{CommitError, DbOutcome, ServiceError};
-pub use executor::{FinalizeOutcome, LazyTransaction, SeaOrmExecutor};
+pub use error::{DbOutcome, ServiceError};
 pub use exposed::Exposed;
 pub use insertion::Insertion;
 pub use module::{SeaOrmModule, SeaOrmSetup, connect_from_env};
 pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageCursor, PageParams, clamp_page_size};
 pub use repo::{Repo, scope_for};
-pub use savepoint::Savepoint;
 pub use select::RepoSelect;
 pub use service::{
     Access, Authorized, Creatable, CreateModel, CrudService, Deletable, Updatable, UpdateModel,
@@ -122,7 +120,7 @@ pub mod __private {
     pub use crate::error::{graphql_crud_error, graphql_crud_write_error};
     #[cfg(feature = "http")]
     pub use crate::error::{http_crud_error, http_crud_write_error};
-    pub use crate::executor::current_executor;
+    pub use crate::executor::{FinalizeOutcome, LazyTransaction, SeaOrmExecutor, current_executor};
     #[cfg(feature = "graphql")]
     pub use crate::graphql::bind::graphql_bind;
     #[cfg(feature = "graphql")]
@@ -134,6 +132,7 @@ pub mod __private {
     #[cfg(feature = "graphql")]
     pub use crate::page::graphql_page_cursor;
     pub use crate::repo::unit_of_work_required;
+    pub use crate::savepoint::Savepoint;
     pub use crate::service::{SameEntity, bound_entity, created_key};
 
     pub use crate::column_default::ColumnDefaultRegistration;

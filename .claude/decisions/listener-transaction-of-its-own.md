@@ -53,3 +53,14 @@ transaction of its own, and the dispatch waits for the hook's commit. The
 limit keeps its other members — a task handed to `TaskContext`, a binary of
 one's own, a test — and closing those still takes a binding the bus reaches
 without its emitter.
+
+## 2026-11-05 — no caller's transaction is installed
+
+`Executor::Txn` is gone (`visibility-tiers.md`, 2026-11-05): no public function
+could install one, so the handle this entry calls "an `Executor::Txn` it
+installs" stood only in framework tests. The choice stands for the transaction
+a caller still opens, a `db.begin()`: a listener reached before its commit is a
+unit of its own. The passenger the limit above describes is gone: an emit
+outside every unit runs its listeners with no executor, so a `Repo` call in one
+fails closed. What the limit still costs is that closed read, in a task handed
+to `TaskContext` under an app that binds a unit of work.

@@ -8,12 +8,12 @@ use std::time::Duration;
 use nest_rs_core::module;
 use nest_rs_database::__private::with_request_executor;
 use nest_rs_database::{AtomicError, atomic};
-use nest_rs_seaorm::__private::current_executor;
-use nest_rs_seaorm::{DbOutcome, FinalizeOutcome, LazyTransaction, SeaOrmExecutor};
-use sea_orm::prelude::Uuid;
-use sea_orm::{
-    ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
+use nest_rs_seaorm::__private::{
+    FinalizeOutcome, LazyTransaction, SeaOrmExecutor, current_executor,
 };
+use nest_rs_seaorm::DbOutcome;
+use sea_orm::prelude::Uuid;
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
 
 #[derive(Debug)]
 enum Failure {
@@ -412,38 +412,6 @@ async fn a_block_dropped_before_it_settles_leaves_its_unit_unable_to_commit() {
     );
     assert!(!stored(&conn, before).await);
     assert!(!stored(&conn, inside).await);
-}
-
-#[tokio::test]
-async fn inside_a_callers_own_transaction_a_block_nests_and_the_caller_commits() {
-    let conn = db().await;
-    let (kept, dropped, beside) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
-
-    let txn = Arc::new(conn.begin().await.expect("the caller opens its own"));
-    with_request_executor(SeaOrmExecutor::Txn(Arc::clone(&txn)).into(), async {
-        let released = atomic(async { Ok::<_, Failure>(insert(kept).await?) }).await;
-        assert!(released.is_ok(), "{released:?}");
-        let rolled_back = atomic(async {
-            insert(dropped).await?;
-            Err::<(), _>(Failure::Refused)
-        })
-        .await;
-        assert!(
-            matches!(rolled_back, Err(Failure::Refused)),
-            "{rolled_back:?}"
-        );
-        insert(beside).await.expect("the caller writes on");
-    })
-    .await;
-    Arc::try_unwrap(txn)
-        .expect("no handle outlived the scope")
-        .commit()
-        .await
-        .expect("the caller commits");
-
-    assert!(stored(&conn, kept).await);
-    assert!(!stored(&conn, dropped).await);
-    assert!(stored(&conn, beside).await);
 }
 
 /// What an event's listener saw, in order.

@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Two pieces carry the data layer's transparency: the ambient `SeaOrmExecutor`
+Two pieces carry the data layer's transparency: the ambient executor
 installed per request (or per job), and the `Repo<E>` handle every service
 uses to reach it. They are built on
 [SeaORM](https://www.sea-ql.org/SeaORM/) — a query `Repo` hands you is
@@ -92,30 +92,23 @@ executor is a wiring bug, not a silent miss.
 
 ## Under the hood: the ambient executor
 
-`SeaOrmExecutor` is a SeaORM connection — the pool or the request's
+The ambient executor is a SeaORM connection — the pool or the request's
 transaction — installed in the request's ambient context for the duration of
-the handler. Four variants:
+the handler. It takes one of three shapes:
 
-```rust title="nest_rs::seaorm::SeaOrmExecutor"
-#[non_exhaustive]
-pub enum SeaOrmExecutor {
-    Pool(DatabaseConnection),
-    Txn(Arc<DatabaseTransaction>),
-    Lazy(Arc<LazyTransaction>),
-    Savepoint(Arc<Savepoint>),
-}
-```
+- **The pool**, where nothing asks for a transaction: a safe route, a GraphQL
+  query, `transactional = false`.
+- **A lazy transaction**, the one the framework installs wherever work may
+  write. It defers `BEGIN` to the first data-layer touch, so a request a guard
+  denies — or one that never queries — costs no round-trip at all.
+- **A savepoint**, what an [atomic block](/database/transactions/#atomic-blocks)
+  runs on inside a transaction.
 
-`Lazy` is the one the framework installs wherever work may write: it defers
-`BEGIN` to the first data-layer touch, so a request a guard denies — or one
-that never queries — costs no round-trip at all. `Txn` is the eager handle,
-for a transaction something already opened. `Savepoint` is what an
-[atomic block](/database/transactions/#atomic-blocks) runs on inside a
-transaction. The enum can grow within 7.x, so a `match` on it keeps a `_` arm.
+None of the three is yours to name: the unit of work installs the handle,
+`Repo` reads it, and nothing public hands one out or takes one in.
 A test runs a service in a unit of the app's own binding instead —
 `app.unit(ability, || svc.list())` as a request granted `ability`,
-`app.system_unit(|| svc.purge())` as a job ([E2E tests](/testing/e2e/#a-service-in-a-unit)) —
-and the handle a unit installs is never handed back to a service.
+`app.system_unit(|| svc.purge())` as a job ([E2E tests](/testing/e2e/#a-service-in-a-unit)).
 
 Three scopes coexist:
 
@@ -166,8 +159,8 @@ guards and handlers resolve the same ambient executor through `Repo`:
 ```text
 HTTP request
   ↓
-unit of work          ──→ installs SeaOrmExecutor::Pool (GET/HEAD/OPTIONS/TRACE)
-                      ──→ installs SeaOrmExecutor::Lazy (POST/PUT/PATCH/DELETE)
+unit of work          ──→ installs the pool (GET/HEAD/OPTIONS/TRACE)
+                      ──→ installs a lazy transaction (POST/PUT/PATCH/DELETE)
   ↓
 guards (AuthnGuard, AbilityGuard, ...)
   ↓
@@ -213,7 +206,7 @@ classify, no response to inspect. The worker transport (`#[scheduled]`,
 ```text
 job
   ↓
-SeaOrmUnitOfWork  ──→ installs SeaOrmExecutor::Lazy, settled on the job's Ok/Err
+SeaOrmUnitOfWork  ──→ installs a lazy transaction, settled on the job's Ok/Err
   ↓
 processor body
 ```

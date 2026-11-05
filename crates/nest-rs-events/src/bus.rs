@@ -183,10 +183,9 @@ impl EventBus {
     /// under: one transaction, committed when the listener answers `Ok` and
     /// rolled back when it fails — on the pool for `transactional = false`. An
     /// emitter outside every unit of work has no binding to open one, so its
-    /// listeners run bare on whatever executor it installed, a transaction it
-    /// opened itself included. A listener's body is cut at its timeout, ten
-    /// minutes unless its `#[on_event]` declares one; a commit never is. An
-    /// event the listener emits waits for its commit in turn.
+    /// listeners run bare, with no executor. A listener's body is cut at its
+    /// timeout, ten minutes unless its `#[on_event]` declares one; a commit
+    /// never is. An event the listener emits waits for its commit in turn.
     ///
     /// The app's interceptors and exception filters, then those its
     /// `#[listeners]` block and its `#[on_event]` method bind, run around each

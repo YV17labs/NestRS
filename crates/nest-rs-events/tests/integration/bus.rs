@@ -674,6 +674,17 @@ async fn a_listener_run_at_once_runs_on_its_emitters_executor() {
     );
 }
 
+/// No binding opens it a unit and nothing public installs an executor, so a
+/// `Repo` call there fails closed.
+#[tokio::test]
+async fn a_listener_outside_every_unit_runs_with_no_executor() {
+    let (_app, bus, probe) = executor_booted().await;
+
+    bus.emit(Recorded).await;
+
+    assert_eq!(ran_on(&probe), [(None, None)]);
+}
+
 #[tokio::test]
 async fn a_listener_held_for_the_commit_runs_on_what_its_driver_installed() {
     let (_app, bus, probe) = executor_booted().await;

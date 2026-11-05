@@ -88,11 +88,9 @@ pub enum AtomicError {
     Unsupported,
     /// The database refused to settle the block — its `RELEASE` or
     /// `ROLLBACK TO`, or the `COMMIT` of a block that is a transaction of its
-    /// own — and nothing it wrote stands. Inside a unit of work the framework
-    /// opened, that unit is left unable to commit; inside a transaction the
-    /// caller opened, the database has aborted it and the caller rolls it back.
-    /// A refused `SAVEPOINT` is not this: the block's first statement fails
-    /// with the database's error.
+    /// own — and nothing it wrote stands. Inside a unit of work, that unit is
+    /// left unable to commit. A refused `SAVEPOINT` is not this: the block's
+    /// first statement fails with the database's error.
     #[error("the atomic block could not be settled")]
     Database(#[source] Box<dyn std::error::Error + Send + Sync>),
     /// The work returned `Ok` over a statement that failed inside it: nothing

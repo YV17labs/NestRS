@@ -1098,9 +1098,34 @@ mod answers {
                 ..HttpConfig::default()
             }),
         ],
-        providers = [super::PostsV1Controller, super::PostsV2Controller],
+        providers = [OrdersController, super::PostsV1Controller, super::PostsV2Controller],
     )]
     struct HeaderVersionedApp;
+
+    #[module(
+        imports = [
+            openapi(),
+            HttpModule::for_root(HttpConfig {
+                versioning: ApiVersioning::MediaType,
+                default_version: Some("1".into()),
+                ..HttpConfig::default()
+            }),
+        ],
+        providers = [OrdersController, super::PostsV1Controller],
+    )]
+    struct MediaTypeVersionedApp;
+
+    #[module(
+        imports = [
+            openapi(),
+            HttpModule::for_root(HttpConfig {
+                versioning: ApiVersioning::Header,
+                ..HttpConfig::default()
+            }),
+        ],
+        providers = [OrdersController],
+    )]
+    struct NothingVersionedApp;
 
     fn responses<'d>(document: &'d Value, path: &str, method: &str) -> &'d Value {
         &document["paths"][path][method]["responses"]
@@ -1519,14 +1544,14 @@ mod answers {
             .await
             .expect("boots");
         let doc = document(&app, "/api-json").await;
-        let header = nest_rs_http::DEFAULT_VERSION_HEADER;
+        let version = nest_rs_http::DEFAULT_VERSION_HEADER;
 
-        let unserved = app.http().get("/posts").header(header, "9").send().await;
+        let unserved = app.http().get("/posts").header(version, "9").send().await;
         unserved.assert_status(StatusCode::NOT_FOUND);
         let malformed = app
             .http()
             .get("/posts")
-            .header(header, "not a token")
+            .header(version, "not a token")
             .send()
             .await;
         malformed.assert_status(StatusCode::BAD_REQUEST);
@@ -1534,6 +1559,67 @@ mod answers {
         let answers = responses(&doc, "/posts", "get");
         assert_a_problem(answers, "400");
         assert_a_problem(answers, "404");
+    }
+
+    /// The selector refuses a malformed version in front of routing, on any
+    /// address; a well-formed one moves no unversioned route, so no `404`.
+    #[tokio::test]
+    async fn an_unversioned_route_beside_a_versioned_one_documents_the_400_a_selector_answers() {
+        let app = TestApp::for_module::<HeaderVersionedApp>()
+            .await
+            .expect("boots");
+        let doc = document(&app, "/api-json").await;
+        let version = nest_rs_http::DEFAULT_VERSION_HEADER;
+
+        let malformed = app
+            .http()
+            .get("/orders/plain")
+            .header(version, "not a token")
+            .send()
+            .await;
+        malformed.assert_status(StatusCode::BAD_REQUEST);
+        let unserved = app
+            .http()
+            .get("/orders/plain")
+            .header(version, "9")
+            .send()
+            .await;
+        unserved.assert_status_is_ok();
+
+        let answers = responses(&doc, "/orders/plain", "get");
+        assert_a_problem(answers, "400");
+        assert!(answers.get("404").is_none(), "{answers}");
+
+        let app = TestApp::for_module::<MediaTypeVersionedApp>()
+            .await
+            .expect("boots");
+        let doc = document(&app, "/api-json").await;
+        let malformed = app
+            .http()
+            .get("/orders/plain")
+            .header(header::ACCEPT, "application/json; version=!!")
+            .send()
+            .await;
+        malformed.assert_status(StatusCode::BAD_REQUEST);
+        assert_a_problem(responses(&doc, "/orders/plain", "get"), "400");
+    }
+
+    /// With nothing versioned the selector is never mounted, so it refuses nothing.
+    #[tokio::test]
+    async fn a_strategy_with_nothing_versioned_documents_no_400() {
+        let app = TestApp::for_module::<NothingVersionedApp>()
+            .await
+            .expect("boots");
+        let doc = document(&app, "/api-json").await;
+        let read = app
+            .http()
+            .get("/orders/plain")
+            .header(nest_rs_http::DEFAULT_VERSION_HEADER, "not a token")
+            .send()
+            .await;
+        read.assert_status_is_ok();
+        let answers = responses(&doc, "/orders/plain", "get");
+        assert!(answers.get("400").is_none(), "{answers}");
     }
 
     #[tokio::test]

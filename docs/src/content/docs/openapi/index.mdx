@@ -162,6 +162,8 @@ The document composes from the route table, so everything in it is derived:
   [the media type it writes](/openapi/operations/#bodies-that-are-not-json);
 - the error statuses an operation can actually produce, read off what it takes
   and the transport it runs on — `400` where a parameter or a body can be refused,
+  or a [header or media type strategy](/http/versioning/) refuses a malformed
+  version on every route once one is versioned,
   `404` where a path parameter or a version selects, `408` where a body can stall
   under the [body-read deadline](/http/configuration/#connection-deadlines),
   `409` where a write can conflict, `413` and `415` where a body can be refused,

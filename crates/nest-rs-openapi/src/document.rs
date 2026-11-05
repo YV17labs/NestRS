@@ -43,15 +43,20 @@ pub(crate) fn build_document(
     let mut generator = settings.into_generator();
 
     let selection = VersionSelection::resolve(container, claims);
-    let edge_answers = container
-        .get::<HttpConfig>()
-        .map_or_else(EdgeAnswers::default, |config| EdgeAnswers::of(&config));
 
     let controllers = discovery.meta::<HttpControllerMeta>();
     let mut entries: Vec<(&Arc<HttpControllerMeta>, Option<&'static str>)> = controllers
         .iter()
         .flat_map(|d| d.meta.mounted_versions().map(move |v| (&d.meta, v)))
         .collect();
+    let versioned = entries
+        .iter()
+        .any(|(meta, version)| version.is_some() && !meta.routes().is_empty());
+    let edge_answers = container
+        .get::<HttpConfig>()
+        .map_or_else(EdgeAnswers::default, |config| {
+            EdgeAnswers::of(&config, versioned)
+        });
     if selection.is_some() {
         // The last write wins a contested path, so the highest version is described.
         // Not under the URI strategy: reordering would rewrite a committed document.
@@ -792,10 +797,14 @@ fn edge_statuses(
     let body = body_read(route);
     // Edge validation answers `400`, never `422` (`nest_rs_http::pipe_error`): a
     // parameter's value its type does not read, required or not, a path's among
-    // them, and a body's; and a list linking its next page refuses a cursor no
-    // page issued.
+    // them, and a body's; a list linking its next page refuses a cursor no page
+    // issued; and a selector refuses a malformed version on any address.
     let body_refused_by_the_edge = body.is_some() && route.request_refusal().is_none();
-    if body_refused_by_the_edge || takes_parameters || route.sets_next_link() {
+    if body_refused_by_the_edge
+        || takes_parameters
+        || route.sets_next_link()
+        || edge_answers.version_malformed
+    {
         out.insert(400);
     }
     if body.is_some() {

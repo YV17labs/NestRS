@@ -80,6 +80,10 @@ holds each against the live answer):
   parameter, a malformed token and a version nothing serves. `RawBody` and `Body` document `*/*`,
   optional and binary. A `Form<T>` on `GET` reads the query, so it is its `in: query` parameters
   and its `400`, none of a body's statuses.
+- **A selector refuses in front of routing**: under the `Header` or `MediaType` strategy, once a
+  route is versioned, every route lists the `400` of a malformed version, unversioned ones
+  included. They list no `404`: a well-formed version moves no unversioned address. With nothing
+  versioned the selector is not mounted, and none is listed.
 - **A body sent to a route taking none is not its answer.** It is refused `413` past the cap, and
   no document lists that: the route's contract is not to be sent one.
 

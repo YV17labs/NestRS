@@ -180,7 +180,9 @@ Six behaviours worth knowing before you switch:
 - **The URI form stops being a second address.** With `header` or `media_type`
   in force, `GET /v2/posts` is a `404`: there is exactly one way to ask.
 - **A malformed version is a `400`.** The token is spliced into a path, so it is
-  validated first — alphanumerics, `.` and `-`, nothing longer than 32 bytes.
+  validated first — alphanumerics, `.` and `-`, nothing longer than 32 bytes — in
+  front of routing, so an unversioned route answers it too, and the document lists
+  it there.
 - **The [OpenAPI document](/openapi/) follows the caller as well.** It names
   `/posts`, not `/v1/posts`, and each versioned operation gains the version as an
   `in: header` parameter — your `<PREFIX>_HTTP__VERSION_HEADER`, or `Accept` with

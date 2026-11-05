@@ -560,6 +560,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `HttpConfig { trusted_proxies: vec![ip], .. }` | `vec![ip.into()]`, or `vec!["10.42.0.0/16".parse().expect("a CIDR range")]` for a range in a `#[module]`'s imports (`?` in a function returning `Result`): an entry is a `TrustedProxy` |
    | `ClientOrigin::resolve(forwarded, forwarded_for, real_ip, peer, &[ip])` | `&[ip.into()]` for the last argument |
    | `ClientIp`'s `ip` compared with `::ffff:a.b.c.d` on a listener on `[::]` | `a.b.c.d`: a mapped address is the IPv4 address it carries — not a compile error |
+   | an `OPTIONS` from a listed origin that relied on the CORS layer's `403` | nothing, or a guard: it reaches its route now, `405` with `Allow` where none answers — not a compile error |
    | `HttpCors { methods: vec!["TRACE".into()], .. }` | drop the forbidden method; list the methods a page sends (`PUT`, `DELETE`, …) |
    | a CORS policy without `max_age`, whose preflight a browser kept a day | `max_age: Some(Duration::from_secs(86_400))`, or `<PREFIX>_HTTP__CORS_MAX_AGE_SECS=86400` — not a compile error: a preflight otherwise carries no `Access-Control-Max-Age` |
    | a write guarded by `If-Match` against the `ETag` of a read `compression` encoded | read the tag the write sends from an unencoded answer (a request without `Accept-Encoding`) — not a compile error: an encoded answer's strong tag is now sent weak (`W/"…"`, RFC 9110 §8.8.3), and a weak tag matches no `If-Match` |

@@ -331,6 +331,87 @@ async fn a_mount_answering_every_method_admits_every_method_a_page_sends() {
     );
 }
 
+/// A self-mount with an entry for `OPTIONS` itself, beside one answering every
+/// method: what a plain `OPTIONS` from a page is sent to.
+struct OptionsMount;
+
+impl Discoverable for OptionsMount {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<OptionsMount, HttpEndpointMeta>(
+            HttpEndpointMeta::new(
+                &crate::PUBLIC_MOUNT,
+                "/",
+                "options",
+                |_container, routes| {
+                    routes.route(
+                        Method::OPTIONS,
+                        "/capabilities",
+                        crate::answering("options"),
+                    );
+                    routes.route_any("/rpc", crate::answering("rpc"));
+                },
+            )
+            .owned_by("OptionsMount"),
+        )
+    }
+}
+
+#[module(providers = [OptionsMount, PagesController])]
+struct OptionsModule;
+
+/// A page's own `fetch(url, { method: "OPTIONS" })` carries no
+/// `Access-Control-Request-Method`, the request its preflight admitted: it
+/// reaches the entry that answers it, and the page may read the answer.
+#[tokio::test]
+async fn a_plain_options_from_a_listed_origin_reaches_what_answers_it() {
+    let client = crate::boot_on::<OptionsModule>(policy(HttpCors {
+        origins: vec![LISTED.into()],
+        ..HttpCors::default()
+    }))
+    .await;
+
+    for (path, body) in [("/capabilities", "options"), ("/rpc", "rpc")] {
+        let answered = client
+            .request(Method::OPTIONS, path)
+            .header(header::ORIGIN, LISTED)
+            .send()
+            .await;
+        answered.assert_status_is_ok();
+        answered.assert_header(header::ACCESS_CONTROL_ALLOW_ORIGIN, LISTED);
+        answered.assert_header_is_not_exist(header::ACCESS_CONTROL_ALLOW_METHODS);
+        let vary = values(&answered.0, header::VARY);
+        assert!(vary.iter().any(|v| v == "origin"), "{vary:?}");
+        answered.assert_text(body).await;
+    }
+
+    let unrouted = client
+        .request(Method::OPTIONS, "/cors")
+        .header(header::ORIGIN, LISTED)
+        .send()
+        .await;
+    unrouted.assert_status(StatusCode::METHOD_NOT_ALLOWED);
+    unrouted.assert_header(header::ACCESS_CONTROL_ALLOW_ORIGIN, LISTED);
+}
+
+/// Only the origin check stands in front of it: an origin the policy does not
+/// list reaches nothing, whatever the method.
+#[tokio::test]
+async fn a_plain_options_from_an_unlisted_origin_is_refused() {
+    let client = crate::boot_on::<OptionsModule>(policy(HttpCors {
+        origins: vec![LISTED.into()],
+        ..HttpCors::default()
+    }))
+    .await;
+
+    let refused = client
+        .request(Method::OPTIONS, "/capabilities")
+        .header(header::ORIGIN, "https://evil.example")
+        .send()
+        .await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    refused.assert_header_is_not_exist(header::ACCESS_CONTROL_ALLOW_ORIGIN);
+}
+
 /// The wildcard admits every method, and says so as Fetch spells it, `*`,
 /// rather than as a list naming a method no page can send.
 #[tokio::test]

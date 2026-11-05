@@ -442,3 +442,15 @@ hostname, and refusing it fails a boot in the open.
 `21`, which the URL standard's table gives. So `ftp://a:21` and `ftp://a` are two
 origins here and one there. No browser serves a page over `ftp`, so none sends
 either; it costs a line when one does.
+
+## 2026-11-05 — an `OPTIONS` naming no method is no preflight
+
+The 2026-10-23 entry kept poem's rule that a preflight naming no method is refused,
+and a run showed what it cost. WHATWG Fetch calls a CORS-preflight request one that
+uses `OPTIONS` and carries `Access-Control-Request-Method`; the layer refused any
+`OPTIONS` with an `Origin` and without it, `403`, so a `route(Method::OPTIONS, …)`
+or `route_any` entry was never reached from a listed origin. A page's own
+`fetch(url, { method: "OPTIONS" })` was refused right after its preflight had
+admitted it, a method `SENDABLE_METHODS` advertises. Now only a request carrying
+the header is a preflight, and any other goes on with the headers an admitted
+answer carries. The refusal an unlisted origin gets stands in front of both.

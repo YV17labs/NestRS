@@ -176,7 +176,9 @@ material in the environment, so the pinned form is a test's: a suite hands
 The transport answers the CORS policy **outermost**, so a preflight
 (`OPTIONS`) is answered before any guard or interceptor runs, and every answer
 under the policy, a refusal included, carries `Vary: Origin`: a shared cache
-keeps one origin's answer from another.
+keeps one origin's answer from another. A preflight is an `OPTIONS` naming
+`Access-Control-Request-Method`, as the Fetch standard defines one; an `OPTIONS`
+naming none is a request like any other, and reaches what answers it.
 
 CORS activates only when `cors.origins` is non-empty, whatever else the
 policy sets — the default is no CORS layer. Set the origins (and any other

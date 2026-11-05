@@ -343,11 +343,11 @@ impl ServedCorsPolicy {
         }
     }
 
-    /// Whether a preflight asking for the method `requested` may send it; one
-    /// naming none asks for none the policy admits.
-    fn admits_method(&self, requested: Option<&HeaderValue>) -> bool {
+    /// Whether a preflight asking for the method `requested` may send it.
+    fn admits_method(&self, requested: &HeaderValue) -> bool {
         requested
-            .and_then(|value| value.to_str().ok())
+            .to_str()
+            .ok()
             .and_then(|value| value.parse::<Method>().ok())
             .is_some_and(|method| {
                 self.methods
@@ -415,8 +415,12 @@ impl<E: Endpoint> Cors<E> {
         if !policy.origins.admits(&origin) {
             return CorsRefusal::Origin.answer();
         }
-        if req.method() == Method::OPTIONS {
-            if !policy.admits_method(req.headers().get(ACCESS_CONTROL_REQUEST_METHOD)) {
+        // WHATWG Fetch: an `OPTIONS` naming no method is no preflight, and goes
+        // on like any other request; a page's own `OPTIONS` is one.
+        if req.method() == Method::OPTIONS
+            && let Some(method) = req.headers().get(ACCESS_CONTROL_REQUEST_METHOD)
+        {
+            if !policy.admits_method(method) {
                 return CorsRefusal::Method.answer();
             }
             let requested = req.headers().get(ACCESS_CONTROL_REQUEST_HEADERS);
@@ -858,13 +862,17 @@ mod tests {
         cors.call(request.finish()).await.expect("answered")
     }
 
-    /// A preflight that names no method asks for none the policy admits.
+    /// WHATWG Fetch calls a preflight an `OPTIONS` naming the method it asks
+    /// for: one naming none is a request like the rest, and it reaches what it
+    /// addresses, answered as any admitted request is.
     #[tokio::test]
-    async fn a_preflight_naming_no_method_is_refused() {
+    async fn an_options_naming_no_method_is_no_preflight() {
         let cors = served(cfg(&[LISTED]));
-        let refused = preflight(&cors, None, None).await;
-        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
-        assert!(!refused.headers().contains_key(ACCESS_CONTROL_ALLOW_ORIGIN));
+        let plain = preflight(&cors, None, None).await;
+        assert_eq!(plain.status(), StatusCode::OK);
+        assert_eq!(plain.headers()[ACCESS_CONTROL_ALLOW_ORIGIN], LISTED);
+        assert!(!plain.headers().contains_key(ACCESS_CONTROL_ALLOW_METHODS));
+        assert_eq!(plain.into_body().into_string().await.unwrap(), "served");
     }
 
     /// A policy listing no header admits what a preflight asks for, and says

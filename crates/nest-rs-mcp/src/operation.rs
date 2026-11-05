@@ -141,7 +141,7 @@ pub struct OperationGuards {
     /// shapes its answer.
     pub withheld: bool,
     /// The posture declares a class gate, which reads the ability a guard attached.
-    pub gated: bool,
+    pub class_gated: bool,
 }
 
 /// The guard stage of the operation `handler` declares: the app-wide pool, the
@@ -181,7 +181,7 @@ pub fn operation_guard_stage(
             .map_err(|unresolved| unresolved.to_string()),
     };
     validate_carried_chain(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
-    if declared.gated {
+    if declared.class_gated {
         validate_gate_reached(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
     }
     if carried_stage_idle(&chain, declared.withheld, request_chain).map_err(anyhow::Error::msg)? {
@@ -431,7 +431,7 @@ mod tests {
                 force: Vec::new(),
                 kind: McpOperationKind::Tool,
                 withheld: true,
-                gated: false,
+                class_gated: false,
             },
         )
         .expect("no guard to resolve");

@@ -1325,7 +1325,7 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
         let force = force_guard_typeids(&op.force_guards);
         let kind = op.role.kind();
         let gate = class_gate(&op.posture);
-        let gated = op.posture.gate().is_some();
+        let class_gated = op.posture.gate().is_some();
         let withheld = op.posture.withheld();
         quote! {
             #handler
@@ -1361,7 +1361,7 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
                         force: #force,
                         kind: #kind,
                         withheld: #withheld,
-                        gated: #gated,
+                        class_gated: #class_gated,
                     },
                 )
             }

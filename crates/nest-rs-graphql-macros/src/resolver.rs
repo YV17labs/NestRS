@@ -627,7 +627,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         gate,
         withheld,
     } = site;
-    let gated = gate.is_some();
+    let class_gated = gate.is_some();
     let gate = match gate {
         Some(gate) => quote!(::core::option::Option::Some(#gate)),
         None => quote!(::core::option::Option::None),
@@ -685,7 +685,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
                     site: #site_kind,
                     label: #label,
                     withheld: #withheld,
-                    gated: #gated,
+                    class_gated: #class_gated,
                 },
             )
         }

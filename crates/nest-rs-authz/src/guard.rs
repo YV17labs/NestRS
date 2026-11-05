@@ -36,7 +36,7 @@ pub struct AbilityGuard<F: AbilityFactory> {
 
 impl<F: AbilityFactory> AbilityGuard<F> {
     /// The rules of the actor a guard ahead of this one identified, if any.
-    fn actors(&self, cx: &UnitContext<'_>) -> Option<Result<Ability, MalformedRuleError>> {
+    fn actor(&self, cx: &UnitContext<'_>) -> Option<Result<Ability, MalformedRuleError>> {
         let actor = cx.ambient::<F::Actor>()?;
         // Absent ⇒ the principal is not scope-aware and no rule is scope-gated.
         let granted = cx
@@ -96,7 +96,7 @@ fn attach(
 #[async_trait]
 impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let built = match self.actors(cx) {
+        let built = match self.actor(cx) {
             Some(built) => built,
             // `#[public]` or in band: no authenticated actor.
             None if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand) => {
@@ -121,7 +121,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             return Ok(());
         }
         if cx.reflector().posture() == Posture::Public {
-            let built = self.actors(cx).unwrap_or_else(|| self.visitor());
+            let built = self.actor(cx).unwrap_or_else(|| self.visitor());
             return attach(cx, built);
         }
         let refused = Denial::unauthorized(match cx.edge() {

@@ -108,7 +108,7 @@ pub struct FieldGuards {
     /// its answer.
     pub withheld: bool,
     /// The posture declares a class gate, which reads the ability a guard attached.
-    pub gated: bool,
+    pub class_gated: bool,
 }
 
 /// The guard stage of the field `declared` describes: the app-wide pool where
@@ -126,7 +126,7 @@ pub fn field_guard_stage(
         site,
         label,
         withheld,
-        gated,
+        class_gated,
     } = declared;
     let sources = SiteChainSources {
         provider: host,
@@ -139,7 +139,7 @@ pub fn field_guard_stage(
             .map_err(|unresolved| unresolved.to_string())
     };
     validate_carried_chain(label, &chain, request_chain).map_err(anyhow::Error::msg)?;
-    if gated {
+    if class_gated {
         validate_gate_reached(label, &chain, request_chain).map_err(anyhow::Error::msg)?;
     }
     if carried_stage_idle(&chain, withheld, request_chain).map_err(anyhow::Error::msg)? {
@@ -602,7 +602,7 @@ mod tests {
                 site: GraphqlSite::Operation,
                 label: "query field",
                 withheld: true,
-                gated: false,
+                class_gated: false,
             },
         )
         .expect("no guard to resolve");

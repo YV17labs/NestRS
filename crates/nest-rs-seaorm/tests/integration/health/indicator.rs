@@ -1,12 +1,12 @@
 //! The indicator `SeaOrmModule::for_root` attaches, booted beside
 //! `HealthModule` alone over a connection holding no pool, which no round-trip
 //! reaches: the readiness and startup probes read `seaorm` down, once however
-//! many modules open the pool, and liveness waits on it never. An app without
-//! `HealthModule` boots as it did.
+//! many modules open the pool, its binding included, and liveness waits on it
+//! never. An app without `HealthModule` boots as it did.
 
 use nest_rs_core::{App, module};
 use nest_rs_health::{HealthModule, HealthService, IndicatorStatus, ProbeKind};
-use nest_rs_seaorm::{SeaOrmConfig, SeaOrmModule};
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use sea_orm::DatabaseConnection;
 
 /// The pool's config, seeded beside a connection that keeps the module from
@@ -63,6 +63,25 @@ async fn a_pool_no_round_trip_reaches_fails_readiness_and_startup_once_as_seaorm
         (live.status, live.details.len()),
         (IndicatorStatus::Up, 0),
         "a database outage is no reason to restart the process: {live:#?}"
+    );
+}
+
+/// An app naming only the binding, which opens the pool it runs on.
+#[module(imports = [HealthModule, SeaOrmDatabaseModule])]
+struct OpenedByItsBinding;
+
+#[tokio::test]
+async fn a_pool_its_binding_opens_answers_the_probes_as_seaorm() {
+    let app = booted::<OpenedByItsBinding>().await;
+    let health = app
+        .container()
+        .get::<HealthService>()
+        .expect("HealthModule provides it");
+    let report = health.probe(ProbeKind::Readiness).await;
+    assert_eq!(
+        report.error.keys().map(|key| &**key).collect::<Vec<&str>>(),
+        ["seaorm"],
+        "{report:#?}"
     );
 }
 

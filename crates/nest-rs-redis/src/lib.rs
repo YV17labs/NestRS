@@ -6,8 +6,9 @@
 //! one server (`rediss://`), the primary Sentinel names (`rediss-sentinel://`),
 //! or a Cluster (`rediss-cluster://`), every connection encrypted and verified
 //! against what [`RedisConfig::tls`] trusts. That is the crate without a feature. Each
-//! binding is a feature of its own, named for the port it binds, and sits beside
-//! the connection in the composition root, sharing it on every topology:
+//! binding is a feature of its own, named for the port it binds, which imports
+//! the connection and shares it on every topology, so the composition root names
+//! a binding alone, and [`RedisModule`] only to pin it:
 //!
 //! - **queue** — `RedisQueueModule` binds the queue port over it, on Redis
 //!   Streams: the port's `Jobs` a feature injects to

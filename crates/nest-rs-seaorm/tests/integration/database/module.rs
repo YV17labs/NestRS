@@ -12,7 +12,7 @@ use nest_rs_core::module;
 use nest_rs_database::{Executor, OpenUnit, Settlement, Unhonoured, UnitOfWork, UnitSpec};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
-use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule};
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::TestApp;
 use sea_orm::DatabaseConnection;
 use tokio::time::Instant;
@@ -423,4 +423,78 @@ async fn a_pool_reached_only_by_injection_boots_with_no_binding_and_says_nothing
         .flat_map(|level| logs.events_at(level))
         .collect();
     assert!(said.is_empty(), "correct wiring says nothing: {said:?}");
+}
+
+/// The binding alone, naming nothing it runs on.
+#[module(imports = [SeaOrmDatabaseModule])]
+struct BindingAlone;
+
+#[tokio::test]
+async fn the_binding_alone_opens_the_pool_it_runs_on() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .provide(SeaOrmConfig::default())
+        .module::<BindingAlone>()
+        .build()
+        .await
+    else {
+        panic!("a config naming no database opens no pool");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        said.contains(&nest_rs_config::var_name("seaorm", "URL")),
+        "the pool's own refusal, naming its variable: {said}"
+    );
+}
+
+#[tokio::test]
+async fn the_binding_alone_reads_the_config_of_a_pool_the_app_was_handed() {
+    let app = nest_rs_core::App::builder()
+        .provide(DatabaseConnection::default())
+        .module::<BindingAlone>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("the binding reads the pool's config: {refused:#}"));
+    assert!(app.container().get::<SeaOrmConfig>().is_some());
+}
+
+/// A pool budget no default holds, so only the pin can have set it.
+const PINNED_CONNECTIONS: u32 = 7;
+
+fn pinned_pool() -> SeaOrmConfig {
+    SeaOrmConfig {
+        max_connections: PINNED_CONNECTIONS,
+        ..SeaOrmConfig::default()
+    }
+}
+
+#[module(imports = [SeaOrmDatabaseModule, SeaOrmModule::for_root(pinned_pool())])]
+struct BindingThenPin;
+
+#[module(imports = [SeaOrmModule::for_root(pinned_pool()), SeaOrmDatabaseModule])]
+struct PinThenBinding;
+
+async fn pool_connections<M: nest_rs_core::Module>() -> u32 {
+    nest_rs_core::App::builder()
+        .provide(DatabaseConnection::default())
+        .module::<M>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("the pin beside the binding boots: {refused:#}"))
+        .container()
+        .get::<SeaOrmConfig>()
+        .expect("the pool's config")
+        .max_connections
+}
+
+#[tokio::test]
+async fn a_pin_at_the_root_supersedes_the_binding_s_bare_import_in_either_order() {
+    assert_ne!(SeaOrmConfig::default().max_connections, PINNED_CONNECTIONS);
+    assert_eq!(
+        pool_connections::<BindingThenPin>().await,
+        PINNED_CONNECTIONS
+    );
+    assert_eq!(
+        pool_connections::<PinThenBinding>().await,
+        PINNED_CONNECTIONS
+    );
 }

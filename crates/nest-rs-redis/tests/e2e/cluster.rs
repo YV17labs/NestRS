@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{Queue, QueueModule, processor, queue};
-use nest_rs_redis::{RedisModule, RedisQueueModule};
+use nest_rs_redis::RedisQueueModule;
 use serde::{Deserialize, Serialize};
 
 use crate::{ClusterNode, Runs};
@@ -85,7 +85,7 @@ impl MovedProcessor {
 }
 
 #[module(
-    imports = [RedisModule, RedisQueueModule, QueueModule],
+    imports = [RedisQueueModule, QueueModule],
     providers = [MovedProcessor],
 )]
 struct MovedModule;
@@ -198,7 +198,7 @@ impl AskedProcessor {
 }
 
 #[module(
-    imports = [RedisModule, RedisQueueModule, QueueModule],
+    imports = [RedisQueueModule, QueueModule],
     providers = [AskedProcessor],
 )]
 struct AskedModule;
@@ -318,7 +318,7 @@ impl AtomicProcessor {
 }
 
 #[module(
-    imports = [RedisModule, RedisQueueModule, QueueModule],
+    imports = [RedisQueueModule, QueueModule],
     providers = [AtomicProcessor],
 )]
 struct AtomicModule;

@@ -21,10 +21,6 @@ use crate::error::ConnectError;
 /// Where the substrate's variables live: `<PREFIX>_SEAORM__*`.
 const NAMESPACE: &str = <SeaOrmConfig as Namespaced>::NAMESPACE;
 
-/// What every binding says when the pool or its config is missing.
-pub(crate) const SUBSTRATE_REMEDY: &str = "import `SeaOrmModule`, which resolves `SeaOrmConfig` \
-                                           and opens the one pool every SeaORM binding shares";
-
 nest_rs_core::inventory::submit! {
     nest_rs_core::DependencyRemedy::new(
         TypeId::of::<DatabaseConnection>,
@@ -34,10 +30,10 @@ nest_rs_core::inventory::submit! {
 }
 
 /// The SeaORM substrate: the pool, its budgets, its close and, under the
-/// `health` feature, its indicator. Import it once — bare to read
-/// `<PREFIX>_SEAORM__*`, or through [`SeaOrmModule::for_root`] to pin — then
-/// the bindings your app needs beside it, which share the pool it opens. It is
-/// imported by type, so two imports open, close and report one pool.
+/// `health` feature, its indicator. Every binding imports it, so an app names
+/// it only to pin it, through [`SeaOrmModule::for_root`], or for a pool reached
+/// by injection alone, bare, which reads `<PREFIX>_SEAORM__*`. It is imported
+/// by type, so two imports open, close and report one pool.
 pub struct SeaOrmModule;
 
 impl SeaOrmModule {

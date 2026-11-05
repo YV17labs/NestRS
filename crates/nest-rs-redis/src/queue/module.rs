@@ -14,16 +14,15 @@ use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, Jobs};
 use super::consumer::RedisQueueConsumer;
 use super::{RedisQueueConfig, RedisQueueProducer};
 use crate::instance::RedisInstance;
-use crate::{RedisConnection, RedisError};
+use crate::{RedisConnection, RedisError, RedisModule};
 
-/// The Redis queue binding. Import it beside
-/// [`RedisModule`](crate::RedisModule): an app pushing jobs injects the port's
-/// `Arc<Jobs>`, and an app running them imports `QueueModule` beside it too. A
-/// bare import reads `<PREFIX>_REDIS__QUEUE__*`;
-/// [`for_root`](RedisQueueModule::for_root) pins the base those variables
-/// overlay. It queues on the default instance's connection, or on a named
-/// one's — `RedisQueueModule::<Background>` reading
-/// `<PREFIX>_REDIS__BACKGROUND__QUEUE__*`.
+/// The Redis queue binding: an app pushing jobs injects the port's `Arc<Jobs>`,
+/// and a queue adapter brings the `QueueModule` that runs them. A bare import
+/// reads `<PREFIX>_REDIS__QUEUE__*`; [`for_root`](RedisQueueModule::for_root)
+/// pins the base those variables overlay. It queues on the default instance's
+/// connection, or on a named one's — `RedisQueueModule::<Background>` reading
+/// `<PREFIX>_REDIS__BACKGROUND__QUEUE__*` — and imports the
+/// [`RedisModule`] opening it, which an app names only to pin it.
 pub struct RedisQueueModule<I = Unnamed>(PhantomData<fn() -> I>);
 
 impl RedisQueueModule {
@@ -87,10 +86,11 @@ impl<I: Instance> Module for RedisQueueModule<I> {
         Self::bind(ConfigModule::provide_feature::<I, RedisQueueConfig>(
             builder,
         ))
+        .import::<RedisModule<I>>()
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder
+        builder.import::<RedisModule<I>>()
     }
 }
 

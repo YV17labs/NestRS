@@ -12,9 +12,7 @@ use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, code, injectable, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, crud, operations, resolver};
 use nest_rs_http::{HttpModule, StatusCode, controller, routes};
-use nest_rs_seaorm::{
-    Creatable, CrudService, SeaOrmDatabaseModule, SeaOrmModule, ServiceError, expose,
-};
+use nest_rs_seaorm::{Creatable, CrudService, SeaOrmDatabaseModule, ServiceError, expose};
 use nest_rs_testing::{LogCapture, TestApp};
 use sea_orm::sqlx::error::{DatabaseError, ErrorKind};
 use sea_orm::{ConnectOptions, Database, DbErr, RuntimeErr, SqlxError};
@@ -101,7 +99,6 @@ impl LedgerResolver {
 
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
         GraphqlModule::for_root(GraphqlConfig::default()),
     ],

@@ -58,9 +58,6 @@ impl Module for ElsewhereScheduleModule {
 ])]
 struct TwoLocksModule;
 
-#[module(imports = [RedisScheduleModule])]
-struct NoConnectionModule;
-
 #[tokio::test]
 async fn a_second_occurrence_lock_beside_redis_fails_the_boot_naming_the_remedy() {
     let Err(error) = App::builder().module::<TwoLocksModule>().build().await else {
@@ -70,18 +67,6 @@ async fn a_second_occurrence_lock_beside_redis_fails_the_boot_naming_the_remedy(
     assert!(
         rendered.contains(nest_rs_schedule::BACKEND_REMEDY),
         "the boot error carries the port's remedy: {rendered}",
-    );
-}
-
-#[tokio::test]
-async fn the_binding_without_its_connection_fails_the_boot_naming_the_import() {
-    let Err(error) = App::builder().module::<NoConnectionModule>().build().await else {
-        panic!("a lock binding with no connection to claim over must not boot");
-    };
-    let rendered = format!("{error:#}");
-    assert!(
-        rendered.contains("import RedisModule, which opens the Redis connection"),
-        "the boot error names the import that opens the connection: {rendered}",
     );
 }
 

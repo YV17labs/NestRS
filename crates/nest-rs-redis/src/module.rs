@@ -1,8 +1,8 @@
 //! [`RedisModule`] — the substrate seam. `RedisModule` opens the
 //! [`RedisConnection`] this crate's bindings share, and under the `health`
 //! feature attaches its indicator; each binding (`RedisQueueModule`,
-//! `RedisThrottlerModule`, `RedisScheduleModule`) is then a bare import beside
-//! it. An app opening a second Redis names it with an instance marker, as a
+//! `RedisThrottlerModule`, `RedisScheduleModule`) imports it, by the instance it
+//! runs on. An app opening a second Redis names it with an instance marker, as a
 //! typed import, `RedisModule::<Cache>`, and a binding over a named instance
 //! the same way, `RedisScheduleModule::<Locks>`.
 
@@ -15,11 +15,11 @@ use nest_rs_core::{Collecting, ContainerBuilder, Instance, Module, Registering, 
 use crate::{RedisConfig, RedisConnection};
 
 /// The Redis substrate for the instance `I`: the connection, its budget and,
-/// under the `health` feature, its indicator. Import it once per Redis the app
-/// opens — bare to read its variables, through [`RedisModule::for_root`] to
-/// pin — then the bindings it needs beside it, which share the connection it
-/// opens. It is imported by type, so two imports of one instance open and
-/// report one connection.
+/// under the `health` feature, its indicator. Every binding imports its
+/// instance's, so an app names it only to pin it, through
+/// [`RedisModule::for_root`], or for a connection reached by injection alone,
+/// bare, which reads its variables. It is imported by type, so two imports of
+/// one instance open and report one connection.
 ///
 /// The default instance reads `<PREFIX>_REDIS__*`; a `#[instance] struct
 /// Cache` reads `<PREFIX>_REDIS__CACHE__*` and is injected as
@@ -38,7 +38,6 @@ use crate::{RedisConfig, RedisConnection};
 /// pub struct Limits;
 ///
 /// #[module(imports = [
-///     RedisModule,
 ///     RedisQueueModule,
 ///     RedisModule::<Cache>,
 ///     RedisModule::for_root((Limits, RedisConfig {

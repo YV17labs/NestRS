@@ -135,6 +135,7 @@ async fn a_seeded_connection_past_the_queue_ports_net_fails_the_boot() {
     .expect("connect to the dev container Redis");
     let Err(refused) = App::builder()
         .provide(patient)
+        .provide(redis_config())
         .module::<BareBindingModule>()
         .build()
         .await

@@ -22,7 +22,7 @@ use nest_rs_oauth_server::{OAuthServerConfig, OAuthServerModule, RegisteredClien
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_queue::{OutboxConfig, OutboxModule, QueueConfig, QueueModule};
 use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueConfig, RedisQueueModule};
-use nest_rs_seaorm::{SeaOrmConfig, SeaOrmModule};
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_server_timing::{ServerTimingConfig, ServerTimingModule};
 use nest_rs_static_files::{StaticFilesConfig, StaticFilesModule};
 use nest_rs_storage::{StorageConfig, StorageModule};
@@ -355,6 +355,41 @@ imported_twice!(
     bare = [SeaOrmModule],
     pinned = [SeaOrmModule::for_root(SeaOrmConfig::default())],
 );
+
+#[module(imports = [SeaOrmDatabaseModule])]
+struct BindingAlone;
+
+#[module(imports = [SeaOrmModule, SeaOrmDatabaseModule])]
+struct BindingBesideItsResource;
+
+#[module(imports = [SeaOrmDatabaseModule, SeaOrmModule::for_root(SeaOrmConfig::default())])]
+struct BindingThenPinnedResource;
+
+#[module(imports = [SeaOrmModule::for_root(SeaOrmConfig::default()), SeaOrmDatabaseModule])]
+struct PinnedResourceThenBinding;
+
+/// The closes `M`'s app wires, sorted: which runs first is read off what was
+/// installed last, whatever the order the imports attached them in.
+async fn closes<M: Module>() -> Vec<String> {
+    let seeds: Seeds = |app| {
+        app.provide(nest_rs_seaorm::sea_orm::DatabaseConnection::default())
+            .provide(SeaOrmConfig::default())
+    };
+    let mut closes = wiring::<M>(seeds).await.closes;
+    closes.sort();
+    closes
+}
+
+/// A binding wires the resource it runs on, and a root naming that resource,
+/// bare or pinned, wires it no second time.
+#[tokio::test]
+async fn a_binding_wires_its_resource_once_however_the_root_names_it() {
+    let alone = closes::<BindingAlone>().await;
+    assert_eq!(alone, ["DatabaseConnection", "Settles"]);
+    assert_eq!(closes::<BindingBesideItsResource>().await, alone);
+    assert_eq!(closes::<BindingThenPinnedResource>().await, alone);
+    assert_eq!(closes::<PinnedResourceThenBinding>().await, alone);
+}
 
 /// A row of the second table: `$import` alone attaches the HTTP transport its
 /// surface mounts on, so an app importing it serves it with no import of

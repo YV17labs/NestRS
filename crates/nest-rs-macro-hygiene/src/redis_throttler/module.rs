@@ -2,7 +2,7 @@
 //! over it, both reached through `nest_rs::redis`.
 
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisThrottlerModule};
+use nest_rs::redis::RedisThrottlerModule;
 
-#[module(imports = [RedisModule, RedisThrottlerModule])]
+#[module(imports = [RedisThrottlerModule])]
 pub struct MacroHygieneRedisThrottlerModule;

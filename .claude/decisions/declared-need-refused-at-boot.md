@@ -91,3 +91,13 @@ registration's `type_name`. The SDL stays refused, for the reason above.
 **Refused: a boot refusal for a `Context` body.** Nothing declares it, and reading
 one would take parsing a method body; a body that wants the check takes the
 parameter.
+
+## 2026-11-05 — the binding imports the pool, which is not the folding refused above
+
+Agreed by the owner's "Tout faire (Recommandé)" of 2026-10-31 (identity audit,
+second pass). `SeaOrmDatabaseModule` now imports `SeaOrmModule`, so *a pool opened
+with no binding* and *a binding with no pool* stop being the same refusal's two
+halves: the second no longer exists, while the need a host declares is still
+refused naming the binding. The refusal above still holds: both modules stay, and
+an app reaching the pool by injection alone still imports `SeaOrmModule` and puts
+no unit over SeaORM's executor.

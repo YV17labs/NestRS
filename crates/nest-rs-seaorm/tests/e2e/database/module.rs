@@ -13,7 +13,7 @@ use nest_rs_core::{App, BudgetPastNetError, Module, hooks, injectable, module};
 use nest_rs_events::{EventBus, EventsModule, listeners};
 use nest_rs_http::Request;
 use nest_rs_seaorm::{
-    Creatable, CreateModel, CrudService, Repo, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule,
+    Creatable, CreateModel, CrudService, Repo, SeaOrmConfig, SeaOrmDatabaseModule,
 };
 use sea_orm::prelude::Uuid;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set};
@@ -34,7 +34,7 @@ impl Strategy for LocalStrategy {
 type LocalGuard = AuthnGuard<LocalStrategy>;
 
 #[module(
-    imports = [SeaOrmModule, SeaOrmDatabaseModule],
+    imports = [SeaOrmDatabaseModule],
     providers = [LocalStrategy, LocalGuard],
 )]
 struct BoundPoolModule;

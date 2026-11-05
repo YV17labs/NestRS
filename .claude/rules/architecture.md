@@ -55,9 +55,12 @@ trait, no `<Vendor><Port>Module`.
 module owning a `#[config]` also offers a `for_root(cfg)`, which only pins a
 base those variables overlay. An adapter crate's root holds the resource and **one folder per port
 it binds** (`queue/`, `throttler/`); a binding never names a sibling's type, and
-a port crate with nothing to register holds no module. **Swapping a backend
-edits the composition root alone**: a vendor binding supersedes the port's
-default anywhere in `imports`, and two bindings of one port fail the boot.
+a port crate with nothing to register holds no module. **A binding imports the
+resource it runs on**, bare and by its instance, so a root names that resource
+only to pin it; the resource alone is the shape of one reached by injection.
+**Swapping a backend edits the composition root alone**: a vendor binding
+supersedes the port's default anywhere in `imports`, and two bindings of one
+port fail the boot.
 
 **The crate counts only when it is a subject** (`features` is a container:
 `audio/http/module.rs` is `AudioHttpModule`). **Every type in a `module.rs`

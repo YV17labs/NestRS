@@ -7,11 +7,12 @@
 //!   past the settle for a connection no unit holds. Under the `health`
 //!   feature it attaches the pool's indicator, `seaorm`, which an app
 //!   importing `HealthModule` runs on the readiness and startup probes.
-//! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port:
-//!   [`SeaOrmUnitOfWork`], which every edge — an HTTP request, a WS message, an
-//!   MCP operation, a queue attempt, a scheduled tick — and every lifecycle hook
-//!   runs its unit of work through, on an ambient [`SeaOrmExecutor`]: the pool, or a
-//!   transaction opened on the unit's first data-layer touch.
+//! - [`SeaOrmDatabaseModule`] (bare), which imports the pool it runs on, binds
+//!   the `nest-rs-database` port: [`SeaOrmUnitOfWork`], which every edge — an
+//!   HTTP request, a WS message, an MCP operation, a queue attempt, a scheduled
+//!   tick — and every lifecycle hook runs its unit of work through, on an ambient
+//!   [`SeaOrmExecutor`]: the pool, or a transaction opened on the unit's first
+//!   data-layer touch.
 //! - Under the `queue` feature, [`SeaOrmDatabaseModule`] also keeps the queue
 //!   port's outbox, `queue::SeaOrmOutbox`: a job pushed inside a unit's
 //!   transaction is written there and filed after its commit;
@@ -29,12 +30,12 @@
 //! ```
 //! # use nest_rs_core::module;
 //! # use nest_rs_seaorm::sea_orm::{ConnectOptions, Database};
-//! # use nest_rs_seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+//! # use nest_rs_seaorm::SeaOrmDatabaseModule;
 //! # use nest_rs_testing::TestApp;
 //! # use nest_rs_database::UnitOfWork;
 //! # #[module(providers = [])]
 //! # pub struct UsersModule;
-//! #[module(imports = [SeaOrmModule, SeaOrmDatabaseModule, UsersModule])]
+//! #[module(imports = [SeaOrmDatabaseModule, UsersModule])]
 //! pub struct AppModule;
 //! # #[nest_rs_core::main]
 //! # async fn main() -> anyhow::Result<()> {
@@ -49,7 +50,8 @@
 //! ```
 //!
 //! Pin a base those variables overlay with
-//! [`SeaOrmModule::for_root`]`(SeaOrmConfig { .. })`.
+//! [`SeaOrmModule::for_root`]`(SeaOrmConfig { .. })`, the one reason an app
+//! running on the binding names the pool.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

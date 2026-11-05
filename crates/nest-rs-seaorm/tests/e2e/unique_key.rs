@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, module};
 use nest_rs_http::{Method, StatusCode};
-use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule};
 use nest_rs_testing::{EphemeralDatabase, TestApp};
 use sea_orm::sqlx::postgres::PgConnectOptions;
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
@@ -79,7 +79,7 @@ struct HandlesController {
 impl HandlesController {}
 
 #[module(
-    imports = [SeaOrmModule, SeaOrmDatabaseModule],
+    imports = [SeaOrmDatabaseModule],
     providers = [
         HandlesService,
         EveryHandle,

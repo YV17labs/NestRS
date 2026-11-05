@@ -1,15 +1,15 @@
 //! The indicator `RedisModule::for_root` attaches for each instance it opens,
 //! booted beside `HealthModule` alone over scripted servers answering `PING`:
 //! the default instance answers the readiness and startup probes as `redis`,
-//! a named one as `redis:cache` — opened at the root or by a feature the app
-//! imports, once however many modules open it — and liveness waits on
-//! neither. An app without `HealthModule` boots as it did.
+//! a named one as `redis:cache` — opened at the root, by a feature the app
+//! imports or by a binding, once however many modules open it — and liveness
+//! waits on neither. An app without `HealthModule` boots as it did.
 
 use std::time::Duration;
 
 use nest_rs_core::{App, module};
 use nest_rs_health::{HealthModule, HealthService, IndicatorStatus, ProbeKind};
-use nest_rs_redis::{RedisConfig, RedisModule};
+use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueModule, RedisScheduleModule};
 
 use crate::connection::DemotedRedis;
 use crate::harness::tls::trusting_the_test_authority;
@@ -101,6 +101,27 @@ async fn an_instance_features_open_answers_once_in_an_app_that_never_names_it() 
             "{kind:?}"
         );
     }
+}
+
+/// An app naming only its bindings, which open the instance they run on.
+#[module(imports = [HealthModule, RedisQueueModule, RedisScheduleModule])]
+struct OpenedByItsBindings;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_instance_its_bindings_open_answers_once_under_its_own_name() {
+    let server = DemotedRedis::start().await;
+    let app = App::builder()
+        .provide(default_on(&server))
+        .module::<OpenedByItsBindings>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("two bindings of one instance boot: {refused:#}"));
+    let health = app
+        .container()
+        .get::<HealthService>()
+        .expect("HealthModule provides it");
+
+    assert_eq!(answering_up(&health, ProbeKind::Readiness).await, ["redis"]);
 }
 
 #[module(imports = [RedisModule])]

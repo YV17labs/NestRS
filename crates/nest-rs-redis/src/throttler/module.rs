@@ -1,8 +1,8 @@
 //! [`RedisThrottlerModule`] — the Redis binding of the throttler port. A bare
-//! import beside `ThrottlerModule` (the policy and the guard) and
-//! [`RedisModule`](crate::RedisModule) (the connection): it declares
+//! import at the root of an app reaching `ThrottlerModule` (the policy and the
+//! guard), which imports the [`RedisModule`] opening its connection: it declares
 //! [`RedisThrottler`] as the `dyn ThrottlerStore`, which supersedes the port's
-//! in-process default wherever the three fall in `imports`. Enabled by the
+//! in-process default wherever the two fall in the app's imports. Enabled by the
 //! `throttler` feature.
 
 use std::marker::PhantomData;
@@ -11,19 +11,19 @@ use std::sync::Arc;
 use nest_rs_core::{Collecting, ContainerBuilder, Instance, Module, Registering, Unnamed};
 use nest_rs_throttler::ThrottlerStore;
 
-use crate::RedisConnection;
 use crate::throttler::RedisThrottler;
+use crate::{RedisConnection, RedisModule};
 
-/// Cross-process rate-limit store. Import beside `ThrottlerModule` to share the
-/// counters across every replica of the app; the policy
-/// (`<PREFIX>_THROTTLER__*`) and the `ThrottlerGuard` stay the port's. It
-/// counts on the default instance's connection, or on a named one's when
-/// imported as `RedisThrottlerModule::<Cache>`.
+/// Cross-process rate-limit store. Import it at the root to share the counters
+/// across every replica of the app; the policy (`<PREFIX>_THROTTLER__*`) and the
+/// `ThrottlerGuard` stay the port's. It counts on the default instance's
+/// connection, or on a named one's when imported as
+/// `RedisThrottlerModule::<Cache>`, and imports the [`RedisModule`] opening it.
 pub struct RedisThrottlerModule<I = Unnamed>(PhantomData<fn() -> I>);
 
 impl<I: Instance> Module for RedisThrottlerModule<I> {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder
+        builder.import::<RedisModule<I>>()
     }
 
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
@@ -37,5 +37,6 @@ impl<I: Instance> Module for RedisThrottlerModule<I> {
                     Ok(Arc::new(RedisThrottler::new(conn)) as Arc<dyn ThrottlerStore>)
                 },
             )
+            .import::<RedisModule<I>>()
     }
 }

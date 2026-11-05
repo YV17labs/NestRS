@@ -692,7 +692,7 @@ impl GatedProcessor {
 }
 
 #[module(
-    imports = [RedisModule, RedisQueueModule, nest_rs_queue::QueueModule],
+    imports = [RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [GatedProcessor],
 )]
 struct GatedModule;

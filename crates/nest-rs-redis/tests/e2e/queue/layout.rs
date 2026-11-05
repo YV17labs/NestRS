@@ -14,7 +14,7 @@ use std::time::Duration;
 use futures_util::StreamExt as _;
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{Checkpoint, PushOptions, QueueModule, processor, queue};
-use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueModule, RedisTopology};
+use nest_rs_redis::{RedisConnection, RedisQueueModule, RedisTopology};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -72,7 +72,7 @@ impl ConfinedProcessor {
 }
 
 #[module(
-    imports = [RedisModule, RedisQueueModule, QueueModule],
+    imports = [RedisQueueModule, QueueModule],
     providers = [ConfinedProcessor],
 )]
 struct WorkerModule;

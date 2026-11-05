@@ -1,9 +1,8 @@
 //! [`RedisScheduleModule`] — the Redis binding of the schedule port's occurrence
-//! lock. A bare import beside `ScheduleModule` and
-//! [`RedisModule`](crate::RedisModule): it declares
-//! [`RedisOccurrenceLock`] as the `dyn OccurrenceLock` a job declared
-//! `replicas = "one"` claims its occurrences through. Enabled by the `schedule`
-//! feature.
+//! lock. A bare import, which imports the [`RedisModule`] opening its
+//! connection: it declares [`RedisOccurrenceLock`] as the `dyn OccurrenceLock` a
+//! job declared `replicas = "one"` claims its occurrences through. Enabled by
+//! the `schedule` feature.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -11,19 +10,19 @@ use std::sync::Arc;
 use nest_rs_core::{Collecting, ContainerBuilder, Instance, Module, Registering, Unnamed};
 use nest_rs_schedule::OccurrenceLock;
 
-use crate::RedisConnection;
 use crate::schedule::RedisOccurrenceLock;
+use crate::{RedisConnection, RedisModule};
 
-/// Claims every occurrence of a `replicas = "one"` job in Redis. Import beside
-/// `ScheduleModule` in each app that runs such a job; its replicas then share
-/// one set of claims, and each occurrence fires on at most one of them. It
-/// claims on the default instance's connection, or on a named one's when
-/// imported as `RedisScheduleModule::<Locks>`.
+/// Claims every occurrence of a `replicas = "one"` job in Redis. Import it in
+/// each app that runs such a job; its replicas then share one set of claims,
+/// and each occurrence fires on at most one of them. It claims on the default
+/// instance's connection, or on a named one's when imported as
+/// `RedisScheduleModule::<Locks>`, and imports the [`RedisModule`] opening it.
 pub struct RedisScheduleModule<I = Unnamed>(PhantomData<fn() -> I>);
 
 impl<I: Instance> Module for RedisScheduleModule<I> {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder
+        builder.import::<RedisModule<I>>()
     }
 
     fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
@@ -36,5 +35,6 @@ impl<I: Instance> Module for RedisScheduleModule<I> {
                     Ok(Arc::new(RedisOccurrenceLock::new(conn)) as Arc<dyn OccurrenceLock>)
                 },
             )
+            .import::<RedisModule<I>>()
     }
 }

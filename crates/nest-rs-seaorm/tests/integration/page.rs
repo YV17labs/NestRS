@@ -10,7 +10,7 @@ use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::{injectable, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_http::{EndpointGuards, HttpModule, StatusCode, controller, header};
-use nest_rs_seaorm::{CrudService, SeaOrmDatabaseModule, SeaOrmModule, expose};
+use nest_rs_seaorm::{CrudService, SeaOrmDatabaseModule, expose};
 use nest_rs_testing::TestApp;
 use sea_orm::{ConnectOptions, Database};
 use serde_json::{Value, json};
@@ -126,7 +126,6 @@ impl ShelfResolver {
 
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
         HttpModule,
         GraphqlModule::for_root(GraphqlConfig::default()),

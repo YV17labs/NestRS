@@ -1321,7 +1321,7 @@ impl FailoverProcessor {
 }
 
 #[nest_rs_core::module(
-    imports = [RedisModule, RedisQueueModule, nest_rs_queue::QueueModule],
+    imports = [RedisQueueModule, nest_rs_queue::QueueModule],
     providers = [FailoverProcessor],
 )]
 struct FailoverModule;

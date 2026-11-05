@@ -399,7 +399,7 @@ impl ReadsAtShutdown {
 }
 
 #[module(
-    imports = [SeaOrmModule, nest_rs_seaorm::SeaOrmDatabaseModule],
+    imports = [nest_rs_seaorm::SeaOrmDatabaseModule],
     providers = [ReadsAtShutdown],
 )]
 struct ClosingModule;

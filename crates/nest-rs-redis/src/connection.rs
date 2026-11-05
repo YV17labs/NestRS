@@ -36,22 +36,6 @@ use crate::standalone::StandaloneLink;
 use crate::url::{NodeAddr, RedisUrl};
 use crate::{RedisConfig, tls};
 
-/// The sentence every binding's boot error appends when the connection of the
-/// instance `I` is missing.
-pub(crate) fn connection_remedy<I: Instance>() -> String {
-    if I::NAME.is_empty() {
-        return "RedisConnection is not registered — import RedisModule, which opens the Redis \
-                connection every binding of the default instance shares"
-            .to_owned();
-    }
-    let marker = nest_rs_core::__private::short_type_name::<I>();
-    format!(
-        "RedisConnection<{marker}> is not registered — import RedisModule::<{marker}>, which \
-         opens the Redis connection every binding of the instance `{}` shares",
-        I::NAME,
-    )
-}
-
 nest_rs_core::inventory::submit! {
     nest_rs_core::DependencyRemedy::new(
         std::any::TypeId::of::<RedisConnection>,
@@ -267,12 +251,17 @@ impl<I: Instance> RedisConnection<I> {
     }
 
     /// The connection [`RedisModule`](crate::RedisModule) opened for the
-    /// instance `I`, for `binding`'s factory.
+    /// instance `I`, for the factory of `binding`, which imports that module.
     pub(crate) fn of(container: &nest_rs_core::Container, binding: &str) -> anyhow::Result<Self> {
         container
             .get::<Self>()
             .map(|conn| (*conn).clone())
-            .ok_or_else(|| anyhow::anyhow!("{binding}: {}", connection_remedy::<I>()))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{binding}: `{}` was not resolved",
+                    nest_rs_core::__private::short_type_name::<Self>()
+                )
+            })
     }
 
     /// Run `invocation`, loading its script on the server that ran it each time
@@ -1491,22 +1480,6 @@ mod tests {
         for event in retries {
             assert_eq!(event.field("instance").as_deref(), Some("cache"));
         }
-    }
-
-    #[test]
-    fn a_missing_connection_sends_the_binding_to_its_instance_s_import() {
-        assert!(
-            connection_remedy::<Unnamed>().contains("import RedisModule, which opens"),
-            "{}",
-            connection_remedy::<Unnamed>()
-        );
-        let named = connection_remedy::<Cache>();
-        assert!(
-            named.starts_with("RedisConnection<Cache> is not registered")
-                && named.contains("import RedisModule::<Cache>, which opens")
-                && named.contains("the instance `cache`"),
-            "{named}"
-        );
     }
 
     #[tokio::test(start_paused = true)]

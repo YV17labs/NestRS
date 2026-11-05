@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigError, config};
-use nest_rs_core::{App, Instanced, instance, module};
+use nest_rs_core::{App, Instanced, Module, instance, module};
 use nest_rs_redis::{
     RedisConfig, RedisConnection, RedisError, RedisModule, RedisQueueConfig, RedisQueueModule,
     RedisScheduleModule, RedisThrottlerModule,
@@ -89,7 +89,7 @@ async fn two_instances_open_two_connections_each_to_its_own_server() {
 
 /// The cache's budget pinned at the rate limiter's net, on a server that
 /// answers: the boot holds the cache's budget, not the default's, under it.
-#[module(imports = [RedisModule::<Cache>, RedisThrottlerModule::<Cache>])]
+#[module(imports = [RedisThrottlerModule::<Cache>])]
 struct PatientCache;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -128,7 +128,7 @@ async fn a_named_instance_s_budget_at_its_binding_s_net_is_refused_naming_its_va
 }
 
 /// The cache's budget pinned at the scheduler's net.
-#[module(imports = [RedisModule::<Cache>, RedisScheduleModule::<Cache>])]
+#[module(imports = [RedisScheduleModule::<Cache>])]
 struct LockingCache;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -171,7 +171,6 @@ const CACHE_LEASE: Duration = Duration::from_secs(45);
 
 /// A queue on the cache, its config pinned on the binding.
 #[module(imports = [
-    RedisModule::<Cache>,
     RedisQueueModule::for_root((Cache, RedisQueueConfig { lease: CACHE_LEASE })),
 ])]
 struct QueueOnTheCache;
@@ -199,6 +198,78 @@ async fn a_queue_pinned_on_a_named_instance_holds_its_config_under_that_instance
         app.container().get::<RedisQueueConfig>().is_none(),
         "the default instance has no queue"
     );
+    assert!(
+        app.container().get::<RedisConnection<Cache>>().is_some(),
+        "the binding opens the instance it runs on"
+    );
+    assert!(
+        app.container().get::<RedisConnection>().is_none(),
+        "and no other, whose variables a deployment need not set"
+    );
+}
+
+#[module(imports = [RedisQueueModule])]
+struct QueueAlone;
+
+#[module(imports = [RedisScheduleModule])]
+struct LockAlone;
+
+#[module(imports = [RedisThrottlerModule])]
+struct StoreAlone;
+
+/// Whether `M`, naming no `RedisModule`, opened the default instance over
+/// `server`.
+async fn opens_the_default_instance<M: Module>(server: &DemotedRedis) -> bool {
+    App::builder()
+        .provide(RedisConfig {
+            url: server.url().into(),
+            connect_timeout: Duration::from_secs(2),
+            tls: trusting_the_test_authority(),
+        })
+        .module::<M>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("{} boots: {refused:#}", std::any::type_name::<M>()))
+        .container()
+        .get::<RedisConnection>()
+        .is_some()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_binding_alone_opens_the_connection_it_runs_on() {
+    let server = DemotedRedis::start().await;
+    assert!(opens_the_default_instance::<QueueAlone>(&server).await);
+    assert!(opens_the_default_instance::<LockAlone>(&server).await);
+    assert!(opens_the_default_instance::<StoreAlone>(&server).await);
+}
+
+#[module(imports = [RedisThrottlerModule::<Cache>, RedisModule::for_root((Cache, cache_config()))])]
+struct BindingThenPin;
+
+#[module(imports = [RedisModule::for_root((Cache, cache_config())), RedisThrottlerModule::<Cache>])]
+struct PinThenBinding;
+
+/// The budget `M`'s boot left the cache's connection pinned at.
+async fn cache_budget<M: Module>() -> Duration {
+    App::builder()
+        .module::<M>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("{} boots: {refused:#}", std::any::type_name::<M>()))
+        .container()
+        .get::<Instanced<Cache, RedisConfig>>()
+        .expect("the cache's config")
+        .connect_timeout
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pin_at_the_root_supersedes_the_binding_s_bare_import_in_either_order() {
+    let cache = DemotedRedis::start().await;
+    CACHE_URL.set(cache.url()).expect("set once");
+    let pinned = cache_config().connect_timeout;
+    assert_ne!(RedisConfig::default().connect_timeout, pinned);
+    assert_eq!(cache_budget::<BindingThenPin>().await, pinned);
+    assert_eq!(cache_budget::<PinThenBinding>().await, pinned);
 }
 
 /// An instance reading `lock`, whose derived namespace the config below holds.

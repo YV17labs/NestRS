@@ -19,8 +19,8 @@ use nest_rs_queue::{
     Capabilities, Capability, Envelope, JobId, JobProducer, Jobs, OutboxConfig, OutboxRelay,
     PushOptions, PushReceipt, QueueBackend, QueueError, QueueName, TARGET,
 };
+use nest_rs_seaorm::SeaOrmDatabaseModule;
 use nest_rs_seaorm::queue::OutboxMigration;
-use nest_rs_seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::{LogCapture, TestApp, TestAppBuilder, wait_for, wait_until};
 use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
@@ -254,7 +254,7 @@ impl NotingListeners {
 }
 
 #[module(
-    imports = [SeaOrmModule, SeaOrmDatabaseModule, EventsModule],
+    imports = [SeaOrmDatabaseModule, EventsModule],
     providers = [OutboxController, NotingListeners],
 )]
 struct OutboxAppModule;

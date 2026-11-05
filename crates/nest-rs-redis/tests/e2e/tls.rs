@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{QueueModule, processor, queue};
-use nest_rs_redis::{RedisModule, RedisQueueModule};
+use nest_rs_redis::RedisQueueModule;
 use serde::{Deserialize, Serialize};
 
 use nest_rs_config::{ClientTls, ConfigService};
@@ -44,7 +44,7 @@ impl SealedProcessor {
 }
 
 #[module(
-    imports = [RedisModule, RedisQueueModule, QueueModule],
+    imports = [RedisQueueModule, QueueModule],
     providers = [SealedProcessor],
 )]
 struct SealedModule;

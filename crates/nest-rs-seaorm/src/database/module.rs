@@ -6,7 +6,8 @@ use nest_rs_core::{Collecting, Container, ContainerBuilder, Module, Registering}
 use nest_rs_database::{UnitOfWork, provide_unit_of_work};
 use sea_orm::DatabaseConnection;
 
-use crate::module::{BudgetReach, SUBSTRATE_REMEDY, budgets};
+use crate::SeaOrmModule;
+use crate::module::{BudgetReach, budgets};
 #[cfg(any(feature = "http", feature = "graphql"))]
 use crate::unique_key::UniqueKeys;
 use crate::unit::Settles;
@@ -14,8 +15,8 @@ use crate::{SeaOrmConfig, SeaOrmUnitOfWork};
 
 /// Binds the `nest-rs-database` port: [`SeaOrmUnitOfWork`] as `dyn
 /// UnitOfWork`, which every edge opens its units of work through and every
-/// lifecycle hook runs in. A bare import beside
-/// [`SeaOrmModule`](crate::SeaOrmModule).
+/// lifecycle hook runs in. A bare import, which imports the pool it runs on,
+/// [`SeaOrmModule`]: an app names that one only to pin it.
 ///
 /// Under an edge rendering a `#[crud]` write (`http`, `graphql`), it reads at boot,
 /// from the catalog, the unique keys of every `#[expose]` entity's table: a write
@@ -45,8 +46,6 @@ impl Module for SeaOrmDatabaseModule {
         let builder = budgets(BudgetReach::Ambient)
             .into_iter()
             .fold(builder, ContainerBuilder::provide_meta);
-        // Queued after the pool's and config's factories, so a missing one is
-        // named before any later factory dials.
         let builder = provide_unit_of_work::<UnitInputs, _, _>(builder, |container| async move {
             let unit_of_work = unit_of_work(&container)?;
             #[cfg(any(feature = "http", feature = "graphql"))]
@@ -73,23 +72,14 @@ impl Module for SeaOrmDatabaseModule {
         });
         #[cfg(feature = "queue")]
         let builder = crate::queue::collect(builder);
-        builder
+        builder.import::<SeaOrmModule>()
     }
 
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         #[cfg(feature = "queue")]
         let builder = crate::queue::register(builder);
-        // A seeded `dyn UnitOfWork` skips the factory above, and its check.
-        if let Err(missing) = substrate(&builder.snapshot()) {
-            return builder.refuse(missing);
-        }
-        builder
+        builder.import::<SeaOrmModule>()
     }
-}
-
-/// The pool and its config, checked present: the binding is built over both.
-fn substrate(container: &Container) -> anyhow::Result<()> {
-    unit_of_work(container).map(drop)
 }
 
 /// SeaORM's unit of work over the container's pool and config, its settles
@@ -110,7 +100,7 @@ fn unit_of_work(container: &Container) -> anyhow::Result<SeaOrmUnitOfWork> {
 fn present<T: std::any::Any + Send + Sync>(container: &Container) -> anyhow::Result<Arc<T>> {
     container.get::<T>().ok_or_else(|| {
         anyhow::anyhow!(
-            "SeaOrmDatabaseModule: no `{}` in the container — {SUBSTRATE_REMEDY}",
+            "SeaOrmDatabaseModule: `{}` was not resolved",
             nest_rs_core::__private::short_type_name::<T>()
         )
     })
@@ -175,46 +165,6 @@ mod tests {
                 "seaorm first: {seaorm_first}"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn a_pool_seeded_without_its_module_fails_the_boot_naming_the_module() {
-        let Err(refused) = App::builder()
-            .provide(DatabaseConnection::default())
-            .module::<SeaOrmDatabaseModule>()
-            .build()
-            .await
-        else {
-            panic!("the binding reads the config `SeaOrmModule` resolves beside its pool");
-        };
-        let refused = format!("{refused:#}");
-        assert!(
-            refused.contains(": SeaOrmDatabaseModule: no `SeaOrmConfig` in the container")
-                && refused.contains("import `SeaOrmModule`, which resolves `SeaOrmConfig`"),
-            "the factory's own sentence, after the one naming it: {refused}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_unit_of_work_seeded_without_the_config_fails_the_boot_naming_the_module() {
-        let seeded = SeaOrmUnitOfWork::new(
-            Arc::new(DatabaseConnection::default()),
-            &SeaOrmConfig::default(),
-        );
-        let Err(refused) = App::builder()
-            .provide(DatabaseConnection::default())
-            .provide_dyn::<dyn UnitOfWork>(Arc::new(seeded))
-            .module::<SeaOrmDatabaseModule>()
-            .build()
-            .await
-        else {
-            panic!("a seeded unit of work still leaves the binding its substrate to read");
-        };
-        let refused = format!("{refused:#}");
-        assert!(
-            refused.starts_with("SeaOrmDatabaseModule: no `SeaOrmConfig` in the container"),
-            "{refused}"
-        );
     }
 
     #[tokio::test(start_paused = true)]

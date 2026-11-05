@@ -3,8 +3,7 @@
 //! `RedisScheduleModule` binds.
 //!
 //! Every app here is the documented wiring — `ScheduleModule`,
-//! `RedisModule`, `RedisScheduleModule` and a `#[scheduled]`
-//! host — booted through the harness, with its scheduler started the way the
+//! `RedisScheduleModule` and a `#[scheduled]` host — booted through the harness, with its scheduler started the way the
 //! app's run starts it. Each boot seeds its `RedisConfig`, the hermetic-test
 //! hatch: a seed freezes the namespace, so the `NESTRS_REDIS__URL` the suite
 //! runs under cannot move an app off the database or the proxy the test chose.
@@ -46,9 +45,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::{injectable, module};
-use nest_rs_redis::{
-    RedisConfig, RedisConnection, RedisModule, RedisOccurrenceLock, RedisScheduleModule,
-};
+use nest_rs_redis::{RedisConfig, RedisConnection, RedisOccurrenceLock, RedisScheduleModule};
 use nest_rs_schedule::{
     Occurrence, OccurrenceClaim, OccurrenceLock, ScheduleModule, Scheduler, scheduled,
 };
@@ -268,7 +265,7 @@ impl WiredTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
+    imports = [ScheduleModule, RedisScheduleModule],
     providers = [WiredTasks],
 )]
 struct WiredModule;
@@ -361,7 +358,7 @@ impl ReplicatedTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
+    imports = [ScheduleModule, RedisScheduleModule],
     providers = [ReplicatedTasks],
 )]
 struct ReplicatedModule;
@@ -430,7 +427,7 @@ impl OverlapTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
+    imports = [ScheduleModule, RedisScheduleModule],
     providers = [OverlapTasks],
 )]
 struct OverlapModule;
@@ -476,7 +473,7 @@ async fn a_run_outlasting_its_period_leaves_the_next_occurrences_to_its_peers() 
 /// whose identity is derived — this crate, the type, the method.
 mod before {
     use nest_rs_core::{injectable, module};
-    use nest_rs_redis::{RedisModule, RedisScheduleModule};
+    use nest_rs_redis::RedisScheduleModule;
     use nest_rs_schedule::{ScheduleModule, scheduled};
 
     #[injectable]
@@ -492,7 +489,7 @@ mod before {
     }
 
     #[module(
-        imports = [ScheduleModule, RedisModule, RedisScheduleModule],
+        imports = [ScheduleModule, RedisScheduleModule],
         providers = [InvoiceTasks],
     )]
     pub(super) struct BeforeModule;
@@ -502,7 +499,7 @@ mod before {
 /// module — pinning the identity it had.
 mod after {
     use nest_rs_core::{injectable, module};
-    use nest_rs_redis::{RedisModule, RedisScheduleModule};
+    use nest_rs_redis::RedisScheduleModule;
     use nest_rs_schedule::{ScheduleModule, scheduled};
 
     #[injectable]
@@ -518,7 +515,7 @@ mod after {
     }
 
     #[module(
-        imports = [ScheduleModule, RedisModule, RedisScheduleModule],
+        imports = [ScheduleModule, RedisScheduleModule],
         providers = [LedgerTasks],
     )]
     pub(super) struct AfterModule;
@@ -658,7 +655,7 @@ impl OutageTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
+    imports = [ScheduleModule, RedisScheduleModule],
     providers = [OutageTasks],
 )]
 struct OutageModule;
@@ -758,7 +755,7 @@ impl StalledTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
+    imports = [ScheduleModule, RedisScheduleModule],
     providers = [StalledTasks],
 )]
 struct StalledModule;
@@ -778,7 +775,7 @@ impl ConfinedTasks {
 }
 
 #[module(
-    imports = [ScheduleModule, RedisModule, RedisScheduleModule],
+    imports = [ScheduleModule, RedisScheduleModule],
     providers = [ConfinedTasks],
 )]
 struct ConfinedModule;

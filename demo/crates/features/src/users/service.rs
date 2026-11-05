@@ -10,7 +10,7 @@ use nest_rs::pipes::validator::Validate;
 use nest_rs::seaorm::{
     Creatable, CreateModel, CrudService, Deletable, Insertion, Repo, ServiceError, Updatable,
 };
-use sea_orm::{ColumnTrait, DbErr, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DbErr, Set};
 use uuid::Uuid;
 
 use super::entities::user as entity;

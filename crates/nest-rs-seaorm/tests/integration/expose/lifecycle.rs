@@ -12,9 +12,8 @@ use std::any::TypeId;
 use nest_rs_authz::Action;
 use nest_rs_database::__private::with_job_executor;
 use nest_rs_seaorm::__private::{ColumnDefaultRegistration, SeaOrmExecutor, inventory};
-use nest_rs_seaorm::sea_orm::sea_query::SelectStatement;
 use nest_rs_seaorm::sea_orm::{DatabaseBackend, QueryTrait};
-use nest_rs_seaorm::{Repo, SoftDeletable, live_condition};
+use nest_rs_seaorm::{Repo, RepoSelect, SoftDeletable, live_condition};
 use sea_orm::entity::prelude::*;
 use sea_orm::{ActiveValue, Set};
 
@@ -122,7 +121,7 @@ async fn saved<A: ActiveModelBehavior + Send>(active: A, insert: bool) -> A {
         .expect("before_save fills, it never fails")
 }
 
-fn sql(select: impl QueryTrait<QueryStatement = SelectStatement>) -> String {
+fn sql(select: RepoSelect<ledger::Entity>) -> String {
     select.build(DatabaseBackend::Postgres).to_string()
 }
 
@@ -148,7 +147,10 @@ fn the_tombstone_is_the_column_the_entity_maps_deleted_at_to() {
         ledger::Entity::deleted_at_column(),
         ledger::Column::DeletedAt
     ));
-    let live = sql(ledger::Entity::find().filter(live_condition::<ledger::Entity>()));
+    let live = ledger::Entity::find()
+        .filter(live_condition::<ledger::Entity>())
+        .build(DatabaseBackend::Postgres)
+        .to_string();
     assert!(live.contains(LIVE), "{live}");
 }
 

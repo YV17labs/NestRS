@@ -5,7 +5,7 @@ use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
 use sea_orm::{
     ActiveModelBehavior, ActiveModelTrait, DbErr, EntityName, EntityTrait, IdenStatic,
-    IntoActiveModel, PrimaryKeyTrait, QueryFilter,
+    IntoActiveModel, PrimaryKeyTrait,
 };
 
 use nest_rs_authz::{Ability, Action, ActionMarker, current_ability};
@@ -322,7 +322,6 @@ where
     /// [`LIST_CAP`](crate::LIST_CAP) rows; a capped result logs a `warn`.
     /// Collections that may exceed it paginate with [`page`](CrudService::page).
     async fn list(&self) -> Result<Vec<<Self::Entity as EntityTrait>::Model>, DbErr> {
-        use sea_orm::QuerySelect;
         tracing::debug!(target: crate::target::ORM, entity = Self::entity_name(), "listing rows");
         let rows = Repo::<Self::Entity>::scoped(Action::Read)
             .limit(crate::LIST_CAP + 1)

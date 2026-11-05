@@ -2,7 +2,7 @@ use chrono::TimeDelta;
 use nest_rs::authz::Action;
 use nest_rs::core::injectable;
 use nest_rs::seaorm::{CrudService, Repo, ServiceError};
-use sea_orm::{ColumnTrait, QueryFilter, QuerySelect, Set};
+use sea_orm::{ColumnTrait, Set};
 
 use super::command::NotifyCommand;
 use super::entity::{self, Entity as Notifications};

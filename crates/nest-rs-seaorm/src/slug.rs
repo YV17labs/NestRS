@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use sea_orm::sea_query::Condition;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait};
 
 use crate::{Repo, ServiceError};
 

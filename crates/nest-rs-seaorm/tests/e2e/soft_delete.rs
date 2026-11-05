@@ -12,9 +12,7 @@ use nest_rs_seaorm::__private::SeaOrmExecutor;
 use nest_rs_seaorm::{Access, Creatable, CrudService, Deletable, Repo, SoftDeletable};
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, IntoActiveModel, QueryFilter, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, IntoActiveModel, Set};
 
 mod gravestone {
     use nest_rs_seaorm::expose;

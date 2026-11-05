@@ -98,10 +98,9 @@ pub fn unit_of_work_required() -> (std::any::TypeId, &'static str) {
 
 /// Repository over entity `E`, bound to the ambient request executor and ability.
 ///
-/// It hands out no connection: every statement it runs carries the ambient
-/// ability's filter, or goes through an escape named for its bar, unless a
-/// service rewrote it through a select's `query()` ([`RepoSelect`]). A query
-/// of a service's own on the unit's executor does not compile:
+/// It hands out no connection and no statement: every statement it runs carries
+/// the ambient ability's filter ([`RepoSelect`]), or goes through an escape named
+/// for its bar. A query of a service's own on the unit's executor does not compile:
 ///
 /// ```compile_fail,E0624
 /// # mod widget {
@@ -168,7 +167,7 @@ impl<E: EntityTrait> Repo<E> {
     }
 
     /// The rows the caller may `action` ([`scope_for`]), for a custom query:
-    /// chain sea-orm's filters, orders and limits, then run it on the ambient
+    /// chain the select's filters, orders and limits, then run it on the ambient
     /// executor.
     pub fn scoped(action: Action) -> RepoSelect<E> {
         RepoSelect::new(E::find().filter(scope_for::<E>(action)))

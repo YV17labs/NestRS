@@ -270,8 +270,11 @@ pub struct RedisConfig {
 ```
 
 Before dialling, `ClientTls::check` refuses material no handshake could use,
-naming your variables and never quoting the PEM, and `refuse_beside_plaintext`
-refuses material beside a URL that does not encrypt, where it would go unused.
+naming your variables and never quoting the PEM, and installs the process's
+rustls provider, which your client's library builds from: with a second provider
+compiled in, rustls would otherwise panic at the first handshake.
+`refuse_beside_plaintext` refuses material beside a URL that does not encrypt,
+where it would go unused.
 Hand your client `authorities_pem()` — the system's authorities, read once,
 unless the deployment names others — and `identity_pem()` when a certificate
 is set.

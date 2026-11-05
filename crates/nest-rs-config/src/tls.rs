@@ -95,8 +95,11 @@ impl ClientTls {
     /// authority rustls cannot anchor trust in, a key the process's provider
     /// cannot sign with, a certificate that is not the key's — naming `env`'s
     /// variables and never quoting the PEM, whose parser errors carry the line
-    /// they choke on.
+    /// they choke on. It installs the process's rustls provider first, so the
+    /// client a library builds from the process default cannot panic at its
+    /// first handshake.
     pub fn check(&self, env: &dyn TlsNames) -> Result<()> {
+        let provider = crypto_provider();
         if let Some(authorities) = &self.authorities {
             let refuse = |reason: &str| {
                 ConfigError::parse(env.named(TlsSetting::Authorities, authorities), reason)
@@ -123,7 +126,6 @@ impl ClientTls {
             }
         }
         if let Some(identity) = &self.identity {
-            let provider = crypto_provider();
             certified_key(
                 &identity.cert.bytes,
                 &identity.key.expose_secret().bytes,
@@ -1059,6 +1061,17 @@ mod tests {
                 && refused.contains(&var("TLS_KEY"))
                 && refused.contains("object_store"),
             "{refused}"
+        );
+    }
+
+    #[test]
+    fn a_check_leaves_the_process_provider_a_client_builds_from_installed() {
+        ClientTls::default()
+            .check(&redis())
+            .expect("nothing set, nothing to refuse");
+        assert!(
+            CryptoProvider::get_default().is_some(),
+            "with two providers compiled, a first handshake without one panics"
         );
     }
 

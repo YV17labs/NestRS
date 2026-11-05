@@ -21,6 +21,17 @@ error[E0119]: conflicting implementations of trait `OutputType` for type `note::
    = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(note::Model) -> note::Note>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
    = note: this error originates in the attribute macro `Object` (in Nightly builds, run with -Z macro-backtrace for more info)
 
+error[E0119]: conflicting implementations of trait `OutputType` for type `keyless::Model`
+  --> tests/integration/diagnostics/seaorm/simple_object_above_expose.rs:83:5
+   |
+82 |     #[derive(SimpleObject)]
+   |              ------------ first implementation here
+83 |     #[expose(name = "Keyless")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `keyless::Model`
+   |
+   = note: upstream crates may add a new impl of trait `nest_rs::seaorm::__private::AModelCrossesNoWire<fn(keyless::Model) -> keyless::Keyless>` for type `nest_rs::seaorm::__private::HiddenColumns<'__row>` in future versions
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0119]: conflicting implementations of trait `InputType` for type `draft::Model`
   --> tests/integration/diagnostics/seaorm/simple_object_above_expose.rs:61:5
    |

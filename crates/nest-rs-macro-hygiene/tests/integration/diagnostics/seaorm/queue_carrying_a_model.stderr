@@ -1,0 +1,47 @@
+error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
+  --> tests/integration/diagnostics/seaorm/queue_carrying_a_model.rs:26:31
+   |
+26 | #[queue(name = "posts", job = post::Model)]
+   |                               ^^^^^^^^^^^ this carries every column, hidden ones included
+   |
+   = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
+note: required for `post::Model` to implement `for<'de> nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+  --> tests/integration/diagnostics/seaorm/queue_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+...
+11 |     pub struct Model {
+   |                ^^^^^
+   = note: required for `<PostsQueue as nest_rs::queue::Queue>::Job` to implement `DeserializeOwned`
+   = note: required for `<PostsQueue as nest_rs::queue::Queue>::Job` to implement `nest_rs::queue::Job`
+note: required by a bound in `nest_rs::queue::Queue::Job`
+  --> $WORKSPACE/crates/nest-rs-queue/src/queue.rs
+   |
+   |     type Job: Job;
+   |               ^^^ required by this bound in `Queue::Job`
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
+  --> tests/integration/diagnostics/seaorm/queue_carrying_a_model.rs:26:31
+   |
+26 | #[queue(name = "posts", job = post::Model)]
+   |                               ^^^^^^^^^^^ this carries every column, hidden ones included
+   |
+   = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
+note: required for `post::Model` to implement `for<'de> nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+  --> tests/integration/diagnostics/seaorm/queue_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+...
+11 |     pub struct Model {
+   |                ^^^^^
+   = note: required for `<PostsQueue as Destination>::Job` to implement `DeserializeOwned`
+   = note: required for `<PostsQueue as Destination>::Job` to implement `nest_rs::queue::Job`
+note: required by a bound in `nest_rs::queue::Destination::Job`
+  --> $WORKSPACE/crates/nest-rs-queue/src/destination.rs
+   |
+   |     type Job: Job;
+   |               ^^^ required by this bound in `Destination::Job`
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,107 @@
+error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
+  --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:35:39
+   |
+35 |     fn answered(&self) -> Result<Json<post::Model>, McpError> {
+   |                                       ^^^^^^^^^^^ this carries every column, hidden ones included
+   |
+   = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
+help: the trait `JsonSchema` is implemented for `post::Model`
+  --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `post::Model` to implement `JsonSchema`
+  --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+...
+11 |     pub struct Model {
+   |                ^^^^^
+note: required by a bound in `schema_for_output`
+  --> $CARGO/rmcp-$VERSION/src/handler/server/common.rs
+   |
+   | pub fn schema_for_output<T: JsonSchema + std::any::Any>() -> Arc<JsonObject> {
+   |                             ^^^^^^^^^^ required by this bound in `schema_for_output`
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
+  --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:41:38
+   |
+41 |     fn read(&self, Parameters(_row): Parameters<post::Model>) -> Result<String, McpError> {
+   |                                      ^^^^^^^^^^^^^^^^^^^^^^^ this carries every column, hidden ones included
+   |
+   = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
+help: the trait `JsonSchema` is implemented for `nest_rs::mcp::Parameters<P>`
+  --> $WORKSPACE/crates/nest-rs-mcp/src/parameters.rs
+   |
+   | impl<P: JsonSchema> JsonSchema for Parameters<P> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `post::Model` to implement `JsonSchema`
+  --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+...
+11 |     pub struct Model {
+   |                ^^^^^
+   = note: 1 redundant requirement hidden
+   = note: required for `nest_rs::mcp::Parameters<post::Model>` to implement `JsonSchema`
+note: required by a bound in `schema_for_input`
+  --> $CARGO/rmcp-$VERSION/src/handler/server/common.rs
+   |
+   | pub fn schema_for_input<T: JsonSchema + std::any::Any>() -> Result<Arc<JsonObject>, String> {
+   |                            ^^^^^^^^^^ required by this bound in `schema_for_input`
+   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `(nest_rs::mcp::model::Tool, for<'a> fn(&'a PostsTools) -> Pin<Box<(dyn std::future::Future<Output = Result<nest_rs::mcp::Json<post::Model>, ErrorData>> + std::marker::Send + 'a)>> {__nest_rs_mcp_posts_tools::<impl PostsTools>::__nestrs_mcp_posts_tools_answered}): IntoToolRoute<PostsTools, _>` is not satisfied
+  --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:31:1
+   |
+31 | #[tools]
+   | ^^^^^^^^ unsatisfied trait bound
+   |
+   = help: the trait `IntoToolRoute<PostsTools, _>` is not implemented for `(nest_rs::mcp::model::Tool, for<'a> fn(&'a PostsTools) -> Pin<Box<(dyn std::future::Future<Output = Result<nest_rs::mcp::Json<post::Model>, ErrorData>> + std::marker::Send + 'a)>> {__nest_rs_mcp_posts_tools::<impl PostsTools>::__nestrs_mcp_posts_tools_answered})`
+help: the trait `IntoToolRoute<S, A>` is implemented for `(T, C)`
+  --> $CARGO/rmcp-$VERSION/src/handler/server/router/tool.rs
+   |
+   | / impl<S, C, A, T> IntoToolRoute<S, A> for (T, C)
+   | | where
+   | |     S: MaybeSend + 'static,
+   | |     C: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
+   | |     T: Into<Tool>,
+   | |__________________^
+note: required by a bound in `ToolRouter::<S>::with_route`
+  --> $CARGO/rmcp-$VERSION/src/handler/server/router/tool.rs
+   |
+   |     pub fn with_route<R, A>(mut self, route: R) -> Self
+   |            ---------- required by a bound in this associated function
+   |     where
+   |         R: IntoToolRoute<S, A>,
+   |            ^^^^^^^^^^^^^^^^^^^ required by this bound in `ToolRouter::<S>::with_route`
+   = note: this error originates in the attribute macro `tool_router` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `(nest_rs::mcp::model::Tool, for<'a> fn(&'a PostsTools, nest_rs::mcp::Parameters<post::Model>) -> Pin<Box<(dyn std::future::Future<Output = Result<std::string::String, ErrorData>> + std::marker::Send + 'a)>> {__nest_rs_mcp_posts_tools::<impl PostsTools>::__nestrs_mcp_posts_tools_read}): IntoToolRoute<PostsTools, _>` is not satisfied
+  --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:31:1
+   |
+31 | #[tools]
+   | ^^^^^^^^ unsatisfied trait bound
+   |
+   = help: the trait `IntoToolRoute<PostsTools, _>` is not implemented for `(nest_rs::mcp::model::Tool, for<'a> fn(&'a PostsTools, nest_rs::mcp::Parameters<post::Model>) -> Pin<Box<(dyn std::future::Future<Output = Result<std::string::String, ErrorData>> + std::marker::Send + 'a)>> {__nest_rs_mcp_posts_tools::<impl PostsTools>::__nestrs_mcp_posts_tools_read})`
+help: the trait `IntoToolRoute<S, A>` is implemented for `(T, C)`
+  --> $CARGO/rmcp-$VERSION/src/handler/server/router/tool.rs
+   |
+   | / impl<S, C, A, T> IntoToolRoute<S, A> for (T, C)
+   | | where
+   | |     S: MaybeSend + 'static,
+   | |     C: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
+   | |     T: Into<Tool>,
+   | |__________________^
+note: required by a bound in `ToolRouter::<S>::with_route`
+  --> $CARGO/rmcp-$VERSION/src/handler/server/router/tool.rs
+   |
+   |     pub fn with_route<R, A>(mut self, route: R) -> Self
+   |            ---------- required by a bound in this associated function
+   |     where
+   |         R: IntoToolRoute<S, A>,
+   |            ^^^^^^^^^^^^^^^^^^^ required by this bound in `ToolRouter::<S>::with_route`
+   = note: this error originates in the attribute macro `tool_router` (in Nightly builds, run with -Z macro-backtrace for more info)

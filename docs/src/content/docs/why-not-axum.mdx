@@ -99,11 +99,11 @@ the option and the accepted set, at the line and column you typed it:
 
 ```bash frame="terminal"
 $ cargo check -p features
-error: unknown #[crud] argument `servcie`; expected `service`, `entity`, `output`, `create`, `update`, `ops`, `paginate` or `api`
-  --> crates/features/src/orgs/http/controller.rs:17:5
+error: unknown #[crud] argument `servcie`; expected `service`, `ops`, `paginate` or `api`
+  --> crates/features/src/orgs/http/controller.rs:16:8
    |
-17 |     servcie = svc,
-   |     ^^^^^^^
+16 | #[crud(servcie = OrgsService)]
+   |        ^^^^^^^
 ```
 
 What a decorator cannot check at compile time — that every injected
@@ -117,7 +117,7 @@ you forgot to thread through surfaces where you use it, at runtime, on the
 request that needs it.
 
 NestRS records imports and dependencies at compile time and walks that graph in
-`App::build()`, so the same mistake is a startup error naming the consumer, the
+`App::builder().build()`, so the same mistake is a startup error naming the consumer, the
 missing dependency and the module that provides it. The check and its error are
 on [Providers](/fundamentals/providers/#the-access-graph--wiring-checked-at-boot).
 

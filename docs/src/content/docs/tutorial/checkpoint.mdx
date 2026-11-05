@@ -105,7 +105,7 @@ authorization code in the controller. The row-level `.when(...)`
 condition scoped both listings to the caller's org; the field-level
 `.fields([...])` grant dropped `email` for the member; and the by-id bind
 turned a cross-tenant load into a `403`. The `UsersController` that
-produced all three is the same thin CRUD shape you are about to write for
+produced all three is the same thin CRUD shape `nestrs g resource` wrote for
 `posts` — it never reads the tenant or the role.
 
 Your `blog` has the same pieces already: the guards on `PostsController`,
@@ -123,4 +123,4 @@ it.
 
 ## Going further
 
-- [Expose over HTTP](/tutorial/http/) — the next step: back in `blog`, write the service and mount the CRUD routes.
+- [Expose over HTTP](/tutorial/http/) — the next step: back in `blog`, read the service and the controller the generator wrote, and grant the policy's first rule.

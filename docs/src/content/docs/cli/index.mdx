@@ -45,8 +45,8 @@ current directory (or `-o` path) and reads that manifest.
 | Outside a nestrs workspace | `nestrs new hello` | Monorepo at `./hello/` + `apps/hello/` on port **3000** |
 | Inside a nestrs workspace | `nestrs new blog` | Thin app at `apps/blog/` — **next free port** in `apps/blog/.env` |
 
-If `apps/blog/` already exists, the CLI stops with **`app blog already
-exists`** — it does not overwrite.
+If `apps/blog/` already exists, the CLI stops with ``app `blog` already exists at
+<path>``: it does not overwrite.
 
 <Aside type="note">
   No extra config file to maintain. Cargo's workspace manifest is the single
@@ -369,8 +369,8 @@ hardening you can defer: `Repo` filters every read by the caller's ambient
 an unguarded DB-backed controller mounts its routes and then serves nothing.
 
 A generated resource therefore answers **401** without a token and **403** until
-[`AuthzAbility`](/security/authorization/) grants a rule for its entity — the two
-lines the generator prints. A resource meant to be readable without a login is
+[`AuthzAbility`](/security/authorization/) grants a rule for its entity — the line
+the generator prints. A resource meant to be readable without a login is
 the same slice with one route marked `#[public(Read, Entity)]` and a rule in
 `define_visitor`; see [Public reads](/security/authorization/public-reads/).
 Before inventing a second layout, open
@@ -488,7 +488,7 @@ declares:
 ```
 nestrs lint
 
-  crates/features/src/desks/principal.rs
+  crates/features/src/principal.rs
     `principal` reaches none of `DeskOperator`
     name the file from the type, or split it — a stem that reaches nothing
     is a slot, and a slot fills
@@ -504,7 +504,7 @@ Everything short of that passes. The word may come from the folder rather than t
 `throttler/store.rs` holding `RedisThrottler` — or from the folder's singular,
 read the way `nestrs g` reads it: `cities/subject.rs` holding `City`. An inflection is the same
 word (`scope.rs` holding `Scoped`), and so is an abbreviation (`context.rs`
-holding `Ambient`). And a file whose principal export is a function is a
+holding `Ctx`). And a file whose principal export is a function is a
 namespace that owes no pairing at all: `queue/consume.rs` exporting
 `consume::attempt`.
 Files a table already names — `service.rs`, `controller.rs`, `registry.rs` —
@@ -513,8 +513,8 @@ are named by that table and are not this rule's business.
 It exits non-zero on a finding, so it belongs in CI: the scaffolded `lint`
 recipe already runs it, and `nestrs run lint` is the front door.
 
-The framework holds itself to it through the same code, from its own
-conformance suite — a rule shipped and not met is the failure that matters.
+The demo holds itself to it through the same code: its `lint` recipe runs the tree's
+`nestrs lint` in CI.
 
 ## Version, about, info, and update
 
@@ -532,6 +532,7 @@ nestrs update
 # → checks crates.io; skips when already on the latest version
 
 nestrs update --force
+# → cargo install --force --locked nest-rs-cli (reinstall even at the same version)
 # → cargo install --force nest-rs-cli (reinstall even at the same version)
 ```
 
@@ -541,11 +542,10 @@ the `nest-rs` version its manifests pin, and which app a generator would wire
 into. It reports the root relative to where you ran it, and outside a project it
 says so rather than failing.
 
-Contributors inside the monorepo clone:
+Contributors inside the monorepo clone install the tree's CLI directly:
 
 ```bash
-nestrs update --from-path
-# → cargo install --locked --path crates/nest-rs-cli --force
+cargo install --locked --path crates/nest-rs-cli --force
 ```
 
 ## Command reference
@@ -561,13 +561,13 @@ nestrs update --from-path
 | `nestrs info` | Report the project the current directory sits in |
 | `nestrs update` | Install latest CLI from crates.io when a newer version exists |
 | `nestrs update --force` | Reinstall from crates.io even when already on the latest version |
-| `nestrs update --from-path` | Reinstall from monorepo `crates/nest-rs-cli` |
 | `nestrs g feature <name>` | Transport-agnostic port in `crates/features/src/` |
 | `nestrs g resource <name> [<column>:<type>[:nullable]…]` | DB-backed CRUD port + guarded HTTP adapter, its table's migration and round trip (deps auto-added) |
 | `nestrs g entity <feature>[/<name>]` | One `#[expose]` entity in an existing feature |
 | `nestrs g auth` | The app's authn/authz adapter — one per workspace |
 | `nestrs g migration <name>` | SeaORM migration, registered in `lib.rs` and `migrator.rs`, its columns an entity's for `create_<table>`; `nestrs_outbox` registers the framework's own |
-| `nestrs g http\|graphql\|ws\|queue\|schedule\|mcp <name>` | Add one transport adapter to a port |
+| `nestrs run [<recipe> [args…]]` | Run a project task through `just`; bare, list the recipes |
+| `nestrs g http\|graphql\|ws\|queue\|schedule\|mcp\|events <name>` | Add one transport adapter to a port |
 
 Every generator accepts **`--dry-run`** and **`-p <path>`**; the ones that wire
 an app (`resource`, `auth` and the adapters) also take **`--app <name>`**.
@@ -596,8 +596,7 @@ nestrs new acme && cd acme
 mkdir -p crates/features/src/posts/http
 
 # 3. Move the port and the adapter into their conventional homes. `main.rs`
-#    stays behind: apps/hello/src/main.rs already exists and is the same six
-#    lines.
+#    stays behind: apps/hello/src/main.rs already exists and does the same job.
 mv ../posts/src/service.rs    crates/features/src/posts/
 mv ../posts/src/module.rs     crates/features/src/posts/
 mv ../posts/src/controller.rs crates/features/src/posts/http/
@@ -643,5 +642,5 @@ themselves into the app whose directory you are standing in, or the one
 ## Going further
 
 - [Getting started](/getting-started/) — first run after `nestrs new`.
-- [Tutorial](/tutorial/) — build `posts` in `apps/blog/`, HTTP only.
+- [Tutorial](/tutorial/) — build `posts` in `apps/blog/`, over HTTP and then GraphQL.
 - [Fundamentals / Modules](/fundamentals/modules/) — how root modules compose features.

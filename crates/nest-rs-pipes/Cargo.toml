@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Transport-agnostic validation & transformation pipes for NestRS, applied at the request boundary by the transport that owns it."
+description = "Transport-agnostic transformation pipes and validation for NestRS, applied by each edge between decoding an argument and its handler."
 keywords = ["framework", "nestrs", "pipes", "validation", "transform"]
 categories = ["web-programming", "rust-patterns"]
 

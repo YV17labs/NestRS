@@ -1,13 +1,13 @@
 ---
 title: Architecture and naming
-description: "Where a file goes and what it may be called: four naming levels, two kinds of module file, and a three-question test for naming any provider."
+description: "Where a file goes and what it may be called: five naming levels, two kinds of module file, and a three-question test for naming any provider."
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
 NestRS is opinionated about layout, and the opinions are worth knowing early:
 they are what let you open someone else's feature and find the service without
-looking. This page is the whole model — four naming levels, what a module file
+looking. This page is the whole model — five naming levels, what a module file
 is, and how to decide what to call a provider when the answer is not obvious.
 
 One thing shapes everything below. `#[module]` carries two lists, `imports` and
@@ -15,11 +15,12 @@ One thing shapes everything below. `#[module]` carries two lists, `imports` and
 therefore cannot say what a given type is *for*. **The name has to.** Naming is
 not decoration here; it is the only place that information lives.
 
-## Four levels of name, and none overflows
+## Five levels of name, and none overflows
 
 | Level | Named for | Where it appears |
 |---|---|---|
 | **Project** | your product | the repository and the workspace, and nowhere else |
+| **Family** | the **standard** that names its members | a shared crate-name prefix, and the first level of every path, span target and config namespace its members own — `nest_rs::oauth::client`, `<PREFIX>_OAUTH__CLIENT__*` |
 | **Crate** | what it holds | `crates/<crate>/`, and the root of every span target it emits |
 | **App** | what it **serves** | `apps/<app>/`, the binary, `<App>Module` |
 | **Module** | its **domain** | `<module>/`, `<Module>Module` |
@@ -130,7 +131,7 @@ The file is named for the role, never for the type.
 | Interceptor / Exception filter | `interceptor.rs` / `exception_filter.rs` |
 | Module config | `config.rs` |
 | An edge's view of its unit | `view.rs`, at the edge crate's root |
-| Domain error / Constants | `error.rs` / `constants.rs` |
+| Error types / Constants | `error.rs` / `constants.rs` |
 
 An adapter role carries its folder: `schedule/tasks.rs`, never `tasks.rs` at the
 module root, and a transport-specific guard belongs to its adapter too —
@@ -149,7 +150,8 @@ crate's view of the unit it dispatches, what a layer reads of it, is
 together.
 
 Shared test doubles are the one file that sits at a crate's root rather than in
-a module: `testing.rs`, behind `#[cfg(test)]`, doubles and nothing else.
+a module: `testing.rs`, behind `#[cfg(test)]` or a `test-support` feature where another crate's suite reads
+them, doubles and nothing else.
 
 A primitive role wins over `Service` **only when the framework is the sole
 caller and the file holds no domain logic**. A `tasks.rs` earns its name when
@@ -289,8 +291,8 @@ way to get the same effect.
 
 - **[Modules](/fundamentals/modules/)** — how imports compose, and the
   boot-time access graph that rejects a provider reaching outside its module.
-- **[Providers](/fundamentals/providers/)** — scopes, `provide_dyn`, and hiding
-  an implementation behind a trait.
+- **[Providers](/fundamentals/providers/)** — scopes, and hiding an implementation
+  behind a trait with `as dyn Trait`.
 - **[CLI](/cli/)** — the generators that write this layout, including the wiring
   edits a copy cannot carry.
 - **[Coming from NestJS](/coming-from-nestjs/)** — how `@Module` maps onto

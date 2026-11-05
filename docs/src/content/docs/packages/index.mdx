@@ -15,7 +15,8 @@ GraphQL schema.
 cargo add nest-rs --features http,seaorm,graphql
 ```
 
-Undecided? `--features full` turns everything on — narrow it later without
+Undecided? `--features full` turns on every capability but `testing`, which is a dev
+dependency — narrow it later without
 moving a single `use`. Either way `nest_rs::prelude::*` covers the decorators
 and types an app reaches for daily.
 
@@ -40,7 +41,8 @@ Default features: `http`, `config` — every other surface crate is opt-in via
 
 ## Transports
 
-Each transport is a module you import in `AppModule`. HTTP-shaped surfaces
+An adapter brings the transport its host serves on, so an app imports the adapter and
+names the transport only to pin it. HTTP-shaped surfaces
 (GraphQL, OpenAPI, MCP, WebSocket gateways) mount on the same
 [`HttpTransport`](/http/configuration/) — one port, one TLS config.
 
@@ -78,7 +80,8 @@ these crates are the engine.
 
 ## Request pipeline
 
-Cross-cutting layers, each bound globally on `App::builder()` or per host and
+Cross-cutting layers, each bound app-wide by the module the app boots
+(`GlobalGuards<(…)>`, `GlobalPipes<(…)>`) or per host and
 method. A guard gates a caller, so it runs on the edges that have one — HTTP,
 GraphQL, WebSockets and MCP. A pipe validates what a unit carries: on an
 argument on every edge, a job's payload included, and through `#[use_pipes]`

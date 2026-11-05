@@ -244,10 +244,14 @@ else does:
 $ nestrs run dev api
 INFO nest_rs::graphql: wrote GraphQL SDL path=/home/dev/blog/apps/api/schema.graphql
 
-$ head -5 apps/api/schema.graphql
+$ grep -A7 '^type Query' apps/api/schema.graphql
 type Query {
-  user(id: String!): User
-  users(first: Int, after: String): [User!]!
+	org(id: String!): Org
+	orgs(after: String, first: Int): [Org!]!
+	post(id: String!): Post
+	posts(after: String, first: Int): [Post!]!
+	user(id: String!): User
+	users(after: String, first: Int): [User!]!
 }
 ```
 

@@ -135,7 +135,7 @@ store, and the committed `.env.development` and `.env.test` already point
 `<PREFIX>_SEAORM__URL` at it — never `.env`, which production reads too, so a
 deployment cannot fall back to a plaintext local URL. The credentials
 are the **workspace** name, not the app's — a workspace scaffolded with
-`nestrs new hello` gets `postgres://hello:hello@localhost:5432/hello`, whatever
+`nestrs new hello` gets `postgres://hello:hello@localhost:5432/hello?sslmode=disable`, whatever
 its apps are called. Bring the services up once:
 
 ```bash frame="terminal"
@@ -201,8 +201,8 @@ INFO nest_rs::routes: mounted host="PostsController" method="update" verb="PUT" 
 INFO nest_rs::routes: mounted host="PostsController" method="delete" verb="DELETE" path="/posts/{id}"
 ```
 
-Every route is behind the guards you bound on the previous page, so an
-anonymous call stops at the door:
+Every route is behind the guards `nestrs g resource` bound, which you read on the
+previous page, so an anonymous call stops at the door:
 
 ```bash frame="terminal"
 $ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3001/posts
@@ -260,9 +260,8 @@ you add richer failure paths; for now, trust the unit-of-work contract
 above.
 
 <Aside type="tip">
-Set `RUST_LOG=nest_rs::orm=trace` to watch the `BEGIN` / `COMMIT` /
-`ROLLBACK` pairs scroll past on mutating routes. The same `trace_id`
-tags the request's span and the SQL spans.
+Set `RUST_LOG=nest_rs::orm=trace` to watch `Repo`'s own events, such as
+`instance check` on a by-id load. Each line carries the request's `trace_id`.
 </Aside>
 
 ## What you have now

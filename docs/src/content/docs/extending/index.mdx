@@ -60,8 +60,8 @@ the vendor's types leak.
 The question is answered by whoever **binds** the port, never by the crate
 that declares it: `nest-rs-database` names no database library, and
 `nest-rs-queue` no Redis client. A delegated port exists for one move —
-swapping the **vendor** — so its contract is thin and it declares no
-configuration of its own. If you want a different object store, you do not
+swapping the **vendor** — so its contract is thin: `nest-rs-database` declares no configuration of its own, and
+what `<PREFIX>_STORAGE__*` sets configures the library `nest-rs-storage` wraps. If you want a different object store, you do not
 write a NestRS driver: you point `object_store` at it.
 
 **Owned.** Nothing abstracts the concern, so NestRS defines the trait, the

@@ -11,10 +11,10 @@ out, and how a package of your own depends on NestRS.
 
 ```toml title="Cargo.toml"
 [workspace.dependencies]
-nest-rs = { version = "7.2", features = ["http", "config", "seaorm"] }
+nest-rs = { version = "7.0", features = ["http", "config", "seaorm"] }
 ```
 
-`7.2` is the oldest release the workspace accepts, and every later 7.x builds
+`7.0` is the oldest release the workspace accepts, and every later 7.x builds
 it unchanged; `cargo update` takes the newest.
 
 ## What 7.x keeps
@@ -144,10 +144,10 @@ the minor it builds against, with the default features off:
 
 ```toml title="crates/yourpackage/Cargo.toml"
 [dependencies]
-nest-rs = { version = "7.2", default-features = false, features = ["http"] }
+nest-rs = { version = "7.0", default-features = false, features = ["http"] }
 
 [dev-dependencies]
-nest-rs = { version = "7.2", default-features = false, features = ["http", "testing"] }
+nest-rs = { version = "7.0", default-features = false, features = ["http", "testing"] }
 ```
 
 - **Name the capabilities your code uses.** The umbrella's defaults are `http`
@@ -158,7 +158,7 @@ nest-rs = { version = "7.2", default-features = false, features = ["http", "test
   releases.
 - **A decorator crate is the one exception.** A `proc-macro` crate depends on
   `nest-rs-codegen` and uses its root items alone. The code it emits names
-  public paths only: your package, built against 7.2, runs in an app on a later
+  public paths only: your package, built against 7.0, runs in an app on a later
   7.x, where `__private` may differ.
 
 ### Naming a package

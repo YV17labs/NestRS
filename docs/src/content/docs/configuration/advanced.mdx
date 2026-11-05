@@ -26,6 +26,7 @@ and never shown.
 #[config(namespace = "throttler")]
 #[derive(Clone, Debug)]
 pub struct ThrottlerConfig {
+    #[config(bounds = LIMIT)]
     pub limit: u32,
     #[config(bounds = WINDOW)]
     pub window: Duration,
@@ -81,7 +82,7 @@ pub struct OAuthServerConfig<P> {
 impl<P: DeserializeOwned + Clone + Send + Sync + 'static> Config for OAuthServerConfig<P> {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            clients: env.json("CLIENTS")?.unwrap_or(base.clients),
+            clients: env.json(Self::CLIENTS.key())?.unwrap_or(base.clients),
         })
     }
 }
@@ -116,7 +117,7 @@ impl<P> Validate for OAuthServerConfig<P> {
   `<PREFIX>_OAUTH__SERVER__CLIENTS` keeps `base.clients` rather than resetting
   to an empty list, so a registry a `for_root` pinned in code survives a
   deployment that sets nothing.
-- **`clients` is a JSON array in a single variable.** `env.json("CLIENTS")`
+- **`clients` is a JSON array in a single variable.** `env.json(Self::CLIENTS.key())`
   decodes it as the field's type, inline or through
   `<PREFIX>_OAUTH__SERVER__CLIENTS_FILE` — what `#[config(json)]` reads on a
   config that is not generic — and a value that does not decode

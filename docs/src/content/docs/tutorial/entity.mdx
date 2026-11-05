@@ -91,13 +91,15 @@ uuid = { version = "1.29", features = ["v7", "serde"] }
 [dependencies]
 nest-rs.workspace = true
 nest-rs.features = ["seaorm", "authz", "http", "authn", "oauth-server"]
+anyhow.workspace = true
+tracing.workspace = true
 sea-orm = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
 ```
 
-Three third-party lines, and each is there because the feature's own source
-writes it: `sea_orm::entity::prelude::*`, `serde` on the claims the auth
+Three third-party lines arrive beside the `anyhow` and `tracing` `nestrs new` wrote,
+and each is there because the feature's own source writes it: `sea_orm::entity::prelude::*`, `serde` on the claims the auth
 adapter derives, `Uuid` as the primary-key type. The entity itself derives no
 serde: what `#[expose]` emits — the wire type's `serde` and
 `schemars::JsonSchema`, `validator::Validate`, the round trip a mask reads a
@@ -232,9 +234,9 @@ $ nestrs run check
     Finished `dev` profile [unoptimized] target(s) in 1.42s
 ```
 
-The macro expanded, the entity compiled, and `Post` / `CreatePost`
-/ `UpdatePost` are usable from the rest of the crate — the generated test
-included, which posts a title and a body.
+The macro expanded and the entity compiled, so `Post`, `CreatePost` and `UpdatePost`
+are usable from the rest of the crate. `check` builds no test target: the generated test
+compiles when you run it on [Test it end to end](/tutorial/testing/).
 
 ## What you have now
 

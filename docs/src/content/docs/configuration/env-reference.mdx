@@ -278,7 +278,7 @@ it and kept fresh ([JWT](/security/authentication/jwt/#verifying-another-issuers
 ## `oauth__client` — `<PREFIX>_OAUTH__CLIENT__*`
 
 The login flow's provider endpoints, read by `OAuthClientConfig` in
-`nest-rs-oauth-client`. Every field is required, so an unconfigured app fails
+`nest-rs-oauth-client`. Every URL and credential is required, so an unconfigured app fails
 boot naming the field:
 
 | Key | Meaning |
@@ -366,6 +366,7 @@ way their section is, so the page is named rather than left to a search:
 |---|---|
 | `graphql` | [GraphQL configuration](/graphql/configuration/) |
 | `openapi` | [OpenAPI](/openapi/) |
+| `queue__outbox` | [Delivery](/queue/delivery/) |
 | `server_timing` | [Server-Timing](/server-timing/#turn-it-on-in-production) |
 | `health` | [Health](/health/) |
 | `throttler` | [Rate limiting](/rate-limiting/) |
@@ -396,8 +397,7 @@ that is not also a word (`auth` and `authz` beside `authn`, `es` beside `ws`), s
 only its separators and its case count; and a misspelled namespace still carries
 the key the deployment meant, which the near namespace reads, while another
 binary's variable carries its own — `<PREFIX>_OPENAI__API_KEY` beside a linked
-`openapi` names no key `openapi` reads, and stays silent. The framework's own
-namespaces are held apart from each other by the conformance suite. A key holding
+`openapi` names no key `openapi` reads, and stays silent. A key holding
 `__` under a namespace it does read is a sub-namespace another binary links —
 `redis__queue` under `redis` — reported only when it is a near miss of a key
 read here. The framework's process-level names, `<PREFIX>_LOG_FORMAT`,

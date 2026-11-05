@@ -32,10 +32,13 @@ use nest_rs::oauth::server::{OAuthServerConfig, RegisteredClient};
 use nest_rs::testing::TestApp;
 use uuid::Uuid;
 
+use crate::harness::basic_auth;
+
 #[tokio::test]
 async fn issues_a_token_for_a_registered_client() {
     let app = TestApp::builder()
         .module::<AuthModule>()
+        .ephemeral_database::<migrations::Migrator>()
         .provide(OAuthServerConfig {
             clients: vec![RegisteredClient::new(
                 "test-client",
@@ -67,8 +70,10 @@ async fn issues_a_token_for_a_registered_client() {
 ```
 
 The test never sets a `<PREFIX>_OAUTH__SERVER__*` or `<PREFIX>_SIGN_IN__*`
-variable, doesn't depend on a
-committed `.env.test`, and produces the same result on any machine.
+variable: the two configs it reads are its seeds. What it still takes from the cascade is
+the server its throwaway database is created on, `<PREFIX>_SEAORM__URL`, and the signing key
+`apps/auth/.env` names. `nest_rs::oauth::server` takes the umbrella's `oauth-server` feature,
+and `TestApp` its `testing` feature, in the suite's `[dev-dependencies]`.
 
 ## Pinning through `for_root`
 
@@ -85,8 +90,6 @@ a test must not read the environment at all, seed the value with `.provide()`
 </Aside>
 
 ```rust title="apps/api/tests/e2e/http.rs"
-use nest_rs::http::{HttpConfig, HttpModule};
-
 let app = TestApp::builder()
     .module::<ApiModule>()
     // ...
@@ -95,6 +98,9 @@ let app = TestApp::builder()
 ```
 
 ```rust title="apps/api/src/module.rs"
+use nest_rs::core::module;
+use nest_rs::http::{HttpConfig, HttpModule};
+
 #[module(
     imports = [
         HttpModule::for_root(HttpConfig {

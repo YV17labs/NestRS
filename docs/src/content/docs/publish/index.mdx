@@ -26,10 +26,10 @@ snippet naming `posts` is Publish's unless the page says otherwise.
 | App | Port | Role in the story | Transports |
 |-----|------|-------------------|------------|
 | [`auth`](/security/authentication/split-deployment/) | 3001 | Authors sign in (OAuth2, JWT issuance) | HTTP |
-| [`api`](/tutorial/) | 3002 | Main API — users, orgs, audio hooks | HTTP, GraphQL, OpenAPI |
-| [`assistant`](/mcp/) | 3003 | AI tools over the audio pipeline (JWT-guarded) | MCP |
+| [`api`](/tutorial/) | 3002 | Main API — users, orgs, posts, audio hooks | HTTP, GraphQL, OpenAPI, Schedule |
+| [`assistant`](/mcp/) | 3003 | AI tools over audio, users and posts (JWT-guarded) | MCP |
 | [`live`](/websockets/) | 3004 | Live comments and notifications | WebSockets |
-| [`worker`](/queue/) | 3005 | Async jobs — newsletters, audio queue | Queue, Schedule, HTTP (health only) |
+| [`worker`](/queue/) | 3005 | Async jobs — notifications, audio queue | Queue, Schedule, HTTP (health only) |
 
 ```bash
 git clone https://github.com/YV17labs/NestRS && cd NestRS/demo
@@ -38,7 +38,7 @@ nestrs run dev auth         # issuer on :3001
 nestrs run dev api          # resource server on :3002
 nestrs run dev live         # WebSockets on :3004
 nestrs run dev assistant    # MCP on :3003
-nestrs run dev worker       # headless — needs Redis
+nestrs run dev worker       # jobs, health on :3005 — needs Redis
 ```
 
 `api` and `auth` share the same database and the `features`
@@ -64,7 +64,8 @@ deploys it.
 ```bash
 helm install demo demo/charts/demo \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
-  --set secrets.REDIS__URL="rediss://redis:6379"
+  --set secrets.REDIS__URL="rediss://redis:6379" \
+  --set secrets.REDIS__TRANSCODES__URL="rediss://cache:6379"
 ```
 
 Every app is declared in one map, and `kind` says what it becomes in the
@@ -143,7 +144,10 @@ before inventing a second pattern.
 | `posts` | Blog articles — `api` (HTTP, org + author scoped) |
 | `users` | Authors and editors — `api` |
 | `orgs` | Publications / tenants — `api` |
-| `oauth` | OAuth2 login on `auth` |
+| `sign_in` | Password and social sign-in, token issuance — `auth` |
+| `chat` | Live comments — `live` |
+| `notifications` | Notifications — `api`, `live`, `worker` |
+| `audit` | The audit trail on writes — `api` |
 | `audio` | Media attachments + queue/schedule hooks |
 | `authn` / `authz` | JWT verification and row-level policy — `api`, not the tutorial blog |
 

@@ -210,8 +210,7 @@ NESTRS_HTTP__PORT
 ```
 
 A feature reads only **its own** namespace. To borrow a
-sibling variable (rare — see *own > borrowed > code default* on the
-[index](/configuration/)), call `env_var(&var_name("<other>", "<KEY>"))`
+sibling variable, which is rare, call `env_var(&var_name("<other>", "<KEY>"))`
 directly: `var_name` spells it under the deployment's prefix.
 
 ## Quoting rules inside `.env` files

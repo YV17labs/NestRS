@@ -174,8 +174,9 @@ pub struct UsersController {
 ### 2. Secure by default
 
 Once the [security modules](/security/) are imported, every read through the
-data layer is filtered, every mutating write is gated, and every response body
-is masked. A feature does not opt in to authn and authz; it opts out by not
+data layer is filtered, every mutating write is gated, and every operation declaring
+`#[authorize]` on an entity has its response masked. A route declaring none reads no
+row. A feature does not opt in to authn and authz; it opts out by not
 importing them.
 
 Security is **structural**, not vigilant: forgetting a check is a category
@@ -228,7 +229,7 @@ for the composition rule and the reference layout.
 
 The dependency-injection graph is not resolved by reflection. Every module
 records its imports and its providers' dependencies at compile time; at startup,
-`App::build()` walks the graph and fails with a clear error if a provider
+`App::builder().build()` walks the graph and fails with a clear error if a provider
 injects something its module cannot reach.
 
 A misconfigured import is a startup error naming the missing dependency, not

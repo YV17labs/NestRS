@@ -377,6 +377,14 @@ imported module asking for a `#[config]` and loads it, environment over
 `Default`, before anything is built.
 
 ```rust title="crates/features/src/posts/service.rs"
+use std::sync::Arc;
+
+use nest_rs::core::injectable;
+use nest_rs::seaorm::ServiceError;
+
+use super::config::PostsConfig;
+use super::entity::Post;
+
 #[injectable]
 pub struct PostsService {
     #[inject]
@@ -402,12 +410,14 @@ pub struct PostsModule;
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 
+use features::posts::PostsHttpModule;
+
 #[module(
     imports = [
         PostsHttpModule,
     ],
 )]
-pub struct AppModule;
+pub struct ApiModule;
 ```
 
 - **The injection loads the config.** Once every module has collected, the
@@ -453,7 +463,7 @@ key off its field keeps the contract where the fields are:
 - A missing variable falls back to the base — the pinned value, or the
   config's own `Default` — for every field alike.
 - An unreadable value fails loudly, naming the variable, never quoting it.
-- What a type cannot say is said on the field, in one of four keys, and a
+- What a type cannot say is said on the field, in one of three keys, and a
   config whose fields depend on each other writes its overlay itself —
   [Advanced configuration](/configuration/advanced/).
 
@@ -489,9 +499,9 @@ Three things are worth knowing:
 - **It must be set on the process, before it starts.** The prefix selects the
   `.env` cascade and configures logging before `main` builds anything, so a
   `.env` file cannot carry it — it is read too late to have chosen itself. The
-  framework aborts naming both values rather than let the rename silently not
-  happen.
-- **It is a rename, not an alias.** Once set, `<PREFIX>_HTTP__PORT` is just
+  framework aborts naming the prefix it resolved, never the file's value, rather than
+  let the rename silently not happen.
+- **It is a rename, not an alias.** Once set, `NESTRS_HTTP__PORT` is just
   another variable in the environment — inert. That is deliberate: a stale
   value silently winning is the failure mode a fallback would create.
 - **`RUST_LOG` and `OTEL_*` keep their names.** They belong to the ecosystem,
@@ -532,7 +542,8 @@ development surface (`Surface`) and a hand-written overlay
 
 ## Reference
 
-- `crates/features/src/sign_in/config.rs` — a product config read by hand.
+- `crates/features/src/sign_in/config.rs` — a product config whose overlay is derived
+  and whose validation is written by hand.
 - `crates/nest-rs-config/` — `#[config]`, `Config`, `ConfigService`,
   `ConfigModule`, the `.env` cascade.
 

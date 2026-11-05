@@ -176,7 +176,8 @@ pub struct UsersHttpModule;
 
 `AuthzModule` carries the `AuthzGuard` provider and the response
 masker. Forgetting the import is caught at boot by the access graph —
-the binary fails to start with a clear "missing guard" error rather
+the binary fails to start with a `module access violation` naming the guard and the
+module to import, rather
 than running silently unprotected.
 
 The app root — `api`, not `blog` — lists the adapter, and nothing it brings:

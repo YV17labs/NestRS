@@ -48,7 +48,7 @@ and field-masked.
 **Two guards on the struct.** Every route below requires a valid token and an
 ability — forgetting one is a boot error, not a 3am incident.
 
-**The handler is plain Rust.** No security code inside — rows are filtered and
+**The handlers are generated.** No security code inside — rows are filtered and
 fields masked on the way out, automatically.
 
 **Policy lives in one place.** Which rows, which fields, for whom — one ability
@@ -71,13 +71,8 @@ rule, applied to every transport.
     { code: '    #[inject] svc: Arc<UsersService>,' },
     { code: '}' },
     { code: '' },
-    { code: '#[routes]' },
-    { code: 'impl UsersController {' },
-    { code: '    #[get("/")]' },
-    { code: '    async fn list(&self) -> Result<Vec<User>> {' },
-    { code: '        self.svc.list().await', mark: true, marker: 2 },
-    { code: '    }' },
-    { code: '}' },
+    { code: '#[crud(service = UsersService)]', mark: true, marker: 2 },
+    { code: 'impl UsersController {}' },
   ]}
 />
 
@@ -86,8 +81,8 @@ rule, applied to every transport.
   note="one place for policy"
   lines={[
     { code: 'ab.can(Action::Read, user::Entity)' },
-    { code: '    .when(|p| p.eq(user::OrgId, actor.org_id))  // your org only' },
-    { code: '    .fields([user::Id, user::Name]);  // email never leaves', mark: true, marker: 3 },
+    { code: '    .when(|p| p.eq(user::Column::OrgId, actor.org_id))  // your org only' },
+    { code: '    .fields([user::Column::Id, user::Column::Name]);  // email never leaves', mark: true, marker: 3 },
   ]}
 />
 
@@ -98,7 +93,7 @@ rule, applied to every transport.
     { segs: [{ t: '[{ "name": "Acme Admin", ' }, { t: '"email": "admin@acme.test"', c: 'bright' }, { t: ', … }]' }] },
     { segs: [] },
     { segs: [{ t: '❯', c: 'dim' }, { t: ' curl :3002/users -H ' }, { t: '"…Bearer $MEMBER"', c: 'str' }] },
-    { segs: [{ t: '[{ "name": "Acme Admin" }]  ' }, { t: '# email masked, org-scoped', c: 'attr' }] },
+    { segs: [{ t: '[{ "id": "…", "name": "Acme Admin" }]  ' }, { t: '# email masked, org-scoped', c: 'attr' }] },
     { segs: [] },
     { segs: [{ t: '❯', c: 'dim' }, { t: ' curl :3002/users/<globex-id> -H ' }, { t: '"…$MEMBER"', c: 'str' }] },
     { segs: [{ t: '403', c: 'err' }, { t: '  ' }, { t: '# cross-tenant read refused, by the framework', c: 'dim' }] },
@@ -117,7 +112,7 @@ rule, applied to every transport.
 <div class="rs-band-aside">
 
 Same service, byte-identical contract, one pinned core each — the regime that
-favours Node. Reproduce with `just bench`.
+favours Node. Reproduce with `just bench` in `bench/`.
 
 </div>
 

@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-You already wrote the validation rules on the entity in
+The rules are already on the entity, where `nestrs g resource` wrote them on
 [Declare the entity](/tutorial/entity/). The `#[crud]` macro's generated
 `POST /posts` handler takes `Json<CreatePost>`, and the edge holds every
 argument it decodes to the rules its type declares, so every request body is
@@ -18,7 +18,8 @@ wired on the previous page.
 
 ## No handler edit required
 
-On the previous page you left `impl PostsController {}` empty. That is
+`nestrs g resource` left `impl PostsController {}` empty, and you read it on
+[Expose over HTTP](/tutorial/http/). That is
 not a shortcut — for a bare CRUD feature, the macro is the handler.
 `#[crud]` emits `create` and `update` methods whose body is a plain
 `Json<…>`:
@@ -42,7 +43,7 @@ it holds the check every edge runs on what it decoded, the transport-agnostic
 
 ## Where the rules live
 
-You already wrote the rules — on the entity, in
+The rules are on the entity, in
 [Declare the entity](/tutorial/entity/):
 
 ```rust title="crates/features/src/posts/entity.rs (abridged)"

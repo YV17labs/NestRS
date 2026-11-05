@@ -46,8 +46,8 @@ fn collect_used_ports(apps_root: &Path) -> CliResult<Vec<u16>> {
 
 /// The port the app in `app` listens on: its own `.env`'s
 /// `<PREFIX>_HTTP__PORT`, else a port its `src/module.rs` pins in code, else
-/// the framework's default when that module imports anything listening on
-/// HTTP.
+/// the framework's default when that module imports or lists anything listening
+/// on HTTP.
 fn app_port(app: &Path) -> CliResult<Option<u16>> {
     let read = |path: &Path| -> CliResult<Option<String>> {
         if !path.is_file() {
@@ -65,24 +65,50 @@ fn app_port(app: &Path) -> CliResult<Option<u16>> {
     }))
 }
 
-/// Whether an app's root `module` imports anything listening on HTTP: a
-/// framework module mounting there, or a feature's adapter of an edge served
-/// over it (`BlogHttpModule`, `ChatWsModule`), whose host brings the transport.
+/// Whether an app's root `module` reaches anything listening on HTTP: a framework
+/// module mounting there, a feature's adapter of an edge served over it
+/// (`BlogHttpModule`, `ChatWsModule`), or a host of such an edge in its own
+/// `providers` (`BlogController`), each host bringing the transport.
 fn listens_on_http(module: &str) -> bool {
-    module
+    let code = module
         .lines()
         .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
-        .flat_map(|code| code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')))
-        .any(|word| {
-            MOUNTS_ON_HTTP.contains(&word)
-                || word.strip_suffix("Module").is_some_and(|stem| {
-                    Transport::ALL
-                        .into_iter()
-                        .filter(|transport| transport.serves_on_http())
-                        .filter_map(|transport| stem.strip_suffix(transport.module_infix()))
-                        .any(|feature| feature.starts_with(|c: char| c.is_ascii_uppercase()))
-                })
+        .collect::<Vec<_>>()
+        .join("\n");
+    words(&code).any(|word| {
+        MOUNTS_ON_HTTP.contains(&word)
+            || word
+                .strip_suffix("Module")
+                .is_some_and(|stem| names_an_edge_on_http(stem, Transport::module_infix))
+    }) || listed_providers(&code).any(|word| names_an_edge_on_http(word, Transport::handler_suffix))
+}
+
+fn words(code: &str) -> impl Iterator<Item = &str> {
+    code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+}
+
+/// The words of each `providers = [...]` in `code`.
+fn listed_providers(code: &str) -> impl Iterator<Item = &str> {
+    code.match_indices("providers")
+        .filter_map(|(at, key)| {
+            let list = code[at + key.len()..]
+                .trim_start()
+                .strip_prefix('=')?
+                .trim_start()
+                .strip_prefix('[')?;
+            list.split_once(']').map(|(list, _)| list)
         })
+        .flat_map(words)
+}
+
+/// Whether `name` is `<Feature><role>`, for `role` the word an edge served on
+/// HTTP takes (`Blog` + `Http`, `Blog` + `Controller`).
+fn names_an_edge_on_http(name: &str, role: fn(Transport) -> &'static str) -> bool {
+    Transport::ALL
+        .into_iter()
+        .filter(|transport| transport.serves_on_http())
+        .filter_map(|transport| name.strip_suffix(role(transport)))
+        .any(|feature| feature.starts_with(|c: char| c.is_ascii_uppercase()))
 }
 
 /// `<PREFIX>_HTTP__PORT` as a `.env` file assigns it, whatever the prefix.
@@ -127,6 +153,29 @@ mod tests {
             ("assistant", "[McpModule::for_root(opts), UsersMcpModule]"),
             ("graph", "[UsersGraphqlModule]"),
             (
+                "inline",
+                "#[module(providers = [BlogService, BlogController])]",
+            ),
+            (
+                "inline-live",
+                "#[module(\n    providers = [ChatGateway],\n)]",
+            ),
+            ("inline-graph", "#[module(providers = [UsersResolver])]"),
+            ("inline-tool", "#[module(providers = [UsersTool])]"),
+            (
+                "discovered",
+                "use social::providers::Github;\n#[module(providers = [BlogController])]",
+            ),
+            (
+                "inline-jobs",
+                "#[module(providers = [AudioProcessor, AudioTasks, AudioListener])]",
+            ),
+            (
+                "unlisted",
+                "use features::BlogController;\n#[module(providers = [\n    // BlogController,\n    BlogService,\n])]",
+            ),
+            ("role-alone", "#[module(providers = [Controller])]"),
+            (
                 "probes",
                 "[HealthModule, AudioQueueModule, RedisQueueModule]",
             ),
@@ -149,7 +198,9 @@ mod tests {
         used.sort_unstable();
         assert_eq!(
             used,
-            vec![3000, 3000, 3000, 3000, 3000, 3000, 3001, 3002, 3004]
+            vec![
+                3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000, 3001, 3002, 3004
+            ]
         );
     }
 

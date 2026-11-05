@@ -76,6 +76,19 @@ impl Transport {
         self.handler_file().trim_end_matches(".rs")
     }
 
+    /// Role word ending the handler struct's name (`Users<Controller>`).
+    pub(crate) fn handler_suffix(self) -> &'static str {
+        match self {
+            Self::Http => "Controller",
+            Self::Graphql => "Resolver",
+            Self::Ws => "Gateway",
+            Self::Queue => "Processor",
+            Self::Schedule => "Tasks",
+            Self::Mcp => "Tool",
+            Self::Events => "Listener",
+        }
+    }
+
     /// Whether this transport's generated handler emits an event, on the log
     /// target its feature declares.
     pub(crate) fn logs(self) -> bool {
@@ -262,19 +275,19 @@ impl Names {
     }
 
     pub(crate) fn controller(&self) -> String {
-        format!("{}Controller", self.pascal)
+        self.handler_for(Transport::Http)
     }
 
     pub(crate) fn resolver(&self) -> String {
-        format!("{}Resolver", self.pascal)
+        self.handler_for(Transport::Graphql)
     }
 
     pub(crate) fn gateway(&self) -> String {
-        format!("{}Gateway", self.pascal)
+        self.handler_for(Transport::Ws)
     }
 
     pub(crate) fn processor(&self) -> String {
-        format!("{}Processor", self.pascal)
+        self.handler_for(Transport::Queue)
     }
 
     /// The `#[queue]` marker both sides of the queue import — the wire name and
@@ -284,15 +297,15 @@ impl Names {
     }
 
     pub(crate) fn tasks(&self) -> String {
-        format!("{}Tasks", self.pascal)
+        self.handler_for(Transport::Schedule)
     }
 
     pub(crate) fn tool(&self) -> String {
-        format!("{}Tool", self.pascal)
+        self.handler_for(Transport::Mcp)
     }
 
     pub(crate) fn listener(&self) -> String {
-        format!("{}Listener", self.pascal)
+        self.handler_for(Transport::Events)
     }
 
     /// The fact the `g events` skeleton listens for — past tense, at the port.
@@ -335,15 +348,7 @@ impl Names {
 
     /// The handler struct name a given transport adapter declares.
     pub(crate) fn handler_for(&self, transport: Transport) -> String {
-        match transport {
-            Transport::Http => self.controller(),
-            Transport::Graphql => self.resolver(),
-            Transport::Ws => self.gateway(),
-            Transport::Queue => self.processor(),
-            Transport::Schedule => self.tasks(),
-            Transport::Mcp => self.tool(),
-            Transport::Events => self.listener(),
-        }
+        format!("{}{}", self.pascal, transport.handler_suffix())
     }
 
     /// Shorthand for the HTTP adapter module name.

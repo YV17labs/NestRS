@@ -181,7 +181,7 @@ pub fn route_guard_stage(
         validate_gate_reached(&label, &chain, || Ok(Vec::new())).map_err(anyhow::Error::msg)?;
     }
     log_effective_chain(&label, "guards", &chain);
-    Ok(stage(chain, declared.gates, declared.masked))
+    stage(chain, declared.gates, declared.masked)
 }
 
 /// The stage running `chain` then `gates`, or `None` when both are empty.
@@ -189,15 +189,15 @@ fn stage(
     chain: Vec<ResolvedLayer<dyn Guard>>,
     gates: Vec<GateFn>,
     masked: bool,
-) -> Option<Arc<dyn GuardStage>> {
+) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
     if chain.is_empty() && gates.is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some(Arc::new(HttpGuardStage::new(
+    Ok(Some(Arc::new(HttpGuardStage::new(
         chain,
         gates,
         StageKind::Route { unmasked: !masked },
-    )))
+    )?)))
 }
 
 /// A route as a boot error and a chain's log line name it.

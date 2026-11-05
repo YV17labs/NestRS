@@ -103,18 +103,51 @@ pub(crate) enum StageKind {
     SelfMount,
 }
 
+/// The statuses a guard may declare it refuses with: a refusal answers an
+/// error, and a route's document files a declared status over what else it says
+/// of that status, its success included.
+const REFUSAL_STATUSES: std::ops::RangeInclusive<u16> = 400..=599;
+
+/// Refuse a guard declaring a status no refusal answers, on a `#[public]` route
+/// or on any other.
+fn refuse_a_declared_non_error(guards: &[ResolvedLayer<dyn Guard>]) -> anyhow::Result<()> {
+    for entry in guards {
+        let declared = [
+            entry.layer.denial_statuses(false),
+            entry.layer.denial_statuses(true),
+        ];
+        if let Some(status) = declared
+            .into_iter()
+            .flatten()
+            .find(|status| !REFUSAL_STATUSES.contains(status))
+        {
+            anyhow::bail!(
+                "the guard `{}` declares `{status}` among what it refuses a request with: \
+                 `Guard::denial_statuses` takes the error statuses a refusal answers, from \
+                 {} to {}",
+                nest_rs_core::__private::shorten(entry.name),
+                REFUSAL_STATUSES.start(),
+                REFUSAL_STATUSES.end(),
+            );
+        }
+    }
+    Ok(())
+}
+
 impl HttpGuardStage {
-    /// The stage running `guards`, then `gates`.
+    /// The stage running `guards`, then `gates`; a guard declaring a status no
+    /// refusal answers refuses it.
     pub(crate) fn new(
         guards: Vec<ResolvedLayer<dyn Guard>>,
         gates: Vec<GateFn>,
         kind: StageKind,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        refuse_a_declared_non_error(&guards)?;
+        Ok(Self {
             guards,
             gates,
             kind,
-        }
+        })
     }
 
     /// What the stage records once its guards passed.
@@ -257,7 +290,7 @@ fn behind_stage(
 ) -> anyhow::Result<crate::endpoint::BoxEndpoint> {
     use nest_rs_core::__private::{GlobalLayers, SiteDeclaration, SiteLayers, compose_site};
 
-    let stage: Arc<dyn GuardStage> = Arc::new(HttpGuardStage::new(chain, Vec::new(), kind));
+    let stage: Arc<dyn GuardStage> = Arc::new(HttpGuardStage::new(chain, Vec::new(), kind)?);
     let declared = SiteDeclaration {
         layers: SiteLayers::default,
         global: GlobalLayers::NONE,
@@ -680,7 +713,8 @@ mod tests {
     fn a_stage_declares_what_each_guard_does_in_ascending_order() {
         let mut guards = chain(Witness);
         guards.extend(chain(Busy));
-        let stage = HttpGuardStage::new(guards, Vec::new(), StageKind::Route { unmasked: true });
+        let stage = HttpGuardStage::new(guards, Vec::new(), StageKind::Route { unmasked: true })
+            .expect("a guard declaring errors composes");
         assert_eq!(statuses(&stage, false), [401, 403, 403, 503]);
         assert_eq!(statuses(&stage, true), [403, 503]);
     }
@@ -717,7 +751,8 @@ mod tests {
             chain(ChallengesBasic),
             vec![admit],
             StageKind::Route { unmasked: true },
-        );
+        )
+        .expect("a guard declaring errors composes");
 
         let denials = stage.denials(false);
 
@@ -734,7 +769,8 @@ mod tests {
     fn a_stage_running_a_class_gate_declares_what_the_gate_refuses() {
         let admit: GateFn = |_| Ok(());
         let stage =
-            HttpGuardStage::new(Vec::new(), vec![admit], StageKind::Route { unmasked: true });
+            HttpGuardStage::new(Vec::new(), vec![admit], StageKind::Route { unmasked: true })
+                .expect("a stage with no guard declares nothing");
         assert_eq!(
             statuses(&stage, false),
             [401, 403],
@@ -1121,6 +1157,68 @@ mod tests {
         posture: Posture::Public,
         meta: throttled_twice,
     });
+
+    /// Declares what it refuses with, on a route that is not `#[public]` and on
+    /// one that is.
+    struct Declares {
+        gated: &'static [u16],
+        public: &'static [u16],
+    }
+
+    impl Layer for Declares {}
+
+    #[async_trait]
+    impl Guard for Declares {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+            Ok(())
+        }
+
+        fn denial_statuses(&self, public: bool) -> &'static [u16] {
+            if public { self.public } else { self.gated }
+        }
+    }
+
+    fn behind_declared(declared: Declares, kind: StageKind) -> anyhow::Result<BoxEndpoint> {
+        let inner = crate::endpoint_fn(|_req: Request| async { Ok(Response::default()) });
+        behind_stage(&ROUTE, chain(declared), kind, BoxEndpoint::new(inner))
+    }
+
+    #[test]
+    fn a_guard_declaring_a_status_outside_the_errors_is_refused_at_every_site() {
+        for kind in [StageKind::Route { unmasked: true }, StageKind::SelfMount] {
+            for outside in [&[100_u16][..], &[200], &[302], &[399], &[600], &[403, 204]] {
+                for declared in [
+                    Declares {
+                        gated: outside,
+                        public: &[],
+                    },
+                    Declares {
+                        gated: &[],
+                        public: outside,
+                    },
+                ] {
+                    let Err(refused) = behind_declared(declared, kind) else {
+                        panic!("{outside:?} declared as a refusal on a {kind:?} site");
+                    };
+                    let said = refused.to_string();
+                    assert!(said.contains("`Declares`"), "{said}");
+                    assert!(said.contains("400 to 599"), "{said}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_guard_declaring_an_error_status_composes() {
+        for declared in [&[400_u16, 599][..], &[401, 403, 429, 500, 503], &[]] {
+            let declared = Declares {
+                gated: declared,
+                public: declared,
+            };
+            behind_declared(declared, StageKind::SelfMount)
+                .unwrap_or_else(|refused| panic!("{refused}"));
+        }
+    }
 
     #[test]
     fn a_site_declaring_two_values_of_one_type_is_refused_rather_than_guarded() {

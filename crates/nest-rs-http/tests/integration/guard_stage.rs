@@ -238,3 +238,60 @@ async fn a_denial_short_circuits_the_guards_listed_after_it() {
         "a guard listed after the denying one must not run",
     );
 }
+
+mod declaration {
+    use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
+    use nest_rs_http::{HttpView, controller, routes};
+    use nest_rs_testing::TestApp;
+
+    /// Declares a success among what it refuses with.
+    #[injectable]
+    #[derive(Default)]
+    struct DeclaresASuccess;
+
+    impl Layer for DeclaresASuccess {}
+
+    #[async_trait]
+    impl Guard for DeclaresASuccess {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+            &[200]
+        }
+    }
+
+    impl GuardFor<HttpView> for DeclaresASuccess {}
+
+    #[controller(path = "/declared")]
+    struct DeclaredController;
+
+    #[routes]
+    impl DeclaredController {
+        #[get("/")]
+        #[public]
+        #[use_guards(DeclaresASuccess)]
+        async fn list(&self) -> &'static str {
+            "[]"
+        }
+    }
+
+    #[module(providers = [DeclaresASuccess, DeclaredController])]
+    struct DeclaredApp;
+
+    /// A declared success would stand in the route's document for what it
+    /// answers.
+    #[tokio::test]
+    async fn a_guard_declaring_a_non_error_status_fails_the_boot() {
+        let refused = TestApp::for_module::<DeclaredApp>()
+            .await
+            .err()
+            .expect("a guard declaring `200` must fail the boot");
+        let said = nest_rs_core::error_message(&*refused);
+        assert!(said.contains("DeclaresASuccess"), "names the guard: {said}");
+        assert!(said.contains("200"), "names the status: {said}");
+        assert!(said.contains("400 to 599"), "names the range: {said}");
+    }
+}

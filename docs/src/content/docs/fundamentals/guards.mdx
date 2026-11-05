@@ -207,7 +207,9 @@ The framework's guards declare theirs: `AuthnGuard` a `503` on every route
 and a `401` off a `#[public]` one, `ClientAuthenticationGuard` a `400`, a
 `401` and a `503` on every route, `ThrottlerGuard` a `429`, the ability guard
 none — the `403` an ability earns is answered where it is read, and a masked
-route lists it. A `500` is never declared: every route lists it.
+route lists it. A `500` is never declared: every route lists it. A refusal
+answers an error, so a status outside `400` to `599` fails the boot, naming the
+guard: its document would otherwise read a refusal as the route's success.
 
 A refusal through `Denial` reads as a problem document, its `401` challenged
 `Bearer`, and that is what the document says unless the guard answers in another

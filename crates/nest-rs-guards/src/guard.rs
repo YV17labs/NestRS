@@ -186,7 +186,8 @@ pub trait Guard: Layer {
     /// answers in its protocol's own words, which the HTTP edge serves in place
     /// of the denial's rendering: what a route's document lists for this guard.
     /// A `500` is not declared — [`Denial::internal`] is a wiring defect, and
-    /// every route documents it.
+    /// every route documents it. A status outside `400` to `599` fails the boot
+    /// of a route this guard runs on: a refusal answers an error.
     ///
     /// The default is `401` and `403` on a route that is not `#[public]`, and
     /// nothing on one that is. A guard refusing with anything else says so,

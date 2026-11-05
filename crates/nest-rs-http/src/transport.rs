@@ -690,7 +690,7 @@ impl Transport for HttpTransport {
                     chain,
                     Vec::new(),
                     StageKind::SelfMount,
-                ))),
+                )?)),
                 RequestStage::Denied => {
                     no_guard_at_the_request(d.meta.label(), &served, "denies every unit");
                     Some(Arc::new(DeniedStage::new(served)))

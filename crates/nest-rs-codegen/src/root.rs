@@ -235,12 +235,8 @@ pub fn reroot_as(attribute: &'static str, tokens: TokenStream) -> TokenStream {
 /// umbrella, where the feature to name is the framework crate's own.
 pub fn refused_without(attribute: &'static str, lib: &str) -> Option<TokenStream> {
     let u = umbrella()?;
-    let krate = framework_crate(lib)?;
+    let root = Root::new(framework_crate(lib)?, &[], &[]);
     let prefix: Vec<TokenTree> = root_prefix(u).into_iter().collect();
-    let root = Root {
-        krate,
-        cfgs: Vec::new(),
-    };
     Some(feature_checks(vec![root], &prefix, Some(attribute)))
 }
 

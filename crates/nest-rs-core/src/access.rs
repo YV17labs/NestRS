@@ -157,14 +157,12 @@ inventory::collect!(HostLayers);
 inventory::collect!(HostRequires);
 inventory::collect!(DependencyRemedy);
 
-/// The remedy the first of `keys` an owning crate names one for, read off the
-/// registry where a refusal is written.
-pub(crate) fn first_remedy(keys: &[TypeId]) -> Option<&'static str> {
-    keys.iter().find_map(|key| {
-        inventory::iter::<DependencyRemedy>()
-            .find(|entry| (entry.key)() == *key)
-            .map(|entry| entry.remedy)
-    })
+/// The remedy the crate owning `key`'s type names for it, read off the registry
+/// where a refusal is written.
+pub(crate) fn remedy_for(key: TypeId) -> Option<&'static str> {
+    inventory::iter::<DependencyRemedy>()
+        .find(|entry| (entry.key)() == key)
+        .map(|entry| entry.remedy)
 }
 
 /// Every module `module` imports: those its `imports = [...]` names, in order,
@@ -191,8 +189,6 @@ pub(crate) struct LinkedDeclarations {
     pub(crate) layers: HostDependencies,
     /// Every [`HostRequires`] entry, by host.
     pub(crate) required: HostDependencies,
-    /// Every [`DependencyRemedy`], by key.
-    pub(crate) remedies: HashMap<TypeId, &'static str>,
     /// What each app-wide pool's declaration injects in truth, by declaration:
     /// the dependencies of the layers it registers itself, each flagged when
     /// optional.
@@ -216,14 +212,9 @@ impl LinkedDeclarations {
                 .or_default()
                 .push((entry.requires)());
         }
-        let mut remedies = HashMap::new();
-        for entry in inventory::iter::<DependencyRemedy>() {
-            remedies.entry((entry.key)()).or_insert(entry.remedy);
-        }
         Self {
             layers,
             required,
-            remedies,
             pools: HashMap::new(),
         }
     }
@@ -399,11 +390,11 @@ pub(crate) fn positions(order: impl IntoIterator<Item = TypeId>) -> HashMap<Type
 /// Validate the access graph: every provider's dependency must be reachable
 /// from its module's import closure or be global infrastructure.
 ///
-/// Pure over its inputs, but for what a host's decorator brings. `roots` without
-/// a descriptor terminate a branch, making a hand-written root a no-op. A
+/// Pure over its inputs, but for what a host's decorator brings and the remedy a
+/// crate names for a key no module provides or none in reach does. `roots`
+/// without a descriptor terminate a branch, making a hand-written root a no-op. A
 /// provider in `overridden` is never built, so what it injects is not checked;
-/// `linked` holds what each host's decorators declare of it, and the remedy a
-/// crate names for a key no module provides or none in reach does.
+/// `linked` holds what each host's decorators declare of it.
 pub(crate) fn validate_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
@@ -503,7 +494,7 @@ pub(crate) fn validate_access_graph(
                         consumer: p.name,
                         dependency,
                         owner,
-                        remedy: linked.remedies.get(&dep).copied(),
+                        remedy: remedy_for(dep),
                     }
                     .into());
                 }
@@ -516,7 +507,7 @@ pub(crate) fn validate_access_graph(
                     module: desc.name,
                     consumer: p.name,
                     dependency: name,
-                    remedy: linked.remedies.get(&dep).copied(),
+                    remedy: remedy_for(dep),
                 }
                 .into());
             }

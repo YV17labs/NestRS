@@ -1720,7 +1720,7 @@ impl ContainerBuilder {
             provider: stall.provider,
             missing,
             cause: self.absence_cause(reached, module, &keys),
-            remedy: crate::access::first_remedy(&keys),
+            remedy: keys.iter().find_map(|key| crate::access::remedy_for(*key)),
         })
     }
 
@@ -1736,7 +1736,7 @@ impl ContainerBuilder {
             provider: built.provider.1,
             dependency,
             cause: self.absence_cause(reached, built.module.0, &[key]),
-            remedy: crate::access::first_remedy(&[key]),
+            remedy: crate::access::remedy_for(key),
         })
     }
 

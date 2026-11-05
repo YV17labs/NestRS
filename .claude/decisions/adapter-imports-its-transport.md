@@ -209,4 +209,3 @@ reaches, which stays as it was. One module of a gateway's two is enough: an app
 may well import `WsModule` alone, and which is missing is another line's.
 
 The public seam stays closed: an entry is tier 2, and no third party asks.
-

@@ -67,4 +67,3 @@ of its own: nothing it names may sit under `__private`, and no package has asked
 
 **Refused:** `ForInstance<I, C>`'s conversion stays public. It is no setup: it reaches
 nothing but a `for_root`, and a marker before a config is what it is for.
-

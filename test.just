@@ -30,18 +30,18 @@ postgres := "server"
 # postgres := "mutual-tls"
 unasked := if postgres == "mutual-tls" { "none()" } else { "binary_id(nest-rs-seaorm::e2e) and test(/^mutual_tls::/)" }
 
-# What a decorator says in a build lacking the features an attribute pulls
-# in: the refusal suite on `graphql` alone, which the workspace's one feature
+# What a kernel decorator's key says in a build lacking the capability it reaches:
+# `#[wire_enum(graphql)]` on no feature at all, which the workspace's one feature
 # union cannot reach.
-graphql_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --features graphql --test integration --no-fail-fast"
+kernel_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --test integration --no-fail-fast"
+
+# What a decorator says in a build lacking the features an attribute pulls
+# in: the refusal suite on `graphql` alone, which the union cannot reach either.
+graphql_alone := kernel_alone + " --features graphql"
 
 # What `#[expose(..., graphql)]` says in a build with `seaorm` and no `graphql`,
 # the front door's own shape, which the union cannot reach either.
-seaorm_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --features seaorm --test integration --no-fail-fast"
-
-# What a kernel decorator's key says in a build lacking the capability it reaches:
-# `#[wire_enum(graphql)]` on no feature at all, which the union cannot reach either.
-kernel_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --test integration --no-fail-fast"
+seaorm_alone := kernel_alone + " --features seaorm"
 
 # What a binary without OTLP export refuses: nest-rs-opentelemetry built
 # without its `otlp` feature, the console alone, which the union turns on.

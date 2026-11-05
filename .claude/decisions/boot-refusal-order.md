@@ -227,4 +227,3 @@ modules as a `HashSet`, so an app with two gaps read one or the other by the
 process's hash seed: 21 and 9 of 30 runs of one test told apart two refusals, one of
 them naming the wrong fix. It now walks them as `provider_order` does, roots first
 and imports depth-first, so one app reads one first refusal on every boot.
-

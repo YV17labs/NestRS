@@ -746,33 +746,36 @@ fn unbuilt_clause(
     count: usize,
     remedy: Option<&str>,
 ) -> String {
+    if let (UnbuiltCause::RegisteredLater, Some(remedy)) = (cause, remedy) {
+        return format!(". {remedy}");
+    }
     let them = if count == 1 { "it" } else { "them" };
-    match (cause, remedy) {
-        (UnbuiltCause::RegisteredLater, Some(remedy)) => format!(". {remedy}"),
-        (UnbuiltCause::ImportCycle(modules), _) if modules.len() == 2 => format!(
-            "; {} import each other, so one registers before the other's providers exist: move \
+    let edit = match cause {
+        UnbuiltCause::ImportCycle(modules) if modules.len() == 2 => format!(
+            "{} import each other, so one registers before the other's providers exist: move \
              what both need into a module both import",
             and_list(modules)
         ),
-        (UnbuiltCause::ImportCycle(modules), _) => format!(
-            "; {} import each other in a cycle, so one registers before another's providers \
+        UnbuiltCause::ImportCycle(modules) => format!(
+            "{} import each other in a cycle, so one registers before another's providers \
              exist: move what they need into a module they all import",
             and_list(modules)
         ),
-        (UnbuiltCause::RegisteredLater, None) => format!(
-            "; a hand-written module or a `for_root` outside `{module}`'s imports registers \
-             {them} later: import that module in `{module}`'s `imports`"
+        UnbuiltCause::RegisteredLater => format!(
+            "a hand-written module or a `for_root` outside `{module}`'s imports registers {them} \
+             later: import that module in `{module}`'s `imports`"
         ),
-        (UnbuiltCause::RegisteredByAPool, _) => format!(
-            "; only an app-wide pool's declaration lists {them}, and a pool registers what it \
+        UnbuiltCause::RegisteredByAPool => format!(
+            "only an app-wide pool's declaration lists {them}, and a pool registers what it \
              lists once every module is built: list {them} in `{module}`'s `providers`"
         ),
-        (UnbuiltCause::ImportedFirst, _) => format!(
-            "; `{module}` was imported on a container built by hand while nothing there \
+        UnbuiltCause::ImportedFirst => format!(
+            "`{module}` was imported on a container built by hand while nothing there \
              provided {them}: provide {them}, or import what provides {them}, before \
              `{module}`"
         ),
-    }
+    };
+    format!("; {edit}")
 }
 
 /// A test override nothing in the app's graph would register: no module lists

@@ -57,6 +57,13 @@ there, as in `demo/` (`demo.md`).
 
 ## Scaffolds emit exactly what the rules mandate
 
+**A scaffold writes the `clippy.toml` holding what no type can**: raw SQL, as the
+repository's does (`data-layer.md`), so a developer's `nestrs run lint` refuses it
+as `just lint` does here. Only what a developer's own code can write goes in it, so
+a framework-internal entry stays the repository's. `crates/migrations` holds an empty
+one replacing it there, so a generated migration's `Expr::cust("uuidv7()")`, and a
+developer's DDL, take no `#[expect]`.
+
 Templates stay in lockstep with the `users/` exemplar and the layout rules
 (`features.md`, `apps.md`, `architecture.md`). Changing the exemplar or a
 naming rule updates the matching template in the same change, and the

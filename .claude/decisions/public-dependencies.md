@@ -145,3 +145,14 @@ already, so neither needs a second feature to reach it. Its row above stands: a
 `0.x`, so its next minor is a nestrs major, and an app may still name it directly at
 a compatible requirement. Agreed by the owner ("Tout faire (Recommandé)",
 2026-10-31).
+
+## 2026-11-05 — `RepoSelect` implements none of sea-orm's builder traits
+
+The 2026-10-28 entry above is reversed, security first
+(`repo-hands-out-no-connection.md`, this date): a trait's `query()` cannot be
+sealed, and it hands out the statement `Repo` filtered. The refusal "a wrapper over
+… sea-orm's query builder is a second framework" stands for what it refuses: the
+select's eight narrowing methods re-implement nothing, each one line over the
+`Select<E>` it holds, in sea-orm's own vocabulary (`IntoCondition`, `Order`,
+`NullOrdering`), and sea-orm stays public, its next major a nestrs major. The cost
+is sea-orm's documentation on those methods, each carrying its own sentence.

@@ -191,21 +191,22 @@ let everyone = user::Entity::find().all(&conn).await?;
 
 The framework's posture: handlers do not write SQL. They call
 services. Services go through `Repo`, which hands out no connection, and
-`Repo::scoped(...)` adds the filter. The path of "leak rows" stays closed
-unless a service rewrites the select's statement itself, through the
-`query()` SeaORM's builder traits hand out — which review reads as an escape.
+`Repo::scoped(...)` adds the filter, on a select that hands out no statement
+to rewrite. The path of "leak rows" stays closed but for raw SQL in a filter,
+which clippy refuses.
 
 ## When you really do need a custom query
 
-Sometimes a read needs what `CrudService` does not offer — a join, an extra
-condition, an order. Write it as a service method on `Repo::scoped`: the
-select it returns takes SeaORM's own filters, joins, orders and limits, and
-runs on the ambient executor with the ability's condition already in it.
+Sometimes a read needs what `CrudService` does not offer — an extra condition,
+an order, a limit. Write it as a service method on `Repo::scoped`: the select it
+returns takes SeaORM's conditions, column orders and limits through its own
+methods, and runs on the ambient executor with the ability's condition already
+in it.
 
 ```rust title="crates/features/src/users/service.rs"
 use nest_rs::authz::Action;
 use nest_rs::seaorm::{Repo, ServiceError};
-use sea_orm::{ColumnTrait, QueryFilter, QueryOrder};
+use sea_orm::ColumnTrait;
 
 impl UsersService {
     pub async fn search(&self, q: &str) -> Result<Vec<user::Model>, ServiceError> {
@@ -221,8 +222,9 @@ impl UsersService {
 The handler calls `search` and never sees a connection. A condition on
 another entity — a subquery over `orgs` — takes that entity's own filter from
 `scope_for::<Orgs>(Action::Read)`, so every table the query reads is
-filtered. Chain the builder methods, never `.query()`: a statement replaced,
-cleared or `union`ed through it runs past the ability's condition.
+filtered. The select hands out no statement, so `.query()` and `.select_only()`
+do not compile on it, and a raw `Expr::cust` in its filter is what clippy refuses
+([A custom query](/database/repo-and-executor/#a-custom-query)).
 
 ## Going further
 

@@ -842,8 +842,14 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::seaorm::WorkerDbContext`; `nest_rs::seaorm::ws::WsDataContext`, `mcp::McpDataContext`; the seaorm `ws` and `mcp` features | `nest_rs::seaorm::SeaOrmUnitOfWork`; nothing: delete them |
     | a database driver's request interceptor and `JobContext` | one `UnitOfWork`, bound through `nest_rs::database::provide_unit_of_work`, which also runs every lifecycle hook in a unit; it implements `settle_net`, and `Executor::atomic` to offer an atomic block (*Writing a driver*) |
     | a `match` on `ExecutorScope`, `TransactionPolicy` or `DbOutcome` outside its crate | add a `_` arm that fails closed |
-    | `Repo::<E>::conn()`, and a query run on it (`Entity::find()….all(&conn)`, `active.insert(&conn)`) | `Repo::<E>::scoped(action)` with SeaORM's builders, then `.all()`; an ability-less read `Repo::unscoped`, an insert `Creatable::create_from_active` or `Repo::insert_unscoped(active)` |
+    | `Repo::<E>::conn()`, and a query run on it (`Entity::find()….all(&conn)`, `active.insert(&conn)`) | `Repo::<E>::scoped(action)` with its own methods, then `.all()`; an ability-less read `Repo::unscoped`, an insert `Creatable::create_from_active` or `Repo::insert_unscoped(active)` |
     | `.all(&conn)`, `.one(&conn)`, `.count(&conn)`, `.exists(&conn)` on `Repo::scoped`, `with_tombstones`, `unscoped`, `unscoped_by_id` | `.all()`, `.one()`, `.count()`, `.exists()`: a `RepoSelect<E>` runs on the ambient executor |
+    | `use sea_orm::{QueryFilter, QueryOrder, QuerySelect}` for a `Repo` select | delete the import: `filter`, `order_by`, `order_by_asc`, `order_by_desc`, `order_by_with_nulls`, `limit`, `offset` and `apply_if` are `RepoSelect<E>`'s own |
+    | `.query()`, `.as_query()`, `.into_query()`, `select_only`, `column`, `column_as`, `expr_as`, `group_by`, `having`, `distinct`, `join` or a `lock_*` method on a `Repo` select | gone: narrow with the select's own methods, and read a related row through its own service's loader, under its own filter |
+    | an expression as a `Repo` select's order key (`.order_by_asc(Expr::col(…))`) | a column of the entity; an order by anything else is not offered in 7.0 |
+    | raw text in a service's condition: `Expr::cust` and its `cust_with_*`, `custom_keyword`, `Expr::Custom`, `Expr::CustomWithExpr`, `Keyword::Custom`, `Func::cust`, `cast_as`, `as_enum`, `Expr::AsEnum`, `Expr::Constant`, `sea_query::Enum`, `OptionEnum::None`, `ArrayType::Enum`, `BinOper::Custom`, `PgFunc::json_exists`, `json_value`, `json_query`, `json_table`, `Order::Field`, `OnConflict::constraint`, `order_by_customs`, `partition_by_custom` | sea-query's typed builders (`Func::lower`, `PgFunc::to_tsquery`, `Condition`), their values bound; where only raw text can say it, a JSON path among it, `#[expect(clippy::disallowed_methods, reason = "…")]`, once your project has the `clippy.toml` `nestrs new` writes, and an empty one in `crates/migrations`, where raw DDL stays free |
+    | `#[sea_orm(select_as = …, save_as = …, save_array_as = …)]` on an entity, under that `clippy.toml` | the derive expands to `cast_as` beside the struct, so the `#[expect]` goes on the module holding the entity: `#![expect(clippy::disallowed_methods, reason = "…")]` at the top of its file |
+    | `#[derive(DeriveActiveEnum)]` with `db_type = "Enum"` and no `rs_type`, under that `clippy.toml` | `rs_type = "String"`, which expands to nothing the list names; or `#![expect(clippy::disallowed_methods, clippy::disallowed_types, reason = "…")]` on its module |
     | `Repo::insert_unscoped(active, &conn)`, `resolve_unique_slug(&conn, column, …)` | `Repo::insert_unscoped(active)`, `resolve_unique_slug::<E>(column, …)` |
     | a secret column typed as a newtype with a hand-written `Debug` (`PasswordHash`), and an `impl Debug for Model` / `ModelEx` restating every column to hide it | `pub password_hash: Option<Secret<String>>` and `#[derive(Clone, Debug, DeriveEntityModel)]`; the service reads `hash.expose_secret()` |
     | `#[expose]` on a secret column | refused at compile time: drop the `#[expose]` — a `Secret` never crosses the wire |
@@ -2043,6 +2049,16 @@ lists what the boot, a log or the wire shows when one is missed.
   once per entity and action.
 - **A `Repo` read that relied on seeing deleted rows** compiles and returns
   fewer rows; read them through `with_tombstones`.
+- **A SeaORM builder method on a `Repo` select** answers `E0599`, `no method named
+  query found for struct RepoSelect`: it hands out no statement. **A trait import
+  left beside it** warns `unused import`, which `-D warnings` refuses.
+- **`Expr::cust` under the scaffold's `clippy.toml`** fails `nestrs run lint`,
+  `use of a disallowed method`, with what to write instead. A project with no such
+  file compiles it as before, and a fragment closing its parenthesis widens the
+  filter: copy the file from a new scaffold.
+- **A derive expanding to a listed call** fails the same way with `this error
+  originates in the derive macro`, and an `#[expect]` on the struct adds `this lint
+  expectation is unfulfilled`: it goes on the module holding the entity.
 - **A downcast of `nest_rs::database::current_executor()` to the SeaORM
   executor** compiles and answers `None`: the handle a unit installs is private
   to `nest-rs-seaorm`. Run the statement through `Repo`, which filters it, or

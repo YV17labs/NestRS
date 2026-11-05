@@ -48,8 +48,8 @@ public, so whatever it downcasts to is in every service's reach: a public
 handle there is a connection a service could run a query on that your row
 filter never saw. SeaORM installs its executor inside a crate-private
 wrapper, and its `Repo` hands out no connection, so every statement that
-reaches the database is one `Repo` built — filtered, unless a service
-rewrote it through the `query()` SeaORM's builder traits hand out:
+reaches the database is one `Repo` built, and its select hands out no
+statement to rewrite:
 
 ```rust title="from nest-rs-seaorm's executor"
 pub(crate) struct Installed(pub(crate) SeaOrmExecutor);

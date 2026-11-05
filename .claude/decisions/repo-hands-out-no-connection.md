@@ -162,3 +162,117 @@ type had nothing to serve. It moved to `__private` beside its reader, and
 (`visibility-tiers.md`, 2026-11-05). What the tests above still spell,
 `SeaOrmExecutor::Pool(pool).into()`, is the suite's plumbing through both
 `__private`s.
+
+## 2026-11-05 — a `Repo` select hands out no statement
+
+The first limit above is closed, with the owner's agreement to break the API
+before 7.0 publishes ("on ne veut pas d'angle mort", 2026-11-05), security first.
+`RepoSelect<E>` implements none of sea-orm's traits. Its `filter`, `order_by`,
+`order_by_asc`, `order_by_desc`, `order_by_with_nulls`, `limit`, `offset`,
+`apply_if` and `build` are inherent, in sea-orm's vocabulary (`IntoCondition`,
+`Order`, `NullOrdering`), each one line over the `Select<E>` it holds, so
+`.query()`, `.into_query()`, `.select_only()`, `.column_as()` and the rest answer
+`E0599`. This reverses "implementing sea-orm's builder traits" above: a trait's
+method cannot be sealed, and every builder trait's `query()` is the statement as
+`&mut`. It closes what `query()` named and what the same traits left beside it:
+`select_only` with `expr_as` rendered `SELECT "users"."id", "password_hash" AS
+"email" FROM "users" WHERE …`, a hidden column in an exposed slot, with no
+`.query()` to grep; `having` and `join` came along.
+
+**An order key is `E::Column`**, narrower than sea-orm's `IntoSimpleExpr`. An
+expression there is a second way in for a raw fragment, and an order computed over
+a hidden column reads it. No caller orders by an expression, and widening later is
+additive where narrowing would be a break.
+
+**A raw fragment stays clippy's, decided on evidence.** `filter` takes
+`IntoCondition`, and `Expr::cust` is one `Expr` to sea-query, so no type refuses
+it. Rendered on sea-query 1.0.2, pinned by `select.rs`'s unit test:
+
+```text
+.filter(Expr::cust("1 = 1 OR 1 = 1"))     (1 = 0) AND (1 = 1 OR 1 = 1)      contained
+.filter(Expr::cust("1 = 1) OR (1 = 1"))   (1 = 0) AND (1 = 1) OR (1 = 1)    every row
+```
+
+What each harder refusal would do:
+
+- **Parentheses at the select.** One more pair holds that fragment, `(1 = 0) AND
+  ((1 = 1) OR (1 = 1))`, and `1 = 1)) OR ((1 = 1` renders `(1 = 0) AND ((1 = 1)) OR
+  ((1 = 1))`, every row again. A fixed depth moves the text a fragment needs, and
+  the class is a value interpolated by an attacker who can count.
+- **The ability's filter in a derived table** (`SELECT … FROM (SELECT … WHERE scope)
+  AS t WHERE raw`). It holds an `OR`, but `1 = 1) UNION SELECT …` runs past it, so
+  the class stays while every statement changes shape.
+- **A walk refusing `Expr::Custom` at run.** `From<Condition> for Expr` gives a tree
+  and `FunctionCall` has getters, but `CaseStatement` and a sub-select keep their
+  expressions `pub(crate)`, so the walk stops short at them and a partial refusal
+  reads as a whole one. It would also take the only spelling of what the typed
+  builders do not reach, with no named way back.
+- **Scanning the rendered text.** Unbalanced parentheses need strings, `E''`, dollar
+  quoting and comments read as Postgres reads them, a SQL lexer of our own on every
+  `filter`, and a miss is silent. Standards over invention.
+
+So it is the SQL-injection class and is held where that class is, at review level:
+clippy's `disallowed-methods` and `disallowed-types` in the root `clippy.toml` and a
+new scaffold one. They name every call through which sea-query 1.0.2 writes text
+unescaped into a query statement, read off its writers (`backend/query_builder.rs`,
+`backend/postgres/query.rs`, `extension/postgres/func/`) and off what each renders
+(`select.rs`'s `every_constructor_the_lint_names_splices_its_text`, one `#[expect]`
+per entry, so one leaving the list fails it):
+
+- raw text: `Expr::cust`, `cust_with_values`, `cust_with_expr`, `cust_with_exprs`,
+  `custom_keyword`, `Expr::Custom`, `Expr::CustomWithExpr`, `Keyword::Custom`,
+  `Func::cust`, `Func::cast_as`, `ExprTrait::cast_as`, `BinOper::Custom`,
+  `OnConflict::constraint`, and `order_by_customs`, `order_by_customs_with_nulls`,
+  `partition_by_custom` and `partition_by_customs` on every statement holding them
+  (`From<SubQueryStatement> for Expr` reaches an `UpdateStatement` and a
+  `DeleteStatement`, so those two are listed though Postgres refuses the text there);
+- a JSON path, an alias or a column name, written between quotes unescaped:
+  `PgFunc::json_exists`, `json_value`, `json_query`, `json_table`;
+- a type name, written between double quotes unescaped: `ExprTrait::as_enum`,
+  `Expr::AsEnum`, and a `sea_query::Enum`, `OptionEnum::None` or `ArrayType::Enum`,
+  whose name goes out bound too, as `$1::"<type_name>"`;
+- a value written inline, the other way out for that name: `Expr::Constant`,
+  `Order::Field`, the second being what `RepoSelect::order_by` takes.
+
+Executed on Postgres 18.6 under a query the ability denied whole, each of `as_enum`,
+`json_table`, an `Expr::Constant` and a bound `sea_query::Enum` returned every row.
+Clippy resolves a variant's constructor as a function.
+`#[expect(clippy::disallowed_methods, reason = "…")]` is the opening, one line a grep
+finds; the framework's own are `1 = 0` and `ROW_NUMBER()`.
+
+**A scaffold's `crates/migrations` holds an empty `clippy.toml`**, which replaces the
+workspace's there, clippy reading the nearest file upwards. A migration is DDL an
+operator runs, no request's value reaches it, and `uuidv7()` has no typed builder, so
+the lint would only make an everyday migration harder and refuse nothing: the owner's
+rule of 2026-11-05 that a fix does not make everyday code harder. The generated
+`Expr::cust("uuidv7()")` stays as it was, with no `#[expect]`.
+
+**Limits:**
+
+- **It holds only where an app runs clippy with that config**: `nestrs run lint` does,
+  and a project that runs no clippy, or predates the file, compiles a fragment that
+  widens a filter. Nothing refuses one at compile time or at run, for the reasons above.
+- **What no call writes.** Clippy names calls and types, so two spellings pass it, each
+  pinned by a test in `select.rs`: a `sea_query::Enum` literal through its full path or
+  a glob, which `disallowed-types` does not see, and a hand-written `impl Iden` whose
+  `quoted` answers `Cow::Borrowed`, which writes that `'static` text unescaped. Each is
+  one grep in the multi-tenant checklist.
+- **A derive's expansion.** `#[sea_orm(select_as, save_as, save_array_as)]` expands to
+  `ExprTrait::cast_as`, and a `DeriveActiveEnum` with `db_type = "Enum"` and no
+  `rs_type` to `sea_query::Enum`, `OptionEnum::None` and `ArrayType::Enum`, beside the
+  item carrying the derive. An `#[expect]` on that item stays unfulfilled and leaves
+  the error, one on the module holding it opens it, `#![expect(…)]` at the top of its
+  file, and `rs_type = "String"` on that enum needs none (`select.rs`'s tests and the
+  scaffold's). The entries stay, since each splices. The demo and the scaffold spell
+  neither, so everyday code pays nothing, and a project spelling one pays one attribute
+  or one key.
+- **Off the list, each read:** `Func::Custom`, since `FunctionCall::new` is `pub(crate)`
+  and nothing public takes it to a statement; `raw_query!`, `raw_sql!`,
+  `Statement::from_string` and the rest of the raw statement family, since inside a unit
+  nothing can run a statement (`Repo` hands out no connection), and a contextless path
+  holding `Arc<DatabaseConnection>` is its own named exception; `ColumnDef::custom`,
+  `ColumnType::custom`, `extra` and `IndexType::Custom`, which are DDL; `ExplainStatement`'s
+  `into_variable` and `table_with_wildcard`, MySQL's, on a statement no `Expr` holds.
+- **What a select no longer offers**: `lock_exclusive`, `lock_shared`, `group_by`,
+  `distinct`, and an order by an expression. None has a caller in the tree, and each is
+  an inherent method, additive, when one comes.

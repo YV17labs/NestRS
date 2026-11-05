@@ -180,9 +180,12 @@ read:
    finds `insert_unscoped_or_existing` too) and `with_tombstones`** in
    feature code. Confirm each call site clears the bar
    the method's rustdoc states, and is not a forgotten scope.
-2. **Grep for `.query()`** in feature code. A `.query()` on a `Repo`
-   select hands out the statement itself, and one rewritten there runs past
-   the filter: chain the builder methods instead. `with_ability` needs no
+2. **Grep for `clippy::disallowed_`, `sea_query::Enum` and `impl Iden`** in feature
+   code. A `Repo` select hands out no statement, so nothing rewrites what `Repo`
+   filtered, and raw SQL in a filter is the one way past it: each `#[expect]` opens
+   it, and its text must hold no value; the other two are what clippy cannot name
+   ([Raw SQL in a filter](/database/repo-and-executor/#raw-sql-in-a-filter)).
+   `with_ability` needs no
    such read: it only narrows the ability the unit runs under, and nothing
    public widens one — no function installs an executor of its own, and a
    unit opened or work re-entered inside a request runs as that request. A

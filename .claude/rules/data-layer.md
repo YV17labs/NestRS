@@ -22,13 +22,21 @@ ability in a job is system work, unscoped, and outside one denies every row, a
 save or a create then running no hook and sending nothing. Binding a subject by id (`bind = S`) goes
 through `CrudService::access`.
 
-**`Repo` hands out no connection**, held by types: its selects run on the
-ambient executor themselves, and the handle a unit installs is private to its
-driver, so a downcast of the port's reader finds nothing to run a statement
-on (`.claude/decisions/repo-hands-out-no-connection.md`). Review holds the
-one way past it the types leave: the `query()` sea-orm's builder traits hand
-out as `&mut`, through which a statement replaced, cleared or `union`ed runs
-past the filter — a `.query()` on a `Repo` select is read as an escape.
+**`Repo` hands out no connection and no statement**, held by types: its selects
+run on the ambient executor themselves, and the handle a unit installs is private
+to its driver, so a downcast of the port's reader finds nothing to run a statement
+on; a `RepoSelect` implements none of sea-orm's traits, so nothing rewrites what
+`Repo` filtered or moves a hidden column into an exposed slot, and an order key is
+a column of the entity (`.claude/decisions/repo-hands-out-no-connection.md`).
+The one way past it the types leave is a raw fragment in `filter` (`Expr::cust`
+and every other call writing text unescaped), whose text can close the parenthesis
+around it and widen the filter. It is the SQL-injection class, and it is held at
+review level: `disallowed-methods` and `disallowed-types` in the root `clippy.toml`
+and in the one `nestrs new` writes, an `#[expect]` the visible opening, on the module
+when a derive expands to the call, which binds only where an app runs clippy with
+that config; what no call writes is the decision's *Limits*. A scaffold's migrations
+crate carries an empty file of its own, a migration being DDL no request's value
+reaches.
 
 **The named exceptions — there are no others.** The ability filter is dropped
 only through a named escape, and each escape's rustdoc states the bar its
@@ -81,7 +89,7 @@ binding (`TestApp::unit` under an ability, `system_unit` as system work).
 
 No webhook ingress exists; `Repo::unscoped`'s rustdoc states the bar a
 signature-authenticated one must clear before it ships. Auditing the escapes
-is one grep per name, `.query()` included.
+is one grep per name, `clippy::disallowed_` for a raw fragment.
 
 **A soft-deleted row is hidden by `Repo`, declared once on the entity.**
 `#[expose(..., soft_delete)]` registers the entity, and every `Repo` read and

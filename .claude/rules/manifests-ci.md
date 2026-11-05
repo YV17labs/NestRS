@@ -25,8 +25,9 @@ paths:
   `architecture.md`'s *`pub` means exported*.
 - **`clippy.toml` exists once, at the repository root.** clippy reads the
   nearest file upwards, so it covers `crates/`, `demo/` and `bench/`, and a
-  closer one would *replace* it. A `disallowed-*` entry carries a `reason`
-  naming what to use instead.
+  closer one would *replace* it; a scaffold writes its own at its root
+  (`cli.md`). A `disallowed-*` entry carries a `reason` naming what to use
+  instead.
 - **Tests are exempt by configuration**: the `allow-*-in-tests` keys, plus one
   attribute per suite root for the helpers those keys do not reach.
 

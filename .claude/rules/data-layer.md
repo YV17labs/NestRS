@@ -386,8 +386,8 @@ dependency cycle.** What they guarantee:
   every unit the request carries: each GraphQL operation and MCP tool call,
   each WS message and hook. Nothing re-runs the chain below the request. A
   `#[public]` unit no ability reached, on an opened MCP endpoint or under an open
-  upgrade, takes the visitor's rules at its own `AbilityGuard`, the pool's
-  included. **A visitor reads only inside a unit naming its read**
+  upgrade, takes its actor's rules, or the visitor's, at its own `AbilityGuard`, the
+  pool's included. **A visitor reads only inside a unit naming its read**
   (`#[public(Action, Entity)]`): `current_ability` answers none for a visitor
   anywhere else in a request, a bare `#[public]`, a nested GraphQL field, a relation's
   batch, so each fails closed where no line names the read. A job holding one reads by its

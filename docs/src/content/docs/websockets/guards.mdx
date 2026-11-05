@@ -262,8 +262,8 @@ the upgrade carried — into each message, and the gateway opens each message's
 unit of work itself. Binding
 `AuthzGuard` beside a `#[subscribe_message]` adds a per-message check
 through `check`: with no ambient ability it denies a gated message, fail-closed,
-and gives a `#[public(Read, Entity)]` one the rules
-[`define_visitor`](/security/authorization/public-reads/) writes.
+and gives a `#[public(Read, Entity)]` one the rules of the actor a guard ahead of it
+identified, or those [`define_visitor`](/security/authorization/public-reads/) writes.
 
 See [Security](/security/) for the strategy + ability composition, and
 [Endpoint guards](/security/authorization/endpoint-guards/) for

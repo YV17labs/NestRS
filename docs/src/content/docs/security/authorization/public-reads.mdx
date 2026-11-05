@@ -116,8 +116,9 @@ expect. The bare word costs a route that reads nothing nothing.
 
 `define_visitor` answers for the anonymous caller only. On a `#[public]`
 route reached with a valid token, `AuthnGuard` attaches the principal
-and `AbilityGuard` calls `define` — the visitor rules are not a floor
-added under every caller.
+and `AbilityGuard` calls `define`, as it does on a `#[public]` operation whose
+`/graphql` request an `AuthnGuard` ran with no `AuthzGuard` beside it — the visitor
+rules are not a floor added under every caller.
 
 That is what makes one route serve both audiences without a branch in
 the handler: a visitor sees published posts because `define_visitor`

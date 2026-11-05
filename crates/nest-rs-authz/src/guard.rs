@@ -7,6 +7,7 @@ use std::sync::Arc;
 use nest_rs_core::{
     Edge, Layer, MissingAmbientError, Posture, UnitContext, async_trait, injectable,
 };
+use nest_rs_guards::__private::UNAUTHENTICATED;
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 
 use crate::gate::reason;
@@ -17,7 +18,9 @@ use crate::{Ability, AbilityBuilder, AbilityFactory, MalformedRuleError};
 /// on a non-public route is a `500` (an authn guard must run first). On a
 /// `#[public]` unit of any edge, and on an in-band endpoint (`/graphql`) whose
 /// operations gate themselves, the guard builds an Ability for the anonymous
-/// (visitor) actor — see the dev's `AbilityFactory` to define visitor rules.
+/// (visitor) actor — see the dev's `AbilityFactory` to define visitor rules —
+/// and for the actor when a guard ahead of it identified one, on a unit as on a
+/// route.
 ///
 /// The ability is attached for the rest of the request: on every edge, the reads
 /// it scopes run where the unit's response mask arms them, and nowhere else.
@@ -32,6 +35,18 @@ pub struct AbilityGuard<F: AbilityFactory> {
 }
 
 impl<F: AbilityFactory> AbilityGuard<F> {
+    /// The rules of the actor a guard ahead of this one identified, if any.
+    fn actors(&self, cx: &UnitContext<'_>) -> Option<Result<Ability, MalformedRuleError>> {
+        let actor = cx.ambient::<F::Actor>()?;
+        // Absent ⇒ the principal is not scope-aware and no rule is scope-gated.
+        let granted = cx
+            .ambient::<GrantedScopes>()
+            .map(|granted| granted.shared());
+        let mut builder = AbilityBuilder::new().with_granted_scopes(granted);
+        self.factory.define(&actor, &mut builder);
+        Some(builder.build())
+    }
+
     /// A caller no credential backs: the factory's visitor branch decides.
     fn visitor(&self) -> Result<Ability, MalformedRuleError> {
         // No credential, so no scopes — `Some(empty)`, not `None`: a scope-gated
@@ -41,6 +56,21 @@ impl<F: AbilityFactory> AbilityGuard<F> {
         // Marked anonymous, so a posture's gate can refuse a visitor.
         builder.build_visitor()
     }
+}
+
+/// Whether `cx` is a federation root field: its site reads no posture, so nothing
+/// after this guard would refuse a visitor.
+#[cfg(feature = "graphql")]
+fn states_no_posture(cx: &UnitContext<'_>) -> bool {
+    use nest_rs_graphql::{FieldRole, GraphqlView};
+    cx.switch_to::<GraphqlView>()
+        .is_some_and(|field| field.role() == FieldRole::Federation)
+}
+
+/// Every other edge's unit answers to its posture.
+#[cfg(not(feature = "graphql"))]
+fn states_no_posture(_cx: &UnitContext<'_>) -> bool {
+    false
 }
 
 /// `built` attached for the rest of the unit. A malformed rule fails construction
@@ -66,16 +96,8 @@ fn attach(
 #[async_trait]
 impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        // Absent ⇒ the principal is not scope-aware and no rule is scope-gated.
-        let granted = cx
-            .ambient::<GrantedScopes>()
-            .map(|granted| granted.shared());
-        let built = match cx.ambient::<F::Actor>() {
-            Some(actor) => {
-                let mut builder = AbilityBuilder::new().with_granted_scopes(granted);
-                self.factory.define(&actor, &mut builder);
-                builder.build()
-            }
+        let built = match self.actors(cx) {
+            Some(built) => built,
             // `#[public]` or in band: no authenticated actor.
             None if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand) => {
                 self.visitor()
@@ -87,25 +109,36 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         attach(cx, built)
     }
 
-    /// Read the ability the unit's request attached. With none, a `#[public]` unit
-    /// is a visitor, whose rules it reads as a `#[public]` route does; any other
-    /// is refused: its request did not authenticate, or nothing re-established the
-    /// ability for it.
+    /// Read the ability the unit's request attached; a visitor's reaches no
+    /// federation root field, which states no posture its grant could answer to.
+    /// With none, a `#[public]` unit takes its actor's rules or the visitor's, as a
+    /// `#[public]` route does; any other is refused, for what its request ran.
     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        if crate::context::carried(cx).is_some() {
+        if let Some(ability) = crate::context::carried(cx) {
+            if ability.is_visitor() && states_no_posture(cx) {
+                return Err(
+                    Denial::unauthorized(UNAUTHENTICATED).with_reason(reason::ANONYMOUS_CALLER)
+                );
+            }
             return Ok(());
         }
         if cx.reflector().posture() == Posture::Public {
-            let visitor = self.visitor();
-            return attach(cx, visitor);
+            let built = self.actors(cx).unwrap_or_else(|| self.visitor());
+            return attach(cx, built);
         }
-        let refused = Denial::unauthorized(match cx.edge() {
-            Some(Edge::Graphql) => {
+        let identified = cx.ambient::<F::Actor>().is_some();
+        let refused = Denial::unauthorized(match (identified, cx.edge()) {
+            (true, _) => {
+                "no ambient ability — the caller authenticated, and no ability guard ran at its request"
+            }
+            (false, Some(Edge::Graphql)) => {
                 "no ambient ability — authentication did not run on the GraphQL operation"
             }
-            Some(Edge::Ws) => "no ambient ability — WS connection did not authenticate",
-            Some(Edge::Mcp) => "no ambient ability — the MCP operation did not authenticate",
-            _ => "no ambient ability — the unit's request did not authenticate",
+            (false, Some(Edge::Ws)) => "no ambient ability — WS connection did not authenticate",
+            (false, Some(Edge::Mcp)) => {
+                "no ambient ability — the MCP operation did not authenticate"
+            }
+            (false, _) => "no ambient ability — the unit's request did not authenticate",
         });
         Err(refused.with_reason(reason::NO_AMBIENT_ABILITY))
     }
@@ -370,6 +403,47 @@ mod tests {
         );
     }
 
+    /// The rules the guard's `check` attached on the unit `handler` declares.
+    async fn checked(handler: &'static Handler) -> Result<Arc<Ability>, Denial> {
+        let mut view = Message;
+        let mut cx = new_unit_context(handler, &mut view, None, None);
+        guard().check(&mut cx).await?;
+        Ok(crate::context::carried(&cx).expect("the guard attaches an ability"))
+    }
+
+    #[tokio::test]
+    async fn a_public_unit_with_an_actor_ahead_takes_the_actors_rules() {
+        let ability = with_ambient(Arc::new(Caller), checked(&PUBLIC_MESSAGE))
+            .await
+            .expect("a public unit admits its caller");
+        assert!(
+            !ability.is_visitor(),
+            "a caller a guard identified takes its own rules, as on a route",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_public_unit_with_no_actor_takes_the_visitors_rules() {
+        let ability = checked(&PUBLIC_MESSAGE)
+            .await
+            .expect("a public unit admits a visitor");
+        assert!(ability.is_visitor());
+    }
+
+    #[tokio::test]
+    async fn a_gated_unit_with_an_actor_and_no_ability_names_the_ability_guard() {
+        let Err(denial) = with_ambient(Arc::new(Caller), checked(&PING)).await else {
+            panic!("nothing attached an ability at its request");
+        };
+        assert_eq!(denial.http_status(), 401);
+        assert_eq!(denial.reason(), Some("no_ambient_ability"));
+        assert!(
+            denial.message().contains("ability guard"),
+            "authentication ran, so the sentence names what did not: {}",
+            denial.message(),
+        );
+    }
+
     struct Gateway;
 
     static PING: Handler = declare_handler(HandlerDeclaration {
@@ -385,6 +459,16 @@ mod tests {
     struct Message;
 
     impl UnitView for Message {}
+
+    static PUBLIC_MESSAGE: Handler = declare_handler(HandlerDeclaration {
+        unit: declare_unit("nest-rs-ws", "nest_rs::ws", Kind::Server, "ws.message"),
+        host: TypeId::of::<Gateway>(),
+        host_name: "Gateway",
+        method: "open",
+        address: "open",
+        posture: Posture::Public,
+        meta: MetaLevels::default,
+    });
 
     // A message whose upgrade attached no ability carries none: the
     // per-message guard must deny.

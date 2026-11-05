@@ -120,9 +120,10 @@ guard, filter or interceptor loop of its own.
    an authentication guard reads it and admits the visitor. No gateway opens
    beneath the pool: its upgrade is `Gated`, so the refusal says to move the guard
    onto the hosts it should cover. `AbilityGuard` reads
-   it on every edge: a `#[public]` unit no ability reached takes the visitor's
-   rules, as a `#[public]` route does, so a tool of an opened endpoint under the
-   pool serves, and a gated unit still fails closed.
+   it on every edge: a `#[public]` unit no ability reached takes its actor's rules,
+   or the visitor's where no guard identified one, as a `#[public]` route does, so a
+   tool of an opened endpoint under the pool serves, and a gated unit still fails
+   closed.
    The grammar is one `PostureRules` in `nest-rs-codegen` where it is the same
    grammar, for `#[authorize]` and `#[public(...)]` alike: `#[tools]` and
    `#[messages]` take it verbatim, and `bind = Service`

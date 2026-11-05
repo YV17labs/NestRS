@@ -65,7 +65,7 @@ resolver — carries across intact.
 | `onApplicationShutdown(signal)` | `#[on_application_shutdown]`; the signal is `cause()` on an injected `Arc<AppLifecycle>` (`StopCause::Terminate`, `Interrupt`, …) |
 | `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `<PREFIX>_<NS>__<KEY>` |
 | `ServeStaticModule.forRoot({ rootPath })` | `StaticFilesModule::for_root(StaticFilesConfig { root, .. })` — or `for_root(Embedded::of::<WebAssets>())` for a folder embedded in the binary |
-| `Test.createTestingModule(...)` | `TestApp` booting the real `AppModule` |
+| `Test.createTestingModule(...)` | `TestApp` booting the real `ApiModule` |
 | `NestFactory.createApplicationContext(...)`, then `app.close()` | `App::builder()…build()`, `init()`, then `close()` ([running without serving](/fundamentals/lifecycle/#running-without-serving)) |
 | `nest g resource users` | `nestrs g resource users` |
 | Runtime DI resolution | access graph checked at boot, with a named error |

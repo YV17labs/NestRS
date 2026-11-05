@@ -116,6 +116,9 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+`nestrs new` writes the same `main` with one more line, `let _otel =
+OpenTelemetry::init()?;`, the [telemetry](/opentelemetry/) a project starts with.
+
 ```bash frame="terminal"
 $ curl http://localhost:3000/
 A minimal blog API

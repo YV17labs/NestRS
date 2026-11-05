@@ -7,7 +7,6 @@ use features::testing::connection;
 use features::users::{ActiveModel as UserActive, UserRole};
 use nest_rs::authn::{AuthnConfig, JwtOptions, JwtService, hash_password};
 use nest_rs::oauth::server::{OAuthServerConfig, RegisteredClient};
-use nest_rs::social::{GithubSocialConfig, GoogleSocialConfig};
 use nest_rs::testing::{TestApp, TestResponse};
 use sea_orm::{ActiveModelTrait, Set};
 use uuid::Uuid;
@@ -33,18 +32,6 @@ pub(crate) async fn boot() -> TestApp {
     TestApp::builder()
         .module::<AuthModule>()
         .ephemeral_database::<migrations::Migrator>()
-        .provide(GithubSocialConfig {
-            client_id: "demo-github-client-id".into(),
-            client_secret: "demo-github-client-secret".into(),
-            redirect_url: "http://localhost:3001/social/github/callback".into(),
-            scopes: vec![],
-        })
-        .provide(GoogleSocialConfig {
-            client_id: "demo-google-client-id".into(),
-            client_secret: "demo-google-client-secret".into(),
-            redirect_url: "http://localhost:3001/social/google/callback".into(),
-            scopes: vec![],
-        })
         .provide(OAuthServerConfig {
             clients: vec![
                 RegisteredClient::new(

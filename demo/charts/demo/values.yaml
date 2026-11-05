@@ -36,7 +36,6 @@ scheme: https
 # prefix; the chart prepends `envPrefix`. Anything set here wins over the values
 # the chart derives from the app hostnames (see `templates/_helpers.tpl`).
 config:
-  OPENAPI__DESCRIPTION: Demo API built with nestrs
   STORAGE__URL: s3://nestrs
   STORAGE__REGION: us-east-1
   STORAGE__FORCE_PATH_STYLE: "true"

@@ -97,12 +97,19 @@ fn registered(client_id: &str, scopes: &[&str]) -> RegisteredClient<ClientPayloa
 }
 
 fn sign_in_app(clients: Vec<RegisteredClient<ClientPayload>>) -> TestAppBuilder {
+    sign_in_app_serving(vec![RESOURCE.into()], clients)
+}
+
+fn sign_in_app_serving(
+    resources: Vec<String>,
+    clients: Vec<RegisteredClient<ClientPayload>>,
+) -> TestAppBuilder {
     HeadlessApp::builder()
         .module::<SignInApp>()
         .provide(sea_orm::DatabaseConnection::default())
         .provide(SeaOrmConfig::default())
         .provide(SignInConfig {
-            resources: vec![RESOURCE.into()],
+            resources,
             default_org_id: ORG,
         })
         .provide(OAuthServerConfig { clients })
@@ -139,6 +146,25 @@ async fn a_client_registered_outside_the_policy_refuses_the_boot_naming_it() {
         assert!(refused.contains(&said), "{refused}");
         assert!(!refused.contains("s3cr3t-never-logged"), "{refused}");
     }
+}
+
+#[tokio::test]
+async fn a_sign_in_naming_no_resource_refuses_the_boot_with_its_code() {
+    let resources = var_name(SignInConfig::NAMESPACE, "RESOURCES");
+
+    let clients = vec![registered("ci-runner", &[POSTS_READ.as_str()])];
+    let Err(refused) = sign_in_app_serving(Vec::new(), clients)
+        .build_headless()
+        .await
+    else {
+        panic!("a sign-in no resource can be minted for boots");
+    };
+
+    let refused = format!("{refused:#}");
+    assert!(
+        refused.contains(&format!("resources ({resources}): at_least_one_resource")),
+        "{refused}"
+    );
 }
 
 #[tokio::test]

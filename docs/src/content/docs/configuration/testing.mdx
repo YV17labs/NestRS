@@ -204,7 +204,8 @@ mod tests {
     #[test]
     fn a_sign_in_naming_no_resource_fails_validation() {
         let errors = SignInConfig::default().validate().unwrap_err();
-        assert!(errors.field_errors().contains_key("resources"));
+        let fields = errors.field_errors();
+        assert_eq!(fields["resources"][0].code, "at_least_one_resource");
     }
     // …
 }

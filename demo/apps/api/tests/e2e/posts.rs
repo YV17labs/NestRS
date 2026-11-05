@@ -3,7 +3,7 @@ use std::time::Duration;
 use features::notifications::{Entity as Notifications, NotificationsQueueModule};
 use nest_rs::core::module;
 use nest_rs::http::{StatusCode, header};
-use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
+use nest_rs::queue::{OutboxRelay, QueueWorker};
 use nest_rs::redis::RedisQueueModule;
 use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::{HeadlessApp, wait_for};
@@ -151,7 +151,7 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
     assert_eq!(extensions.get("code").string(), "CONFLICT");
     assert_eq!(
         extensions.get("type").string(),
-        "https://nestrs.dev/problems/post-already-published",
+        "https://publish.example/problems/post-already-published",
     );
     assert_eq!(extensions.get("title").string(), "Post already published");
 
@@ -184,7 +184,6 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
     imports = [
         SeaOrmDatabaseModule,
         RedisQueueModule,
-        QueueModule,
         NotificationsQueueModule,
     ],
 )]

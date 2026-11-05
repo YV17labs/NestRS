@@ -161,13 +161,14 @@ pub struct SignInModule;
 `SignInConfig` is the product's own — the resources a sign-in may ask for and
 the org a first social sign-in joins — read from `<PREFIX>_SIGN_IN__*`, the
 feature's own word: a product stem never takes a family's (`oauth`), whose
-first level is the framework members'. Its overlay is derived; only its
-validation is written by hand:
+first level is the framework members'. Its overlay is derived, and its one rule is a
+`#[validate]` line:
 
 ```rust title="crates/features/src/sign_in/config.rs (from the demo, abridged)"
-#[config(namespace = "sign_in", validate = "manual")]
+#[config(namespace = "sign_in")]
 #[derive(Clone)]
 pub struct SignInConfig {
+    #[validate(length(min = 1, code = "at_least_one_resource"))]
     pub resources: Vec<String>,
     pub default_org_id: Uuid,
 }

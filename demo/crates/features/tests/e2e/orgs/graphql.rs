@@ -5,7 +5,7 @@ use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::TestApp;
 use serde_json::json;
 
-use features::authn::{AuthnModule, Role};
+use features::authn::Role;
 use features::orgs::OrgsGraphqlModule;
 use features::testing::{claims, connection, seed_org, user};
 
@@ -13,7 +13,6 @@ use features::testing::{claims, connection, seed_org, user};
     imports = [
         SeaOrmDatabaseModule,
         RedisQueueModule,
-        AuthnModule,
         OrgsGraphqlModule,
     ],
 )]

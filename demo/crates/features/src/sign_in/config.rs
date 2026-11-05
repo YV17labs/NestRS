@@ -1,8 +1,6 @@
 use nest_rs::config::config;
 use nest_rs::oauth::server::OAuthServerConfig;
-use nest_rs::pipes::validator::{
-    Validate, ValidationError, ValidationErrors, ValidationErrorsKind,
-};
+use nest_rs::pipes::validator::{ValidationError, ValidationErrors, ValidationErrorsKind};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -17,9 +15,10 @@ pub struct ClientPayload {
     pub roles: Vec<Role>,
 }
 
-#[config(namespace = "sign_in", validate = "manual")]
+#[config(namespace = "sign_in")]
 #[derive(Clone)]
 pub struct SignInConfig {
+    #[validate(length(min = 1, code = "at_least_one_resource"))]
     pub resources: Vec<String>,
     pub default_org_id: Uuid,
 }
@@ -29,20 +28,6 @@ impl Default for SignInConfig {
         Self {
             resources: Vec::new(),
             default_org_id: DEFAULT_ORG,
-        }
-    }
-}
-
-impl Validate for SignInConfig {
-    fn validate(&self) -> Result<(), ValidationErrors> {
-        let mut errors = ValidationErrors::new();
-        if self.resources.is_empty() {
-            errors.add("resources", ValidationError::new("at_least_one_resource"));
-        }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
         }
     }
 }
@@ -81,6 +66,7 @@ mod tests {
     use nest_rs::config::{Config, ConfigError, ConfigService, Namespaced, var_name};
     use nest_rs::guards::Scope;
     use nest_rs::oauth::server::RegisteredClient;
+    use nest_rs::pipes::validator::Validate;
 
     use super::*;
 
@@ -171,7 +157,8 @@ mod tests {
     #[test]
     fn a_sign_in_naming_no_resource_fails_validation() {
         let errors = SignInConfig::default().validate().unwrap_err();
-        assert!(errors.field_errors().contains_key("resources"));
+        let fields = errors.field_errors();
+        assert_eq!(fields["resources"][0].code, "at_least_one_resource");
     }
 
     #[test]

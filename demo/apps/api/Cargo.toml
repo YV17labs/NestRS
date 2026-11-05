@@ -2,6 +2,7 @@
 name = "api"
 version.workspace = true
 edition.workspace = true
+description = "Demo API built with nestrs"
 publish = false
 
 [dependencies]

@@ -15,7 +15,7 @@ use nest_rs::core::module;
 use nest_rs::database::{
     ExecutorScope, Settlement, TransactionPolicy, UnitOfWork, UnitSpec, run_unit,
 };
-use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
+use nest_rs::queue::{OutboxRelay, QueueWorker};
 use nest_rs::redis::RedisQueueModule;
 use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::HeadlessApp;
@@ -35,7 +35,6 @@ struct PublishingHarness;
     imports = [
         SeaOrmDatabaseModule,
         RedisQueueModule,
-        QueueModule,
         NotificationsQueueModule,
     ],
 )]

@@ -7,9 +7,8 @@ use nest_rs::testing::{TestApp, TestResponse};
 use serde_json::json;
 use uuid::Uuid;
 
-use features::authn::AuthnModule;
 use features::authn::{Claims, Role, Subject};
-use features::authz::{AuthzModule, constants};
+use features::authz::constants;
 use features::posts::{PostsHttpModule, publication};
 use features::testing::{claims, client, connection, seed_org, seed_user, user};
 use features::users::UserRole;
@@ -20,8 +19,6 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
         SeaOrmDatabaseModule,
         RedisQueueModule,
         HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
-        AuthnModule,
-        AuthzModule,
         PostsHttpModule,
     ],
 )]
@@ -278,7 +275,7 @@ async fn re_publishing_returns_rfc9457_problem_json() {
     assert_eq!(problem.get("title").string(), "Post already published");
     assert_eq!(
         problem.get("type").string(),
-        "https://nestrs.dev/problems/post-already-published"
+        "https://publish.example/problems/post-already-published"
     );
     assert!(
         problem.get("detail").string().contains("already published"),
@@ -389,7 +386,7 @@ async fn a_failing_audit_insert_rolls_back_the_status_update() {
     conflict.assert_status(StatusCode::CONFLICT);
     assert_eq!(
         conflict.json().await.value().object().get("type").string(),
-        "https://nestrs.dev/problems/post-already-published",
+        "https://publish.example/problems/post-already-published",
         "the publication the database refused reads as the one the service refuses",
     );
 

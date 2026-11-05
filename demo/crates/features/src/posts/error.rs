@@ -4,7 +4,7 @@ use nest_rs::seaorm::ServiceError;
 use uuid::Uuid;
 
 const ALREADY_PUBLISHED: Problem = Problem::new(409, code::CONFLICT).with_type(
-    "https://nestrs.dev/problems/post-already-published",
+    "https://publish.example/problems/post-already-published",
     "Post already published",
 );
 
@@ -48,7 +48,7 @@ mod tests {
         assert_eq!((problem.status(), problem.code()), (409, code::CONFLICT));
         assert_eq!(
             problem.type_uri(),
-            Some("https://nestrs.dev/problems/post-already-published")
+            Some("https://publish.example/problems/post-already-published")
         );
         assert_eq!(problem.title(), Some("Post already published"));
         assert_eq!(problem.detail(), Some(err.to_string().as_str()));

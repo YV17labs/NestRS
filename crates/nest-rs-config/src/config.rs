@@ -36,7 +36,7 @@ pub trait Namespaced {
 /// registry. It refuses first a namespace another type declares too
 /// ([`ConfigError::SharedNamespace`](crate::ConfigError)) and one a crate
 /// retired whose loss would weaken a policy
-/// ([`ConfigError::Retired`](crate::ConfigError::Retired)), and runs the
+/// ([`crate::ConfigError::Retired`]), and runs the
 /// unclaimed-variable report ([`crate::unclaimed`]) before a read error can end
 /// the boot.
 pub fn read<C: Config>(env: &ConfigService, base: C) -> Result<C> {

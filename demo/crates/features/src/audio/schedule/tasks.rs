@@ -18,7 +18,7 @@ pub struct AudioTasks {
 impl AudioTasks {
     #[every("5s", replicas = "one")]
     async fn enqueue_transcode(&self) -> Result<()> {
-        if !self.config.synthetic_seed.is_open() {
+        if !self.config.seeds() {
             return Ok(());
         }
         self.svc.seed_and_enqueue().await?;

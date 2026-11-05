@@ -257,7 +257,8 @@ arbitrates between variables or tiers.
   would rewrite the file), never by the cargo build profile, so a pin over
   `..Default::default()` closes nothing it does not name and opens nothing in
   any deployed or undeclared profile, where an opening is a written
-  `Surface::Open` or a set variable; and a profile read in the overlay would
+  `Surface::Open` or a set variable, honoured and said at `warn` where it takes
+  effect (`Surface::opened_in_deployment`); and a profile read in the overlay would
   rewrite a pin, so a written value is never touched. **An address or a
   credential is never a default**, in any profile: the deployment names it, or
   the profile's `.env` file — the scaffold's for its `compose.yml`, the demo's

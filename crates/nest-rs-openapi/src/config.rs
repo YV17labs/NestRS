@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use nest_rs_config::{ConfigError, ConfigService, Environment, Field, Result, Surface, config};
+use nest_rs_config::{ConfigError, ConfigService, Field, Result, Surface, config};
 use nest_rs_core::AppIdentity;
 
 use crate::contact::OpenApiContact;
@@ -53,8 +53,9 @@ pub struct OpenApiConfig {
     /// leaves it to the profile: written under a declared development profile
     /// alone, since under test parallel suites would rewrite a committed file.
     /// With [`enabled`](Self::enabled) closed no document is built, so nothing
-    /// is written and the boot says so at `warn`; a write failure is logged,
-    /// never fatal.
+    /// is written and the boot says so at `warn`; writing it outside a
+    /// development profile, [`Surface::Open`] or `true` from the environment, is
+    /// honoured and logged at `warn`; a write failure is logged, never fatal.
     pub emit: Surface,
     /// Where [`emit`](Self::emit) writes the JSON document. Default
     /// `openapi.json`; a relative path is the app crate's — the one
@@ -62,6 +63,9 @@ pub struct OpenApiConfig {
     /// own.
     pub emit_path: PathBuf,
 }
+
+/// What the boot says when a deployment writes the committed document.
+const EMIT_OPEN: &str = "OpenAPI document is written to disk outside a dev profile";
 
 /// `info.title` and `info.version` in a process no `#[nest_rs::main]` named.
 const UNNAMED_TITLE: &str = "nestrs API";
@@ -96,14 +100,23 @@ impl OpenApiConfig {
     }
 
     /// One `warn` when the documentation is served outside a development or
-    /// test profile: honoured, since the deployment chose it, and said.
+    /// test profile, and one when the document is written there: honoured, since
+    /// the deployment chose it, and said. With the documentation closed nothing
+    /// is written, which the boot says on its own.
     pub(crate) fn warn_when_open(&self) {
-        let environment = Environment::from_env();
-        if environment.is_deployed() && self.enabled.is_open() {
+        let Some(environment) = self.enabled.opened_in_deployment() else {
+            return;
+        };
+        tracing::warn!(
+            target: crate::TARGET,
+            environment = environment.as_str(),
+            "OpenAPI documentation endpoints are enabled and public outside a dev profile",
+        );
+        if self.emit.is_open() {
             tracing::warn!(
                 target: crate::TARGET,
                 environment = environment.as_str(),
-                "OpenAPI documentation endpoints are enabled and public outside a dev profile",
+                "{EMIT_OPEN}",
             );
         }
     }
@@ -371,6 +384,48 @@ mod tests {
                 jail.set_env(nest_rs_config::Environment::var_name(), profile);
                 assert_eq!(OpenApiConfig::default().emit.writes(), emits, "{profile:?}");
             }
+            Ok(())
+        });
+    }
+
+    /// A deployment writing the committed document is honoured, and says so:
+    /// with the documentation closed nothing is written, and another line says that.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn an_emit_opened_outside_a_dev_profile_is_reported() {
+        figment::Jail::expect_with(|jail| {
+            for (profile, enabled, said) in [
+                ("production", Surface::Open, true),
+                ("staging", Surface::Open, true),
+                ("", Surface::Open, true),
+                ("production", Surface::Closed, false),
+                ("development", Surface::Open, false),
+                ("test", Surface::Open, false),
+            ] {
+                jail.set_env(nest_rs_config::Environment::var_name(), profile);
+                let logs = nest_rs_testing::LogCapture::install();
+                OpenApiConfig {
+                    enabled,
+                    emit: Surface::Open,
+                    ..OpenApiConfig::default()
+                }
+                .warn_when_open();
+                let line = logs.find(crate::TARGET, EMIT_OPEN);
+                assert_eq!(line.len(), usize::from(said), "{profile:?} {enabled:?}");
+                if said {
+                    assert_eq!(line[0].level, "warn");
+                }
+            }
+            jail.set_env(nest_rs_config::Environment::var_name(), "production");
+            let logs = nest_rs_testing::LogCapture::install();
+            OpenApiConfig::default().warn_when_open();
+            assert!(
+                logs.find(crate::TARGET, EMIT_OPEN).is_empty(),
+                "the default writes nothing in a deployment"
+            );
             Ok(())
         });
     }

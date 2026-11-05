@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use nest_rs_config::__private::RetiredKey;
-use nest_rs_config::{Bound, CountBounds, DurationBounds, Environment, Floor, Surface, config};
+use nest_rs_config::{Bound, CountBounds, DurationBounds, Floor, Surface, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
@@ -119,6 +119,9 @@ nest_rs_core::inventory::submit! {
     ])
 }
 
+/// What the boot says when a deployment writes the committed SDL.
+const EMIT_OPEN: &str = "GraphQL schema is written to disk outside a dev profile";
+
 /// GraphQL endpoint options, settable via `<PREFIX>_GRAPHQL__*` or pinned through
 /// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root).
 ///
@@ -145,8 +148,9 @@ pub struct GraphqlConfig {
     /// (Re)write [`emit_path`](Self::emit_path) with the schema's SDL once at
     /// boot — the committed copy a pull request diffs. `Default` leaves it to
     /// the profile: written under a declared development profile alone, since
-    /// under test parallel suites would rewrite a committed file. A write
-    /// failure is logged, never fatal.
+    /// under test parallel suites would rewrite a committed file. Writing it
+    /// outside one, [`Surface::Open`] or `true` from the environment, is honoured
+    /// and logged at `warn`. A write failure is logged, never fatal.
     pub emit: Surface,
     /// Where [`emit`](Self::emit) writes the SDL. Default `schema.graphql`; a
     /// relative path is the app crate's — the one `#[nest_rs::main]` expanded
@@ -269,18 +273,15 @@ impl Default for GraphqlConfig {
 }
 
 impl GraphqlConfig {
-    /// One `warn` per public surface open outside a development or test
-    /// profile: honoured, since the deployment chose it, and said.
+    /// One `warn` per surface open outside a development or test profile:
+    /// honoured, since the deployment chose it, and said.
     pub(crate) fn warn_when_open(&self) {
-        let environment = Environment::from_env();
-        if !environment.is_deployed() {
-            return;
-        }
         for (surface, said) in [
             (self.playground, PLAYGROUND_OPEN),
             (self.introspection, INTROSPECTION_OPEN),
+            (self.emit, EMIT_OPEN),
         ] {
-            if surface.is_open() {
+            if let Some(environment) = surface.opened_in_deployment() {
                 tracing::warn!(
                     target: crate::TARGET,
                     environment = environment.as_str(),
@@ -403,6 +404,38 @@ mod tests {
             assert_eq!(event.level, "warn");
             assert_eq!(event.field("environment").as_deref(), Some("production"));
         }
+    }
+
+    /// A deployment writing the committed SDL is honoured, and says so.
+    #[test]
+    fn an_emit_opened_outside_a_dev_profile_is_reported() {
+        for (profile, said) in [
+            ("production", true),
+            ("staging", true),
+            ("", true),
+            ("development", false),
+            ("test", false),
+        ] {
+            let logs = nest_rs_testing::LogCapture::install();
+            in_profile(profile, || {
+                GraphqlConfig {
+                    emit: Surface::Open,
+                    ..GraphqlConfig::default()
+                }
+                .warn_when_open();
+            });
+            let line = logs.find(crate::TARGET, EMIT_OPEN);
+            assert_eq!(line.len(), usize::from(said), "{profile:?}");
+            if said {
+                assert_eq!(line[0].level, "warn");
+            }
+        }
+        let logs = nest_rs_testing::LogCapture::install();
+        in_profile("production", || GraphqlConfig::default().warn_when_open());
+        assert!(
+            logs.find(crate::TARGET, EMIT_OPEN).is_empty(),
+            "the default writes nothing in a deployment"
+        );
     }
 
     #[test]

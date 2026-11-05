@@ -246,3 +246,11 @@ Refused:
   it writes takes the same name, so the derive cannot tell what to bind; storage binds
   its own beside its budgets, as it did for those, and the OAuth server its one.
 
+### A deployment's opening is said at `warn`
+
+B-180 left a public surface the one opening with a line: a deployment's `ALLOW_HTTP`, an
+open emit and a seed were honoured in silence. By the security value ("an opening is an
+explicit, visible line"), each now files its `warn` where the value takes effect, and a
+fourth consumer asking the same two questions made the helper worth its name:
+`Surface::opened_in_deployment`, the deployed profile it is open in. Production keeps
+honouring them: this adds the line and refuses nothing.

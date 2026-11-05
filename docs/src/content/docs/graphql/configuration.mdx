@@ -67,7 +67,7 @@ pub struct GraphqlConfig {
 |---|---|---|---|
 | `path` | `<PREFIX>_GRAPHQL__PATH` | `/graphql` | Mount point for both `POST` (operations) and `GET` (playground, when enabled). One literal path: template syntax (`{` `}`) or what the router reads as a parameter (`:` `*` `<`) fails the boot. |
 | `playground` | `<PREFIX>_GRAPHQL__PLAYGROUND` | `Surface::ByProfile`: open in development and test | When open, `GET <path>` serves the GraphQL Playground page, which loads its scripts, styles and fonts from third-party hosts ([The playground](#the-playground)). |
-| `emit` | `<PREFIX>_GRAPHQL__EMIT` | `Surface::ByProfile`: open in development | When open, the running app writes its live SDL to `emit_path` once at boot. |
+| `emit` | `<PREFIX>_GRAPHQL__EMIT` | `Surface::ByProfile`: open in development | When open, the running app writes its live SDL to `emit_path` once at boot, said at `warn` outside a development or test profile. |
 | `emit_path` | `<PREFIX>_GRAPHQL__EMIT_PATH` | `schema.graphql` | Where the SDL gets written; a relative path is the app crate's ([SDL emission](#sdl-emission)). |
 | `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` | `15` | Bound on AST nesting depth, from `1` to `33`, where async-graphql's own recursion bound takes over; `None` disables, as `0` does from the environment. See [Query limits](/graphql/query-limits/). |
 | `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` | `2000` | Bound on query complexity score, from `1` to `10000000`; `None` disables, as `0` does from the environment. See [Query limits](/graphql/query-limits/). |

@@ -24,6 +24,10 @@ nest_rs_core::inventory::submit! {
     ])
 }
 
+/// What the boot says when a deployment reaches its store over plain HTTP.
+pub(crate) const PLAINTEXT_OPEN: &str = "the object store is reached over plain HTTP outside a \
+     dev profile: its credentials and presigned URLs travel unencrypted";
+
 /// The object store's configuration, read from the framework-namespaced
 /// `<PREFIX>_STORAGE__*` keys: [`url`](Self::url) names the store, and its
 /// scheme picks the backend — `s3` or `memory`.
@@ -58,7 +62,9 @@ pub struct StorageConfig {
     pub secret_key: Secret<String>,
     /// S3 only: allow reaching the endpoint over plain `http://`
     /// (`<PREFIX>_STORAGE__ALLOW_HTTP`). `Default` leaves it to the profile:
-    /// allowed under a declared development or test profile alone.
+    /// allowed under a declared development or test profile alone. Opening it
+    /// outside one, [`Surface::Open`] or `true` from the environment, is honoured
+    /// and logged at `warn` where the store opens.
     pub allow_http: Surface,
     /// The most a call waits for the store's answer, every retry included,
     /// and the boot for its proof; a download's body is held by
@@ -165,6 +171,23 @@ impl Config for StorageConfig {
 }
 
 impl StorageConfig {
+    /// One `warn` when a deployment reaches its store over plain HTTP: honoured,
+    /// since the deployment chose it, and said, since its credentials and presigned
+    /// URLs then cross the network in clear.
+    pub(crate) fn warn_when_open(&self) {
+        let Some(endpoint) = self.endpoint.as_deref().filter(|url| is_plaintext(url)) else {
+            return;
+        };
+        if let Some(environment) = self.allow_http.opened_in_deployment() {
+            tracing::warn!(
+                target: crate::TARGET,
+                environment = environment.as_str(),
+                endpoint = %endpoint_shown(endpoint),
+                "{PLAINTEXT_OPEN}",
+            );
+        }
+    }
+
     /// [`url`](Self::url)'s key and path.
     pub const URL: Field = Field::new("URL", "StorageConfig::url");
     /// [`endpoint`](Self::endpoint)'s key and path.
@@ -757,6 +780,60 @@ mod tests {
             .expect("a blank endpoint is AWS's own"),
             None
         );
+    }
+
+    /// A deployment opting into plain HTTP is honoured, and says so where its
+    /// endpoint is plaintext; `https` needs no opening, and a development
+    /// profile's is no incident.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_deployment_reaching_its_store_over_plain_http_says_so() {
+        let config = |endpoint: &str, allow_http| StorageConfig {
+            endpoint: Some(endpoint.to_owned()),
+            allow_http,
+            ..StorageConfig::default()
+        };
+        figment::Jail::expect_with(|jail| {
+            for (profile, endpoint, allow_http, said) in [
+                ("production", "http://store:9000", Surface::Open, true),
+                ("staging", "http://store:9000", Surface::Open, true),
+                ("", "http://store:9000", Surface::Open, true),
+                ("development", "http://store:9000", Surface::Open, false),
+                ("test", "http://store:9000", Surface::Open, false),
+                ("production", "https://store:9000", Surface::Open, false),
+                ("production", "http://store:9000", Surface::Closed, false),
+                ("production", "http://store:9000", Surface::ByProfile, false),
+            ] {
+                jail.set_env(nest_rs_config::Environment::var_name(), profile);
+                let logs = nest_rs_testing::LogCapture::install();
+                config(endpoint, allow_http).warn_when_open();
+                let line = logs.find(crate::TARGET, PLAINTEXT_OPEN);
+                assert_eq!(
+                    line.len(),
+                    usize::from(said),
+                    "{profile:?} {endpoint} {allow_http:?}"
+                );
+                if said {
+                    assert_eq!(line[0].level, "warn");
+                    assert_eq!(
+                        line[0].field("environment").as_deref(),
+                        Some(if profile.is_empty() {
+                            "production"
+                        } else {
+                            profile
+                        })
+                    );
+                    assert_eq!(
+                        line[0].field("endpoint").as_deref(),
+                        Some("http://store:9000/")
+                    );
+                }
+            }
+            Ok(())
+        });
     }
 
     #[test]

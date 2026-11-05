@@ -231,10 +231,16 @@ use nest_rs::config::{Surface, config};
 pub struct AudioConfig {
     pub synthetic_seed: Surface,
 }
+
+impl AudioConfig {
+    pub fn seeds(&self) -> bool {
+        self.synthetic_seed.is_open()
+    }
+}
 ```
 
 ```rust title="crates/features/src/audio/schedule/tasks.rs — the check"
-if !self.config.synthetic_seed.is_open() {
+if !self.config.seeds() {
     return Ok(());
 }
 ```
@@ -248,8 +254,30 @@ if !self.config.synthetic_seed.is_open() {
 
 `writes()` is an emit's reader: under `test`, parallel suites would rewrite a
 committed file. The framework's storage, OpenAPI, GraphQL and Server-Timing
-configs use the same type, and each says at `warn` when a deployment opens a
-public surface.
+configs use the same type, and each says at `warn`, where the value takes effect,
+when a deployment opens one: plain HTTP to a store, a public surface, an emit.
+`opened_in_deployment()` is the question they ask, the deployed profile it is open
+in, so a seed of your own says itself the same way, in the check its tick makes,
+once however often the tick asks:
+
+```rust title="crates/features/src/audio/config.rs — the check, with its line"
+static SEED_OPEN_SAID: Once = Once::new();
+
+impl AudioConfig {
+    pub fn seeds(&self) -> bool {
+        if let Some(environment) = self.synthetic_seed.opened_in_deployment() {
+            SEED_OPEN_SAID.call_once(|| {
+                tracing::warn!(
+                    target: TARGET,
+                    environment = environment.as_str(),
+                    "{SEED_OPEN}",
+                );
+            });
+        }
+        self.synthetic_seed.is_open()
+    }
+}
+```
 
 The profile is read where the value is used, never in the overlay: the overlay
 also runs over a value pinned in code, and a profile rule there would silently

@@ -16,7 +16,7 @@ pub mod queue;
 pub mod schedule;
 
 pub use command::{AUDIO_QUEUE, AudioQueue, TranscodeCommand};
-pub use config::AudioConfig;
+pub use config::{AudioConfig, SEED_OPEN};
 pub use dtos::{
     DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeProgressDto,
 };

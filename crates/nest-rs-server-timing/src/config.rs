@@ -2,7 +2,7 @@
 //! `<PREFIX>_SERVER_TIMING__*` or pinned through
 //! [`ServerTimingModule::for_root`](crate::ServerTimingModule::for_root).
 
-use nest_rs_config::{Environment, Surface, config};
+use nest_rs_config::{Surface, config};
 
 /// Whether responses carry `Server-Timing`, settable via
 /// `<PREFIX>_SERVER_TIMING__ENABLED` or pinned through
@@ -24,8 +24,7 @@ impl ServerTimingConfig {
     /// honoured, since the deployment chose it, and said, since every client
     /// then reads the backends' timings.
     pub(crate) fn warn_when_open(&self) {
-        let environment = Environment::from_env();
-        if environment.is_deployed() && self.enabled.is_open() {
+        if let Some(environment) = self.enabled.opened_in_deployment() {
             tracing::warn!(
                 target: crate::TARGET,
                 environment = environment.as_str(),
@@ -50,7 +49,7 @@ mod tests {
     fn in_profile<T>(profile: &str, read: impl FnOnce() -> T) -> T {
         let mut out = None;
         figment::Jail::expect_with(|jail| {
-            jail.set_env(Environment::var_name(), profile);
+            jail.set_env(nest_rs_config::Environment::var_name(), profile);
             out = Some(read());
             Ok(())
         });

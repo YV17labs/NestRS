@@ -80,6 +80,7 @@ impl Store {
             "opening the object store",
         );
         if let Some(probe) = &store.probe {
+            config.warn_when_open();
             proved(probe, config.operation_timeout, &store.shown).await?;
         }
         Ok(store)
@@ -658,6 +659,38 @@ mod tests {
             "{chain}"
         );
         assert_eq!(heard.lines().len(), 1, "never retried");
+    }
+
+    /// Opening the store is where a deployment's plain HTTP takes effect, so the
+    /// line is filed there, whether or not the store then answers.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn opening_a_store_says_a_deployments_plain_http() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::Environment::var_name(), "production");
+            let logs = nest_rs_testing::LogCapture::install();
+            let config = StorageConfig {
+                url: "s3://bucket".to_owned(),
+                endpoint: Some("http://127.0.0.1:9".to_owned()),
+                allow_http: nest_rs_config::Surface::Open,
+                access_key: "key".into(),
+                secret_key: "secret".into(),
+                operation_timeout: Duration::from_millis(50),
+                ..StorageConfig::default()
+            };
+            let answered = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime")
+                .block_on(Store::open(&config));
+            assert!(answered.is_err(), "nothing listens there");
+            let line = logs.expect_one(crate::TARGET, crate::config::PLAINTEXT_OPEN);
+            assert_eq!(line.level, "warn");
+            Ok(())
+        });
     }
 
     #[tokio::test]

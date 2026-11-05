@@ -319,7 +319,8 @@ profile — refuses a plain-`http://` endpoint **at boot**, naming
 `<PREFIX>_STORAGE__ENDPOINT`. It covers presigned URLs too: signing is a local
 computation, so a plaintext endpoint would otherwise hand clients a working URL
 carrying the SigV4 signature. Point it at an `https://` endpoint, or set
-`<PREFIX>_STORAGE__ALLOW_HTTP=true` to opt in deliberately.
+`<PREFIX>_STORAGE__ALLOW_HTTP=true` to opt in deliberately, which a deployment's
+boot says at `warn` once it opens the store, naming the endpoint.
 </Aside>
 
 ## Limits

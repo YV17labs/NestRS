@@ -59,6 +59,23 @@ impl Surface {
         self.resolved(|profile| profile == Environment::Development)
     }
 
+    /// The deployed profile it is open in, if any: the one case a consumer says
+    /// at `warn` where the opening takes effect, an opening the deployment wrote,
+    /// honoured and visible. Under a development or test profile it is the
+    /// surface doing its job, and in a deployment left [`ByProfile`](Self::ByProfile)
+    /// it is closed.
+    ///
+    /// ```
+    /// use nest_rs_config::Surface;
+    ///
+    /// assert_eq!(Surface::Closed.opened_in_deployment(), None);
+    /// assert_eq!(Surface::ByProfile.opened_in_deployment(), None);
+    /// ```
+    pub fn opened_in_deployment(self) -> Option<Environment> {
+        let environment = Environment::from_env();
+        (environment.is_deployed() && self.is_open()).then_some(environment)
+    }
+
     /// A written opening or closing, or what `by_profile` makes of the profile.
     fn resolved(self, by_profile: fn(Environment) -> bool) -> bool {
         match self {
@@ -147,6 +164,31 @@ mod tests {
     fn read(vars: &[(&'static str, &'static str)], base: Surface) -> crate::Result<Surface> {
         let env = ConfigService::with_vars(NAMESPACE, vars.iter().copied());
         Surface::overlay(&env, "OPEN", base)
+    }
+
+    /// What a consumer says at `warn`: open, in a process that is deployed. The
+    /// default is never that, and a development profile's opening is no incident.
+    #[test]
+    fn an_opening_outside_a_development_profile_is_what_a_consumer_says() {
+        figment::Jail::expect_with(|jail| {
+            for (profile, surface, opened) in [
+                ("production", Surface::Open, Some(Environment::Production)),
+                ("staging", Surface::Open, Some(Environment::Staging)),
+                ("", Surface::Open, Some(Environment::Production)),
+                ("production", Surface::ByProfile, None),
+                ("production", Surface::Closed, None),
+                ("development", Surface::Open, None),
+                ("test", Surface::Open, None),
+            ] {
+                jail.set_env(Environment::var_name(), profile);
+                assert_eq!(
+                    surface.opened_in_deployment(),
+                    opened,
+                    "{surface:?} under {profile:?}"
+                );
+            }
+            Ok(())
+        });
     }
 
     #[test]

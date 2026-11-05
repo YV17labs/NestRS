@@ -200,13 +200,18 @@ fits on one line (`CLAUDE.md`, *Families*). A value refusal opens with its site
 shows without the source frame. No value is handed to `syn`'s own sentence or to
 `format_ident!`, which names neither the decorator nor the key, or panics.
 
-**A misuse rustc reports is one sentence, naming no expansion item.** A trait
-an expansion bounds on carries `#[diagnostic::on_unimplemented]` whose message
-and note say the whole fix; a `__private` impl rustc would list as a
+**A misuse rustc reports leads with one framework sentence, naming no expansion
+item.** A trait an expansion bounds on carries `#[diagnostic::on_unimplemented]`
+whose message and note say the whole fix; a `__private` impl rustc would list as a
 candidate, or a blanket that leads it to the wrong trait, is
-`#[diagnostic::do_not_recommend]`; and a bound one use site checks is not
+`#[diagnostic::do_not_recommend]`, unless the candidates are the fix (`ForRootValue`'s
+impls, the values a `for_root` takes); and a bound one use site checks is not
 re-checked by every probe — what a decorator generates carries no probe its
-type cannot answer. Held by the hygiene snapshots, read when they move. One
+type cannot answer. rustc's own lines stay around that sentence, since no
+`#[diagnostic]` attribute hides `required by a bound in` or `the trait … is not
+implemented`, and a bound an expansion holds at several sites repeats it, one error
+each (`crud_op_the_service_does_not_offer.stderr`). Held by the hygiene snapshots,
+read when they move. One
 exception, by the first value: an impl only coherence can refuse (a `Model`'s
 wire traits, `.claude/decisions/mask-provenance.md`) reports rustc's own `E0119`,
 whose note names the bound, so that bound's name says the reason.

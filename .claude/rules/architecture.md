@@ -139,7 +139,8 @@ pinned is the bare import. **A module owning no config gets no `for_root`**
 (`SocialModule` discovers providers that carry their own).
 
 **A `#[config]`'s keys are its fields' names**, the overlay derived from the
-struct (`from_env = "manual"` only where fields depend on each other); a
+struct (`from_env = "manual"` only where fields depend on each other, or on a
+generic config, whose bounds the derive does not write); a
 vocabulary of several variables extends its field's key with `_` and each
 member's name (`CORS_EXPOSED_HEADERS` for `cors.exposed_headers`,
 `TLS_RELOAD_SECS` for `HttpTls`'s `reload` under `tls`), never `__`, the

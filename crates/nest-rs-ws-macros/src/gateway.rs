@@ -87,10 +87,8 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         Some(path) => quote! { #path },
         None => quote! { ::nest_rs_ws::Global },
     };
-    // Declared to the access graph so a missing `WsModule` fails boot by name
-    // rather than panicking at mount.
+    // No field injects the registry: declaring it here builds the gateway after it.
     let registry_key = quote! { ::core::any::TypeId::of::<::nest_rs_ws::WsServer<#ns_ty>>() };
-    // What a missing import prints; the docs quote the bare `WsServer` verbatim.
     let registry_label: &str = &match &namespace {
         Some(path) => format!(
             "WsServer<{}>",

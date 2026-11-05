@@ -350,7 +350,7 @@ fn crate_of(path: &str) -> &str {
 }
 
 /// The reachable providers **in declaration order** — modules depth-first from
-/// the root along `imports = [...]`, each module's `providers = [...]` left to
+/// the root along what each imports, each module's `providers = [...]` left to
 /// right — for the event bus's listener order, which link order cannot give.
 pub struct ProviderOrder(HashMap<TypeId, usize>);
 
@@ -777,7 +777,7 @@ fn provided_keys(provider: &ProviderDescriptor) -> impl Iterator<Item = TypeId> 
 }
 
 /// The shortest import path from `from` to `to`, both included, along
-/// `imports = [...]`.
+/// [`imported_by`].
 fn import_path(
     from: TypeId,
     to: TypeId,
@@ -809,14 +809,14 @@ fn import_path(
     None
 }
 
-/// BFS over `imports` from `roots`, returning every module `TypeId` reached
-/// (roots included). A `TypeId` without a descriptor terminates its branch.
+/// Every module `TypeId` `roots` reach through [`imported_by`] (roots included).
+/// A `TypeId` without a descriptor terminates its branch.
 fn reachable(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescriptor>) -> HashSet<TypeId> {
     reachable_in_order(roots, by_id).into_iter().collect()
 }
 
-/// The same walk, **in source order**: roots first, then each module's
-/// `imports = [...]` left to right, depth-first, first occurrence winning.
+/// The same walk, **in source order**: roots first, then what each module
+/// imports in [`imported_by`]'s order, depth-first, first occurrence winning.
 fn reachable_in_order(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescriptor>) -> Vec<TypeId> {
     let mut seen = HashSet::new();
     let mut order = Vec::new();
@@ -845,7 +845,7 @@ pub(crate) fn reachable_provider_ids(
 }
 
 /// Every reachable provider in **declaration order**: modules depth-first from
-/// the roots along their `imports = [...]`, and within each module its
+/// the roots along what each imports, and within each module its
 /// `providers = [...]` left to right; first occurrence wins. A `Foo as dyn
 /// Trait` binding is ranked under both keys it holds, the trait object first.
 /// What a provider registers on its module's behalf follows them all — a layer
@@ -942,7 +942,7 @@ pub(crate) fn dependency_order(
 }
 
 /// The modules `roots` reach, each after every module it imports: imports in
-/// their declared order, depth-first, first occurrence winning.
+/// [`imported_by`]'s order, depth-first, first occurrence winning.
 fn modules_imports_first(
     roots: &[TypeId],
     by_id: &HashMap<TypeId, &ModuleDescriptor>,

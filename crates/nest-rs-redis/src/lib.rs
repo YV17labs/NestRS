@@ -13,8 +13,8 @@
 //! - **queue** — `RedisQueueModule` binds the queue port over it, on Redis
 //!   Streams: the port's `Jobs` a feature injects to
 //!   `.push(AudioQueue, job).await?`, and the consumer the port's
-//!   `QueueWorker` runs every `#[process]` method through in an app that also
-//!   imports `QueueModule`.
+//!   `QueueWorker` runs every `#[process]` method through in an app reaching
+//!   one, whose host brings `QueueModule`.
 //! - **throttler** — `RedisThrottlerModule` binds the cross-process
 //!   `dyn ThrottlerStore` the `nest-rs-throttler` guard injects.
 //! - **schedule** — `RedisScheduleModule` binds the `dyn OccurrenceLock` a

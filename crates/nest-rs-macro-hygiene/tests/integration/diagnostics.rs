@@ -44,8 +44,6 @@ fn every_decorator_refuses_in_the_words_pinned() {
     t.compile_fail("tests/integration/diagnostics/oauth/resource/*.rs");
     t.compile_fail("tests/integration/diagnostics/queue/*.rs");
     t.compile_fail("tests/integration/diagnostics/schedule/*.rs");
-    // `#[expose(…, graphql)]` without the `graphql` feature is not pinned: every
-    // build that runs this glob has the feature on.
     t.compile_fail("tests/integration/diagnostics/seaorm/*.rs");
     t.compile_fail("tests/integration/diagnostics/static_files/*.rs");
     t.compile_fail("tests/integration/diagnostics/ws/*.rs");
@@ -64,6 +62,21 @@ fn every_decorator_refuses_in_the_words_pinned() {
 fn an_attribute_names_the_feature_its_expansion_needs() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/integration/diagnostics/graphql/alone/*.rs");
+}
+
+/// What a decorator's key says when it needs a feature the build lacks: run by
+/// `just test` as `--no-default-features --features seaorm`.
+#[cfg(all(
+    feature = "seaorm",
+    not(feature = "graphql"),
+    not(feature = "http"),
+    not(feature = "ws"),
+    not(feature = "mcp"),
+))]
+#[test]
+fn an_exposed_entity_names_the_feature_its_graphql_key_needs() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/integration/diagnostics/seaorm/alone/*.rs");
 }
 
 /// What a kernel decorator's key says when its expansion needs a feature the build

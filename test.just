@@ -35,6 +35,10 @@ unasked := if postgres == "mutual-tls" { "none()" } else { "binary_id(nest-rs-se
 # union cannot reach.
 graphql_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --features graphql --test integration --no-fail-fast"
 
+# What `#[expose(..., graphql)]` says in a build with `seaorm` and no `graphql`,
+# the front door's own shape, which the union cannot reach either.
+seaorm_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --features seaorm --test integration --no-fail-fast"
+
 # What a kernel decorator's key says in a build lacking the capability it reaches:
 # `#[wire_enum(graphql)]` on no feature at all, which the union cannot reach either.
 kernel_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --test integration --no-fail-fast"
@@ -50,6 +54,7 @@ all: && doc
     export NESTRS_REDIS__URL='{{shared_redis_url}}'
     {{nextest}} -E 'not ({{elsewhere}}) and not ({{alone}}) and not ({{unasked}})'
     {{graphql_alone}}
+    {{seaorm_alone}}
     {{kernel_alone}}
     {{console_alone}} --lib --test integration
     # A failover moves the primaries every other test runs on, and a node
@@ -67,6 +72,7 @@ unit:
 integration:
     {{nextest}} -E 'kind(test) and not binary(e2e)'
     {{graphql_alone}}
+    {{seaorm_alone}}
     {{kernel_alone}}
     {{console_alone}} --test integration
 

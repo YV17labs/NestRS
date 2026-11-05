@@ -163,7 +163,7 @@ pub mod __private {
     pub use crate::provider_site::{ProviderSite, host_layers_entry, site_const, site_ref};
     pub use crate::queue_name::{invalid_queue_name, is_valid_queue_name};
     pub use crate::replicas::{REPLICAS, Replicas, replicas_value};
-    pub use crate::root::{CHECKED_BY_CRUD, reroot_as, reroot_impl_half};
+    pub use crate::root::{CHECKED_BY_CRUD, refused_without, reroot_as, reroot_impl_half};
     pub use crate::route_path::RoutePath;
     pub use crate::specs::{
         exception_filter_specs, force_guard_typeids, interceptor_specs, scoped_specs,

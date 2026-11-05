@@ -1394,7 +1394,7 @@ lists what the boot, a log or the wire shows when one is missed.
   root, an `McpIdentity` setter, of `wire_enum` from `nest_rs::resource`, or of an item
   through a module `nest_rs::core` or `nest_rs::social` no longer opens** fails to compile
   (`E0432`, `E0599`): steps 5 and 12 list each with what replaces it. `#[wire_enum(graphql)]`
-  without the `graphql` feature fails naming the feature to add.
+  or `#[expose(..., graphql)]` without the `graphql` feature fails naming the feature to add.
 - **An `McpIdentity` stating a name with no version behind it, or a version, a title, a
   description, a website or icons with no name behind them**, refuses the boot in a process no
   `#[nest_rs::main]` started, naming the literal to write; the binary fills both anywhere else.

@@ -18,8 +18,8 @@ mod relations;
 mod wire;
 
 /// Emits a wire DTO (`Serialize` + `JsonSchema`) and `Create/Update` input
-/// types; add the `graphql` flag (and enable the `graphql` feature on
-/// `nest-rs-seaorm`) for GraphQL types and auto-resolved relations. Add
+/// types; add the `graphql` flag (and enable the `graphql` feature on the
+/// umbrella, `nest-rs`) for GraphQL types and auto-resolved relations. Add
 /// `soft_delete` and/or `timestamps` for lifecycle columns: `soft_delete`
 /// registers the entity, so a delete stamps `deleted_at` and every `Repo` read
 /// hides a stamped row (see `nest-rs-seaorm`'s `SoftDeletable`); `timestamps`

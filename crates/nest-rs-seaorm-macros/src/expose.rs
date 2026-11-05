@@ -18,11 +18,17 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     if model.graphql {
         #[cfg(not(feature = "graphql"))]
         {
-            return syn::Error::new_spanned(
-                &model.source_ident,
-                "`#[expose(..., graphql)]` requires the `graphql` feature on `nest-rs-seaorm` (`features = [\"graphql\"]`)",
+            return nest_rs_codegen::__private::refused_without(
+                "`#[expose(..., graphql)]`",
+                "nest_rs_graphql",
             )
-            .to_compile_error()
+            .unwrap_or_else(|| {
+                syn::Error::new_spanned(
+                    &model.source_ident,
+                    "`#[expose(..., graphql)]` requires the `graphql` feature on `nest-rs-seaorm`",
+                )
+                .to_compile_error()
+            })
             .into();
         }
     } else if model.has_auto_relations() {

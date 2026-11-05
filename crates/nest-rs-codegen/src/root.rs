@@ -229,6 +229,21 @@ pub fn reroot_as(attribute: &'static str, tokens: TokenStream) -> TokenStream {
     reroot_checked(tokens, Checks::Gated(Some(attribute)))
 }
 
+/// The umbrella's check alone, naming `attribute`, for a decorator that cannot
+/// expand at all in a build lacking what the crate `lib` ships: any path of its
+/// expansion would fail to resolve beside the sentence. `None` outside the
+/// umbrella, where the feature to name is the framework crate's own.
+pub fn refused_without(attribute: &'static str, lib: &str) -> Option<TokenStream> {
+    let u = umbrella()?;
+    let krate = framework_crate(lib)?;
+    let prefix: Vec<TokenTree> = root_prefix(u).into_iter().collect();
+    let root = Root {
+        krate,
+        cfgs: Vec::new(),
+    };
+    Some(feature_checks(vec![root], &prefix, Some(attribute)))
+}
+
 /// The argument `#[crud]` hands the impl half it re-emits: `#[crud]`'s own
 /// check, naming it, covers what that half reaches.
 pub const CHECKED_BY_CRUD: &str = "__nestrs_checked_by_crud";

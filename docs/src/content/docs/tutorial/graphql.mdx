@@ -80,10 +80,10 @@ posture attribute, and so is the principal's parameter:
 | `#[authorize(Read, bind = UsersService)]` attribute, an `Authorized<Read, UserEntity>` parameter | the same attribute and parameter, the `id` argument synthesised | Load the row through the service, refuse it on a denied ability |
 | `Ambient<Claims>` parameter | `Ambient<Claims>` parameter, no argument of the schema | Read the principal the endpoint's guards attached |
 
-The same `#[use_guards(...)]` declaration on the resolver struct — the
-markers are the same, the access graph checks the same thing. It names
-`AuthzGuard` alone because `/graphql` authenticates at its request, before
-any field runs: `AuthzGraphqlModule`, imported below, declares
+The resolver's `#[use_guards(AuthzGuard)]` is not the controller's line, though
+the access graph checks it the same way. It names `AuthzGuard` alone because
+`/graphql` authenticates at its request, before any field runs:
+`AuthzGraphqlModule`, imported below, declares
 `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` for it, and what
 those attach is ambient for every field the request carries. `AuthnGuard`
 reads a bearer token off an HTTP request and declares no GraphQL check of its

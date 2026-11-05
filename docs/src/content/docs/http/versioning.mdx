@@ -175,7 +175,8 @@ Six behaviours worth knowing before you switch:
   client talks to the wrong API for a month. `<PREFIX>_HTTP__DEFAULT_VERSION`
   answers a caller who states none — a default *among versions*, never a rewrite
   of everything the app mounts, so every self-mounted endpoint (`/graphql`,
-  `/mcp`, `/api-json`, `/health`) is served as written too.
+  `/mcp`, `/api-json`) and every unversioned route (`/health`) is served as
+  written too.
 - **The URI form stops being a second address.** With `header` or `media_type`
   in force, `GET /v2/posts` is a `404`: there is exactly one way to ask.
 - **A malformed version is a `400`.** The token is spliced into a path, so it is

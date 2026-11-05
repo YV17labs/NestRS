@@ -182,3 +182,44 @@ lists, by type, and decides no posture.
 
 - **`#[public]` refused beside any guard**, stands, for the reason given above; what
   goes is the same opening with nothing written.
+
+## 2026-11-05 — the reference roots list no posture pool
+
+Agreed by the owner on 2026-10-31 ("Tout faire (Recommandé)", the identity audit's
+second pass, its item on the composition the code runs). `ApiModule`'s
+`GlobalGuards<(AuthnGuard, AuthzGuard)>` and `LiveModule`'s `GlobalGuards<(AuthnGuard,)>`
+repeated what each host declares: the double declaration this decision's refusal of
+the warn already says had no other purpose. What covers each edge with the pools gone:
+a route, its controller's `#[use_guards]`; `/graphql`, the `EndpointGuards` of
+`AuthzGraphqlModule`, which each GraphQL adapter imports, and a field, its resolver's
+`AuthzGuard`, since `AuthnGuard::check` admits every unit; a gateway's upgrade and
+messages, its own `#[use_guards]`.
+
+**Two chains were not inert. One keeps what it ran.** The broadest site wins, so the pool
+ran `AuthnGuard` and `AuthzGuard` ahead of `AudioController`'s `ThrottlerGuard`, listed
+first: an anonymous caller answered `401` and spent no budget. With the pool gone the
+written order would run, and past its limit that caller would answer `429`. So the
+controller writes the order it ran.
+
+**The other moves, and the pool still goes.** `HealthController`'s probes are `#[public]`
+routes, not self-mounts, so both pools ran on them, and `AuthnGuard` fails closed on every
+route, `#[public]` included, when it could not evaluate a credential. A probe carrying a
+credential during a strategy outage answered a `503` problem and now answers its report;
+one carrying a refused credential no longer files its `warn`. A request with no credential,
+which is every orchestrator's, answers what it did. What decides a pool is what an anonymous
+caller answers on a gated unit, and a probe gates nothing and reads no principal. Decided by
+the second value: a probe reports the process, and a credential it never reads should not
+change that; the first has no objection. The api's committed document holds the chain, since
+a guard back on a probe puts its `503` problem back in the document.
+
+A root's pool stays for what no host binds, an API key or an IP allow-list.
+
+**Refused:**
+
+- **The root pool as the one place**, retiring host declarations and `EndpointGuards`
+  (the audit's other proposal): a feature imported by an app with no pool would lose its
+  guards (`bridge-joins-the-pool.md`), against the owner's standing "declare on the
+  provider".
+- **`ThrottlerGuard` first on the audio routes**, which this change would have made true:
+  a move of what an anonymous caller answers and of whose budget it spends, decided by a
+  cleanup rather than for its own reason.

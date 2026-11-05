@@ -124,7 +124,7 @@ queue adapter — so no `QueueModule`. It gets
 inventory, no read of any queue.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
-use nest_rs::core::module;
+use nest_rs::core::{GlobalInterceptors, module};
 // …
 use nest_rs::redis::{RedisQueueModule, RedisScheduleModule};
 use nest_rs::seaorm::SeaOrmDatabaseModule;
@@ -143,6 +143,7 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
         AudioHttpModule,
         AudioScheduleModule,
     ],
+    // …
 )]
 pub struct ApiModule;
 ```

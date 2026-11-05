@@ -28,7 +28,7 @@ Add `OpenApiModule` to the app root, alongside the controllers it
 should document:
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
-use nest_rs::core::module;
+use nest_rs::core::{GlobalInterceptors, module};
 // …
 use nest_rs::openapi::OpenApiModule;
 // …
@@ -41,6 +41,7 @@ use nest_rs::openapi::OpenApiModule;
         UsersHttpModule,
         // … the rest of the HTTP modules
     ],
+    // …
 )]
 pub struct ApiModule;
 ```

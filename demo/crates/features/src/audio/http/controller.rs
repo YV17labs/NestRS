@@ -19,7 +19,7 @@ use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 
 #[controller(path = "/audio")]
-#[use_guards(ThrottlerGuard, AuthnGuard, AuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard, ThrottlerGuard)]
 pub struct AudioController {
     #[inject]
     svc: Arc<AudioService>,

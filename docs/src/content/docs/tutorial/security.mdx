@@ -182,19 +182,14 @@ than running silently unprotected.
 
 The app root — `api`, not `blog` — lists the adapter, and nothing it brings:
 `AuthzModule` reaches it through `UsersHttpModule`, and `AuthnModule` through
-`AuthzModule`, where the access graph checks each import. Its one provider,
-[`GlobalGuards`](/fundamentals/guards/#the-three-scopes), puts the two guards
-in the app-wide pool every route runs first; `blog` declares none, its
-controllers binding theirs.
+`AuthzModule`, where the access graph checks each import. It lists no guard
+either: each controller binds its own, as `blog`'s do, so a feature stays covered
+in every app that imports it.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
-use nest_rs::core::module;
-use nest_rs::guards::GlobalGuards;
+use nest_rs::core::{GlobalInterceptors, module};
 // …
 use nest_rs::seaorm::SeaOrmDatabaseModule;
-// …
-use features::authn::AuthnGuard;
-use features::authz::AuthzGuard;
 // …
 use features::users::{UsersGraphqlModule, UsersHttpModule};
 
@@ -206,7 +201,7 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         UsersHttpModule,
         // …
     ],
-    providers = [GlobalGuards<(AuthnGuard, AuthzGuard)>],
+    // …
 )]
 pub struct ApiModule;
 ```

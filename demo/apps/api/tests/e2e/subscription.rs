@@ -19,15 +19,17 @@ type Socket =
 
 const SUBSCRIBE: &str = "subscription { postPublished { id title orgId status } }";
 
-async fn connect(app: &WsApp, authorization: &str) -> Socket {
+async fn connect(app: &WsApp, authorization: Option<&str>) -> Socket {
     let mut request = app
         .url("/graphql")
         .into_client_request()
         .expect("valid websocket url");
-    request.headers_mut().insert(
-        header::AUTHORIZATION,
-        authorization.parse().expect("valid bearer header"),
-    );
+    if let Some(authorization) = authorization {
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            authorization.parse().expect("valid bearer header"),
+        );
+    }
     request.headers_mut().insert(
         header::SEC_WEBSOCKET_PROTOCOL,
         "graphql-transport-ws".parse().expect("valid protocol"),
@@ -59,7 +61,7 @@ async fn next_message(socket: &mut Socket, within: Duration) -> Option<Value> {
     }
 }
 
-async fn subscribe(app: &WsApp, authorization: &str, id: &str) -> Socket {
+async fn subscribe(app: &WsApp, authorization: Option<&str>, id: &str) -> Socket {
     let mut socket = connect(app, authorization).await;
     send(&mut socket, json!({ "type": "connection_init" })).await;
     let ack = next_message(&mut socket, Duration::from_secs(5))
@@ -117,15 +119,36 @@ fn id_of(created: Value) -> Uuid {
         .expect("the id of the row it created")
 }
 
-#[tokio::test]
-async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
-    let app = TestApp::builder()
+async fn serve() -> WsApp {
+    TestApp::builder()
         .module::<ApiModule>()
         .ephemeral_database::<migrations::Migrator>()
         .ephemeral_signing_key()
         .build_ws()
         .await
-        .expect("ApiModule serves on a real port against a throwaway database");
+        .expect("ApiModule serves on a real port against a throwaway database")
+}
+
+#[tokio::test]
+async fn an_anonymous_subscriber_is_refused_at_subscribe() {
+    let app = serve().await;
+
+    let mut socket = subscribe(&app, None, "anonymous").await;
+
+    let refused = next_item(&mut socket, Duration::from_secs(5))
+        .await
+        .expect("the refusal is delivered");
+    assert_eq!(
+        refused["errors"][0]["extensions"]["code"], "UNAUTHENTICATED",
+        "{refused}",
+    );
+
+    app.close().await;
+}
+
+#[tokio::test]
+async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
+    let app = serve().await;
     let sign = |org_id: Uuid, sub: Subject| app.bearer(&claims(org_id, Role::Admin, sub));
 
     let bootstrap = sign(ORG_ID, client());
@@ -155,8 +178,8 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
         .await,
     );
 
-    let mut reader = subscribe(&app, &author, "in").await;
-    let mut outsider = subscribe(&app, &stranger, "out").await;
+    let mut reader = subscribe(&app, Some(&author), "in").await;
+    let mut outsider = subscribe(&app, Some(&stranger), "out").await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     graphql(

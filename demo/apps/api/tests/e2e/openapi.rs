@@ -3,13 +3,16 @@ use serde_json::json;
 
 use crate::*;
 
+pub(crate) async fn served_document(app: &TestApp) -> Value {
+    let served = app.http().get("/api-json").send().await;
+    served.assert_status_is_ok();
+    served.json().await.value().deserialize()
+}
+
 #[tokio::test]
 async fn openapi_document_describes_the_routes() {
     let app = boot().await;
-    let resp = app.http().get("/api-json").send().await;
-    resp.assert_status_is_ok();
-    let bytes = resp.0.into_body().into_bytes().await.expect("body");
-    let doc: serde_json::Value = serde_json::from_slice(&bytes).expect("api-json is JSON");
+    let doc = served_document(&app).await;
 
     let paths = doc["paths"].as_object().expect("paths object");
     assert!(paths.contains_key("/orgs"), "paths include /orgs");
@@ -192,10 +195,7 @@ async fn openapi_document_describes_the_routes() {
 #[tokio::test]
 async fn the_committed_document_is_the_one_the_app_serves() {
     let app = boot().await;
-    let resp = app.http().get("/api-json").send().await;
-    resp.assert_status_is_ok();
-    let bytes = resp.0.into_body().into_bytes().await.expect("body");
-    let served: serde_json::Value = serde_json::from_slice(&bytes).expect("api-json is JSON");
+    let served = served_document(&app).await;
 
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json");
     let committed: serde_json::Value = serde_json::from_str(

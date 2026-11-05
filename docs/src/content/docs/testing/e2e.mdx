@@ -46,9 +46,9 @@ pub(crate) fn sign(app: &TestApp, org_id: Uuid, role: Role) -> String {
 ```
 
 The suite boots `ApiModule`, the module the api's `main` boots, and nothing
-beside it: the app's guard pool is `GlobalGuards<(AuthnGuard, AuthzGuard)>` in
-that module's providers, so every route runs behind the guards the binary puts
-in front of it, and the OpenAPI document describes them. The boot also arms the
+beside it: every route runs behind the guards the binary puts in front of it, its
+controller's and any pool that module's providers list, and the OpenAPI document
+describes them. The boot also arms the
 app's outbox, as the binary's relay does, so what a test pushes waits in the
 throwaway database
 ([below](#a-job-pushed-inside-a-transaction-waits-for-a-relay)). Each test gets

@@ -61,8 +61,8 @@ fn attach(
     }
 }
 
-/// Layer-System impl — listed after the authentication guard in the app's
-/// `GlobalGuards<(AuthnGuard, AuthzGuard)>` is the canonical path.
+/// Layer-System impl — bound after the authentication guard, on a host or in an
+/// endpoint's `EndpointGuards`.
 #[async_trait]
 impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {

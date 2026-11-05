@@ -382,8 +382,11 @@ adds no line to the root, and writing it is the visible opening.
   from `HttpConfig` alone, with no builder), and declares a `static` `Handler`
   with its posture: `Gated` (a WS upgrade, `/mcp`) and `InBand` (`/graphql`,
   its operations gating themselves) get the request stage the transport
-  composes in front of the endpoint; `Public` (OpenAPI, health, static files)
-  is deliberately open; a `Gated` one carrying no unit and running no guard
+  composes in front of the endpoint; `Public` (the OpenAPI document, an endpoint
+  `McpAccess::Public` opens) is deliberately open and runs no guard, the pool's
+  included. The health probes are no self-mount but `#[public]` routes, whose chain
+  holds what any route's does, and static files the router's fallback, which runs
+  none. A `Gated` self-mount carrying no unit and running no guard
   identifying a caller refuses the boot, but a gateway's, whose messages answer for it (item 5). **The transport composes every self-mount's request
   stage, one function for all** (`request_stage`): the global pool, the
   mount's own guards (a gateway's) and the `EndpointGuards<V, G>` the app's

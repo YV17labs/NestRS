@@ -157,21 +157,20 @@ mints tokens, not users.
         UsersHttpModule,
         // …
     ],
+    // …
 )]
 pub struct ApiModule;
 ```
 
-The resource server imports the authz transports and every feature
-controller. With only the public key in env, its authn loads as
+The resource server imports every feature controller, and each imports the authz
+module its guards need. With only the public key in env, its authn loads as
 verify-only.
 
-The two lists import different modules, and the names say which.
-`apps/auth` takes `nest_rs::authn::AuthnModule` — the framework's, which
-provides `JwtService` and carries the config seam. `apps/api` takes
-`features::authn::AuthnModule` — the product's own, which wraps that one
-and adds the `Claims`-bound strategy and guard; it owns no configuration, so it
-has no seam. The `app_` prefix is what makes the pair readable without going
-back to the `use` line.
+Two modules share one name, and the path says which. `SignInModule` imports
+`nest_rs::authn::AuthnModule` — the framework's, which provides `JwtService` and
+carries the config seam. `features::authz::AuthzModule` imports
+`features::authn::AuthnModule` — the product's own, which wraps that one and adds
+the `Claims`-bound strategy and guard; it owns no configuration, so it has no seam.
 
 ## Why not RPC
 

@@ -240,7 +240,7 @@ stays at the root; leave it out and the boot fails, naming
 `AudioTasks::enqueue_transcode` and the binding to import.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
-use nest_rs::core::module;
+use nest_rs::core::{GlobalInterceptors, module};
 // …
 use nest_rs::redis::{RedisQueueModule, RedisScheduleModule};
 // …
@@ -257,6 +257,7 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
         AudioHttpModule,
         AudioScheduleModule,
     ],
+    // …
 )]
 pub struct ApiModule;
 ```

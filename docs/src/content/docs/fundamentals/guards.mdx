@@ -313,7 +313,7 @@ from the same provider — declare once, choose *where* it runs.
 
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
-| **Global** | `GlobalGuards<(AuthnGuard,)>` in the providers of the module the app boots | The route's guard stage, post-routing (a self-mount's request stage for gateways) |
+| **Global** | `GlobalGuards<(RequireApiKey,)>` in the providers of the module the app boots | The route's guard stage, post-routing (a self-mount's request stage for gateways) |
 | **Controller / Resolver / Gateway** | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct — a resolver binds `AuthzGuard` alone, [authenticated in band](/fundamentals/guards-beyond-http/#a-guard-declares-the-edges-it-checks) | Container, at mount |
 | **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb / `#[query]` / `#[subscribe_message]` | Container, at mount |
 
@@ -322,13 +322,12 @@ first — the first listed sees the request before the second.
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::guards::GlobalGuards;
-use features::authn::AuthnGuard;
-use features::authz::AuthzGuard;
+use features::api_key::RequireApiKey;
 use nest_rs::core::module;
 
 #[module(
     imports = [/* … */],
-    providers = [GlobalGuards<(AuthnGuard, AuthzGuard)>],
+    providers = [GlobalGuards<(RequireApiKey,)>],
 )]
 pub struct BlogModule;
 ```
@@ -582,19 +581,8 @@ beside its `#[public]` opening.
 
 ## Declare on the provider
 
-The Layer System dedups every layer by
-[`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html) across
-the three sites. When the same guard is declared at several levels, the
-**broadest site wins**; narrower declarations log a `debug` line at boot
-(deduped once on `nest_rs::layers`) but never re-execute.
-
-```rust title="apps/blog/src/module.rs"
-#[module(
-    imports = [/* … */],
-    providers = [GlobalGuards<(AuthnGuard, AuthzGuard)>],
-)]
-pub struct BlogModule;
-```
+A feature's guards go on its provider, so the feature is covered in every app
+that imports it:
 
 ```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
 #[controller(path = "/posts")]
@@ -605,9 +593,17 @@ pub struct PostsController {
 }
 ```
 
-`AuthnGuard` and `AuthzGuard` run **exactly once** per request, not twice.
-The controller's two extra lines cost zero runtime overhead and one `debug`
-line at boot.
+A root's pool holds what no host binds: an app-wide guard, an API key or an IP
+allow-list, which the deployment decides rather than a feature. The demo's roots
+list none, since each controller and gateway binds its own, and
+`AuthzGraphqlModule` and `AuthzMcpModule` cover `/graphql` and `/mcp`.
+
+A guard listed at both sites still runs **exactly once** per request. The Layer
+System dedups every layer by
+[`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html) across the three
+sites: the **broadest site wins**, which also places it in the chain, and narrower
+declarations log a `debug` line at boot (deduped once on `nest_rs::layers`) but never
+re-execute.
 
 ### Re-running one on purpose: `#[force_guards]`
 
@@ -647,8 +643,8 @@ and filters, which have no such refusal.
 
 ```mermaid
 flowchart TB
-  MAIN["BlogModule: GlobalGuards<(AuthnGuard, AuthzGuard)>"]
-  PC["PostsController: #[use_guards(AuthnGuard, AuthzGuard)]"]
+  MAIN["BlogModule: GlobalGuards<(RequireApiKey,)>"]
+  PC["PostsController: #[use_guards(RequireApiKey, AuthnGuard, AuthzGuard)]"]
   MAIN -. "dedup — runs once" .-> RUN[per-request chain]
   PC -. "debug at boot, zero extra cost" .-> RUN
 ```

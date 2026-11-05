@@ -73,8 +73,8 @@ demo's `api` app does — the suite then fails the day someone forgets to rerun:
 #[tokio::test]
 async fn the_committed_document_is_the_one_the_app_serves() {
     let app = boot().await;
-    let resp = app.http().get("/api-json").send().await;
-    // …
+    let served = served_document(&app).await;
+
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json");
     // …
     assert!(

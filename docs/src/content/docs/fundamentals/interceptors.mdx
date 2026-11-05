@@ -156,11 +156,12 @@ impl Interceptor for AuditInterceptor {
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
 #[module(
-    imports = [AuditHttpModule, /* … */],
-    providers = [
-        GlobalGuards<(AuthnGuard, AuthzGuard)>,
-        GlobalInterceptors<(AuditInterceptor,)>,
+    imports = [
+        // …
+        AuditHttpModule,
+        // …
     ],
+    providers = [GlobalInterceptors<(AuditInterceptor,)>],
 )]
 pub struct ApiModule;
 ```

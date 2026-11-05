@@ -13,8 +13,10 @@ paths:
 
 - **`module.rs`** is the canonical composition: one `<App>Module` listing the
   edges the app serves and, in its `providers`, the app-wide layer pools
-  (`GlobalGuards<(AuthnGuard, AuthzGuard)>`, `edges.md`, *Request layers*).
-  Declaring the transport-wide pool is composition, not business logic.
+  (`edges.md`, *Request layers*): what no feature decides, an audit interceptor,
+  or a guard no host binds, an API key or an IP allow-list. A feature's guards
+  are its host's, so a feature stays covered in an app with no pool, and a pool
+  never repeats them.
 - **`lib.rs`** declares `mod module;` and re-exports `<App>Module` — and the
   types its e2e suite configures it with — so the suite boots the composition
   the binary runs, its pools included. No logic.

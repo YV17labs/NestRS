@@ -3,7 +3,7 @@ use std::time::Duration;
 use features::audio::AudioQueueModule;
 use nest_rs::core::module;
 use nest_rs::http::{StatusCode, header};
-use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
+use nest_rs::queue::{OutboxRelay, QueueWorker};
 use nest_rs::redis::RedisQueueModule;
 use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::{HeadlessApp, LogCapture};
@@ -105,11 +105,34 @@ async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
     denied.assert_header_exist("retry-after");
 }
 
+#[tokio::test]
+async fn an_anonymous_caller_stays_refused_and_spends_no_one_s_rate_limit() {
+    let app = boot().await;
+    let file = Uuid::now_v7();
+
+    for _ in 0..=20 {
+        app.http()
+            .post("/audio/transcode")
+            .body_json(&json!({ "file": file }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    let bearer = sign(&app, ORG_ID, Role::Admin);
+    app.http()
+        .post("/audio/transcode")
+        .header(header::AUTHORIZATION, &bearer)
+        .body_json(&json!({ "file": file }))
+        .send()
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+}
+
 #[module(
     imports = [
         SeaOrmDatabaseModule,
         RedisQueueModule,
-        QueueModule,
         AudioQueueModule,
     ],
 )]

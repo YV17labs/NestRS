@@ -110,7 +110,8 @@ impl<S: Strategy> AuthnGuard<S> {
     }
 }
 
-/// Layer-System impl — the app's pool lists it in `GlobalGuards`.
+/// Layer-System impl — bound on a host, in an endpoint's `EndpointGuards` or in
+/// the app's `GlobalGuards`.
 ///
 /// On a `#[public]` route the guard authenticates opportunistically: it attaches
 /// the principal when a token verifies and otherwise continues anonymously (a

@@ -28,10 +28,13 @@ slice: the port at the feature root, one adapter folder per edge.
   ability rule — what the product chose. What `#[inject]`, `#[process]` or
   `#[expose]` records, or a module registers, is the framework's suites' to
   prove, so a copied feature inherits no test of the framework.
-- **Security is wired by composition, not ceremony.** Importing
-  `SeaOrmDatabaseModule` and `Authz<Edge>Module` turns on row filtering, the
-  transaction scope and response masking. Guards still bind per route: the
-  principal source is a policy decision.
+- **Security is wired by composition, not ceremony.** `SeaOrmDatabaseModule`
+  opens the unit of work, `Repo` filters rows by the ability the authz guard
+  attaches, and `#[authorize]` arms the gate and the mask. An adapter imports
+  what its edge's guards need: `AuthzModule` on HTTP and WS, whose host binds
+  them, `AuthzGraphqlModule` and `AuthzMcpModule` on the two edges whose shared
+  request no host can gate. A feature's guards are its host's or that module's
+  declaration, never the root's: the principal source is a policy decision.
 
 ## Layout
 

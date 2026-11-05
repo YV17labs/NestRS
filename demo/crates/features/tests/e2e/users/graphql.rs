@@ -1,7 +1,7 @@
 use nest_rs::core::module;
 use nest_rs::http::header;
-use nest_rs::redis::{RedisModule, RedisQueueModule};
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::redis::RedisQueueModule;
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::TestApp;
 use serde_json::json;
 
@@ -11,9 +11,7 @@ use features::users::{UserRole, UsersGraphqlModule};
 
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule,
         RedisQueueModule,
         AuthnModule,
         UsersGraphqlModule,

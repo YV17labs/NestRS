@@ -1,8 +1,8 @@
 use nest_rs::core::{code, module};
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::http::{StatusCode, header};
-use nest_rs::redis::{RedisModule, RedisQueueModule};
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::redis::RedisQueueModule;
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::{TestApp, TestResponse};
 use serde_json::json;
 use uuid::Uuid;
@@ -17,9 +17,7 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule,
         RedisQueueModule,
         HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
         AuthnModule,

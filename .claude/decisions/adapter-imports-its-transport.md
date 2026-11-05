@@ -100,3 +100,37 @@ imports to push with, and already imported `HttpModule`. A host listed beside
 `HttpModule` alone still mounts on `McpConfig::default()`: what the harnesses
 serve, and a hand-written adapter's old shape, until an edge decorator brings
 its edge's module itself.
+
+## 2026-11-05 — A binding imports its resource, and an adapter the throttler its host binds
+
+The same reasoning for the two lines a root still wrote for someone else
+(the identity audit's second pass, comp-4, rules-5 and comp-6's reshaped half,
+agreed with the owner's "Tout faire (Recommandé)", 2026-10-31). Elegance decides:
+security and correctness are untouched, and each line chose nothing.
+
+Adopted:
+
+- **Each `<Vendor><Port>Module<I>` imports `<Vendor>Module<I>` bare, from both
+  phases**: `SeaOrmDatabaseModule` the pool, `RedisQueueModule<I>`,
+  `RedisScheduleModule<I>` and `RedisThrottlerModule<I>` their instance's
+  connection. The root names the resource only to pin it, which supersedes the
+  bare import in either order, and a seed still wins over a factory. What refused
+  a binding left without its resource (`SUBSTRATE_REMEDY`, `connection_remedy`) is
+  gone: nothing reaches it. A provider injecting a resource nothing opens keeps
+  its `DependencyRemedy`.
+- **An adapter whose host binds `ThrottlerGuard` imports `ThrottlerModule` bare**,
+  the port behind that guard, so an app serving no such adapter pays no rate
+  limiter. A root's `RedisThrottlerModule` still supersedes the in-process store
+  wherever the two fall, so swapping the backend still edits the root alone.
+
+The binding itself stays the root's, as this page's adoption says of the queue's:
+it is what the root chooses, and what it runs on is not.
+
+Refused:
+
+- **Changing how a guard and its strategy are listed** (the audit's comp-6, as
+  first written, which read three ways for a guard to reach its host): listing a
+  guard in `providers` is the general rule and `DevelopmentOnlyGuard` follows it,
+  `ThrottlerGuard` is the one built by its port module because it reads the port's
+  policy and store, and a guard registering its own strategy, its type parameter,
+  would be a second registration path that collides when two guards share one.

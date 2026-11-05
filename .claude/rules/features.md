@@ -29,9 +29,9 @@ slice: the port at the feature root, one adapter folder per edge.
   `#[expose]` records, or a module registers, is the framework's suites' to
   prove, so a copied feature inherits no test of the framework.
 - **Security is wired by composition, not ceremony.** Importing
-  `SeaOrmModule`, `SeaOrmDatabaseModule` and `Authz<Edge>Module`
-  turns on row filtering, the transaction scope and response masking. Guards
-  still bind per route: the principal source is a policy decision.
+  `SeaOrmDatabaseModule` and `Authz<Edge>Module` turns on row filtering, the
+  transaction scope and response masking. Guards still bind per route: the
+  principal source is a policy decision.
 
 ## Layout
 
@@ -50,10 +50,12 @@ The port lives at the feature **root**, never in a `core/` folder.
 
 **Each adapter imports its port explicitly** — composition, not inheritance —
 **and the module serving its edge**, so importing the adapter serves it and
-reads its edge's config.
+reads its edge's config; one whose host binds `ThrottlerGuard` imports
+`ThrottlerModule` too, the port behind that guard.
 Importing only the port mounts nothing, and no module re-exports every edge:
 the app lists the edges it serves, so its imports are what the binary exposes;
-the queue's backend binding is the root's, since the root chooses it.
+a backend binding (the queue's, the rate limiter's store) is the root's, since
+the root chooses it.
 
 **A feature that emits events declares its span target at its root** —
 `pub const TARGET: &str = "features::<feature>";` in its `mod.rs` — and every

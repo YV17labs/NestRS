@@ -6,8 +6,8 @@ use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::mcp::{McpIdentity, McpModule};
 use nest_rs::oauth::resource::OAuthResourceModule;
-use nest_rs::redis::{RedisModule, RedisQueueModule};
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::redis::RedisQueueModule;
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::server_timing::ServerTimingModule;
 
 const SERVER_TITLE: &str = "nestrs demo assistant";
@@ -26,9 +26,7 @@ const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped
             ..Default::default()
         }),
         OAuthResourceModule::for_root(constants::ALL),
-        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule,
         RedisQueueModule,
         AudioMcpModule,
         UsersMcpModule,

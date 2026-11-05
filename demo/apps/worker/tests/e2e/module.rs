@@ -5,14 +5,14 @@ use features::notifications::{Column, Entity, NotifyCommand, NotifyQueue};
 use features::testing::{RedisDatabase, connection};
 use nest_rs::core::module;
 use nest_rs::queue::{Jobs, PushReceipt, QueueWorker};
-use nest_rs::redis::{RedisModule, RedisQueueModule};
+use nest_rs::redis::RedisQueueModule;
 use nest_rs::schedule::Scheduler;
 use nest_rs::testing::HeadlessApp;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 use uuid::Uuid;
 use worker::WorkerModule;
 
-#[module(imports = [RedisModule, RedisQueueModule])]
+#[module(imports = [RedisQueueModule])]
 struct SuitesProducer;
 
 fn jobs(app: &HeadlessApp) -> Arc<Jobs> {

@@ -16,12 +16,12 @@ mod posts;
 mod users;
 
 use nest_rs::core::module;
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::TestApp;
 
 pub(crate) use features::testing::connection;
 
-#[module(imports = [SeaOrmModule, SeaOrmDatabaseModule])]
+#[module(imports = [SeaOrmDatabaseModule])]
 struct DataModule;
 
 pub(crate) async fn data_app() -> TestApp {

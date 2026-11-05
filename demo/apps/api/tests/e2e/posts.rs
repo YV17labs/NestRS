@@ -4,8 +4,8 @@ use features::notifications::{Entity as Notifications, NotificationsQueueModule}
 use nest_rs::core::module;
 use nest_rs::http::{StatusCode, header};
 use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
-use nest_rs::redis::{RedisModule, RedisQueueModule};
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::redis::RedisQueueModule;
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::{HeadlessApp, wait_for};
 use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, Set};
 use serde_json::json;
@@ -182,9 +182,7 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
 
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule,
         RedisQueueModule,
         QueueModule,
         NotificationsQueueModule,

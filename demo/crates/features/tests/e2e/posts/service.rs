@@ -16,17 +16,15 @@ use nest_rs::database::{
     ExecutorScope, Settlement, TransactionPolicy, UnitOfWork, UnitSpec, run_unit,
 };
 use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
-use nest_rs::redis::{RedisModule, RedisQueueModule};
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::redis::RedisQueueModule;
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::HeadlessApp;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use uuid::Uuid;
 
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule,
         RedisQueueModule,
         PostsModule,
     ],
@@ -35,9 +33,7 @@ struct PublishingHarness;
 
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule,
         RedisQueueModule,
         QueueModule,
         NotificationsQueueModule,

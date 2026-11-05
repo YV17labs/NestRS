@@ -4,8 +4,8 @@ use features::audio::AudioQueueModule;
 use nest_rs::core::module;
 use nest_rs::http::{StatusCode, header};
 use nest_rs::queue::{OutboxRelay, QueueModule, QueueWorker};
-use nest_rs::redis::{RedisModule, RedisQueueModule};
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::redis::RedisQueueModule;
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::{HeadlessApp, LogCapture};
 use nest_rs::testing::{TestForm, TestFormField};
 use serde_json::{Value, json};
@@ -107,9 +107,7 @@ async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
 
 #[module(
     imports = [
-        SeaOrmModule,
         SeaOrmDatabaseModule,
-        RedisModule,
         RedisQueueModule,
         QueueModule,
         AudioQueueModule,

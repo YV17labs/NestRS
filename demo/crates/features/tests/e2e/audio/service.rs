@@ -4,12 +4,12 @@ use features::audio::{AudioModule, AudioService, TranscodeState, Transcodes};
 use features::testing::delete_transcode;
 use futures_util::StreamExt;
 use nest_rs::core::module;
-use nest_rs::redis::{RedisConnection, RedisModule, RedisQueueModule};
+use nest_rs::redis::{RedisConnection, RedisQueueModule};
 use nest_rs::storage::Storage;
 use nest_rs::testing::HeadlessApp;
 use uuid::Uuid;
 
-#[module(imports = [RedisModule, RedisQueueModule, AudioModule])]
+#[module(imports = [RedisQueueModule, AudioModule])]
 struct AudioHarness;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

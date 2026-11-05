@@ -1692,8 +1692,9 @@ lists what the boot, a log or the wire shows when one is missed.
   Error: PostsController::list declares a class gate (`#[authorize]` or `#[public(Action, Subject)]`), and no guard in its chain or at its request attaches the ability the gate reads, so every call would answer `500`: bind `AbilityGuard` over your `AbilityFactory` with `#[use_guards]`, `GlobalGuards<(...)>` or, on an in-band endpoint, `EndpointGuards<View, (...)>`
   ```
 
-  Bind `AuthzGuard` where the message says. A guard of your own delegating to
-  `AbilityGuard` adds `fn __attaches_ability(&self) -> bool { true }`.
+  Bind `AuthzGuard` where the message says. A guard of your own that delegated to
+  `AbilityGuard` stops: list `AuthzGuard` in the chain beside it, the one guard the boot
+  reads as attaching the ability.
 - **An in-band chain listing authentication after authorization** stops the boot, on a
   GraphQL field, a WS message and an MCP operation, reading its request's chain ahead of
   its own. List the authentication guard first, or declare the phase of a guard of your

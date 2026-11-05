@@ -74,25 +74,24 @@ listing name no id, and refuse the key.
 
 ## The four outcomes
 
-The load decides among four early returns, after the class gate and before
+The load decides among three early returns, after the class gate and before
 the handler runs:
 
-| Path id | Ability | Row | Status |
-|--------|---------|-----|--------|
-| Not a UUID v7 | — | — | `400 BAD REQUEST` |
-| Valid | Missing (wiring bug) | — | `500 INTERNAL SERVER ERROR` |
-| Valid | Present | Absent in DB | `404 NOT FOUND` |
-| Valid | Present | Present, denied | `403 FORBIDDEN` |
-| Valid | Present | Present, allowed | Handler runs with the row |
+| Path id | Row | Status |
+|--------|-----|--------|
+| Not a UUID v7 | — | `400 BAD REQUEST` |
+| Valid | Absent in DB | `404 NOT FOUND` |
+| Valid | Present, denied | `403 FORBIDDEN` |
+| Valid | Present, allowed | Handler runs with the row |
 
 The UUID v7 check is deliberate — the framework's id format is
 ordered, v7 only. A v4 id (or a malformed string) fails fast at the
 edge.
 
-A missing ability is a 500 because it means the route runs no
-`AbilityGuard` — a wiring bug, never a client error. The class gate
-answers it before the load does. A bound route with no guard at all never
-boots: a route no guard covers says `#[public]` or refuses the boot.
+A bound route whose chain runs no `AbilityGuard` never boots, the refusal naming
+the route and the guard to bind: the class gate reads the ability that guard
+attaches. Neither does a bound route with no guard at all: a route no guard
+covers says `#[public]` or refuses the boot.
 
 ## How `access` decides
 
@@ -213,11 +212,11 @@ async fn get(&self, id: Path<Uuid>) -> Result<Json<Post>> {
 
 <Aside type="caution">
 A bound route needs `AuthnGuard` and `AuthzGuard` bound on the controller.
-The boot refuses a route no guard covers, and the access graph a service
-no import reaches, but a **route whose guards attach no ability** —
-`AuthnGuard` without `AbilityGuard` — returns 500 at request time. Pin
-every by-id route with a [negative-path test](/testing/negative-path/) —
-auth refused, cross-tenant denied, malformed id rejected.
+The boot refuses a route no guard covers and a route whose guards attach no
+ability — `AuthnGuard` without `AbilityGuard` — and the access graph a service
+no import reaches, but not a policy that grants too much. Pin every by-id route
+with a [negative-path test](/testing/negative-path/) — auth refused,
+cross-tenant denied, malformed id rejected.
 </Aside>
 
 ## Going further

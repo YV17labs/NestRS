@@ -252,9 +252,9 @@ guard identifying a caller covers says `#[public]` or fails the boot; a rate lim
 identifies no one, so it covers nothing. `#[authorize(Action, Entity)]`
 emits the class gate (`nest_rs::authz::class_gate`, every edge's) before the payload
 is deserialized and the reply mask afterwards — so a handler answering with entity
-rows writes **no masking call**. It fails closed when no ambient ability is
-present, which is exactly the state of a gateway that binds no `AuthzGuard`
-at its upgrade.
+rows writes **no masking call**. A gate no `AuthzGuard` reaches, at the upgrade or
+beside the message, refuses the boot, and one still finding no ambient ability
+fails closed.
 
 The mask acts on the serialized reply, so a withheld column is absent
 from the frame rather than an error — HTTP's behaviour, not GraphQL's,

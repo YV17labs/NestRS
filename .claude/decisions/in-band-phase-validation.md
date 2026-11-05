@@ -59,4 +59,3 @@ first sentence exists to prevent.
 
 What it leaves: the phase is its author's word, which no type can check, and a
 hand-written MCP `ServerHandler` has no chain to read.
-

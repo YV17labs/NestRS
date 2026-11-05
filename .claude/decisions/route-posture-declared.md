@@ -237,9 +237,9 @@ to `AbilityGuard`. A gate nothing attaches for answered `500` on every call, on
 reading the unit's chain, then the chain its request ran: a route, a message under its
 upgrade, a GraphQL field or an MCP operation under `/graphql`'s or `/mcp`'s request. A
 hidden `Guard::__attaches_ability` is what it reads, since the chain holds `dyn Guard`:
-`AbilityGuard` answers `true`, `Arc<T>` forwards, and a guard delegating to it answers as
-it does. The gate's own fail-closed `500` stays, for a guard answering `true` that
-attached nothing and for a unit driven with no boot behind it.
+`AbilityGuard` answers `true` and `Arc<T>` forwards. The gate's own fail-closed `500`
+stays, for a guard answering `true` that attached nothing and for a unit driven with no
+boot behind it.
 
 The reference roots' entry above says a field needs its resolver's `AuthzGuard` "since
 `AuthnGuard::check` admits every unit". That guard now refuses a gated unit no principal
@@ -249,12 +249,12 @@ is that `AuthnGuard` declares no `GuardFor<GraphqlView>`.
 **Refused:**
 
 - **A public `Guard` method**: a name in the trait's documentation teaches a third place
-  an ability comes from, where the framework has one. A delegating guard is rare enough
-  for the method's own note.
+  an ability comes from, where the framework has one. A guard delegating to `AbilityGuard`
+  therefore has no public spelling: it stops delegating and lists that guard beside it,
+  which the guide says in words, and the hidden method stays outside the API.
 - **A marker trait**: the chain erases to `dyn Guard`, so nothing could read it there.
 
 What it leaves: an ability guard bound at the unit alone under `#[authorize]`, with none at
 the request, boots and answers `401`, its sentence naming the guard to bind at the request:
 `AbilityGuard::check` builds on a `#[public]` unit only, and this entry does not make a
 gated unit's rules depend on where the guard is listed.
-

@@ -173,8 +173,8 @@ pub trait Guard: Layer {
 
     /// Whether this guard attaches the caller's ability, which a class gate
     /// reads: the boot refuses a gate no guard answering `true` reaches, in its
-    /// chain or at its request. `nest_rs::authz::AbilityGuard` does, and a guard
-    /// delegating to it answers as it does; nothing else builds that ability.
+    /// chain or at its request. `nest_rs::authz::AbilityGuard` does, and nothing
+    /// else builds that ability, so an app lists that guard and answers nothing here.
     #[doc(hidden)]
     fn __attaches_ability(&self) -> bool {
         false

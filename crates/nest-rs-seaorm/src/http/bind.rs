@@ -11,9 +11,10 @@ use crate::{Authorized, CrudService, ServiceError};
 /// the handler's `Authorized<A, E>` parameter.
 ///
 /// A non-v7 id answers 400, an absent row 404, a denied one 403 (existence is
-/// not hidden). The decorator puts `S` in the boot's access contract; a route
-/// that still reaches none — no ability guard, no request scope — answers an
-/// opaque `500` and files what was missing at `error`.
+/// not hidden). The decorator puts `S` in the boot's access contract, and the
+/// boot refuses a route no ability guard reaches; what the unit still lacks at
+/// request time — an ability, its request scope — answers an opaque `500` and
+/// files at `error`.
 pub async fn http_bind<A, S>(
     req: &nest_rs_http::Request,
     body: &mut nest_rs_http::RequestBody,

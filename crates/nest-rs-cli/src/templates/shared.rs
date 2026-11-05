@@ -485,7 +485,7 @@ guards on the struct, and the edge's authz module imported in that adapter's
 
 A guard bound where its check never runs is a compile error naming the edge it
 does check: `AuthnGuard` checks HTTP requests only, so a resolver refuses it.
-`nestrs g auth` writes the guards and `AuthzModule`, `nestrs g graphql|ws|mcp`
+`nestrs g auth` writes the guards and `AuthzModule`, `nestrs g graphql|mcp`
 writes that edge's module, and `g http`, `g ws`, `g graphql` and `g mcp` emit
 the wiring already done, writing the auth adapter first when the workspace has
 none.

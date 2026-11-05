@@ -286,13 +286,13 @@ nestrs g mcp posts         # MCP tool
 nestrs g events posts      # event listener, with its event at the port
 ```
 
-`g graphql`, `g ws` and `g mcp` also write that transport's **authz module**
-under `crates/features/src/authz/` when the workspace has a policy to enforce,
-and the adapter imports it. It is not optional wiring: `/graphql` and `/mcp` run
-the guards a module declares at their request, so without it `/mcp` denies
-every call and `/graphql` runs operations with no ability attached. A gateway's
-module brings the guards whose ability crosses the connection and scopes its
-rows.
+`g graphql` and `g mcp` also write that transport's **authz module** under
+`crates/features/src/authz/` when the workspace has a policy to enforce, and the
+adapter imports it. It is not optional wiring: `/graphql` and `/mcp` run the guards
+a module declares at their request, so without it `/mcp` denies every call and
+`/graphql` runs operations with no ability attached. `g ws` writes none: a
+gateway's module imports `AuthzModule`, which `g auth` wrote, and that brings the
+guards whose ability crosses the connection and scopes its rows.
 
 `g queue` also registers the framework's outbox migration in
 `crates/migrations`, when the workspace keeps that crate. The queue it enables

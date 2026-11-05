@@ -20,16 +20,17 @@ On `/graphql` and `/mcp` the guards are declared by a module, with
 [`EndpointGuards`](https://docs.rs/nest-rs-http/latest/nest_rs_http/struct.EndpointGuards.html);
 on a gateway, by the gateway itself, at its upgrade.
 
-GraphQL, WS and MCP each get a one-import `Authz<Transport>Module` in
-`crates/features/src/authz/`, so an app imports the module and lists nothing
-else. **HTTP has no such module**: `AbilityGuard` answers every transport, so
-`AuthzModule` provides it directly.
+Each adapter imports what its edge needs, so an app lists the adapter and nothing
+else. **HTTP and WS adapters import `AuthzModule`**, which provides `AbilityGuard`,
+since a controller or a gateway binds its guards itself. **GraphQL and MCP adapters
+import their `Authz<Edge>Module`** in `crates/features/src/authz/`, since a request
+every operation shares cannot run one host's guards.
 
 You do not write them: `nestrs g auth` writes `authz/module.rs` and
-`authz/guard.rs`, and `nestrs g graphql|ws|mcp` writes that transport's module
-alongside the adapter and wires it into the app. The blocks below are what those
-generators produce — read them to understand the wiring, copy them only into a
-workspace that was not scaffolded.
+`authz/guard.rs`, and `nestrs g graphql|mcp` writes that edge's module alongside the
+adapter and wires it into the app. The blocks below are what those generators
+produce — read them to understand the wiring, copy them only into a workspace that
+was not scaffolded.
 
 ## The modules
 

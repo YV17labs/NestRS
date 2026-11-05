@@ -8,11 +8,12 @@ sidebar:
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
 Every NestRS binary is a tree of modules. This page walks **`blog`**
-through four steps — step ① inline, then the composed root the
+through four steps, from what `nestrs new` writes to the composed root the
 [tutorial](/tutorial/) implements:
 
-1. **One root module** — handlers inline, one transport.
-2. **Extract a feature** — domain code moves to `posts/` with its own prefix.
+1. **A feature adapter and a root** — the handler in the adapter, the root
+   importing it.
+2. **A feature of its own** — a domain gets its port and one adapter per edge.
 3. **Wire imports** — static vs dynamic framework modules.
 4. **Compose** — the root lists imports only; adapters own the handlers.
 
@@ -21,33 +22,47 @@ The snippets are illustrative. Step ① matches the
 rest of this page.
 
 
-## Start with one module
+## Start with a feature adapter and a root
 
 A module is a struct decorated with `#[module(...)]`. It declares two
 things: the **providers it owns** (built and registered into the
 container) and the **modules it imports** (whose providers it can
 inject).
 
-At the smallest scale, the app's root module lists a feature's service and controller itself:
+`nestrs new blog` writes the shape every app keeps. The handler lives in a feature's
+adapter, beside the port it serves:
+
+```rust title="crates/features/src/blog/http/module.rs"
+use nest_rs::core::module;
+
+use super::controller::BlogController;
+use crate::blog::BlogModule;
+
+#[module(imports = [BlogModule], providers = [BlogController])]
+pub struct BlogHttpModule;
+```
+
+and the app's root imports the adapter, the edge it serves:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use features::blog::BlogController;
-use features::blog::BlogService;
 
-#[module(providers = [BlogService, BlogController])]
+use features::blog::BlogHttpModule;
+
+#[module(imports = [BlogHttpModule])]
 pub struct BlogModule;
 ```
 
-`BlogModule` registers its own service and controller, and the controller brings
-`HttpModule`, which starts the server: the decorator already says the edge.
-Providers in the same module share its name prefix — here, `BlogService`
-and `BlogController`.
+The controller brings `HttpModule`, which starts the server: the decorator already
+says the edge. Two modules are named `BlogModule`, the feature's port and the app's
+root, and the path says which; the app only ever names the adapter.
 
 ```mermaid
 flowchart TB
-  BM[BlogModule] --> BS[BlogService]
-  BM --> BC[BlogController]
+  BM[apps/blog: BlogModule] --> BHM[BlogHttpModule]
+  BHM --> BP[features: BlogModule]
+  BHM --> BC[BlogController]
+  BP --> BS[BlogService]
   BC -. "injects" .-> BS
   BC -. "brings" .-> HM[HttpModule]
 ```
@@ -67,17 +82,16 @@ List order does not decide what registers, and a module's providers build in
 dependency order. It does order the hooks the graph leaves free, and what a
 hand-written module installs reaches only what registers after it
 ([what is global](#what-is-global)). We still list imports in a
-readable order: **config → infrastructure → the transports it pins → auth
-wiring → feature adapters**. The app root imports **`PostsHttpModule`**, not
+readable order: **infrastructure → the transports it pins → feature
+adapters**. The app root imports **`PostsHttpModule`**, not
 `PostsModule` — the port rides along inside the adapter's own `imports`.
 Business modules sit at the bottom of the list.
 
-## Extract a feature
+## A feature of its own
 
-When a domain outgrows the `blog` placeholder, it moves to a folder of its own
-under `crates/features/src/`, with its **own name prefix**. The blog handlers become `PostsService` and
-`PostsController` under `PostsModule` — same domain, feature naming, not
-the app-root `Blog*` prefix anymore.
+A real domain gets a feature of its own under `crates/features/src/`, with its
+**own name prefix**: `PostsService` and `PostsController` under `PostsModule`,
+where `Blog*` was the greeting the scaffold starts from.
 
 <FileTree>
 - crates/features/src/posts/
@@ -195,10 +209,9 @@ and deployment-specific host/port from env. See
 
 ## Compose the root module
 
-Once `blog` needs persistence, the inline
-`BlogService` / `BlogController` pair moves into `posts/` (renamed
-`PostsService` / `PostsController`). The root module no longer lists
-providers — it only composes imports:
+Once `blog` needs persistence, the scaffold's greeting gives way to `posts/`, and
+the root picks up the backend it chooses. It still lists no provider — it only
+composes imports:
 
 ```rust title="apps/blog/src/module.rs"
 #[module(

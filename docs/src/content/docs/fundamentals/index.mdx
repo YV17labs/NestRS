@@ -13,10 +13,10 @@ a missing wire fails startup with a clear error, never with a deep
 `Cannot resolve` at first request.
 
 This category walks **`blog`** through the [**Publish**](/publish/) story
-— from an inline root (**step ①**: `BlogService` / `BlogController` under
-`crates/features/src/blog/`, which `BlogModule` in `apps/blog/` lists itself, no database) to a composed API with a `posts/` feature, the
-stage the [tutorial](/tutorial/) builds in the repo — and the primitives
-every binary leans on:
+— from the shape `nestrs new` writes (**step ①**: `BlogService` /
+`BlogController` in a feature's adapter, a root importing it, no database) to a
+composed API with a `posts/` feature, the stage the [tutorial](/tutorial/) builds
+in the repo — and the primitives every binary leans on:
 
 - **Modules** — the composition unit. `#[module]` declares what a module
   owns and what it depends on.
@@ -92,12 +92,34 @@ covers either says `#[public]` or refuses the boot, which names it. This
 tagline is open on purpose, so it says so;
 [Guards](/fundamentals/guards/) covers the other half.
 
+```rust title="crates/features/src/blog/module.rs"
+use nest_rs::core::module;
+
+use super::service::BlogService;
+
+#[module(providers = [BlogService])]
+pub struct BlogModule;
+```
+
+```rust title="crates/features/src/blog/http/module.rs"
+use nest_rs::core::module;
+
+use super::controller::BlogController;
+use crate::blog::BlogModule;
+
+#[module(imports = [BlogModule], providers = [BlogController])]
+pub struct BlogHttpModule;
+```
+
+The port owns the service, the adapter owns the handler and imports the port, and
+the app's root imports the adapter:
+
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use features::blog::BlogController;
-use features::blog::BlogService;
 
-#[module(providers = [BlogService, BlogController])]
+use features::blog::BlogHttpModule;
+
+#[module(imports = [BlogHttpModule])]
 pub struct BlogModule;
 ```
 
@@ -124,8 +146,8 @@ $ curl http://localhost:3000/
 A minimal blog API
 ```
 
-Later pages move the domain into `posts/` (`PostsService`,
-`PostsController`, `PostsModule`, …) and grow `BlogModule` into a
+Later pages give the domain a feature of its own, `posts/` (`PostsService`,
+`PostsController`, `PostsModule`, …), and grow the app's `BlogModule` into a
 composed root — see [Modules](/fundamentals/modules/). The
 [tutorial](/tutorial/) is where you implement that composed root in the
 repo.
@@ -134,8 +156,9 @@ repo.
 
 1. **Collected** every provider in the import tree — `BlogService`,
    `BlogController` — into a link-time registry.
-2. **Built** the access graph from `BlogModule`. `BlogController`
-   declares it injects `BlogService`; `BlogModule` owns both; reachable. ✓
+2. **Built** the access graph from the app's `BlogModule`. `BlogController`
+   declares it injects `BlogService`; `BlogHttpModule` imports the port that owns
+   it; reachable. ✓
 3. **Constructed** each provider once. `BlogService` became
    one `Arc<BlogService>`, injected into `BlogController::svc`.
 4. **Mounted** `BlogController` on the HTTP transport from the route
@@ -143,11 +166,10 @@ repo.
 
 ## Try breaking it
 
-Comment the line that lists `BlogService` in `BlogModule`'s providers,
-then build:
+Empty the port's `providers`, the line that lists `BlogService`, then build:
 
 ```text frame="terminal" "BlogService"
-Error: unmet dependency: `BlogController` (in module `BlogModule`) depends on `BlogService`, but no module provides it and it is not global infrastructure (a seed or factory output). Add a provider for `BlogService` to a module reachable from the root, or seed it at `App::builder()`.
+Error: unmet dependency: `BlogController` (in module `BlogHttpModule`) depends on `BlogService`, but no module provides it and it is not global infrastructure (a seed or factory output). Add a provider for `BlogService` to a module reachable from the root, or seed it at `App::builder()`.
 ```
 
 The error names the consumer (`BlogController`), the missing dependency

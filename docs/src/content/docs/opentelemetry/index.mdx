@@ -386,17 +386,29 @@ collector never stops one.
 ## Tests
 
 ```rust title="apps/api/tests/e2e/users.rs"
+use api::ApiModule;
+use features::Role;
+use features::testing::{ORG_ID, claims, client};
+use nest_rs::http::header;
 use nest_rs::testing::TestApp;
 
 #[tokio::test]
 async fn users_list_returns_a_page() {
     let app = TestApp::builder()
         .module::<ApiModule>()
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
         .build()
         .await
         .unwrap();
+    let bearer = app.bearer(&claims(ORG_ID, Role::Admin, client()));
 
-    app.http().get("/users").send().await.assert_status_is_ok();
+    app.http()
+        .get("/users")
+        .header(header::AUTHORIZATION, &bearer)
+        .send()
+        .await
+        .assert_status_is_ok();
 }
 ```
 

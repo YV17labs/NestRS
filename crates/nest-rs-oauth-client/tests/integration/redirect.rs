@@ -7,8 +7,8 @@ use std::sync::Arc;
 use nest_rs_authn::{AuthnConfig, AuthnModule, JwtService};
 use nest_rs_config::Surface;
 use nest_rs_core::module;
-use nest_rs_http::{HttpModule, Opaque, Result, StatusCode, controller, header, routes};
-use nest_rs_oauth_client::{AuthorizationRedirect, OAuthClient, OAuthClientModule, TARGET};
+use nest_rs_http::{HttpModule, Result, StatusCode, controller, header, routes};
+use nest_rs_oauth_client::{AuthorizationRedirect, OAuthClient, OAuthClientModule};
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_testing::{LogCapture, TestApp};
 use serde_json::Value;
@@ -32,22 +32,20 @@ impl OAuthController {
     #[get("/authorize")]
     #[public]
     async fn authorize(&self) -> Result<AuthorizationRedirect> {
-        self.client
-            .authorize(&self.jwt, PROVIDER, Some(RESOURCE))
-            .opaque()
+        Ok(self.client.authorize(&self.jwt, PROVIDER, Some(RESOURCE))?)
     }
 
-    /// The one way to the refusal: a provider's override appending to the URL
-    /// it was handed.
-    #[get("/authorize/appended")]
+    /// A handler writing `?` over a service that cannot sign.
+    #[get("/authorize/verify-only")]
     #[public]
-    async fn appended(&self) -> Result<AuthorizationRedirect> {
-        let mut redirect = self
+    async fn verify_only(&self) -> Result<AuthorizationRedirect> {
+        let verify_only = JwtService::new(nest_rs_authn::JwtOptions::jwks(
+            "https://issuer.example/jwks",
+        ))
+        .expect("a JWK Set service");
+        Ok(self
             .client
-            .authorize(&self.jwt, PROVIDER, Some(RESOURCE))
-            .opaque()?;
-        redirect.url.push('\n');
-        Ok(redirect)
+            .authorize(&verify_only, PROVIDER, Some(RESOURCE))?)
     }
 }
 
@@ -116,25 +114,25 @@ async fn a_handler_returning_the_redirect_answers_the_302_with_its_transaction_n
     assert_eq!(matched.resource(), Some(RESOURCE));
 }
 
+/// A transaction this server cannot sign says nothing of the caller, who is
+/// answered the opaque `500`, with no challenge and no cookie.
 #[tokio::test]
-async fn a_url_no_header_can_carry_reaches_the_client_opaque_and_the_operator_on_one_line() {
+async fn a_transaction_the_server_cannot_sign_answers_the_opaque_500() {
     let logs = LogCapture::install();
     let app = TestApp::for_module::<AuthorizeApp>().await.expect("boots");
 
-    let response = app.http().get("/authorize/appended").send().await;
+    let response = app.http().get("/authorize/verify-only").send().await;
 
     response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(response.0.headers().get(header::SET_COOKIE).is_none());
+    let headers = response.0.headers();
+    assert!(headers.get(header::WWW_AUTHENTICATE).is_none());
+    assert!(headers.get(header::SET_COOKIE).is_none());
     let document: Value = response.json().await.value().deserialize();
     assert_eq!(document["code"], "INTERNAL", "{document}");
-    assert!(document.get("detail").is_none(), "{document}");
-    logs.expect_one(TARGET, "OAuth redirect rejected");
     let errors = logs.events_at(Level::ERROR);
-    assert_eq!(
-        errors.len(),
-        1,
-        "the edge files nothing beside it: {errors:#?}"
-    );
+    assert_eq!(errors.len(), 1, "{errors:#?}");
+    let chain = errors[0].field("error").expect("the chain");
+    assert!(chain.contains("verify-only"), "{chain}");
 }
 
 #[tokio::test]

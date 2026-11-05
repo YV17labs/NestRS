@@ -736,8 +736,9 @@ async fn a_secret_signs_with_the_hmac_algorithm_named() {
     use nest_rs_authn::Algorithm;
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, nest_rs_authn::PrincipalIdentity)]
     struct Claims {
+        #[principal(actor)]
         sub: String,
     }
 

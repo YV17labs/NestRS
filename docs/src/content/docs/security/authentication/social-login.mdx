@@ -158,9 +158,9 @@ pub fn authorize(
     resource: Option<&str>,
 ) -> Result<SocialRedirect, TokenError> {
     self.sign_in_audience(resource)?;
-    self.providers
-        .authorize(provider, &self.jwt_svc, resource)
-        .map_err(|error| TokenError::Sign(error.into()))
+    Ok(self
+        .providers
+        .authorize(provider, &self.jwt_svc, resource)?)
 }
 ```
 

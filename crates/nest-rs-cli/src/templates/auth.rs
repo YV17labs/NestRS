@@ -152,7 +152,7 @@ pub(crate) const AUTHN_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::authn::{DevelopmentOnlyGuard, JwtService};
 use nest_rs::core::input;
-use nest_rs::http::{Json, Opaque, Result, controller, routes};
+use nest_rs::http::{Json, Result, controller, routes};
 use nest_rs::oauth::server::AccessTokenResponse;
 use uuid::Uuid;
 
@@ -185,7 +185,7 @@ impl DevTokenController {
             roles: if roles.is_empty() { vec![Role::User] } else { roles },
         };
         Ok(AccessTokenResponse::bearer(
-            self.jwt.sign(&claims).opaque()?,
+            self.jwt.sign(&claims)?,
             self.jwt.ttl_secs(),
         ))
     }

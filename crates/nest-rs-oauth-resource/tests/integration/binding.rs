@@ -19,8 +19,9 @@ const TRUSTED: [&str; 2] = ["https://auth.example.com", "https://login.example.c
 /// 32 bytes: HS256's floor.
 const SECRET: &str = "binding-flow-secret-0123456789ab";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, nest_rs_authn::PrincipalIdentity)]
 struct Claims {
+    #[principal(actor)]
     sub: String,
 }
 

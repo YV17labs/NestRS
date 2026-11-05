@@ -1,5 +1,6 @@
 //! Authentication failures, rendered as HTTP 401 challenges — and the one that
-//! is no challenge, an identity store or provider that did not answer, as 503.
+//! is no challenge, an identity store or provider that did not answer, as 503 —
+//! and a token this server could not mint, which says nothing of its caller.
 //!
 //! The token-endpoint vocabulary an *issuing* app answers with is
 //! `nest-rs-oauth-server`'s: this crate resolves who is calling, and a grant
@@ -12,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_core::__private::OpaqueCause;
+use nest_rs_core::{Problem, ToProblem};
 use nest_rs_http::{HeaderValue, IntoResponse, Response, ResponseError, StatusCode, header};
 
 use nest_rs_http::challenge::NoBearerChallenge;
@@ -95,6 +97,74 @@ const FAILED: &str = "authentication failed";
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("invalid credentials")]
 pub struct CredentialError;
+
+/// What a failed signing path displays, whatever failed.
+const SIGN_FAILED: &str = "the token could not be signed";
+
+/// Why this server could not mint a token: it holds no signing key, or the
+/// claims it was handed name no subject or are no JSON object. The failure is
+/// the server's, never a verdict on the caller: a handler returning it answers
+/// opaquely on every edge, and `?` on it where a route answers an `HttpError`
+/// is the opaque `500`, its chain filed at `error`, never a `401` a client would
+/// retry with another credential.
+///
+/// It displays a constant and keeps what failed as its
+/// [`source`](Error::source), read together with
+/// [`error_message`](fn@nest_rs_core::error_message).
+///
+/// ```
+/// use nest_rs_authn::{JwtOptions, JwtService, PrincipalIdentity};
+/// use nest_rs_http::{HttpError, StatusCode};
+///
+/// #[derive(serde::Serialize, PrincipalIdentity)]
+/// struct Claims {
+///     #[principal(actor)]
+///     sub: String,
+/// }
+///
+/// let verify_only = JwtService::new(JwtOptions::jwks("https://issuer.example/jwks")).unwrap();
+///
+/// let error = verify_only.sign(&Claims { sub: "ada".into() }).unwrap_err();
+/// assert_eq!(
+///     nest_rs_core::error_message(&error),
+///     "the token could not be signed: this JwtService is verify-only — no signing key configured",
+/// );
+/// assert_eq!(HttpError::from(error).status(), StatusCode::INTERNAL_SERVER_ERROR);
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[error("{}", SIGN_FAILED)]
+pub struct SignError {
+    #[source]
+    cause: OpaqueCause,
+}
+
+impl SignError {
+    /// A signing path refused for `detail`, which names what failed for the
+    /// operator's line, never a value it read.
+    pub fn new(detail: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            cause: OpaqueCause::new(detail, None),
+        }
+    }
+
+    /// [`new`](Self::new), keeping what failed beneath the detail, under
+    /// [`AuthError::failed_because`]'s rule: a source never quotes a value.
+    pub fn because(
+        detail: impl Into<Cow<'static, str>>,
+        source: impl Into<Box<dyn Error + Send + Sync>> + 'static,
+    ) -> Self {
+        Self {
+            cause: OpaqueCause::because(detail, source),
+        }
+    }
+}
+
+/// Nothing a client may read: the opaque answer, on every edge.
+impl ToProblem for SignError {
+    fn to_problem(&self) -> Option<Problem> {
+        None
+    }
+}
 
 /// Why authentication did not establish an identity.
 ///

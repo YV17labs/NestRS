@@ -116,9 +116,9 @@ impl SignInService {
         resource: Option<&str>,
     ) -> Result<SocialRedirect, TokenError> {
         self.sign_in_audience(resource)?;
-        self.providers
-            .authorize(provider, &self.jwt_svc, resource)
-            .map_err(|error| TokenError::Sign(error.into()))
+        Ok(self
+            .providers
+            .authorize(provider, &self.jwt_svc, resource)?)
     }
 
     fn sign_in_audience(&self, resource: Option<&str>) -> Result<&str, TokenError> {
@@ -183,9 +183,7 @@ pub(crate) fn issue_with_jwt(
     audience: &str,
     claims: Claims,
 ) -> Result<AccessTokenResponse, TokenError> {
-    let access_token = jwt_svc
-        .sign_for(audience, &claims)
-        .map_err(|e| TokenError::Sign(e.into()))?;
+    let access_token = jwt_svc.sign_for(audience, &claims)?;
     tracing::debug!(
         target: crate::sign_in::TARGET,
         audience,

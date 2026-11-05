@@ -3,15 +3,17 @@
 //! from its issuer — whatever key material its configuration names, and
 //! whether or not the app signs.
 
-use nest_rs_authn::{AuthnConfig, AuthnModule, JwtOptions, JwtService};
+use nest_rs_authn::__private::sign_unchecked;
+use nest_rs_authn::{AuthnConfig, AuthnModule, JwtOptions, JwtService, PrincipalIdentity};
 use nest_rs_core::{Secret, module};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule};
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[derive(Serialize)]
+#[derive(Serialize, PrincipalIdentity)]
 struct Claims {
+    #[principal(actor)]
     sub: String,
 }
 
@@ -131,9 +133,8 @@ async fn an_app_that_signs_signs_with_the_tests_key() {
     .await;
     let jwt = jwt(&app);
 
-    let own = jwt
-        .sign(&json!({ "sub": "grace" }))
-        .expect("an app that signs keeps signing");
+    let own =
+        sign_unchecked(&jwt, &json!({ "sub": "grace" })).expect("an app that signs keeps signing");
     let read: Read = jwt.verify(&own).await.expect("its own token verifies");
     assert_eq!(read.sub, "grace");
     jwt.verify::<Read>(token(&app.bearer(&ada())))

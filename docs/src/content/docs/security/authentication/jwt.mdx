@@ -167,8 +167,15 @@ let claims = Claims {
 let token = self.jwt.sign(&claims)?;
 ```
 
-`sign` is `Result<String, AuthError>` — on a verify-only service
-(EdDSA with no private key), it returns `AuthError::Failed { .. }`.
+`sign` is `Result<String, SignError>`. A token this server cannot mint — a
+verify-only service, EdDSA with no private key or a JWK Set, is the one you will
+meet — is the server's failure, never the caller's: `?` in a route answers the
+opaque `500` and files the chain at `error`, where a `401` would send a client off
+for another credential, and a handler returning it on another edge answers as
+opaquely. A handler has nothing to add. A service holds it as a `#[from]` variant
+of its own error, and a token endpoint's `TokenError` already does. It does not convert into `AuthError`, whose every answer speaks of the
+credential: a login handler `?`-ing both answers `nest_rs::http::Result`, into which
+each converts on its own status.
 `ttl_secs()` is the token's lifetime, `JwtOptions::expires_in` (default one
 hour), so the issuer can return it alongside the token.
 
@@ -179,6 +186,22 @@ that; `jti`, an identifier no other token shares; and the `aud` and `iss` you
 configured. Your claims name the rest — `sub`, and the `client_id` of the
 OAuth client the token is issued to — and a claim they already carry is kept
 as written: an `exp` of their own outlives or undercuts the signer's.
+
+`sub` is held by the type. `sign` and `sign_for` take a `PrincipalIdentity`, the
+derive your claims already carry for the guard, and a type without it does not
+compile. A claims type holding its subject under another name is stamped its
+`#[principal(actor)]` as `sub`; one naming no subject at all, its actor `None` or
+empty, mints nothing and answers the `SignError` above. A test forging such a token,
+to prove your verifier refuses it, hands it to
+[`TestApp::bearer`](/tutorial/testing/), which signs what it is given.
+
+The demo's machine tokens name their `client_id`. Its user tokens name none,
+which RFC 9068 §2.2 requires: `/login` and the social callback identify no OAuth
+client, so naming one would invent it. That gap closes when the first-party login
+becomes an authorization-code grant (RFC 6749 §4.1, with PKCE) by a registered
+public client, so read it as the demo's limit, never as what a client you register
+should do.
+
 `sign_handshake`, for a flow's short-lived token, stamps the same but `exp`:
 its claims name their lifetime with `expiry_in(secs)`, and claims naming none
 are refused rather than given the access token's.

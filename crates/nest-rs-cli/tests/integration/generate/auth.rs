@@ -224,7 +224,7 @@ fn generate_auth_dev_token_route_answers_the_framework_s_token_response() {
         controller.contains("use nest_rs::oauth::server::AccessTokenResponse;")
             && controller.contains("-> Result<AccessTokenResponse> {")
             && controller.contains("AccessTokenResponse::bearer(")
-            && controller.contains("self.jwt.sign(&claims).opaque()?,")
+            && controller.contains("self.jwt.sign(&claims)?,")
             && controller.contains("self.jwt.ttl_secs(),"),
         "the dev-token route returns the framework's response:\n{controller}",
     );

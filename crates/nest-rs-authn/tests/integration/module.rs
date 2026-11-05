@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 /// only pass by way of this call.
 const PINNED_ISSUER: &str = "pinned-through-for-root";
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, nest_rs_authn::PrincipalIdentity)]
 struct Claims {
+    #[principal(actor)]
     sub: String,
 }
 

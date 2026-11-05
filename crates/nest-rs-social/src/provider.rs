@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use nest_rs_authn::{AuthError, JwtService};
+use nest_rs_authn::{AuthError, JwtService, SignError};
 use nest_rs_core::Secret;
 use nest_rs_oauth_client::{AuthorizationRedirect, AuthorizationResponse, OAuthClient, TokenSet};
 
@@ -84,7 +84,7 @@ pub trait SocialProvider: Send + Sync + 'static {
         &self,
         jwt: &JwtService,
         resource: Option<&str>,
-    ) -> Result<AuthorizationRedirect, AuthError> {
+    ) -> Result<AuthorizationRedirect, SignError> {
         self.client().authorize(jwt, self.key(), resource)
     }
 

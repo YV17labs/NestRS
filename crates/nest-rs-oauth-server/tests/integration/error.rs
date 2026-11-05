@@ -48,7 +48,7 @@ impl TokenController {
     #[post("/token/unsigned")]
     #[public]
     async fn unsigned(&self) -> nest_rs_http::Result<String> {
-        Err(TokenError::Sign(anyhow::anyhow!("signing key unusable")).into())
+        Err(TokenError::Sign(nest_rs_authn::SignError::new("signing key unusable")).into())
     }
 }
 
@@ -192,7 +192,7 @@ async fn a_signing_failure_is_a_500_whose_cause_reaches_the_operator_alone() {
             "error".to_owned(),
             nest_rs_http::target::HTTP.to_owned(),
             "request failed".to_owned(),
-            Some("server_error: signing key unusable".to_owned()),
+            Some("server_error: the token could not be signed: signing key unusable".to_owned()),
         )],
     );
 }

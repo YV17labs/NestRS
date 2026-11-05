@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use nest_rs_authn::__private::{EphemeralSigningKey, ResourceBinding};
+use nest_rs_authn::__private::{EphemeralSigningKey, ResourceBinding, sign_unchecked};
 use nest_rs_authn::{AuthnConfig, JwtOptions, JwtService};
 use nest_rs_core::{Container, Secret};
 use serde::Serialize;
@@ -70,9 +70,10 @@ impl Signer {
         let signer = Self {
             jwt: JwtService::new(options)?,
         };
-        let probe = signer
-            .jwt
-            .sign(&serde_json::json!({ "sub": "nest-rs-testing" }))?;
+        let probe = sign_unchecked(
+            &signer.jwt,
+            &serde_json::json!({ "sub": "nest-rs-testing" }),
+        )?;
         verifier.verify::<Value>(&probe).await.context(
             "the app's JwtService refuses a token of its ephemeral signing key: it was seeded or \
              overridden past the module that builds it from AuthnConfig",
@@ -82,15 +83,14 @@ impl Signer {
 }
 
 impl Kept {
-    /// The `Authorization` value of `claims` signed by the app's ephemeral key.
+    /// The `Authorization` value of `claims` signed by the app's ephemeral key,
+    /// as they are written: a test forges what the app must refuse.
     pub(crate) fn bearer(&self, claims: &impl Serialize) -> String {
         let signer = self.signer.as_ref().expect(
             "the app was booted with no signing key of the test's own: add \
              `.ephemeral_signing_key()` to its builder",
         );
-        let token = signer
-            .jwt
-            .sign(claims)
+        let token = sign_unchecked(&signer.jwt, claims)
             .unwrap_or_else(|refused| panic!("the claims could not be signed: {refused}"));
         format!("Bearer {token}")
     }

@@ -53,7 +53,7 @@ pub use algorithm::Algorithm;
 pub use config::AuthnConfig;
 pub use credentials::{basic_credentials, bearer_token};
 pub use development::DevelopmentOnlyGuard;
-pub use error::{AuthError, CredentialError, PasswordError, UnknownAlgorithmError};
+pub use error::{AuthError, CredentialError, PasswordError, SignError, UnknownAlgorithmError};
 pub use guard::AuthnGuard;
 pub use jwks::{
     JWKS_CONNECT_TIMEOUT, JWKS_DEFAULT_MAX_AGE, JWKS_FETCH_TIMEOUT, JWKS_MAX_AGE_CEILING,
@@ -137,4 +137,5 @@ pub mod __private {
         Actor, ActorField, ActorRefusal, IdentifierAnswer, IdentifierProbe, ScopeList, Tenant,
         TenantField, TenantRefusal, scope_list,
     };
+    pub use crate::service::sign_unchecked;
 }

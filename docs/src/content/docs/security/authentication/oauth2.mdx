@@ -67,7 +67,7 @@ use std::sync::Arc;
 
 use nest_rs::authn::JwtService;
 use nest_rs::core::Ambient;
-use nest_rs::http::{Opaque, Result, controller, routes};
+use nest_rs::http::{Result, controller, routes};
 use nest_rs::oauth::client::{AuthorizationRedirect, OAuthClient};
 use nest_rs::oauth::server::AccessTokenResponse;
 
@@ -86,7 +86,7 @@ impl OAuthController {
     #[get("/authorize")]
     #[public]
     async fn authorize(&self) -> Result<AuthorizationRedirect> {
-        self.client.authorize(&self.jwt, "github", None).opaque()
+        Ok(self.client.authorize(&self.jwt, "github", None)?)
     }
 
     // NOT `#[public]`: `OAuthGuard` authenticates *from* `code`/`state`, so it
@@ -182,9 +182,7 @@ plaintext.
 follows and the signed transaction cookie that ties the round-trip together.
 
 ```rust title="crates/features/src/authn/http/controller.rs"
-self.client
-    .authorize(&self.jwt, "github", Some("https://api.example.com"))
-    .opaque()
+Ok(self.client.authorize(&self.jwt, "github", Some("https://api.example.com"))?)
 ```
 
 The `provider` argument is the registry key of the provider this flow is for.
@@ -328,9 +326,10 @@ endpoint, before either of those speaks for it.
 ## `AuthorizationRedirect` — the redirect leg's return value
 
 ```rust title="nest_rs::oauth::client::AuthorizationRedirect"
-pub struct AuthorizationRedirect {
-    pub url: String,
-    pub transaction: String,
+pub struct AuthorizationRedirect { /* private fields */ }
+
+impl AuthorizationRedirect {
+    pub fn url(&self) -> &str;
 }
 ```
 
@@ -344,11 +343,12 @@ set-cookie: __Host-oauth_tx=<token>; Path=/; Max-Age=600; HttpOnly; Secure; Same
 cache-control: no-store
 ```
 
-`no-store` means no cache keeps the response that set the cookie, and
-`set_cookie()` is that whole `Set-Cookie` value. A `url` no header can carry, one
-a provider's override appended to, answers the opaque `500` and files
-`OAuth redirect rejected` at `error` on `nest_rs::oauth::client`, quoting neither
-field.
+`no-store` means no cache keeps the response that set the cookie, and the answer
+is the cookie's one way out: its fields are private and written valid where
+`authorize` builds them, so a handler cannot set it on a response of its own.
+`url()` reads where the browser is sent. A transaction `jwt` cannot sign — a
+verify-only service — is a `SignError`, the opaque `500` with no cookie, no
+challenge and its chain at `error`.
 
 Behind a social provider, `SocialRegistry::authorize` answers a `SocialRedirect`
 wrapping this one, or the `404` for a provider no imported module registers
@@ -565,8 +565,8 @@ The guard answers through this one rendering, so a client refused by the
 guard and one a handler refuses read the same bytes.
 
 The `Sign` variant collapses any internal signing failure to the
-opaque RFC code on the wire; the inner `anyhow::Error` stays attached
-for `tracing`. `Server` is a dependency the grant needed — the identity
+opaque RFC code on the wire; the `SignError` it holds stays attached
+for `tracing`, and `?` on a `sign_for` converts into it. `Server` is a dependency the grant needed — the identity
 store — that did not answer: no failure of the client's nor of this
 server's code, so a `503` (RFC 9110 §15.6.4) the client may retry, and
 the same opaque code. A rename of these strings breaks every conforming

@@ -276,6 +276,7 @@ on a handler that calls a service without a single line of conversion code:
 | `nest_rs::seaorm::ServiceError` | Repo, CrudService, dataloader | `ToProblem` — `problem+json` with its `code`, `400` validation, as the edge's own check answers, `422` invalid, `409` conflict (a unique violation among them), `403` forbidden, `404` not found, `503` a statement Postgres cancelled at its bound (with the bound as its `Retry-After`), `500` else (validation field errors ride as `errors`) |
 | `nest_rs::oauth::server::TokenError` | OAuth token endpoint: the handler, `ClientAuthenticationGuard`, `AccessTokenRequest` | `ResponseError` — `application/json` per RFC 6749 §5.2, never a problem document — `400` bad grant/scope, a request that does not parse (`invalid_request`, its `error_description` saying where) or a client refused without HTTP authentication, `401` `invalid_client` with a `Basic` challenge for a client refused over the `Authorization` header, `500` signing, `503` a dependency that did not answer |
 | `nest_rs::authn::AuthError` | Strategy authentication | `ResponseError` — `401` challenge (`503`, with a `Retry-After` when known, when the identity store or provider is unavailable) |
+| `nest_rs::authn::SignError` | `JwtService::sign`, `OAuthClient::authorize` | `ToProblem` saying none — the opaque `500` |
 
 Every error the HTTP transport renders — a handler's `ServiceError`, an
 inline `ProblemDetails`, a validation rejection, and even a raw router
@@ -291,8 +292,8 @@ An error nobody meant for the client — an `anyhow` chain a route returns
 `HttpError::new(e, StatusCode::INTERNAL_SERVER_ERROR)` — is never lost on the way: it answers the
 opaque `500`, and its whole chain is filed once at `error` on
 `nest_rs::http`. So is the chain behind a framework error's `5xx`, the one
-line its failure gets: a `ServiceError`'s database error, a `TokenError`'s
-signing failure, and at `warn` an `AuthError`'s or a `TokenError`'s `503`. A
+line its failure gets: a `ServiceError`'s database error, a `SignError` or a
+`TokenError`'s signing failure, and at `warn` an `AuthError`'s or a `TokenError`'s `503`. A
 `nest_rs::core::Problem` the chain carries answers itself
 instead — its status, its `type` and `title`, its `detail` and field map on a
 `4xx`, its `code` as an extension member and its `Retry-After` — the same

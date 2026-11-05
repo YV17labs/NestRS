@@ -9,12 +9,13 @@ use jsonwebtoken::{
 use nest_rs_config::{Namespaced, endpoint_shown};
 use nest_rs_core::Secret;
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
-use crate::Algorithm;
 use crate::algorithm::{Family, algorithms_of};
-use crate::error::AuthError;
+use crate::error::{AuthError, SignError};
 use crate::jwks::Jwks;
+use crate::{Algorithm, PrincipalIdentity};
 use nest_rs_config::ClientTls;
 
 use crate::AuthnConfig;
@@ -555,17 +556,33 @@ impl JwtService {
     }
 
     /// Sign `claims` into a compact JWT this service mints for itself. Errors
-    /// on a verify-only service (no encoding key) or a serialization failure.
+    /// on a verify-only service (no encoding key), on claims naming no subject
+    /// or on a serialization failure.
     ///
     /// The token carries what the signer owns of RFC 9068 §2.2's required set
     /// — `iat`, `exp` this service's lifetime after it, a fresh `jti`, and the
     /// configured `aud` and `iss` — beside `claims`, which name the rest:
-    /// `sub` and `client_id`. A claim `claims` already carry is never
-    /// overwritten. A token for another resource is
+    /// `sub`, their [`actor_id`](PrincipalIdentity::actor_id) when they carry no
+    /// such claim, and `client_id`. A claim `claims` already carry is never
+    /// overwritten. Claims naming no subject mint nothing, and a type that is
+    /// no principal does not compile. A token for another resource is
     /// [`sign_for`](Self::sign_for)'s.
-    pub fn sign<C: Serialize>(&self, claims: &C) -> Result<String, AuthError> {
+    ///
+    /// ```compile_fail,E0277
+    /// use nest_rs_authn::{JwtOptions, JwtService};
+    ///
+    /// let jwt = JwtService::new(JwtOptions::new("a-secret-padded-to-thirty-two-bytes")).unwrap();
+    /// jwt.sign(&serde_json::json!({})).unwrap();
+    /// ```
+    pub fn sign<C: Serialize + PrincipalIdentity>(&self, claims: &C) -> Result<String, SignError> {
         let signer = self.signer()?;
-        self.encode_with(signer, &signer.header, claims, None, Lifetime::Signer)
+        self.encode_with(
+            signer,
+            &signer.header,
+            naming_its_subject(claims)?,
+            None,
+            Lifetime::Signer,
+        )
     }
 
     /// Sign `claims` into a compact JWT for `resource`, the RFC 8707 §2
@@ -575,12 +592,16 @@ impl JwtService {
     ///
     /// The token carries the stamps [`sign`](Self::sign) does but the
     /// audience. Errors on a blank `resource`, on `claims` naming an `aud` of
-    /// their own, on a verify-only service, or on a serialization failure.
-    /// Which resources a caller may be minted a token for is the issuer's to
-    /// decide before it calls this.
-    pub fn sign_for<C: Serialize>(&self, resource: &str, claims: &C) -> Result<String, AuthError> {
+    /// their own or no subject, on a verify-only service, or on a serialization
+    /// failure. Which resources a caller may be minted a token for is the
+    /// issuer's to decide before it calls this.
+    pub fn sign_for<C: Serialize + PrincipalIdentity>(
+        &self,
+        resource: &str,
+        claims: &C,
+    ) -> Result<String, SignError> {
         if resource.trim().is_empty() {
-            return Err(AuthError::failed(
+            return Err(SignError::new(
                 "a blank resource names no resource to sign a token for",
             ));
         }
@@ -588,41 +609,41 @@ impl JwtService {
         self.encode_with(
             signer,
             &signer.header,
-            claims,
+            naming_its_subject(claims)?,
             Some(resource),
             Lifetime::Signer,
         )
     }
 
     /// The signing half, or the refusal a verify-only service answers.
-    fn signer(&self) -> Result<&Signer, AuthError> {
+    fn signer(&self) -> Result<&Signer, SignError> {
         self.signer.as_ref().ok_or_else(|| {
-            AuthError::failed("this JwtService is verify-only — no signing key configured")
+            SignError::new("this JwtService is verify-only — no signing key configured")
         })
     }
 
     /// Sign `claims` under `header` for `resource` — this service itself when
     /// `None` — stamping the signer's claims first, `exp` as `lifetime` says.
-    fn encode_with<C: Serialize>(
+    fn encode_with(
         &self,
         signer: &Signer,
         header: &Header,
-        claims: &C,
+        claims: Map<String, Value>,
         resource: Option<&str>,
         lifetime: Lifetime,
-    ) -> Result<String, AuthError> {
+    ) -> Result<String, SignError> {
         encode(
             header,
             &self.stamped(claims, resource, lifetime)?,
             &signer.key,
         )
-        .map_err(|e| AuthError::failed_because("the claims could not be signed", e))
+        .map_err(|e| SignError::because("the claims could not be signed", e))
     }
 
-    /// `claims` as a JSON object carrying `iat`, `exp` the configured lifetime
-    /// after it (for a [`Lifetime::Signer`] token), a fresh `jti`, the
-    /// configured `iss`, and as `aud` either `resource` or, for a token this
-    /// service mints for itself, the configured audience.
+    /// `claims` carrying `iat`, `exp` the configured lifetime after it (for a
+    /// [`Lifetime::Signer`] token), a fresh `jti`, the configured `iss`, and as
+    /// `aud` either `resource` or, for a token this service mints for itself,
+    /// the configured audience.
     ///
     /// Verification requires `aud` and `iss` when configured, so a claims
     /// struct omitting them would mint tokens its own verifier rejects. A claim
@@ -630,22 +651,16 @@ impl JwtService {
     /// `resource`, which it would contradict, is refused, and so are
     /// [`Lifetime::Claims`] claims carrying no `exp`; one serialized as `null`
     /// is absent.
-    fn stamped<C: Serialize>(
+    fn stamped(
         &self,
-        claims: &C,
+        mut claims: Map<String, Value>,
         resource: Option<&str>,
         lifetime: Lifetime,
-    ) -> Result<serde_json::Value, AuthError> {
-        let mut value = serde_json::to_value(claims)
-            .map_err(|e| AuthError::failed_because("the claims could not be serialized", e))?;
-        let Some(map) = value.as_object_mut() else {
-            // A non-object body cannot carry registered claims; the encoder fails it.
-            return Ok(value);
-        };
+    ) -> Result<Map<String, Value>, SignError> {
         let signer_s_lifetime = match lifetime {
             Lifetime::Signer => Some(self.expires_in.as_secs()),
-            Lifetime::Claims if map.get("exp").is_none_or(serde_json::Value::is_null) => {
-                return Err(AuthError::failed(
+            Lifetime::Claims if claims.get("exp").is_none_or(Value::is_null) => {
+                return Err(SignError::new(
                     "a handshake's claims carry no `exp` — name its lifetime with \
                      `JwtService::expiry_in(secs)`: a handshake never inherits the access-token \
                      lifetime",
@@ -655,8 +670,8 @@ impl JwtService {
         };
         let audience = match resource {
             Some(resource) => {
-                if map.get("aud").is_some_and(|aud| !aud.is_null()) {
-                    return Err(AuthError::failed(
+                if claims.get("aud").is_some_and(|aud| !aud.is_null()) {
+                    return Err(SignError::new(
                         "the claims carry an `aud` of their own beside the resource they are \
                          signed for — leave `aud` to the signer",
                     ));
@@ -666,7 +681,7 @@ impl JwtService {
             None => self.audience.clone(),
         };
         let issued = get_current_timestamp();
-        let stamps: [(&str, Option<serde_json::Value>); 5] = [
+        let stamps: [(&str, Option<Value>); 5] = [
             ("iat", Some(issued.into())),
             (
                 "exp",
@@ -678,12 +693,12 @@ impl JwtService {
         ];
         for (key, stamp) in stamps {
             if let Some(stamp) = stamp
-                && map.get(key).is_none_or(serde_json::Value::is_null)
+                && claims.get(key).is_none_or(Value::is_null)
             {
-                map.insert(key.to_owned(), stamp);
+                claims.insert(key.to_owned(), stamp);
             }
         }
-        Ok(value)
+        Ok(claims)
     }
 
     /// Verify `token` and deserialize its claims into `C`, applying the pinned
@@ -745,11 +760,11 @@ impl JwtService {
         &self,
         purpose: &str,
         claims: &C,
-    ) -> Result<String, AuthError> {
+    ) -> Result<String, SignError> {
         let signer = self.signer()?;
         let mut header = signer.header.clone();
         header.typ = Some(handshake_typ(purpose));
-        self.encode_with(signer, &header, claims, None, Lifetime::Claims)
+        self.encode_with(signer, &header, payload_of(claims)?, None, Lifetime::Claims)
     }
 
     /// Verify a handshake token minted by [`sign_handshake`](Self::sign_handshake)
@@ -795,6 +810,52 @@ impl JwtService {
     pub fn ttl_secs(&self) -> u64 {
         self.expires_in.as_secs()
     }
+}
+
+/// `claims` signed as `jwt` signs an access token, naming a subject or none as
+/// written: what a suite forges for a verifier to refuse.
+pub fn sign_unchecked<C: Serialize>(jwt: &JwtService, claims: &C) -> Result<String, SignError> {
+    let signer = jwt.signer()?;
+    jwt.encode_with(
+        signer,
+        &signer.header,
+        payload_of(claims)?,
+        None,
+        Lifetime::Signer,
+    )
+}
+
+/// `claims` as what a JWT's payload is: a JSON object (RFC 7519 §7.2).
+fn payload_of<C: Serialize>(claims: &C) -> Result<Map<String, Value>, SignError> {
+    match serde_json::to_value(claims) {
+        Ok(Value::Object(payload)) => Ok(payload),
+        Ok(_) => Err(SignError::new("the claims serialize to no JSON object")),
+        Err(e) => Err(SignError::because("the claims could not be serialized", e)),
+    }
+}
+
+/// `claims` as an access token's payload, its `sub` theirs or, when they carry
+/// none, their actor: RFC 9068 §2.2 requires one, and an empty one names no one.
+fn naming_its_subject<C: Serialize + PrincipalIdentity>(
+    claims: &C,
+) -> Result<Map<String, Value>, SignError> {
+    let mut payload = payload_of(claims)?;
+    let named = match payload.get("sub") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(sub)) => !sub.is_empty(),
+        Some(_) => true,
+    };
+    if !named {
+        let actor = claims.actor_id().filter(|actor| !actor.is_empty());
+        let Some(actor) = actor else {
+            return Err(SignError::new(
+                "the claims name no subject: RFC 9068 §2.2 requires `sub`, which their \
+                 `actor_id` supplies when they carry none",
+            ));
+        };
+        payload.insert("sub".to_owned(), actor.into());
+    }
+    Ok(payload)
 }
 
 /// The validation every token meets, for one `algorithm`, its `iss` one of
@@ -923,14 +984,11 @@ mod tests {
     #[test]
     fn a_jwk_set_service_signs_nothing() {
         let jwt = JwtService::new(JwtOptions::jwks("https://issuer.example/jwks")).expect("built");
-        assert!(matches!(
-            jwt.sign(&serde_json::json!({})),
-            Err(AuthError::Failed { .. })
-        ));
-        assert!(matches!(
-            jwt.sign_handshake("oauth-tx", &serde_json::json!({})),
-            Err(AuthError::Failed { .. })
-        ));
+        assert!(sign_unchecked(&jwt, &serde_json::json!({})).is_err());
+        assert!(
+            jwt.sign_handshake("oauth-tx", &serde_json::json!({}))
+                .is_err()
+        );
         assert!(matches!(
             jwt.verify_handshake::<serde_json::Value>("oauth-tx", "a.b.c"),
             Err(AuthError::Failed { .. })

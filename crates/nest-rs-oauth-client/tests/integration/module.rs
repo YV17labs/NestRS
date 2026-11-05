@@ -42,17 +42,17 @@ async fn for_root_pins_the_config_and_provides_a_client_built_from_it() {
     let authorization = client.authorize(&jwt, "acme", None).expect("authorize");
     assert!(
         authorization
-            .url
+            .url()
             .starts_with("https://pinned.example/authorize?"),
         "the client was built from the pinned base, got {}",
-        authorization.url,
+        authorization.url(),
     );
     assert!(
         authorization
-            .url
+            .url()
             .contains("client_id=pinned-through-for-root"),
         "got {}",
-        authorization.url,
+        authorization.url(),
     );
 }
 

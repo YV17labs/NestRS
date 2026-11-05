@@ -117,3 +117,32 @@ the row with `actor_id` pinned to their own id, so the grant fills the actor and
 re-check holds it (`create-fills-what-the-grants-pin.md`), and no guard, newtype or
 parameter threads it. `current_actor_id()` stays the audit identity for a line, a
 string the row's column would have to parse.
+
+## 2026-11-05 — `sign` takes a principal, so a token names its subject
+
+Reopens the 2026-10-25 entry's first refusal, settled by the owner's mandate of
+2026-11-05, which covers the public API break. "The claims type holds `sub` by its
+field's type" held only for a type that has the field: `C: Serialize` holds nothing,
+and a claims type without one minted `at+jwt` with no `sub`, in silence. Seen run.
+
+**`sign` and `sign_for` take `C: Serialize + PrincipalIdentity`.** A claims type already
+says who it names, to the guard, through `#[principal(actor)]`, so the signer asks it
+rather than reading a convention off serialized names, which is what the 2026-10-25
+entry refused. A `sub` the claims carry is kept, as every claim is; one absent, `null`
+or empty is their `actor_id()`, and claims whose actor is `None` or empty mint nothing.
+`sign_handshake` keeps `C: Serialize`: a flow's transaction names no one.
+
+That entry's other reason stands: a test minting a hand-made claim set, the one that
+proves a verifier refuses it, needs a signer that signs it. `TestApp::bearer` signs what
+it is given, through `nest_rs_authn::__private::sign_unchecked`, and so does a suite
+forging one by hand. An application does not reach either.
+
+Everyday code does not move: a claims type an app verifies already derives the trait,
+and one an issuer only signs gains a derive and an attribute.
+
+- **Refused: a second method beside `sign`** (`sign_principal`): two ways to mint, the
+  old one still minting nothing.
+- **Refused: comparing a carried `sub` with `actor_id()`.** The derive reads the one from
+  the other, so only a hand-written impl can disagree, and it says so visibly.
+- **`client_id` stays `Option`**: the 2026-10-25 entry's gap, the demo's user tokens naming
+  none, is unchanged, and the JWT page now says so.

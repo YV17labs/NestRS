@@ -17,7 +17,7 @@ use nest_rs_oauth_client::AuthorizationRedirect;
 /// use std::sync::Arc;
 ///
 /// use nest_rs_authn::JwtService;
-/// use nest_rs_http::{Opaque, Path, Result, controller, routes};
+/// use nest_rs_http::{Path, Result, controller, routes};
 /// use nest_rs_social::{SocialRedirect, SocialRegistry};
 ///
 /// #[controller(path = "/social")]
@@ -33,7 +33,7 @@ use nest_rs_oauth_client::AuthorizationRedirect;
 ///     #[get("/{provider}/authorize")]
 ///     #[public]
 ///     async fn authorize(&self, Path(provider): Path<String>) -> Result<SocialRedirect> {
-///         self.providers.authorize(&provider, &self.jwt, None).opaque()
+///         Ok(self.providers.authorize(&provider, &self.jwt, None)?)
 ///     }
 /// }
 /// ```
@@ -92,24 +92,33 @@ mod tests {
             .expect("the transaction signs")
     }
 
+    /// Each flow draws its own `state` and transaction, so what two answers
+    /// share is everything but those: the status and the headers, in order,
+    /// with the cookie's attributes and the location's endpoint.
     #[test]
-    fn a_social_redirect_answers_byte_for_byte_what_the_plain_client_answers() {
-        let plain = begun();
-        let mut wrapped = begun();
-        wrapped.url.clone_from(&plain.url);
-        wrapped.transaction.clone_from(&plain.transaction);
-        let bytes = |response: &Response| {
+    fn a_social_redirect_answers_what_the_plain_client_answers() {
+        let shape = |response: &Response| {
             response
                 .headers()
                 .iter()
-                .map(|(name, value)| (name.clone(), value.as_bytes().to_vec()))
+                .map(|(name, value)| {
+                    let value = value.to_str().expect("ASCII");
+                    let fixed = match name.as_str() {
+                        "location" => value
+                            .split_once('?')
+                            .map_or(value, |(endpoint, _)| endpoint),
+                        "set-cookie" => value.split_once(';').map_or(value, |(_, rest)| rest),
+                        _ => value,
+                    };
+                    (name.clone(), fixed.to_owned())
+                })
                 .collect::<Vec<_>>()
         };
 
-        let plain = plain.into_response();
-        let social = SocialRedirect::to(wrapped).into_response();
+        let plain = begun().into_response();
+        let social = SocialRedirect::to(begun()).into_response();
 
         assert_eq!(social.status(), plain.status());
-        assert_eq!(bytes(&social), bytes(&plain));
+        assert_eq!(shape(&social), shape(&plain));
     }
 }

@@ -128,3 +128,96 @@ async fn an_outage_a_handler_answers_is_filed_once_by_the_edge_at_warn() {
         )],
     );
 }
+
+/// RFC 9110 §15.5.2's `401` says the request lacks valid credentials, and a
+/// service that cannot sign says nothing of the request: `?` on `sign` answers
+/// the opaque `500`, its chain filed once at `error`, on every signing path.
+mod signing {
+    use std::sync::Arc;
+
+    use nest_rs_authn::{JwtOptions, JwtService};
+    use nest_rs_core::injectable;
+    use nest_rs_http::Result;
+    use serde::Serialize;
+    use serde_json::Value;
+
+    use super::*;
+
+    #[derive(Serialize, nest_rs_authn::PrincipalIdentity)]
+    struct Claims {
+        #[principal(actor)]
+        sub: String,
+    }
+
+    fn ada() -> Claims {
+        Claims { sub: "ada".into() }
+    }
+
+    /// The verify-only service a resource server holds.
+    #[injectable]
+    struct VerifyOnly {
+        jwt: JwtService,
+    }
+
+    impl Default for VerifyOnly {
+        fn default() -> Self {
+            Self {
+                jwt: JwtService::new(JwtOptions::jwks("https://issuer.example/jwks"))
+                    .expect("a JWK Set service"),
+            }
+        }
+    }
+
+    #[controller(path = "/mint")]
+    struct MintController {
+        #[inject]
+        keys: Arc<VerifyOnly>,
+    }
+
+    #[routes]
+    impl MintController {
+        #[get("/sign")]
+        #[public]
+        async fn sign(&self) -> Result<String> {
+            Ok(self.keys.jwt.sign(&ada())?)
+        }
+
+        #[get("/sign-for")]
+        #[public]
+        async fn sign_for(&self) -> Result<String> {
+            Ok(self.keys.jwt.sign_for("https://api.example", &ada())?)
+        }
+
+        #[get("/handshake")]
+        #[public]
+        async fn handshake(&self) -> Result<String> {
+            Ok(self.keys.jwt.sign_handshake("oauth-tx", &ada())?)
+        }
+    }
+
+    #[module(imports = [HttpModule], providers = [VerifyOnly, MintController])]
+    struct MintApp;
+
+    #[tokio::test]
+    async fn a_signing_failure_answers_the_opaque_500_and_files_its_chain_at_error() {
+        for path in ["/mint/sign", "/mint/sign-for", "/mint/handshake"] {
+            let logs = LogCapture::install();
+            let app = TestApp::for_module::<MintApp>().await.expect("boots");
+
+            let response = app.http().get(path).send().await;
+
+            response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+            assert!(
+                response.0.headers().get(header::WWW_AUTHENTICATE).is_none(),
+                "{path}: a server's failure challenges no one"
+            );
+            let document: Value = response.json().await.value().deserialize();
+            assert_eq!(document["code"], "INTERNAL", "{path}: {document}");
+            assert!(document.get("detail").is_none(), "{path}: {document}");
+            let errors = logs.events_at(tracing::Level::ERROR);
+            assert_eq!(errors.len(), 1, "{path}: {errors:#?}");
+            let chain = errors[0].field("error").expect("the chain");
+            assert!(chain.contains("verify-only"), "{path}: {chain}");
+        }
+    }
+}

@@ -22,6 +22,7 @@ use crate::config::OAuthClientConfig;
 use crate::redirect::AuthorizationRedirect;
 use nest_rs_authn::AuthError;
 use nest_rs_authn::JwtService;
+use nest_rs_authn::SignError;
 
 /// Outcome of the Authorization-Code exchange: three bearer credentials, so
 /// each is a [`Secret`].
@@ -659,14 +660,17 @@ impl OAuthClient {
     /// Begin the flow: the [`AuthorizationRedirect`] a handler returns, its
     /// signed transaction bound to `provider` and carrying `resource`, the one
     /// (RFC 8707) the flow's own access token is asked for —
-    /// [`AuthorizationResponse::resource`] reads it back at the callback.
+    /// [`AuthorizationResponse::resource`] reads it back at the callback. A
+    /// transaction `jwt` cannot sign is the server's failure, which a caller
+    /// is never answered as its own.
     pub fn authorize(
         &self,
         jwt: &JwtService,
         provider: &str,
         resource: Option<&str>,
-    ) -> Result<AuthorizationRedirect, AuthError> {
-        let client = Self::basic_client(&self.config)?;
+    ) -> Result<AuthorizationRedirect, SignError> {
+        let client = Self::basic_client(&self.config)
+            .map_err(|error| SignError::because("the provider's URLs do not build", error))?;
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
         let mut request = client.authorize_url(CsrfToken::new_random);
         for scope in &self.config.scopes {
@@ -684,10 +688,7 @@ impl OAuthClient {
                 exp: jwt.expiry_in(Self::TRANSACTION_TTL_SECS),
             },
         )?;
-        Ok(AuthorizationRedirect {
-            url: url.to_string(),
-            transaction,
-        })
+        AuthorizationRedirect::new(&url, &transaction)
     }
 
     /// Read the redirect URI's `query` — RFC 6749 §4.1.2's response, or
@@ -880,6 +881,7 @@ mod tests {
 
     use super::*;
     use nest_rs_authn::JwtOptions;
+    use nest_rs_http::{IntoResponse, header};
 
     fn valid_config() -> OAuthClientConfig {
         OAuthClientConfig {
@@ -1124,10 +1126,11 @@ mod tests {
             ),
             "new refuses it first"
         );
-        assert!(matches!(
-            unchecked(config).authorize(&jwt(), "acme", None),
-            Err(AuthError::Failed { .. })
-        ));
+        let Err(refused) = unchecked(config).authorize(&jwt(), "acme", None) else {
+            panic!("an authorize URL that does not parse began a flow");
+        };
+        let said = nest_rs_core::error_message(&refused);
+        assert!(said.contains("the provider's URLs do not build"), "{said}");
     }
 
     #[test]
@@ -1185,14 +1188,20 @@ mod tests {
         let client = OAuthClient::new(valid_config()).expect("new accepts a valid config");
         for resource in [Some("https://mcp.example.com/mcp"), None] {
             let redirect = client.authorize(&jwt, "acme", resource).expect("authorize");
+            let answered = redirect.into_response();
+            let cookie = answered.headers()[header::SET_COOKIE]
+                .to_str()
+                .expect("ASCII");
+            let transaction =
+                OAuthClient::transaction_from([cookie]).expect("the redirect set its transaction");
             let tx: Transaction = jwt
-                .verify_handshake(TRANSACTION_PURPOSE, &redirect.transaction)
+                .verify_handshake(TRANSACTION_PURPOSE, transaction)
                 .expect("the transaction verifies");
 
             let response = OAuthClient::callback(
                 &jwt,
                 "acme",
-                &redirect.transaction,
+                transaction,
                 &format!("state={}&code=the-code", tx.csrf),
             )
             .expect("the callback matches");

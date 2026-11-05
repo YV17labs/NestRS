@@ -6,11 +6,14 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
+use nest_rs_authn::__private::sign_unchecked;
 use nest_rs_authn::{AuthError, JwtOptions, JwtService};
 use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, var_name};
 use nest_rs_core::{App, module};
+use nest_rs_http::{IntoResponse as _, header};
 use nest_rs_oauth_client::{
-    AuthorizationResponse, OAuthClient, OAuthClientConfig, OAuthClientModule, TARGET, TokenSet,
+    AuthorizationRedirect, AuthorizationResponse, OAuthClient, OAuthClientConfig,
+    OAuthClientModule, TARGET, TokenSet,
 };
 use nest_rs_testing::{LogCapture, TestAuthority, TestCertificate};
 use serde::Deserialize;
@@ -36,21 +39,34 @@ fn client() -> OAuthClient {
     OAuthClient::new(valid_config()).expect("client builds")
 }
 
+/// The transaction `redirect` answers with, read off its `Set-Cookie` as a
+/// browser sends it back.
+fn transaction_of(redirect: AuthorizationRedirect) -> String {
+    let answered = redirect.into_response();
+    let cookie = answered.headers()[header::SET_COOKIE]
+        .to_str()
+        .expect("ASCII");
+    OAuthClient::transaction_from([cookie])
+        .expect("the redirect sets its transaction")
+        .to_owned()
+}
+
 #[test]
 fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
     let jwt = crate::jwt();
     let auth = client().authorize(&jwt, "acme", None).expect("authorize");
 
-    assert!(auth.url.starts_with("https://provider.example/authorize?"));
-    assert!(auth.url.contains("client_id=demo-client"));
-    assert!(auth.url.contains("scope=read%3Auser"));
-    assert!(auth.url.contains("code_challenge="));
-    assert!(auth.url.contains("code_challenge_method=S256"));
+    let url = auth.url().to_owned();
+    assert!(url.starts_with("https://provider.example/authorize?"));
+    assert!(url.contains("client_id=demo-client"));
+    assert!(url.contains("scope=read%3Auser"));
+    assert!(url.contains("code_challenge="));
+    assert!(url.contains("code_challenge_method=S256"));
 
     let tx: Transaction = jwt
-        .verify_handshake("oauth-tx", &auth.transaction)
+        .verify_handshake("oauth-tx", &transaction_of(auth))
         .expect("transaction verifies as a handshake token");
-    assert!(auth.url.contains(&format!("state={}", tx.csrf)));
+    assert!(url.contains(&format!("state={}", tx.csrf)));
     assert!(!tx.pkce.is_empty());
     assert_eq!(tx.typ, "oauth_tx");
     assert_eq!(tx.provider, "acme");
@@ -65,7 +81,7 @@ async fn the_transaction_cookie_is_not_accepted_as_an_access_token() {
 
     assert!(
         matches!(
-            jwt.verify::<Transaction>(&auth.transaction).await,
+            jwt.verify::<Transaction>(&transaction_of(auth)).await,
             Err(AuthError::InvalidToken)
         ),
         "a handshake token must not verify as an access token",
@@ -75,14 +91,16 @@ async fn the_transaction_cookie_is_not_accepted_as_an_access_token() {
 #[test]
 fn an_access_token_is_not_accepted_as_a_transaction() {
     let jwt = crate::jwt();
-    let access = jwt
-        .sign(&serde_json::json!({
+    let access = sign_unchecked(
+        &jwt,
+        &serde_json::json!({
             "typ": "oauth_tx",
             "provider": "acme",
             "csrf": "forged",
             "pkce": "forged",
-        }))
-        .expect("sign an access token shaped like a transaction");
+        }),
+    )
+    .expect("sign an access token shaped like a transaction");
 
     assert!(
         matches!(
@@ -102,7 +120,7 @@ async fn a_callback_refuses_a_state_that_does_not_match_the_transaction() {
     let Err(err) = OAuthClient::callback(
         &jwt,
         "acme",
-        &auth.transaction,
+        &transaction_of(auth),
         "code=some-code&state=not-the-csrf",
     ) else {
         panic!("state mismatch is rejected");
@@ -123,14 +141,16 @@ async fn a_callback_reports_a_transaction_cookie_that_does_not_verify() {
     let logs = LogCapture::install();
     let attacker = JwtService::new(JwtOptions::new("attacker-secret-padded-to-32-byt"))
         .expect("HMAC JwtService");
-    let forged = attacker
-        .sign(&serde_json::json!({
+    let forged = sign_unchecked(
+        &attacker,
+        &serde_json::json!({
             "typ": "oauth_tx",
             "provider": "acme",
             "csrf": "agreed-state",
             "pkce": "verifier",
-        }))
-        .expect("sign with the wrong key");
+        }),
+    )
+    .expect("sign with the wrong key");
 
     let Err(err) = OAuthClient::callback(
         &crate::jwt(),
@@ -163,15 +183,17 @@ async fn a_callback_reports_a_transaction_cookie_that_does_not_verify() {
 async fn an_expired_transaction_cookie_is_reported_the_same_way() {
     let logs = LogCapture::install();
     let jwt = crate::jwt();
-    let stale = jwt
-        .sign(&serde_json::json!({
+    let stale = sign_unchecked(
+        &jwt,
+        &serde_json::json!({
             "typ": "oauth_tx",
             "provider": "acme",
             "csrf": "agreed-state",
             "pkce": "verifier",
             "exp": jsonwebtoken::get_current_timestamp() - 3600,
-        }))
-        .expect("sign");
+        }),
+    )
+    .expect("sign");
 
     let Err(err) = OAuthClient::callback(&jwt, "acme", &stale, "code=some-code&state=agreed-state")
     else {
@@ -687,13 +709,14 @@ async fn module_built(config: OAuthClientConfig) -> Arc<OAuthClient> {
 fn matched(client: &OAuthClient) -> (AuthorizationResponse, Transaction) {
     let jwt = crate::jwt();
     let auth = client.authorize(&jwt, "acme", None).expect("authorize");
+    let transaction = transaction_of(auth);
     let tx: Transaction = jwt
-        .verify_handshake("oauth-tx", &auth.transaction)
+        .verify_handshake("oauth-tx", &transaction)
         .expect("the transaction verifies");
     let response = OAuthClient::callback(
         &jwt,
         "acme",
-        &auth.transaction,
+        &transaction,
         &format!("code={CODE}&state={}", tx.csrf),
     )
     .expect("the callback matches its transaction");

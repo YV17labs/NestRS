@@ -14,6 +14,13 @@ use std::marker::PhantomData;
 /// to. Return the subject the verified credential names: an access token's
 /// `sub`, which RFC 9068 §2.2 requires, the client's own id when the client
 /// acts on its own behalf.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is no principal: it names no subject",
+    label = "names no subject",
+    note = "an access token names its subject (RFC 9068 §2.2), which is what a principal says: \
+            `#[derive(PrincipalIdentity)]` on the claims struct and `#[principal(actor)]` on the \
+            field naming it"
+)]
 pub trait PrincipalIdentity {
     /// The subject the verified credential names, or `None` for a principal
     /// naming none, which a gated MCP endpoint opens no session for.

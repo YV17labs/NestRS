@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 
+use nest_rs_authn::SignError;
 use nest_rs_http::challenge::NoBearerChallenge;
 use nest_rs_http::{HeaderValue, Response, ResponseError, StatusCode, header};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
@@ -81,9 +82,10 @@ pub enum TokenError {
     #[error("invalid_client")]
     InvalidClient(TokenEndpointAuthMethod),
     /// Internal signing failure. `Display` is the opaque RFC 6749
-    /// `server_error`; the source stays attached for `tracing`.
+    /// `server_error`; the source stays attached for `tracing`, and `?` on a
+    /// [`SignError`] converts into it.
     #[error("server_error")]
-    Sign(#[source] anyhow::Error),
+    Sign(#[from] SignError),
     /// A backend dependency (e.g. the identity store) was unreachable while
     /// resolving the grant (503, RFC 9110 §15.6.4). `Display` is the opaque
     /// `server_error`; the source stays attached for `tracing`.
@@ -258,7 +260,7 @@ mod tests {
             TokenError::InvalidClient(TokenEndpointAuthMethod::None),
             TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretPost),
             TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretBasic),
-            TokenError::Sign(anyhow::anyhow!("signing key unusable")),
+            TokenError::Sign(SignError::new("signing key unusable")),
             TokenError::Server(anyhow::anyhow!("identity store unreachable")),
         ];
         let schema = TokenError::json_schema(&mut SchemaGenerator::default());

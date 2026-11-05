@@ -2,6 +2,7 @@
 //! `authorize`/`exchange` delegate to the configured `client()`.
 
 use nest_rs_authn::{JwtOptions, JwtService};
+use nest_rs_http::{IntoResponse as _, header};
 use nest_rs_oauth_client::{OAuthClient, OAuthClientConfig, TokenSet};
 use nest_rs_social::{ProfileFuture, SocialProfile, SocialProvider};
 
@@ -49,10 +50,14 @@ fn default_authorize_delegates_to_the_configured_client() {
 
     assert!(
         authorization
-            .url
+            .url()
             .starts_with("https://provider.example/authorize"),
         "redirect must hit the client's configured provider, got {}",
-        authorization.url,
+        authorization.url(),
     );
-    assert!(!authorization.transaction.is_empty());
+    let answered = authorization.into_response();
+    assert!(
+        answered.headers().contains_key(header::SET_COOKIE),
+        "the transaction leaves on the redirect",
+    );
 }

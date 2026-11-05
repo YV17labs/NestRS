@@ -9,8 +9,7 @@ use nest_rs_authn::{
     AuthError, AuthnConfig, AuthnGuard, AuthnModule, JwtService, PrincipalIdentity,
 };
 use nest_rs_core::{Ambient, AmbientValue, async_trait, injectable, module};
-use nest_rs_http::{HttpModule, Json, StatusCode, controller, routes};
-use nest_rs_oauth_client::AuthorizationRedirect;
+use nest_rs_http::{HttpModule, IntoResponse as _, Json, StatusCode, controller, header, routes};
 use nest_rs_social::{SocialModule, SocialProfile, SocialProvider, SocialSignIn, SocialStrategy};
 use nest_rs_testing::{TestApp, TestResponse};
 
@@ -85,8 +84,9 @@ impl CallbackController {
 )]
 struct SignInApp;
 
-/// The flow begun at the provider, as the authorize route begins it.
-fn begun(app: &TestApp, resource: Option<&str>) -> (AuthorizationRedirect, String) {
+/// The flow begun at the provider, as the authorize route begins it: the
+/// `Cookie` a browser sends back at the callback, and the response's `state`.
+fn begun(app: &TestApp, resource: Option<&str>) -> (String, String) {
     let jwt = app
         .container()
         .get::<JwtService>()
@@ -95,12 +95,17 @@ fn begun(app: &TestApp, resource: Option<&str>) -> (AuthorizationRedirect, Strin
         .authorize(&jwt, resource)
         .expect("the flow begins");
     let state = redirect
-        .url
+        .url()
         .split(['?', '&'])
         .find_map(|pair| pair.strip_prefix("state="))
         .expect("the redirect carries its state")
         .to_owned();
-    (redirect, state)
+    let answered = redirect.into_response();
+    let cookie = answered.headers()[header::SET_COOKIE]
+        .to_str()
+        .expect("ASCII")
+        .to_owned();
+    (cookie, state)
 }
 
 async fn callback(app: &TestApp, query: &str, cookie: Option<&str>) -> TestResponse {
@@ -126,11 +131,11 @@ async fn a_matched_response_signs_the_profile_in_for_the_resource_the_flow_asked
     let app = TestApp::for_module::<SignInApp>().await.expect("boots");
 
     for resource in [Some(MCP), None] {
-        let (redirect, state) = begun(&app, resource);
+        let (cookie, state) = begun(&app, resource);
         let response = callback(
             &app,
             &format!("code={CODE}&state={state}"),
-            Some(&format!("theme=dark; {}", redirect.set_cookie())),
+            Some(&format!("theme=dark; {cookie}")),
         )
         .await;
 
@@ -149,8 +154,7 @@ async fn a_matched_response_signs_the_profile_in_for_the_resource_the_flow_asked
 #[tokio::test]
 async fn a_provider_refusal_is_refused_as_it_says_and_signs_no_one_in() {
     let app = TestApp::for_module::<SignInApp>().await.expect("boots");
-    let (redirect, state) = begun(&app, None);
-    let cookie = redirect.set_cookie();
+    let (cookie, state) = begun(&app, None);
 
     for (error, status) in [
         ("access_denied", StatusCode::UNAUTHORIZED),
@@ -169,8 +173,7 @@ async fn a_provider_refusal_is_refused_as_it_says_and_signs_no_one_in() {
 #[tokio::test]
 async fn a_response_no_transaction_matches_is_refused_before_any_exchange() {
     let app = TestApp::for_module::<SignInApp>().await.expect("boots");
-    let (redirect, state) = begun(&app, None);
-    let cookie = redirect.set_cookie();
+    let (cookie, state) = begun(&app, None);
 
     for (query, cookie) in [
         (format!("code={CODE}&state={state}"), None),
@@ -193,8 +196,7 @@ async fn a_response_no_transaction_matches_is_refused_before_any_exchange() {
 #[tokio::test]
 async fn an_error_response_no_transaction_matches_is_refused_and_files_no_outage() {
     let app = TestApp::for_module::<SignInApp>().await.expect("boots");
-    let (redirect, _) = begun(&app, None);
-    let cookie = redirect.set_cookie();
+    let (cookie, _) = begun(&app, None);
 
     for (query, cookie) in [
         ("error=temporarily_unavailable&state=any-state", None),
@@ -219,11 +221,11 @@ async fn an_error_response_no_transaction_matches_is_refused_and_files_no_outage
 #[tokio::test]
 async fn a_provider_no_imported_module_registers_is_refused() {
     let app = TestApp::for_module::<SignInApp>().await.expect("boots");
-    let (redirect, state) = begun(&app, None);
+    let (cookie, state) = begun(&app, None);
 
     app.http()
         .get(format!("/social/github/callback?code={CODE}&state={state}"))
-        .header("cookie", redirect.set_cookie())
+        .header("cookie", cookie)
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);

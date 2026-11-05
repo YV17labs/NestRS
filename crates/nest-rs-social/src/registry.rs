@@ -13,7 +13,7 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use nest_rs_authn::{AuthError, JwtService};
+use nest_rs_authn::{JwtService, SignError};
 use nest_rs_config::{Config, ConfigService};
 use nest_rs_core::{Composition, Container, Module, injectable, inventory};
 
@@ -215,14 +215,14 @@ impl SocialRegistry {
     /// `resource` (RFC 8707), the one this app's own token is asked for: the
     /// [`SocialRedirect`] a handler returns, its transaction signed by `jwt`.
     /// A key no imported module registers answers the `404` a route that does
-    /// not exist does; a transaction `jwt` cannot sign is an error. Which
+    /// not exist does; a transaction `jwt` cannot sign is a [`SignError`]. Which
     /// resources a sign-in may name is the product's to check first.
     pub fn authorize(
         &self,
         key: &str,
         jwt: &JwtService,
         resource: Option<&str>,
-    ) -> Result<SocialRedirect, AuthError> {
+    ) -> Result<SocialRedirect, SignError> {
         match self.get(key) {
             Some(provider) => provider.authorize(jwt, resource).map(SocialRedirect::to),
             None => Ok(SocialRedirect::unknown()),

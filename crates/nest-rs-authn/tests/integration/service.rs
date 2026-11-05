@@ -5,7 +5,8 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, get_current_timestamp};
-use nest_rs_authn::{AuthError, JwtOptions, JwtService};
+use nest_rs_authn::__private::sign_unchecked;
+use nest_rs_authn::{AuthError, JwtOptions, JwtService, PrincipalIdentity};
 use serde::{Deserialize, Serialize};
 
 /// The header a conformant issuer stamps (RFC 9068 §2.1). Fixtures below mint
@@ -17,8 +18,9 @@ fn at_jwt_header(alg: Algorithm) -> Header {
     header
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, PrincipalIdentity)]
 struct TestClaims {
+    #[principal(actor)]
     sub: String,
     exp: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -163,10 +165,11 @@ async fn invalid_signature_is_rejected() {
 fn verify_only_service_cannot_sign() {
     let jwt =
         JwtService::new(JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY)).expect("verify-only");
-    assert!(matches!(
-        jwt.sign(&claims(in_an_hour(), None)),
-        Err(AuthError::Failed { .. })
-    ));
+    let refused = jwt
+        .sign(&claims(in_an_hour(), None))
+        .expect_err("no key to sign with");
+    let said = nest_rs_core::error_message(&refused);
+    assert!(said.contains("verify-only"), "{said}");
 }
 
 #[test]
@@ -237,8 +240,9 @@ async fn a_configured_issuer_is_stamped_and_required() {
     options.issuer = Some("auth".into());
     let jwt = JwtService::new(options).expect("service");
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, PrincipalIdentity)]
     struct IssClaims {
+        #[principal(actor)]
         sub: String,
         exp: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -459,8 +463,9 @@ async fn a_minted_token_carries_its_issue_time_and_an_identifier_of_its_own() {
     assert!(!id.is_empty(), "{first}");
     assert_ne!(Some(id), second["jti"].as_str(), "each token names its own");
 
-    #[derive(Serialize)]
+    #[derive(Serialize, PrincipalIdentity)]
     struct OwnClaims {
+        #[principal(actor)]
         sub: &'static str,
         exp: u64,
         iat: u64,
@@ -479,8 +484,9 @@ async fn a_minted_token_carries_its_issue_time_and_an_identifier_of_its_own() {
     assert_eq!(kept["iat"], 7);
     assert_eq!(kept["jti"], "chosen-by-the-issuer");
 
-    #[derive(Serialize)]
+    #[derive(Serialize, PrincipalIdentity)]
     struct NullClaims {
+        #[principal(actor)]
         sub: &'static str,
         exp: u64,
         jti: Option<&'static str>,
@@ -510,12 +516,14 @@ async fn a_minted_token_expires_its_signer_s_lifetime_after_it_was_issued() {
     options.expires_in = Duration::from_secs(900);
     let jwt = JwtService::new(options).expect("service");
 
-    #[derive(Serialize)]
+    #[derive(Serialize, PrincipalIdentity)]
     struct Anonymous {
+        #[principal(actor)]
         sub: &'static str,
     }
-    #[derive(Serialize)]
+    #[derive(Serialize, PrincipalIdentity)]
     struct NullExpiry {
+        #[principal(actor)]
         sub: &'static str,
         exp: Option<u64>,
     }
@@ -569,8 +577,7 @@ fn a_handshake_naming_no_exp_is_refused_rather_than_given_the_access_token_lifet
             .sign_handshake("oauth-tx", &claims)
             .expect_err("a handshake carrying no `exp` is refused");
         assert!(
-            matches!(refused, AuthError::Failed { .. })
-                && nest_rs_core::error_message(&refused).contains("expiry_in"),
+            nest_rs_core::error_message(&refused).contains("expiry_in"),
             "{refused:?}"
         );
     }
@@ -747,11 +754,9 @@ async fn a_token_signed_for_a_resource_names_it_and_verifies_only_there() {
 fn signing_for_a_resource_refuses_a_blank_one_and_claims_naming_another() {
     let jwt = service("resource-refusals");
     for blank in ["", "  "] {
-        let Err(refused @ AuthError::Failed { .. }) =
-            jwt.sign_for(blank, &claims(in_an_hour(), None))
-        else {
-            panic!("a blank resource must be refused");
-        };
+        let refused = jwt
+            .sign_for(blank, &claims(in_an_hour(), None))
+            .expect_err("a blank resource must be refused");
         assert!(
             nest_rs_core::error_message(&refused).contains("names no resource"),
             "{refused:?}"
@@ -760,11 +765,9 @@ fn signing_for_a_resource_refuses_a_blank_one_and_claims_naming_another() {
 
     let mut naming_another = claims(in_an_hour(), None);
     naming_another.aud = Some("https://billing.example".into());
-    let Err(refused @ AuthError::Failed { .. }) =
-        jwt.sign_for("https://api.example", &naming_another)
-    else {
-        panic!("claims naming another audience must be refused");
-    };
+    let refused = jwt
+        .sign_for("https://api.example", &naming_another)
+        .expect_err("claims naming another audience must be refused");
     let refused = nest_rs_core::error_message(&refused);
     assert!(refused.contains("`aud` of their own"), "{refused}");
     assert!(!refused.contains("billing"), "{refused}");
@@ -824,5 +827,105 @@ fn debug_prints_no_key_material_and_no_credential_in_the_jwks_uri() {
             }
             assert!(printed.contains(shown), "{shown} in {printed}");
         }
+    }
+}
+
+/// A claims type's subject, read by its role wherever the type holds it: no
+/// `sub` field is no reason to mint a token naming no one (RFC 9068 §2.2).
+#[derive(Serialize, PrincipalIdentity)]
+struct NamedByItsActor {
+    #[principal(actor)]
+    user_id: Option<String>,
+}
+
+/// The claim they carry is theirs: an empty one names no one either.
+#[derive(Serialize, PrincipalIdentity)]
+struct CarriesItsSub {
+    sub: String,
+    #[principal(actor)]
+    actor: Option<String>,
+}
+
+#[test]
+fn a_sub_the_claims_carry_is_kept_and_an_empty_one_is_the_actors() {
+    let jwt = service("carried-sub");
+
+    let kept = jwt
+        .sign(&CarriesItsSub {
+            sub: "alice".into(),
+            actor: Some("bob".into()),
+        })
+        .expect("sign");
+    assert_eq!(payload(&kept)["sub"], "alice");
+
+    let empty = jwt
+        .sign(&CarriesItsSub {
+            sub: String::new(),
+            actor: Some("bob".into()),
+        })
+        .expect("sign");
+    assert_eq!(payload(&empty)["sub"], "bob");
+
+    assert!(
+        jwt.sign(&CarriesItsSub {
+            sub: String::new(),
+            actor: None,
+        })
+        .is_err()
+    );
+}
+
+/// A suite forging what a verifier must refuse has its one way past the bound.
+#[test]
+fn only_the_unchecked_signer_mints_claims_naming_no_subject() {
+    let jwt = service("unchecked");
+    let forged = sign_unchecked(&jwt, &serde_json::json!({})).expect("sign");
+    assert!(payload(&forged).get("sub").is_none());
+}
+
+#[test]
+fn a_claims_type_with_no_sub_field_is_stamped_its_actor_as_sub() {
+    let jwt = service("stamped-sub");
+    let named = NamedByItsActor {
+        user_id: Some("alice".into()),
+    };
+    for token in [
+        jwt.sign(&named).expect("sign"),
+        jwt.sign_for("https://api.example", &named)
+            .expect("sign for a resource"),
+    ] {
+        assert_eq!(payload(&token)["sub"], "alice");
+    }
+}
+
+#[test]
+fn a_claims_type_naming_no_actor_mints_no_token() {
+    let jwt = service("no-subject");
+    let nobody = NamedByItsActor { user_id: None };
+    let empty = NamedByItsActor {
+        user_id: Some(String::new()),
+    };
+    for claims in [nobody, empty] {
+        for refused in [
+            jwt.sign(&claims),
+            jwt.sign_for("https://api.example", &claims),
+        ] {
+            let said = nest_rs_core::error_message(&refused.expect_err("minted naming no one"));
+            assert!(said.contains("name no subject"), "{said}");
+        }
+    }
+}
+
+/// What the signer stamps sits in a JSON object: claims serializing to
+/// anything else cannot carry one, and are refused rather than signed bare.
+#[test]
+fn claims_that_are_no_json_object_are_refused() {
+    let jwt = service("no-object");
+    for refused in [
+        jwt.sign_handshake("oauth-tx", &7_u32),
+        sign_unchecked(&jwt, &7_u32),
+    ] {
+        let said = nest_rs_core::error_message(&refused.expect_err("signed a number"));
+        assert!(said.contains("no JSON object"), "{said}");
     }
 }

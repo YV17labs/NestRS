@@ -424,7 +424,9 @@ import registers it twice, and the boot names both registrations.
 ### The registry is the framework's, the policy yours
 
 What the registry refuses at boot is what makes it serve no token or the
-wrong one, whatever the product. What only your product can judge — a scope
+wrong one, whatever the product — a scope outside
+[§3.3's grammar](https://datatracker.ietf.org/doc/html/rfc6749#section-3.3) among
+them, named by its client and never quoted. What only your product can judge — a scope
 none of your rules gates on, a `client_id` your subject scheme would read as
 a user's (RFC 9068 §5) — is a check of yours over the same registry, run in a
 module-init hook and refused in the registry's own words, so the boot names

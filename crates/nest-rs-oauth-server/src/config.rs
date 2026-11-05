@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 use nest_rs_config::__private::{RetiredKey, RetiredKeys};
 use nest_rs_config::{Config, ConfigService, Field, config};
+use nest_rs_guards::__private::is_scope_token;
 use serde::de::DeserializeOwned;
 use validator::{Validate, ValidationError, ValidationErrors, ValidationErrorsKind};
 
@@ -25,8 +26,10 @@ nest_rs_core::inventory::submit! {
 /// refuses a registry that could serve no token — no client, a client
 /// registered for no resource (RFC 8707: a token names its audience) — and one
 /// that could serve the wrong one: a client id registered twice, a client with
-/// no id, or a client whose secret is empty, which an empty `Basic` password
-/// would match. Each refusal names the client by its id, never its secret.
+/// no id, a client whose secret is empty, which an empty `Basic` password would
+/// match, or a scope outside RFC 6749 §3.3's grammar, which a token would grant
+/// whole and a request could never name. Each refusal names the client by its
+/// id, never its secret or the scope.
 ///
 /// ```
 /// use nest_rs_oauth_server::{OAuthServerConfig, RegisteredClient};
@@ -97,6 +100,9 @@ impl<P> Validate for OAuthServerConfig<P> {
             }
             if client.resources.is_empty() {
                 refuse("resources", "at_least_one_resource");
+            }
+            if !client.scopes.iter().all(|scope| is_scope_token(scope)) {
+                refuse("scopes", "not_a_scope_token");
             }
         }
         if errors.is_empty() {
@@ -172,6 +178,37 @@ mod tests {
         )
         .to_string();
         assert!(!rendered.contains("never-shown"), "{rendered}");
+    }
+
+    /// RFC 6749 §3.3: `"a b"` is two scopes on the wire, granted whole when
+    /// none is asked and refused when asked by name, so it never boots.
+    #[test]
+    fn a_client_scope_outside_the_token_grammar_is_refused() {
+        let scoped =
+            |id: &str, scope: &str| RegisteredClient::new(id, "s3cret", [scope], [RESOURCE], 7);
+        let config = OAuthServerConfig {
+            clients: vec![
+                scoped("spaced", "never-shown two"),
+                scoped("empty", ""),
+                scoped("quoted", "never\"shown"),
+                scoped("fine", "posts:read"),
+            ],
+        };
+
+        assert_eq!(
+            refused(&config),
+            [
+                "clients[empty].scopes",
+                "clients[quoted].scopes",
+                "clients[spaced].scopes",
+            ]
+        );
+        let rendered = nest_rs_config::ConfigError::validation(
+            <OAuthServerConfig<u32> as nest_rs_config::Namespaced>::NAMESPACE,
+            config.validate().expect_err("refused"),
+        )
+        .to_string();
+        assert!(!rendered.contains("never"), "{rendered}");
     }
 
     #[test]

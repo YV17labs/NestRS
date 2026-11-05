@@ -13,13 +13,21 @@ use crate::error::refused;
 /// A machine client permitted to use the `client_credentials` grant, as loaded
 /// from configuration. Generic over the principal payload `P` the app attaches
 /// (deserialized from the `payload` field next to the credentials).
+///
+/// Its secret is the crate's to compare, never a field to read.
+///
+/// ```compile_fail,E0616
+/// # fn read(client: &nest_rs_oauth_server::RegisteredClient<()>) {
+/// let _secret = &client.client_secret;
+/// # }
+/// ```
 #[derive(Clone, Debug, serde::Deserialize)]
 #[non_exhaustive]
 pub struct RegisteredClient<P> {
     /// The client's public identifier, matched in constant time.
     pub client_id: String,
     /// The client's shared secret, matched in constant time.
-    pub client_secret: Secret<String>,
+    pub(crate) client_secret: Secret<String>,
     /// Scopes granted to this client, copied onto the authenticated principal.
     pub scopes: Vec<String>,
     /// The resources (RFC 8707) a token minted for this client may name as

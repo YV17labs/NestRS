@@ -144,3 +144,17 @@ grant's refusals too.
   at this server, `refresh_token`, the device and JWT-bearer URNs), which
   `GrantType` gains as each is built, with `unauthorized_client` and
   `invalid_grant` raised by whichever reads them.
+
+## 2026-11-05 — the registry's shape holds
+
+On the owner's mandate of 2026-11-05. Each seen run first.
+
+- **`RegisteredClient::client_secret` is `pub(crate)`.** Nothing outside the crate reads it, and a
+  client with no secret (`none`, `private_key_jwt`, `tls_client_auth`, each named above) would
+  otherwise need it `Option`, a break, or an empty string as a state, which the boot refuses.
+- **The boot refuses a client's scope outside §3.3's grammar**, naming the client and never the
+  scope: `"a b"` was granted whole when no scope was asked and refused when asked by name.
+  The resource server's `scopes_supported` already held the same grammar.
+- **Not covered:** `OAuthClientConfig::scopes` and each social provider's, which a provider
+  reads and this server never grants; a refusal there would refuse what works today, so it
+  waits for a caller it harms.

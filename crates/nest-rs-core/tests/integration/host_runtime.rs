@@ -3,12 +3,13 @@
 //! graph like an import; what no module the app reaches lists brings nothing.
 
 use std::any::TypeId;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use nest_rs_core::__private::{HostRuntime, RuntimeModule};
 use nest_rs_core::{
     App, Collecting, Composition, Container, ContainerBuilder, ContainerError, Module,
-    ReachableProviders, Registering, injectable, inventory, module,
+    ReachableProviders, Registering, UnbuiltCause, UnbuiltProviderError, hooks, injectable,
+    inventory, module,
 };
 
 use crate::refused_boot;
@@ -270,4 +271,111 @@ fn a_container_built_by_hand_is_held_to_what_a_host_brings() {
         .build()
         .expect("the seed stands in for the factory");
     assert!(seeded.get::<Registered>().is_some());
+}
+
+static INITIALIZED: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
+#[injectable]
+#[derive(Default)]
+struct Brought;
+
+#[hooks]
+impl Brought {
+    #[on_module_init]
+    async fn init(&self) {
+        INITIALIZED.lock().unwrap().push("Brought");
+    }
+}
+
+#[module(providers = [Brought])]
+struct BroughtModule;
+
+const BROUGHT: &[RuntimeModule] = &[RuntimeModule::of::<BroughtModule>()];
+
+#[injectable]
+#[derive(Default)]
+struct Listing;
+
+#[hooks]
+impl Listing {
+    #[on_module_init]
+    async fn init(&self) {
+        INITIALIZED.lock().unwrap().push("Listing");
+    }
+}
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<Listing>(),
+        modules: BROUGHT,
+    }
+}
+
+#[module(providers = [Listing])]
+struct ListingModule;
+
+/// No injection orders the two, so the composition does: what a module imports
+/// comes first, whether the module wrote the import or its host brought it.
+#[tokio::test]
+async fn what_a_host_brings_inits_before_the_module_listing_it() {
+    let app = App::builder()
+        .module::<ListingModule>()
+        .build()
+        .await
+        .expect("the module boots");
+
+    app.init().await.expect("the hooks run");
+
+    assert_eq!(*INITIALIZED.lock().unwrap(), ["Brought", "Listing"]);
+}
+
+#[injectable]
+#[derive(Default)]
+struct Far;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Near {
+    #[inject]
+    far: Arc<Far>,
+}
+
+#[injectable]
+#[derive(Default)]
+struct CycleHost;
+
+#[module(imports = [CycleModule], providers = [Near])]
+struct CycleRuntimeModule;
+
+const CYCLE: &[RuntimeModule] = &[RuntimeModule::of::<CycleRuntimeModule>()];
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<CycleHost>(),
+        modules: CYCLE,
+    }
+}
+
+#[module(providers = [CycleHost, Far])]
+struct CycleModule;
+
+/// The way back is no line a module wrote, and the boot still names the cycle.
+#[tokio::test]
+async fn an_import_cycle_closing_through_what_a_host_brings_is_named() {
+    let refused = refused_boot::<CycleModule>().await;
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+
+    assert_eq!(unbuilt.provider, "Near", "{refused:#}");
+    let UnbuiltCause::ImportCycle(modules) = &unbuilt.cause else {
+        panic!("not an import cycle: {unbuilt}");
+    };
+    assert_eq!(modules.len(), 2, "{unbuilt}");
+    for module in ["CycleModule", "CycleRuntimeModule"] {
+        assert!(modules.contains(&module), "{unbuilt}");
+    }
 }

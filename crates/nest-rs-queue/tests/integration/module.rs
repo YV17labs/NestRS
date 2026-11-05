@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_core::{App, AppLifecycle, Module, injectable, module, target};
-use nest_rs_queue::{BoundConsumer, Jobs, QueueConfig, processor, queue};
+use nest_rs_queue::{BoundConsumer, Jobs, QueueConfig, QueueModule, processor, queue};
 use nest_rs_testing::{HeadlessApp, LogCapture};
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +55,34 @@ async fn a_listed_process_host_brings_the_worker_and_reads_its_config() {
         "the bare import reads the edge's variables",
     );
     assert_eq!(app.attached_transports(), ["queue"]);
+}
+
+fn pinned() -> QueueConfig {
+    QueueConfig {
+        shutdown_timeout: Duration::from_secs(7),
+        ..QueueConfig::default()
+    }
+}
+
+#[module(imports = [QueueModule::for_root(pinned()), ReindexQueueModule])]
+struct PinnedBeforeModule;
+
+#[module(imports = [ReindexQueueModule, QueueModule::for_root(pinned())])]
+struct PinnedAfterModule;
+
+#[tokio::test]
+async fn a_pin_supersedes_what_a_process_host_brings_on_either_side() {
+    for app in [
+        booted::<PinnedBeforeModule>().await,
+        booted::<PinnedAfterModule>().await,
+    ] {
+        let config = app
+            .container()
+            .get::<QueueConfig>()
+            .expect("the pin is read");
+        assert_eq!(config.shutdown_timeout, Duration::from_secs(7));
+        assert_eq!(app.attached_transports(), ["queue"]);
+    }
 }
 
 #[injectable]

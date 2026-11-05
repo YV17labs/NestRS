@@ -5,11 +5,11 @@ use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
-use sea_orm::sea_query::{Condition, Expr};
+use sea_orm::sea_query::Condition;
 use sea_orm::{EntityTrait, IdenStatic, Value};
 
 use crate::action::Action;
-use crate::predicate::{Predicate, Truth, nothing_invented};
+use crate::predicate::{Predicate, Truth, no_row, nothing_invented};
 use crate::wire_model::WireModel;
 
 /// The one fail-closed masking warn, for every edge and the ambient
@@ -531,7 +531,7 @@ impl Ability {
             }
         }
         if grant.is_empty() {
-            return Condition::all().add(Expr::cust("1 = 0"));
+            return no_row();
         }
         let mut out = Condition::all().add(grant);
         if !deny.is_empty() {

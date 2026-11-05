@@ -146,6 +146,10 @@ pub(crate) fn queue_db_crates(s: &mut Scaffold, root: &Path, registered: &Regist
         manifest(migration::CRATE_CARGO),
     );
     s.create(
+        root.join("crates/migrations/clippy.toml"),
+        migration::CRATE_CLIPPY.to_string(),
+    );
+    s.create(
         root.join("crates/migrations/src/lib.rs"),
         render_lib(&registered.mods),
     );

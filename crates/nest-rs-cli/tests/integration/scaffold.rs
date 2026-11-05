@@ -383,6 +383,125 @@ fn the_auth_adapters_compile_with_the_orm_off() {
     );
 }
 
+/// The clippy config a new workspace writes refuses raw SQL where a feature writes
+/// it, an `#[expect]` opens it, on the module when a derive expands to the call, and a
+/// migration's DDL stays out of it: the gate `nestrs run lint` runs, compiled over the
+/// generated tree, so a path clippy cannot resolve fails here and not in the field.
+#[test]
+fn a_raw_sql_fragment_fails_the_generated_clippy_until_it_is_opened() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    nestrs(dir.path(), &["new", "acme"], &[]);
+    let workspace = dir.path().join("acme");
+    std::fs::write(
+        workspace.join("crates/features/src/raw.rs"),
+        r#"use nest_rs::seaorm::sea_orm::sea_query::Expr;
+
+pub fn refused() -> Expr {
+    Expr::cust("1 = 1")
+}
+
+#[expect(clippy::disallowed_methods, reason = "a constant holding no value")]
+pub fn opened() -> Expr {
+    Expr::cust("1 = 1")
+}
+"#,
+    )
+    .expect("the generated tree is writable");
+    let casting_entity = |opening: &str| {
+        format!(
+            r#"{opening}use nest_rs::seaorm::sea_orm;
+use sea_orm::entity::prelude::*;
+
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+#[sea_orm(table_name = "tags")]
+pub struct Model {{
+    #[sea_orm(primary_key)]
+    pub id: i32,
+    #[sea_orm(select_as = "text")]
+    pub label: String,
+}}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {{}}
+
+impl ActiveModelBehavior for ActiveModel {{}}
+"#
+        )
+    };
+    std::fs::write(
+        workspace.join("crates/features/src/refused_cast.rs"),
+        casting_entity(""),
+    )
+    .expect("the generated tree is writable");
+    std::fs::write(
+        workspace.join("crates/features/src/opened_cast.rs"),
+        casting_entity(
+            "#![expect(clippy::disallowed_methods, reason = \"`select_as` expands to `cast_as`\")]\n\n",
+        ),
+    )
+    .expect("the generated tree is writable");
+    let lib = read(&workspace, "crates/features/src/lib.rs");
+    std::fs::write(
+        workspace.join("crates/features/src/lib.rs"),
+        format!("{lib}\npub mod opened_cast;\npub mod raw;\npub mod refused_cast;\n"),
+    )
+    .expect("the generated tree is writable");
+    let migrations = read(&workspace, "crates/migrations/src/lib.rs");
+    std::fs::write(
+        workspace.join("crates/migrations/src/lib.rs"),
+        format!(
+            "{migrations}\npub fn raw_ddl() -> sea_orm_migration::prelude::Expr {{\n    \
+             sea_orm_migration::prelude::Expr::cust(\"uuidv7()\")\n}}\n"
+        ),
+    )
+    .expect("the generated tree is writable");
+
+    patch_to_working_tree(&workspace);
+    let output = cargo(
+        &workspace,
+        &[
+            "clippy",
+            "--keep-going",
+            "-p",
+            "features",
+            "-p",
+            "migrations",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        &[],
+    )
+    .expect("cargo runs");
+    let printed = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{printed}");
+    assert!(
+        !printed.contains("does not refer to a reachable"),
+        "{printed}",
+    );
+    assert_eq!(
+        printed
+            .matches("use of a disallowed method `sea_query::Expr::cust`")
+            .count(),
+        1,
+        "{printed}",
+    );
+    assert!(
+        printed.contains("crates/features/src/raw.rs:4"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("crates/features/src/refused_cast.rs")
+            && printed.contains("use of a disallowed method `sea_query::ExprTrait::cast_as`"),
+        "{printed}",
+    );
+    assert!(
+        !printed.contains("crates/features/src/opened_cast.rs")
+            && !printed.contains("lint expectation is unfulfilled"),
+        "{printed}",
+    );
+}
+
 /// `nestrs g <edge> <feature>` for every framework edge but `skip`, each run
 /// **from inside the scaffolded app** (`-p apps/hello`), so the generator also
 /// edits the app's `module.rs` and manifest. The kernel's vocabulary, so an

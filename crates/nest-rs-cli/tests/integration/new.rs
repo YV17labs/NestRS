@@ -446,6 +446,90 @@ fn no_generated_manifest_names_the_server_library() {
     }
 }
 
+/// Raw SQL is the injection class and its text can widen a `Repo` filter, so a new
+/// workspace's clippy refuses every call writing it, each saying what to write, and
+/// says where the opening goes when a derive expands to one.
+#[test]
+fn a_new_workspace_refuses_raw_sql_through_its_clippy_config() {
+    let dir = tempfile::tempdir().unwrap();
+    run_ok(dir.path(), &["new", "acme"]);
+
+    let written = fs::read_to_string(dir.path().join("acme/clippy.toml")).unwrap();
+    assert!(
+        written.contains("the opening goes on the module holding the entity"),
+        "{written}",
+    );
+    let config = written.parse::<toml_edit::DocumentMut>().unwrap();
+    let held = |key: &str| -> Vec<String> {
+        config[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                let entry = entry.as_inline_table().unwrap();
+                let reason = entry.get("reason").and_then(|reason| reason.as_str());
+                assert!(
+                    reason.is_some_and(|reason| reason.contains("open it with #[expect]")),
+                    "{entry}",
+                );
+                entry
+                    .get("path")
+                    .and_then(|path| path.as_str())
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    };
+    assert_eq!(
+        held("disallowed-methods"),
+        [
+            "sea_query::Expr::cust",
+            "sea_query::Expr::cust_with_values",
+            "sea_query::Expr::cust_with_expr",
+            "sea_query::Expr::cust_with_exprs",
+            "sea_query::Expr::Custom",
+            "sea_query::Expr::CustomWithExpr",
+            "sea_query::Expr::custom_keyword",
+            "sea_query::Keyword::Custom",
+            "sea_query::Func::cust",
+            "sea_query::Func::cast_as",
+            "sea_query::ExprTrait::cast_as",
+            "sea_query::ExprTrait::as_enum",
+            "sea_query::Expr::AsEnum",
+            "sea_query::Expr::Constant",
+            "sea_query::OptionEnum::None",
+            "sea_query::ArrayType::Enum",
+            "sea_query::BinOper::Custom",
+            "sea_query::PgFunc::json_exists",
+            "sea_query::PgFunc::json_value",
+            "sea_query::PgFunc::json_query",
+            "sea_query::PgFunc::json_table",
+            "sea_query::Order::Field",
+            "sea_query::SelectStatement::order_by_customs",
+            "sea_query::SelectStatement::order_by_customs_with_nulls",
+            "sea_query::UpdateStatement::order_by_customs",
+            "sea_query::UpdateStatement::order_by_customs_with_nulls",
+            "sea_query::DeleteStatement::order_by_customs",
+            "sea_query::DeleteStatement::order_by_customs_with_nulls",
+            "sea_query::OnConflict::constraint",
+            "sea_query::WindowStatement::order_by_customs",
+            "sea_query::WindowStatement::order_by_customs_with_nulls",
+            "sea_query::WindowStatement::partition_by_custom",
+            "sea_query::OverStatement::partition_by_customs",
+            "sea_query::OrderedStatement::order_by_customs",
+            "sea_query::OrderedStatement::order_by_customs_with_nulls",
+        ],
+    );
+    assert_eq!(held("disallowed-types"), ["sea_query::Enum"]);
+
+    // A migration is DDL an operator runs: the crate's own file replaces that one.
+    let migrations = fs::read_to_string(dir.path().join("acme/crates/migrations/clippy.toml"))
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    assert!(migrations.is_empty(), "{migrations}");
+}
+
 /// A value its type marks `#[must_use]` is never discarded in a new workspace:
 /// the root denies `clippy::let_underscore_must_use`, and every member the CLI
 /// writes inherits it, a second app included.

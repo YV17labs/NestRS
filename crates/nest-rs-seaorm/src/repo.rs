@@ -40,6 +40,10 @@ pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
 }
 
 /// The ambient ability's condition for `action` on `E`, alone.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a constant holding no value: the always-false clause every denial renders"
+)]
 pub(crate) fn ability_scope<E: EntityTrait>(action: Action) -> Condition {
     match current_ability() {
         Some(ability) => ability.condition_for::<E>(action),
@@ -809,6 +813,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a constant holding no value: the clause this test reads"
+    )]
     fn deny_all_condition_serializes_as_one_equals_zero() {
         let s = sql(Condition::all().add(Expr::cust("1 = 0")));
         assert!(s.contains("1 = 0"), "got: {s}");

@@ -32,6 +32,7 @@ pub(super) fn scaffold_root(
         root.join("rust-toolchain.toml"),
         r.render(shared::RUST_TOOLCHAIN),
     );
+    s.create(root.join("clippy.toml"), r.render(shared::CLIPPY_TOML));
     s.create(root.join("README.md"), r.render(workspace::README));
     // A workspace writes its domain logic in the shared feature library, so the
     // span-target example is rooted there rather than at the app.

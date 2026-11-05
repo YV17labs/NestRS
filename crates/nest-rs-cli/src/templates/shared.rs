@@ -10,6 +10,66 @@ channel = "1.97"
 components = ["clippy", "rustfmt", "llvm-tools-preview"]
 "#;
 
+/// `clippy.toml` — what a `Repo` select's filter leaves to a lint, since no type
+/// tells raw SQL from a condition. `nestrs run lint` runs it with `-D warnings`.
+pub(crate) const CLIPPY_TOML: &str = r#"# Raw SQL reaches the statement as written, and a fragment closing the
+# parenthesis around it widens a `Repo` filter past what the ability allows. These
+# are the calls through which sea-query writes text unescaped. Where only raw text
+# can say it, `#[expect(clippy::disallowed_methods, reason = "…")]` opens it on one
+# line a review reads, and a value goes in `cust_with_values`.
+#
+# A derive's expansion sits beside the item carrying it, out of that `#[expect]`'s
+# reach: `#[sea_orm(select_as, save_as, save_array_as)]` expands to `cast_as`, and a
+# `DeriveActiveEnum` on a native enum with no `rs_type` to `sea_query::Enum`. There
+# the opening goes on the module holding the entity, `#![expect(…)]` at the top of
+# its file; `rs_type = "String"` on that enum needs none.
+#
+# This holds only where clippy runs with this file: `nestrs run lint` does. It names
+# calls, so what no call writes stays review's: a `sea_query::Enum` literal through
+# its full path or a glob, and a hand-written `Iden` borrowing its text.
+disallowed-methods = [
+    { path = "sea_query::Expr::cust", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::cust_with_values", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::cust_with_expr", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::cust_with_exprs", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::Custom", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::CustomWithExpr", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::custom_keyword", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Keyword::Custom", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Func::cust", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Func::cast_as", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::ExprTrait::cast_as", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why, on the module holding the entity when #[sea_orm(select_as, save_as, save_array_as)] expands to it" },
+    { path = "sea_query::ExprTrait::as_enum", reason = "a type name reaches the statement as written, bound or not, and text closing the quote around it widens a Repo filter: use a DeriveActiveEnum, with rs_type = \"String\" on a native enum column, or open it with #[expect] naming why, on the module holding the enum when the derive expands to it" },
+    { path = "sea_query::Expr::AsEnum", reason = "a type name reaches the statement as written, bound or not, and text closing the quote around it widens a Repo filter: use a DeriveActiveEnum, with rs_type = \"String\" on a native enum column, or open it with #[expect] naming why, on the module holding the enum when the derive expands to it" },
+    { path = "sea_query::Expr::Constant", reason = "a value written into the statement skips its bind, and a sea_query::Enum's type name in it widens a Repo filter: bind it with Expr::val, order by a column, or open it with #[expect] naming why" },
+    { path = "sea_query::OptionEnum::None", reason = "a type name reaches the statement as written, bound or not, and text closing the quote around it widens a Repo filter: use a DeriveActiveEnum, with rs_type = \"String\" on a native enum column, or open it with #[expect] naming why, on the module holding the enum when the derive expands to it" },
+    { path = "sea_query::ArrayType::Enum", reason = "a type name reaches the statement as written, bound or not, and text closing the quote around it widens a Repo filter: use a DeriveActiveEnum, with rs_type = \"String\" on a native enum column, or open it with #[expect] naming why, on the module holding the enum when the derive expands to it" },
+    { path = "sea_query::BinOper::Custom", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::PgFunc::json_exists", reason = "a JSON path is written between quotes as it is, and text closing them widens a Repo filter: keep the path a constant, a value going in `passing`, and open it with #[expect] naming why" },
+    { path = "sea_query::PgFunc::json_value", reason = "a JSON path is written between quotes as it is, and text closing them widens a Repo filter: keep the path a constant, a value going in `passing`, and open it with #[expect] naming why" },
+    { path = "sea_query::PgFunc::json_query", reason = "a JSON path is written between quotes as it is, and text closing them widens a Repo filter: keep the path a constant, a value going in `passing`, and open it with #[expect] naming why" },
+    { path = "sea_query::PgFunc::json_table", reason = "a JSON path is written between quotes as it is, and text closing them widens a Repo filter: keep the path a constant, a value going in `passing`, and open it with #[expect] naming why" },
+    { path = "sea_query::Order::Field", reason = "a value written into the statement skips its bind, and a sea_query::Enum's type name in it widens a Repo filter: bind it with Expr::val, order by a column, or open it with #[expect] naming why" },
+    { path = "sea_query::SelectStatement::order_by_customs", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::SelectStatement::order_by_customs_with_nulls", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::UpdateStatement::order_by_customs", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::UpdateStatement::order_by_customs_with_nulls", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::DeleteStatement::order_by_customs", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::DeleteStatement::order_by_customs_with_nulls", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::OnConflict::constraint", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::WindowStatement::order_by_customs", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::WindowStatement::order_by_customs_with_nulls", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::WindowStatement::partition_by_custom", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::OverStatement::partition_by_customs", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::OrderedStatement::order_by_customs", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::OrderedStatement::order_by_customs_with_nulls", reason = "raw SQL is the injection class, and text closing the parenthesis around it widens a Repo filter: write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+]
+
+disallowed-types = [
+    { path = "sea_query::Enum", reason = "a type name reaches the statement as written, bound or not, and text closing the quote around it widens a Repo filter: use a DeriveActiveEnum, with rs_type = \"String\" on a native enum column, or open it with #[expect] naming why, on the module holding the enum when the derive expands to it" },
+]
+"#;
+
 /// `db.just` — shipped in every project so the database verbs are present from
 /// day one, whether or not the project has a database yet. Recipes follow the
 /// nestrs convention: a `migrations` crate (the `migrate` bin) and a `seed` crate.
@@ -464,7 +524,11 @@ the caller:
 
 **Rows are ability-scoped, and the guards are what install the scope.** `Repo`
 filters every read by the caller's ambient `Ability`; with none installed a read
-denies every row rather than returning them unscoped. A scaffolded HTTP route or
+denies every row rather than returning them unscoped. A `Repo` select hands out no
+statement, and raw SQL in its filter (`Expr::cust` and its family) is the one way
+past it, which `clippy.toml` refuses where `nestrs run lint` runs: write the condition
+with sea-query's typed builders. A
+scaffolded HTTP route or
 WebSocket gateway is guarded already — `nestrs g http` and `g ws` bind the two
 guards and write the auth adapter they come from — a GraphQL operation or an
 MCP tool `nestrs g graphql|mcp` writes over a port with no entity is gated on

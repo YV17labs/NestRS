@@ -11,12 +11,17 @@
 //! pins the exact version, held by a compile-time canary in `resolver.rs` and the
 //! `tests/integration/sdl_snapshot.rs` snapshot. To bump it: raise the pin, fix
 //! the canary until the crate compiles, then review the SDL snapshot diff.
-//! `src/null_propagation.rs` reads three of its behaviours — a failed field's
+//! `src/null_propagation.rs` reads five of its behaviours — a failed field's
 //! key left out, the first of a field's selections to finish kept, a request's
-//! cached parse executed — a mutation root field reads the errors filed so far
-//! off its context, and `src/operation_units.rs` refuses a mutation naming one
-//! root field twice because a root field runs once per selection, each held by
-//! its tests.
+//! cached parse executed, `null` for an object with no key, what finishes after
+//! a `null` dropped — a mutation root field reads the errors filed so far off its
+//! context, `src/operation_units.rs` refuses a mutation naming one root field
+//! twice because a root field runs once per selection, copies the private rule
+//! of `remove_skipped_selection`, fills in a variable's default because a
+//! directive reads `request.variables` alone, and stops where
+//! `check_recursive_depth` refuses, and `src/request_extension.rs` refuses inside
+//! `Extension::validation` because it wraps `check_rules` with the request's data
+//! attached, each held by its tests.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

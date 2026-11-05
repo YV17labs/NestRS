@@ -5,11 +5,14 @@
 //! would, and says whether its reads would run under an ability: the live read
 //! is `nest-rs-seaorm`'s e2e suite.
 
+use std::collections::HashMap;
+
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read, current_ability};
 use nest_rs_core::{AmbientValue, Discovery, Layer, UnitContext, async_trait, injectable, module};
+use nest_rs_graphql::async_graphql::dataloader::DataLoader;
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
-use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
+use nest_rs_graphql::{GraphqlModule, GraphqlView, dataloader, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
 use nest_rs_http::__private::route_denials;
 use nest_rs_http::{
@@ -205,6 +208,20 @@ impl ArticlesController {
     }
 }
 
+/// Says whether a batch's reads would run under an ability.
+#[injectable]
+#[derive(Default)]
+struct Reads;
+
+#[dataloader]
+impl Reads {
+    async fn under_an_ability(&self, keys: &[i32]) -> HashMap<i32, bool> {
+        keys.iter()
+            .map(|key| (*key, reads_under_an_ability()))
+            .collect()
+    }
+}
+
 #[resolver]
 struct ArticlesResolver;
 
@@ -240,6 +257,13 @@ impl ArticlesResolver {
         Ok(reads_under_an_ability())
     }
 
+    #[query]
+    #[public(Read, article::Entity, unmasked)]
+    async fn batched(&self, reads: &DataLoader<ReadsUnderAnAbility>) -> GqlResult<Option<bool>> {
+        let Ok(read) = reads.load_one(1).await;
+        Ok(read)
+    }
+
     /// Each item is masked as a row: a draft dropped, a published one its title.
     #[subscription]
     #[public(Read, article::Entity)]
@@ -262,6 +286,7 @@ impl ArticlesResolver {
         Rules,
         CallerGuard,
         AuthzGuard,
+        Reads,
         ArticlesController,
         ArticlesResolver,
         EndpointGuards<GraphqlView, (CallerGuard, AuthzGuard)>,
@@ -459,6 +484,38 @@ async fn a_field_below_a_public_operation_reads_nothing_for_a_visitor() {
         .await;
     let read = serde_json::to_value(caller).expect("a GraphQL response");
     assert_eq!(read["data"]["feed"][0]["nestedRead"], true, "{read}");
+}
+
+/// A batch carries the request's values, never one field's, and the read a line
+/// names for a visitor is that field's alone: it fails closed, so a batch answers
+/// nothing, where the body of the same field reads by its grant.
+#[tokio::test]
+async fn a_batch_below_an_operation_naming_a_visitors_read_reads_nothing() {
+    let app = app().await;
+    let document = "{ feedByHand batched }";
+
+    let visitor = query(&app, "", document).await;
+    assert_eq!(
+        visitor["data"],
+        json!({ "feedByHand": true, "batched": false }),
+        "{visitor}"
+    );
+
+    let caller = app
+        .http()
+        .post("/graphql")
+        .header("x-token", "valid")
+        .body_json(&json!({ "query": document }))
+        .send()
+        .await
+        .json()
+        .await;
+    let read = serde_json::to_value(caller).expect("a GraphQL response");
+    assert_eq!(
+        read["data"],
+        json!({ "feedByHand": true, "batched": true }),
+        "{read}"
+    );
 }
 
 #[tokio::test]

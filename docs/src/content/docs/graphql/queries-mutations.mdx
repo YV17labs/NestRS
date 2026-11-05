@@ -234,7 +234,7 @@ query Post($full: Boolean = true) {
 A required variable the request leaves out — `$id: ID!`, no default — refuses
 the whole operation once validation passed, and nothing runs: `data: null` and
 one `INVALID_ARGUMENT` error, `Variable "$id" of required type "ID!" was not
-provided.` A [variable pipe](/fundamentals/pipes-beyond-http/) runs first, so a
+provided.` A [variable pipe](/fundamentals/global-pipes/) runs first, so a
 directive reads what it made of a variable; a default is the document's own, and
 no pipe is handed it.
 

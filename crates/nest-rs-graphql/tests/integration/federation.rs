@@ -1127,6 +1127,32 @@ impl UncappedResolver {
 #[module(imports = [capped(None)], providers = [UncappedResolver])]
 struct UncappedModule;
 
+/// The ceiling reads `request.variables`, which hold a variable's default only
+/// because the operation's read fills it in before the schema runs: a list a
+/// document carries as its own default walked past the ceiling otherwise.
+#[tokio::test]
+async fn a_variables_default_counts_against_the_representations_ceiling() {
+    let app = TestApp::for_module::<CappedModule>()
+        .await
+        .expect("a subgraph boots");
+    let references = (0..10)
+        .map(|id| format!(r#"{{ __typename: "Widget", id: {id} }}"#))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        "query($reps: [_Any!]! = [{references}]) {{ \
+         _entities(representations: $reps) {{ ... on Widget {{ id }} }} }}"
+    );
+    let body = post_graphql(&app, serde_json::json!({ "query": query })).await;
+    assert!(body["data"].is_null(), "{body}");
+    let message = body["errors"][0]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("carries 10 `_entities` representations")
+            && message.contains("ceiling of 3"),
+        "{body}"
+    );
+}
+
 /// **Upstream behaviour, frozen.** async-graphql resolves the batch with
 /// `try_join_all`, so one unmatched reference discards the whole response.
 #[tokio::test]

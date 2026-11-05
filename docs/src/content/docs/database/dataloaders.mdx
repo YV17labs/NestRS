@@ -162,6 +162,13 @@ async fn posts_named(
 }
 ```
 
+A batch [carries the request's values, never one field's](#batches-carry-the-request-with-them),
+so a field naming a [visitor's read](/security/authorization/public-reads/) reads nothing
+through a loader: under `#[public(Read, posts::Entity)]` a visitor's batch runs with no
+ability, and `Repo` denies every row, with the `warn` on `nest_rs::orm`. Read those rows in
+the field's own body. A caller a token backs reads through the loader by `define`, on either
+line.
+
 A loader's rows hold every exposed column, as rows out of `Repo` do: the batch decides
 the rows, and the field answering decides the columns. `namesakes` answers `Vec<Post>`,
 so it is [masked by the caller's grants](/security/authorization/response-masking/#a-nested-graphql-field-masks-by-the-same-rule)

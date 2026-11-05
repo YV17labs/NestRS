@@ -124,9 +124,13 @@ and declaring a field nothing fills is the same defect with the opposite sign.
   `tool_error`, a JSON-RPC error its code, which `rpc.response.status_code`
   carries too. A failure the convention reads as the caller's own — an HTTP
   `4xx`, a JSON-RPC code the MCP conventions name so — records its code
-  alone: the server failed nothing. A request cut before it answered is
-  named for the template its route table entry recorded, never exported
-  anonymous.
+  alone: the server failed nothing. A WS message, a GraphQL operation or root
+  field and a graphql-ws socket, which no convention gives such a code, record
+  nothing for a failure their caller earned, any answer but a `5xx`'s class,
+  their line still filing `error`
+  (`.claude/decisions/client-error-is-its-line.md`). A request cut before it
+  answered is named for the template its route table entry recorded, never
+  exported anonymous.
 
 ## What a log line carries
 

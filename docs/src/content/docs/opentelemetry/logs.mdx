@@ -305,7 +305,17 @@ operation answered with a JSON-RPC error that code (`-32603`), also in
 `rpc.response.status_code`. A failure the convention reads as the caller's own
 fails nothing on the server's span. An HTTP `4xx` records its status alone, and
 a JSON-RPC code the MCP conventions name the caller's (`-32700`, `-32600`,
-`-32601`, `-32602`, `-32002`) its code alone. The line and the span both read
+`-32601`, `-32602`, `-32002`) its code alone. A WebSocket message, a GraphQL
+operation or root field and a graphql-ws socket the protocol refused have no such
+code, so a failure their caller earned records nothing: a `4xx` problem, a denial,
+a decode failure, an unknown event, a document validation refused, a `WsError` or
+an `async_graphql::Error` of your own. Their line still files `outcome="error"`,
+and a `5xx`, a panic, a stop or a deadline's cut records as above; a failure of the
+server's own answered in your own words names no status, so spell it with a `5xx`
+[`Problem`](/http/errors/). An exception filter's own reply on a WebSocket changes
+what the client reads, never who failed: a catch-all's frame leaves the server's
+failure recorded, and a caller's failure it acknowledges recording nothing. A
+problem a filter answers names a status, which decides. The line and the span both read
 what the unit decided, so a unit whose work rolls back never says `ok`. A
 request dropped before it answered is still named `{method} {route}` for the
 route the router had matched, so a backend groups it with the answered ones.

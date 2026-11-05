@@ -40,6 +40,10 @@ pub struct WsView {
     /// What the reply withholds, filed for the operator once it goes out: set
     /// where the edge rendered a failure, dropped by a layer's own reply.
     withheld: Option<Withheld>,
+    /// Whether the failure the edge rendered is the server's own, `None` until it
+    /// rendered one: a layer's own reply changes what the client reads, never who
+    /// failed.
+    server_failed: Option<bool>,
 }
 
 impl UnitView for WsView {
@@ -57,6 +61,7 @@ impl WsView {
             data: Some(data),
             reply: None,
             withheld: None,
+            server_failed: None,
         }
     }
 
@@ -99,7 +104,8 @@ impl WsView {
 
     /// Answer the message with `reply` in place of whatever it held: from an
     /// interceptor, without running the rest of it; from an exception filter,
-    /// in place of the failure's frame — the unit still fails and rolls back.
+    /// in place of the failure's frame — the unit still fails and rolls back, and
+    /// its span still says who failed.
     pub fn respond(&mut self, reply: WsReply) -> Settled {
         self.reply = Some(reply);
         self.withheld = None;
@@ -110,9 +116,16 @@ impl WsView {
     /// withholds kept for the moment the answer is final.
     pub(crate) fn answer_failed(&mut self, rendered: Rendered) -> Settled {
         let Rendered { frame, withheld } = rendered;
+        self.server_failed = Some(frame.server_failed);
         let settled = self.respond(WsReply::Error(frame));
         self.withheld = withheld;
         settled
+    }
+
+    /// Whether the failure the edge rendered is the server's own; `None` until it
+    /// rendered one.
+    pub(crate) fn server_failed(&self) -> Option<bool> {
+        self.server_failed
     }
 
     /// The answer, and what it withholds, filed once it goes out.

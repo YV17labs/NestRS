@@ -11,7 +11,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use nest_rs_core::module;
+use nest_rs_core::{Problem, code, module};
 use nest_rs_database::{
     AtomicBlock, AtomicError, Executor, OpenUnit, Settlement, TransactionPolicy, Unhonoured,
     UnitOfWork, UnitSpec,
@@ -228,7 +228,17 @@ impl Shape {
     async fn inner(&self) -> Option<Shape> {
         Some(Shape)
     }
+
+    async fn failed_below(&self) -> Result<Option<i32>> {
+        Err(nest_rs_graphql::problem_error(&Problem::new(
+            500,
+            code::INTERNAL,
+        )))
+    }
 }
+
+/// An app's own class for a server failure no constant of the framework names.
+const INSUFFICIENT_STORAGE: nest_rs_core::Code = nest_rs_core::Code::new("INSUFFICIENT_STORAGE");
 
 #[resolver]
 struct ProbeResolver;
@@ -299,6 +309,30 @@ impl ProbeResolver {
     async fn explode(&self) -> bool {
         tokio::task::yield_now().await;
         panic!("the resolver exploded")
+    }
+
+    #[query]
+    #[public]
+    async fn shape(&self) -> Option<Shape> {
+        Some(Shape)
+    }
+
+    #[query]
+    #[public]
+    async fn conflict(&self) -> std::result::Result<Option<String>, Problem> {
+        Err(Problem::new(409, code::CONFLICT))
+    }
+
+    #[query]
+    #[public]
+    async fn failed(&self) -> std::result::Result<Option<String>, Problem> {
+        Err(Problem::new(500, code::INTERNAL))
+    }
+
+    #[query]
+    #[public]
+    async fn storage(&self) -> std::result::Result<Option<String>, Problem> {
+        Err(Problem::new(507, INSUFFICIENT_STORAGE))
     }
 }
 
@@ -1284,13 +1318,6 @@ async fn each_operation_files_one_line_naming_its_type_and_its_span_its_name() {
         named.field("graphql.operation.type").as_deref(),
         Some("mutation")
     );
-    assert_eq!(
-        named.field("error.type").as_deref(),
-        Some(nest_rs_core::operation_log::ERROR),
-        "{:?}",
-        named.fields
-    );
-    assert_eq!(named.field("otel.status_code").as_deref(), Some("error"));
     let anonymous = logs
         .spans()
         .into_iter()
@@ -1308,6 +1335,88 @@ async fn each_operation_files_one_line_naming_its_type_and_its_span_its_name() {
         None,
         "an operation that answered whole exports no error"
     );
+}
+
+/// A failure the caller's own document earned fails nothing on the server's
+/// span, as HTTP's `4xx` does: its line files `error`, and the span records
+/// neither `error.type` nor a status. A failure of the server's own — a `5xx`'s
+/// class, whatever its code, on a root field or below one — records both.
+#[tokio::test]
+async fn an_operation_records_an_error_on_its_span_only_for_a_failure_of_the_servers_own() {
+    let logs = LogCapture::install();
+    let (app, _) = boot().await;
+    for document in [
+        "query Unknown { noSuchField }",
+        "mutation Refused { b: write(fail: true) }",
+        "query Conflict { conflict }",
+        "query NestedRefused { shape { broken } }",
+        "query Failed { failed }",
+        "query Storage { storage }",
+        "query NestedFailed { shape { failedBelow } }",
+        "query Mixed { conflict failed }",
+    ] {
+        post(&app, json!({ "query": document })).await;
+    }
+    post(&app, json!({ "query": "{" })).await;
+
+    let lines = operation_lines(&logs);
+    assert_eq!(lines.len(), 9, "{lines:#?}");
+    for line in &lines {
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "whoever earned it, the operation answered an error: {line:#?}",
+        );
+    }
+    for name in ["Unknown", "Refused", "Conflict", "NestedRefused"] {
+        let span = operation_span(&logs, name);
+        assert_eq!(span.field("error.type"), None, "{name}: {:?}", span.fields);
+        assert_eq!(
+            span.field("otel.status_code"),
+            None,
+            "{name}: {:?}",
+            span.fields
+        );
+    }
+    let no_document = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_graphql::unit::OPERATION.name()
+                && span.field("graphql.operation.name").is_none()
+        })
+        .expect("the span of a document that does not parse");
+    assert_eq!(
+        no_document.field("error.type"),
+        None,
+        "{:?}",
+        no_document.fields
+    );
+    for name in ["Failed", "Storage", "NestedFailed", "Mixed"] {
+        assert_query_span_failed(&logs, name, nest_rs_core::operation_log::ERROR);
+    }
+}
+
+/// What the unit could not honour is the server's own failure: nothing the
+/// caller sent earned it.
+#[tokio::test]
+async fn an_operation_its_unit_could_not_honour_records_an_error_on_its_span() {
+    let logs = LogCapture::install();
+    let (app, _) = boot_with::<ProbeModule>(Settles::Unhonoured).await;
+    post(
+        &app,
+        json!({ "query": "mutation Unhonoured { write(fail: false) }" }),
+    )
+    .await;
+
+    let span = operation_span(&logs, "Unhonoured");
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
 #[tokio::test(start_paused = true)]

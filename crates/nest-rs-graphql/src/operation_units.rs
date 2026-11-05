@@ -35,6 +35,7 @@ use nest_rs_database::{
 use nest_rs_http::__private::RequestDeadline;
 use tracing::Instrument;
 
+use crate::error::AnsweredError;
 use crate::loader::BatchSpan;
 use crate::null_propagation::{HiddenAnswers, MutationAnswer, RootAnswer};
 
@@ -181,7 +182,11 @@ impl<E: Executor> OperationUnits<E> {
         let answered = nest_rs_core::panic::contain(scoped).instrument(span).await;
         match answered {
             Ok(answered) => {
-                line.file(answered.outcome());
+                match answered.outcome() {
+                    Ended::Answered => line.file(OK),
+                    Ended::Refused => line.refused(),
+                    Ended::Failed => line.file(ERROR),
+                }
                 answered.into_response()
             }
             Err(unwound) => {
@@ -417,10 +422,15 @@ impl Answered {
         Self::Unhonoured
     }
 
-    fn outcome(&self) -> &'static str {
+    fn outcome(&self) -> Ended {
         match self {
-            Self::Executed(response) if response.errors.is_empty() => OK,
-            _ => ERROR,
+            Self::Executed(response) if response.errors.is_empty() => Ended::Answered,
+            Self::Executed(response)
+                if !response.errors.iter().any(AnsweredError::failed_the_server) =>
+            {
+                Ended::Refused
+            }
+            _ => Ended::Failed,
         }
     }
 
@@ -433,6 +443,17 @@ impl Answered {
             Self::Unhonoured => refused(&Problem::new(500, code::INTERNAL)),
         }
     }
+}
+
+/// How an operation's unit ended, for its line and its span.
+enum Ended {
+    /// With no error.
+    Answered,
+    /// With what the caller's document earned: its line says `error`, and its
+    /// span records nothing, as an HTTP `4xx` fails nothing on the server's span.
+    Refused,
+    /// With a failure of the server's own, which its span records too.
+    Failed,
 }
 
 /// GraphQL §6.1.2, *CoerceVariableValues*, for the absent variables
@@ -718,6 +739,12 @@ impl OperationLine {
 
     fn file(mut self, outcome: &'static str) {
         self.emit(outcome);
+    }
+
+    /// File `error` with nothing on the span: [`Ended::Refused`].
+    fn refused(mut self) {
+        self.span = tracing::Span::none();
+        self.emit(ERROR);
     }
 
     /// Said inside the operation's unit when the request's deadline cuts it,

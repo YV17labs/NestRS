@@ -29,7 +29,7 @@ use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::carried_request_chain;
 use tracing::Instrument;
 
-use crate::error::{FieldFailure, Reply, answer, rendered};
+use crate::error::{AnsweredError, FieldFailure, Reply, answer, rendered};
 use crate::field_spellings::spelled_by_schema;
 use crate::view::{FieldRole, GraphqlView};
 
@@ -248,6 +248,7 @@ pub(crate) fn in_field_unit<'a, F, T, E>(
     unit: F,
 ) -> impl Future<Output = Result<T, E>> + Send + 'a
 where
+    E: AnsweredError,
     F: Future<Output = Result<T, E>> + Send + 'a,
 {
     let correlation = match nest_rs_core::__private::current_correlation() {
@@ -471,6 +472,7 @@ pin_project_lite::pin_project! {
 
 impl<T, E, F> Future for Filed<'_, F>
 where
+    E: AnsweredError,
     F: Future<Output = Result<Result<T, E>, Box<dyn Any + Send>>>,
 {
     type Output = Result<T, E>;
@@ -482,10 +484,13 @@ where
         match ended {
             Ok(answered) => {
                 if let Some(line) = line {
-                    line.file(match answered.is_ok() {
-                        true => nest_rs_core::operation_log::OK,
-                        false => nest_rs_core::operation_log::ERROR,
-                    });
+                    match &answered {
+                        Ok(_) => line.file(nest_rs_core::operation_log::OK),
+                        Err(error) if error.failed_the_server() => {
+                            line.file(nest_rs_core::operation_log::ERROR);
+                        }
+                        Err(_) => line.refused(),
+                    }
                 }
                 Poll::Ready(answered)
             }
@@ -516,6 +521,13 @@ struct FieldLine<'a> {
 impl FieldLine<'_> {
     fn file(mut self, outcome: &'static str) {
         self.emit(outcome);
+    }
+
+    /// File `error` for what the caller's request earned, which its span
+    /// leaves unrecorded, as an HTTP `4xx` fails nothing on the server's span.
+    fn refused(mut self) {
+        self.span = tracing::Span::none();
+        self.emit(nest_rs_core::operation_log::ERROR);
     }
 
     fn emit(&mut self, outcome: &'static str) {

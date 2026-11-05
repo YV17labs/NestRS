@@ -1179,6 +1179,40 @@ async fn a_reused_operation_id_closes_the_socket_4409_without_echoing_it() {
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
+/// A socket the protocol refused earned it: its line files `error`, and its
+/// span records nothing, the server having failed nothing. The same holds for
+/// each refusal of the graphql-ws protocol, a client's own.
+#[tokio::test]
+async fn a_socket_the_protocol_refused_records_no_error_on_its_span() {
+    let logs = LogCapture::install();
+    let (app, state) = ticks_app::<SubscriptionApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { ticks { seq } }").await;
+    running(&state).await;
+
+    socket
+        .send_text(subscribe_message("1", "subscription { ticks { seq } }"))
+        .await;
+    socket.expect_close().await;
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+        "{line:#?}",
+    );
+    let span = logs.expect_span(
+        nest_rs_graphql::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
+    assert_eq!(span.field("error.type"), None, "{:?}", span.fields);
+    assert_eq!(span.field("otel.status_code"), None, "{:?}", span.fields);
+}
+
 /// Both subprotocols async-graphql speaks are negotiated off
 /// `Sec-WebSocket-Protocol`, and each serves a subscription in its own
 /// wording: the client refuses an answer that echoes none it offered.

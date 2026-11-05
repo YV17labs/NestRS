@@ -132,8 +132,9 @@ pub fn denial_to_ws_error(denial: Denial) -> WsError {
         return WsError::internal();
     }
     WsError {
-        required_scopes: denial.required_scopes().to_vec(),
+        required_scopes: denial.required_scopes().into(),
         retry_after_secs: denial.retry_after_secs(),
+        server_failed: denial.http_status() >= 500,
         ..WsError::classed(client_message(&denial), denial_code(&denial))
             .with_reason(denial_reason(&denial))
     }

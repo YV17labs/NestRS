@@ -1362,6 +1362,22 @@ async fn a_message_past_its_deadline_is_answered_a_timeout_and_the_socket_goes_o
     assert_eq!(cut.field("timeout_secs").as_deref(), Some("1"));
 
     app.shutdown().await.expect("the transport stops cleanly");
+
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_ws::unit::MESSAGE.name()
+                && span.field("ws.event").as_deref() == Some("stall")
+        })
+        .expect("the message's span");
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+        "a cut is the server's own failure: {:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
 /// How a unit the recording binding opened ended.
@@ -3109,4 +3125,196 @@ async fn a_frame_no_handler_reads_opens_no_unit_of_work() {
         .map(|(_, end)| end)
         .collect();
     assert_eq!(messages, [UnitEnd::Settled { ok: true }], "{messages:?}");
+}
+
+/// An app's own class for a server failure no constant of the framework names.
+const INSUFFICIENT_STORAGE: nest_rs_core::Code = nest_rs_core::Code::new("INSUFFICIENT_STORAGE");
+
+/// Refuses every message it checks, for a cause of the server's own.
+#[injectable]
+#[derive(Default)]
+struct StoreDown;
+
+impl Layer for StoreDown {}
+
+#[async_trait]
+impl Guard for StoreDown {
+    async fn check(&self, _: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::unavailable(None, "the store did not answer"))
+    }
+}
+
+impl GuardFor<WsView> for StoreDown {}
+
+/// Refuses every message it checks: the caller may not.
+#[injectable]
+#[derive(Default)]
+struct Forbids;
+
+impl Layer for Forbids {}
+
+#[async_trait]
+impl Guard for Forbids {
+    async fn check(&self, _: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::forbidden("not yours"))
+    }
+}
+
+impl GuardFor<WsView> for Forbids {}
+
+#[gateway(path = "/answers")]
+pub(crate) struct AnswersGateway;
+
+#[messages]
+impl AnswersGateway {
+    #[subscribe_message("deliberate")]
+    #[public]
+    async fn deliberate(&self) -> Result<String, nest_rs_ws::WsError> {
+        Err(nest_rs_ws::WsError::new("no"))
+    }
+
+    #[subscribe_message("conflict")]
+    #[public]
+    async fn conflict(&self) -> Result<String, nest_rs_core::Problem> {
+        Err(nest_rs_core::Problem::new(
+            409,
+            nest_rs_core::code::CONFLICT,
+        ))
+    }
+
+    #[subscribe_message("typed")]
+    #[public]
+    async fn typed(&self, _count: u32) -> String {
+        "typed".to_owned()
+    }
+
+    #[subscribe_message("forbidden")]
+    #[use_guards(Forbids)]
+    #[public]
+    async fn forbidden(&self) -> String {
+        "never".to_owned()
+    }
+
+    #[subscribe_message("failed")]
+    #[public]
+    async fn failed(&self) -> Result<String, nest_rs_core::Problem> {
+        Err(nest_rs_core::Problem::new(
+            500,
+            nest_rs_core::code::INTERNAL,
+        ))
+    }
+
+    #[subscribe_message("storage")]
+    #[public]
+    async fn storage(&self) -> Result<String, nest_rs_core::Problem> {
+        Err(nest_rs_core::Problem::new(507, INSUFFICIENT_STORAGE))
+    }
+
+    #[subscribe_message("opaque")]
+    #[public]
+    async fn opaque(&self) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("the disk is gone"))
+    }
+
+    #[subscribe_message("store_down")]
+    #[use_guards(StoreDown)]
+    #[public]
+    async fn store_down(&self) -> String {
+        "never".to_owned()
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [Forbids, StoreDown, AnswersGateway],
+)]
+struct AnswersModule;
+
+/// A failure the client's own frame earned fails nothing on the server's span,
+/// as HTTP's `4xx` does: its line files `error`, and the span records neither
+/// `error.type` nor a status. A failure of the server's own — a `5xx`'s class,
+/// whatever its code — records both.
+#[tokio::test]
+async fn a_message_records_an_error_on_its_span_only_for_a_failure_of_the_servers_own() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<AnswersModule>()
+        .build_ws()
+        .await
+        .expect("a gateway boots");
+
+    let mut socket = app.socket("/answers").connect().await;
+    for event in [
+        "deliberate",
+        "conflict",
+        "forbidden",
+        "failed",
+        "storage",
+        "opaque",
+        "store_down",
+    ] {
+        socket.send(event, serde_json::Value::Null).await;
+        assert!(socket.next_envelope().await["data"]["error"].is_string());
+    }
+    socket.send("typed", serde_json::json!("no number")).await;
+    assert!(socket.next_envelope().await["data"]["error"].is_string());
+    socket.send("nope", serde_json::Value::Null).await;
+    assert!(socket.next_envelope().await["data"]["error"].is_string());
+    socket.send_binary(vec![1, 2, 3]).await;
+    assert!(socket.next_envelope().await["data"]["error"].is_string());
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    assert_eq!(lines.len(), 10, "{lines:#?}");
+    for line in &lines {
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "whoever earned it, the unit failed: {line:#?}",
+        );
+    }
+    let spans = logs.spans();
+    let of = |event: &str| {
+        spans
+            .iter()
+            .find(|span| {
+                span.name == nest_rs_ws::unit::MESSAGE.name()
+                    && span.field("ws.event").as_deref() == Some(event)
+            })
+            .unwrap_or_else(|| panic!("the span of `{event}`"))
+    };
+    for event in [
+        "deliberate",
+        "conflict",
+        "forbidden",
+        "typed",
+        nest_rs_core::operation_log::OTHER,
+    ] {
+        let span = of(event);
+        assert_eq!(span.field("error.type"), None, "{event}: {:?}", span.fields);
+        assert_eq!(
+            span.field("otel.status_code"),
+            None,
+            "{event}: {:?}",
+            span.fields
+        );
+    }
+    for event in ["failed", "storage", "opaque", "store_down"] {
+        let span = of(event);
+        assert_eq!(
+            span.field("error.type").as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "{event}: {:?}",
+            span.fields,
+        );
+        assert_eq!(
+            span.field("otel.status_code").as_deref(),
+            Some("error"),
+            "{event}: {:?}",
+            span.fields,
+        );
+    }
 }

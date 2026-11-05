@@ -520,7 +520,8 @@ An exception filter reads the handler's error by its type and answers the
 client in place of the frame the error would have answered — a
 `Caught::Problem` as `{ "error": …, "code": … }`, or a reply it
 writes through `WsView::respond`. The message still failed, so whatever it
-wrote rolls back. An interceptor reads the message through `WsView` — its
+wrote rolls back, and [its span](/opentelemetry/logs/) still says who failed. An
+interceptor reads the message through `WsView` — its
 connection, its event, its `data` — and the reply once the rest of the message
 ran; one may answer the message itself with `WsView::respond` and skip the
 rest.

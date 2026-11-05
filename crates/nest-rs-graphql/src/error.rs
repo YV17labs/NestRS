@@ -25,8 +25,9 @@
 //! [`OPAQUE_CLIENT_MESSAGE`]: nest_rs_core::OPAQUE_CLIENT_MESSAGE
 
 use std::error::Error as StdError;
+use std::sync::Arc;
 
-use async_graphql::{Error, ErrorExtensions};
+use async_graphql::{Error, ErrorExtensions, ServerError};
 use nest_rs_core::__private::{Withheld, caught_problem};
 use nest_rs_core::{DecodeError, Failure, Problem, ToProblem, code};
 use nest_rs_guards::Denial;
@@ -39,6 +40,42 @@ pub const FIELD_ERRORS_EXTENSION: &str = "errors";
 /// The extension member carrying the [`Code`](nest_rs_core::Code) a client
 /// branches on.
 pub const CODE_EXTENSION: &str = "code";
+
+/// What an error rendered from a `5xx` carries as its source, a member no
+/// response serializes: the failure is the server's own, so its unit's span
+/// records it, where one the caller's request earned fails nothing.
+#[derive(Debug)]
+struct ServerFailed;
+
+/// `error` answering `status`, marked when that is a failure of the server's own.
+fn answering(mut error: Error, status: u16) -> Error {
+    if status >= 500 {
+        error.source = Some(Arc::new(ServerFailed));
+    }
+    error
+}
+
+/// An error a GraphQL unit answers with, read for what its span records.
+pub(crate) trait AnsweredError {
+    /// Whether it answers a failure of the server's own, a `5xx`'s class. Any
+    /// other — a client's class, the edge's own error as a body built it, what
+    /// validation refused — is one the caller's request earned.
+    fn failed_the_server(&self) -> bool;
+}
+
+impl AnsweredError for Error {
+    fn failed_the_server(&self) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(|source| source.is::<ServerFailed>())
+    }
+}
+
+impl AnsweredError for ServerError {
+    fn failed_the_server(&self) -> bool {
+        self.source::<ServerFailed>().is_some()
+    }
+}
 
 /// Render a [`PipeError`] as an `async_graphql::Error`: its message, the
 /// `INVALID_ARGUMENT` code HTTP's `400` names under `extensions.code`, and any
@@ -67,7 +104,7 @@ pub fn denial_to_graphql_error(denial: Denial) -> Error {
     let scopes = denial.required_scopes();
     let required = (!scopes.is_empty()).then(|| scopes.to_vec());
     let retry_after = denial.retry_after_secs();
-    Error::new(client_message(&denial)).extend_with(move |_, e| {
+    let error = Error::new(client_message(&denial)).extend_with(move |_, e| {
         e.set(CODE_EXTENSION, code);
         if let Some(required) = required {
             e.set("requiredScopes", required);
@@ -75,7 +112,8 @@ pub fn denial_to_graphql_error(denial: Denial) -> Error {
         if let Some(retry_after) = retry_after {
             e.set("retryAfterSeconds", retry_after);
         }
-    })
+    });
+    answering(error, denial.http_status())
 }
 
 /// Render what a [`ToProblem`] error says — a [`Problem`] among them — as an
@@ -118,7 +156,7 @@ pub(crate) fn rendered(problem: &Problem) -> Error {
     let problem_type = problem.type_uri().zip(problem.title());
     let retry_after = problem.retry_after();
     let errors = problem.errors().and_then(field_map);
-    Error::new(problem.client_message()).extend_with(move |_, e| {
+    let error = Error::new(problem.client_message()).extend_with(move |_, e| {
         e.set(CODE_EXTENSION, code);
         if let Some((type_uri, title)) = problem_type {
             e.set("type", type_uri);
@@ -130,7 +168,8 @@ pub(crate) fn rendered(problem: &Problem) -> Error {
         if let Some(errors) = errors {
             e.set(FIELD_ERRORS_EXTENSION, errors);
         }
-    })
+    });
+    answering(error, problem.status())
 }
 
 /// What the request sent, refused: `detail`, under the `INVALID_ARGUMENT` code.

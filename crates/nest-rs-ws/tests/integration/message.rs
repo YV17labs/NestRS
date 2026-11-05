@@ -1191,3 +1191,409 @@ async fn a_layer_answers_a_frame_no_handler_reads_in_place_of_the_edge() {
         );
     }
 }
+
+/// A failure of the server's own, said by a service's domain error.
+#[derive(Debug, thiserror::Error)]
+#[error("the replica is gone")]
+struct ReplicaGone;
+
+impl nest_rs_core::ToProblem for ReplicaGone {
+    fn to_problem(&self) -> Option<Problem> {
+        None
+    }
+}
+
+/// A failure its client earned, said by a service's domain error, whose chain
+/// names no vocabulary: only the edge rendering it knows the class.
+#[derive(Debug, thiserror::Error)]
+#[error("seat 12 is taken")]
+struct SeatTaken;
+
+impl nest_rs_core::ToProblem for SeatTaken {
+    fn to_problem(&self) -> Option<Problem> {
+        Some(Problem::new(409, code::CONFLICT))
+    }
+}
+
+/// A failure its client earned, in an error that cannot cross threads: the
+/// exception filters read a sentence of it, never its type.
+#[derive(Debug)]
+struct RoomFull {
+    cause: std::rc::Rc<Problem>,
+}
+
+impl std::fmt::Display for RoomFull {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the room is full")
+    }
+}
+
+impl std::error::Error for RoomFull {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.cause)
+    }
+}
+
+/// Fails the message before its handler with a failure of the server's own, the
+/// edge having rendered nothing yet.
+#[injectable]
+#[derive(Default)]
+struct RaisesDisk;
+
+impl Layer for RaisesDisk {}
+
+#[async_trait]
+impl Interceptor for RaisesDisk {
+    async fn intercept(&self, _: &mut UnitContext<'_>, _: Next<'_>) -> Outcome {
+        Err(std::io::Error::other("the disk is gone").into())
+    }
+}
+
+/// Fails the message before its handler with a failure its client earned, the
+/// edge having rendered nothing yet.
+#[injectable]
+#[derive(Default)]
+struct RaisesConflict;
+
+impl Layer for RaisesConflict {}
+
+#[async_trait]
+impl Interceptor for RaisesConflict {
+    async fn intercept(&self, _: &mut UnitContext<'_>, _: Next<'_>) -> Outcome {
+        Err(Problem::new(409, code::CONFLICT).into())
+    }
+}
+
+#[gateway(path = "/who-failed")]
+struct WhoFailedGateway;
+
+#[messages]
+impl WhoFailedGateway {
+    #[subscribe_message("disk")]
+    #[public]
+    async fn disk(&self) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("the disk is gone"))
+    }
+
+    #[subscribe_message("failed")]
+    #[public]
+    async fn failed(&self) -> Result<String, Problem> {
+        Err(Problem::new(500, code::INTERNAL))
+    }
+
+    #[subscribe_message("replica")]
+    #[public]
+    async fn replica(&self) -> Result<String, ReplicaGone> {
+        Err(ReplicaGone)
+    }
+
+    #[subscribe_message("raised_disk")]
+    #[use_interceptors(RaisesDisk)]
+    #[public]
+    async fn raised_disk(&self) -> String {
+        "never".to_owned()
+    }
+
+    #[subscribe_message("conflict")]
+    #[public]
+    async fn conflict(&self) -> Result<String, Problem> {
+        Err(Problem::new(409, code::CONFLICT))
+    }
+
+    #[subscribe_message("seat")]
+    #[public]
+    async fn seat(&self) -> Result<String, SeatTaken> {
+        Err(SeatTaken)
+    }
+
+    #[subscribe_message("room")]
+    #[public]
+    async fn room(&self) -> Result<String, RoomFull> {
+        Err(RoomFull {
+            cause: std::rc::Rc::new(Problem::new(409, code::CONFLICT)),
+        })
+    }
+
+    #[subscribe_message("deliberate")]
+    #[public]
+    async fn deliberate(&self) -> Result<String, nest_rs_ws::WsError> {
+        Err(nest_rs_ws::WsError::new("not today"))
+    }
+
+    #[subscribe_message("typed")]
+    #[public]
+    async fn typed(&self, _count: u32) -> String {
+        "typed".to_owned()
+    }
+
+    #[subscribe_message("raised_conflict")]
+    #[use_interceptors(RaisesConflict)]
+    #[public]
+    async fn raised_conflict(&self) -> String {
+        "never".to_owned()
+    }
+}
+
+/// The failures of the server's own [`WhoFailedGateway`] answers.
+const THE_SERVERS: [&str; 4] = ["disk", "failed", "replica", "raised_disk"];
+
+/// The failures its client earned, what no handler reads last.
+const THE_CLIENTS: [&str; 7] = [
+    "conflict",
+    "seat",
+    "room",
+    "deliberate",
+    "typed",
+    "raised_conflict",
+    "nope",
+];
+
+/// Sends `socket` every failure of [`WhoFailedGateway`], reading each answer with
+/// `read`, then says who failed on each span: an error for the server's own,
+/// nothing for what its client earned, every line filing `error`.
+async fn assert_who_failed(
+    logs: &LogCapture,
+    app: nest_rs_testing::ws::WsApp,
+    read: impl Fn(&serde_json::Value),
+) {
+    let mut socket = app.socket("/who-failed").connect().await;
+    for event in THE_SERVERS.into_iter().chain(THE_CLIENTS) {
+        let data = if event == "typed" {
+            serde_json::json!("no number")
+        } else {
+            serde_json::Value::Null
+        };
+        socket.send(event, data).await;
+        read(&socket.next_envelope().await);
+    }
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    assert_eq!(
+        lines.len(),
+        THE_SERVERS.len() + THE_CLIENTS.len(),
+        "{lines:#?}"
+    );
+    for line in &lines {
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "an answer leaves the unit failed: {line:#?}",
+        );
+    }
+    for event in THE_SERVERS {
+        assert_span_records(logs, event, Some(nest_rs_core::operation_log::ERROR));
+    }
+    for event in THE_CLIENTS.map(|event| match event {
+        "nope" => nest_rs_core::operation_log::OTHER,
+        event => event,
+    }) {
+        assert_span_records(logs, event, None);
+    }
+}
+
+/// `event`'s span records `error_type` and, with one, the `Error` status.
+fn assert_span_records(logs: &LogCapture, event: &str, error_type: Option<&str>) {
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_ws::unit::MESSAGE.name()
+                && span.field("ws.event").as_deref() == Some(event)
+        })
+        .unwrap_or_else(|| panic!("the span of `{event}`"));
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        error_type,
+        "{event}: {:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        error_type.map(|_| "error"),
+        "{event}: {:?}",
+        span.fields,
+    );
+}
+
+/// A catch-all writing its house frame in place of every failure's.
+#[injectable]
+#[derive(Default)]
+struct HouseFrame;
+
+impl Layer for HouseFrame {}
+
+#[async_trait]
+impl ExceptionFilter for HouseFrame {
+    type Exception = dyn std::error::Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        match cx.switch_to_mut::<WsView>() {
+            Some(view) => Caught::Answered(view.respond(WsReply::error("something went wrong"))),
+            None => Caught::Declined,
+        }
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [
+        GlobalExceptionFilters<(HouseFrame,)>,
+        RaisesDisk,
+        RaisesConflict,
+        WhoFailedGateway,
+    ],
+)]
+struct HouseFrameModule;
+
+/// A filter's frame changes what the client reads, never who failed: the frame
+/// names no status, and the server's own failures still record behind it.
+#[tokio::test]
+async fn a_filters_own_frame_leaves_who_failed_on_the_span() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<HouseFrameModule>()
+        .build_ws()
+        .await
+        .expect("an app-wide exception filter boots");
+    assert_who_failed(&logs, app, |frame| {
+        assert_eq!(frame["data"]["error"], "something went wrong", "{frame}");
+    })
+    .await;
+}
+
+/// A catch-all acknowledging every failure with a plain reply.
+#[injectable]
+#[derive(Default)]
+struct PlainReply;
+
+impl Layer for PlainReply {}
+
+#[async_trait]
+impl ExceptionFilter for PlainReply {
+    type Exception = dyn std::error::Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        match cx.switch_to_mut::<WsView>() {
+            Some(view) => Caught::Answered(
+                view.respond(WsReply::Reply(serde_json::json!({ "failed": true }))),
+            ),
+            None => Caught::Declined,
+        }
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [
+        GlobalExceptionFilters<(PlainReply,)>,
+        RaisesDisk,
+        RaisesConflict,
+        WhoFailedGateway,
+    ],
+)]
+struct PlainReplyModule;
+
+/// A reply is no error frame, and the failure behind it still says who failed:
+/// its client's sets nothing on the server's span, the server's own still does.
+#[tokio::test]
+async fn a_filters_plain_reply_leaves_who_failed_on_the_span() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<PlainReplyModule>()
+        .build_ws()
+        .await
+        .expect("an app-wide exception filter boots");
+    assert_who_failed(&logs, app, |frame| {
+        assert_eq!(frame["data"]["failed"], true, "{frame}");
+    })
+    .await;
+}
+
+/// Answers whatever it catches as the client's conflict.
+#[injectable]
+#[derive(Default)]
+struct AsConflict;
+
+impl Layer for AsConflict {}
+
+#[async_trait]
+impl ExceptionFilter for AsConflict {
+    type Exception = dyn std::error::Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(409, code::CONFLICT))
+    }
+}
+
+/// Answers whatever it catches as the server's failure.
+#[injectable]
+#[derive(Default)]
+struct AsFailure;
+
+impl Layer for AsFailure {}
+
+#[async_trait]
+impl ExceptionFilter for AsFailure {
+    type Exception = dyn std::error::Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(500, code::INTERNAL))
+    }
+}
+
+#[gateway(path = "/reclassed")]
+struct ReclassedGateway;
+
+#[messages]
+impl ReclassedGateway {
+    #[subscribe_message("disk_as_conflict")]
+    #[use_exception_filters(AsConflict)]
+    #[public]
+    async fn disk_as_conflict(&self) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("the disk is gone"))
+    }
+
+    #[subscribe_message("conflict_as_failure")]
+    #[use_exception_filters(AsFailure)]
+    #[public]
+    async fn conflict_as_failure(&self) -> Result<String, Problem> {
+        Err(Problem::new(409, code::CONFLICT))
+    }
+}
+
+#[module(imports = [WsModule], providers = [AsConflict, AsFailure, ReclassedGateway])]
+struct ReclassedModule;
+
+/// A problem a filter answers names a status, which decides, as HTTP's filter's
+/// does: what it answers `4xx` the server does not record, what it answers `5xx`
+/// it does.
+#[tokio::test]
+async fn a_filters_problem_decides_who_failed_by_its_status() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<ReclassedModule>()
+        .build_ws()
+        .await
+        .expect("a message's exception filters boot");
+    let mut socket = app.socket("/reclassed").connect().await;
+    socket
+        .send("disk_as_conflict", serde_json::Value::Null)
+        .await;
+    assert_eq!(socket.next_envelope().await["data"]["code"], "CONFLICT");
+    socket
+        .send("conflict_as_failure", serde_json::Value::Null)
+        .await;
+    assert_eq!(socket.next_envelope().await["data"]["code"], "INTERNAL");
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    assert_span_records(&logs, "disk_as_conflict", None);
+    assert_span_records(
+        &logs,
+        "conflict_as_failure",
+        Some(nest_rs_core::operation_log::ERROR),
+    );
+}

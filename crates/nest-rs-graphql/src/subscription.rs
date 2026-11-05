@@ -888,12 +888,17 @@ impl SubscriptionLine {
     }
 
     /// Say how the socket ended: `ok` by its peer, `error` refused by the
-    /// protocol, `cancelled` by the server, `panic` when a subscription unwound.
+    /// protocol, which its client earned and its span leaves unrecorded, as an
+    /// HTTP `4xx` fails nothing on the server's span; `cancelled` by the server,
+    /// `panic` when a subscription unwound.
     fn settle(mut self, ended: Ended) {
         use nest_rs_core::operation_log::{CANCELLED, ERROR, OK, PANIC};
         self.outcome = Some(match ended {
             Ended::ByPeer => OK,
-            Ended::Refused => ERROR,
+            Ended::Refused => {
+                self.span = tracing::Span::none();
+                ERROR
+            }
             Ended::ByServer => CANCELLED,
             Ended::Unwound(payload) => {
                 nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(

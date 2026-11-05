@@ -61,3 +61,45 @@ HTTP, GraphQL and MCP file their unit's line alone for it.
 - **Refused: the chain at `debug`**, the smallest move. It would make the
   WebSocket edge the one that says a handler's refusal twice, and the chain
   of a refusal is the handler's own words, which its frame carries.
+
+## 2026-11-05 — and its span records nothing
+
+The entries above took a client's error off `warn`. Its span stayed: a
+`ws.message`, a `graphql.operation`, a `graphql.field` and a `graphql.subscription`
+filed `error` recorded `error.type` and an `Error` status whoever earned it. So a
+client could set `Error` on the server's span once per frame or per operation, and
+a backend's error rate read its typos as the server failing, where HTTP's `4xx` and
+MCP's caller codes fail nothing on theirs. The observability rule's "anything but
+`ok` exports as `error.type`" had read as this edge's default, not as a decision
+about the caller's own failure.
+
+- **Decided, by correctness**: a failure the caller earned files its
+  `outcome="error"` line and records nothing on the span, neither `error.type` nor
+  a status. A `5xx`, a panic, a stop, a message or an operation cut at its deadline,
+  and an operation its unit could not honour record as before. A graphql-ws socket
+  the protocol refused is one such failure: the client broke it.
+- **The class is read off the answer's status, not its code**: an app's own code on
+  a `Problem` answering `507` is the server's. The frame carries it beside its wire
+  members, serialized as nothing; a GraphQL error carries it as its `source`, which
+  no response serializes. Each is set where a status is known: `Problem::status`,
+  `Denial::http_status`, the edge's opaque answer.
+- **A WebSocket filter's reply changes what the client reads, never who failed**, and
+  names no status to read. So the view keeps the class of the failure the edge
+  rendered, which `WsView::respond` leaves alone: a server failure a catch-all answers
+  `WsReply::error` records, a client's `409` it acknowledges with a reply does not. A
+  failure the edge never rendered, an interceptor's `Err` a filter answered, reads what
+  the edge would have answered it. A `Caught::Problem` is rendered, so its status
+  decides, as HTTP's filter's does. GraphQL's filter answers only a `Problem`, and
+  HTTP reads its status, so neither holds this question.
+- **Refused: reading the class off the frame the view holds at the end**, which a
+  filter's reply decides in both directions, and **re-reading the failure once the
+  answer is final**: a `ToProblem` error's chain names no vocabulary, so a domain
+  `409` would read as opaque, and a `Caught::Problem` is forgotten by then.
+- **What names no status is the caller's**: a `WsError` a handler built with `new`,
+  an `async_graphql::Error` a body built, what validation refused. Error opacity
+  already reads each as a refusal, its line alone, so the span follows it. A body
+  answering a failure of the server's in those words records nothing; its line
+  still says `error`, and the `5xx` problem is its spelling.
+- **Refused**: naming the code on the span, which no convention for either edge asks,
+  and `otel.status_message`, an added field carrying a developer's sentence to an
+  exporter, which is the no-payload rule's own decision and additive.

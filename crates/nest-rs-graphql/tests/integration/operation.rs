@@ -251,21 +251,153 @@ async fn a_failing_operation_says_so() {
         "a GraphQL error is answered with a 200, so the HTTP line alone reports \
          a request that failed as one that succeeded: {served:?}",
     );
-    let span = logs
-        .spans()
-        .into_iter()
-        .find(|span| {
-            span.name == nest_rs_graphql::unit::FIELD.name()
-                && span.field("graphql.field.name").as_deref() == Some("refused")
-        })
-        .expect("the failing operation's span");
-    assert_eq!(
-        span.field("error.type").as_deref(),
-        Some(nest_rs_core::operation_log::ERROR),
-        "{:?}",
-        span.fields,
-    );
-    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+}
+
+#[resolver]
+struct AnswersResolver;
+
+/// An app's own class for a server failure no constant of the framework names.
+const INSUFFICIENT_STORAGE: nest_rs_core::Code = nest_rs_core::Code::new("INSUFFICIENT_STORAGE");
+
+/// Refuses every field it checks: the caller may not.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct Forbids;
+
+impl nest_rs_core::Layer for Forbids {}
+
+#[nest_rs_core::async_trait]
+impl nest_rs_guards::Guard for Forbids {
+    async fn check(
+        &self,
+        _: &mut nest_rs_core::UnitContext<'_>,
+    ) -> Result<(), nest_rs_guards::Denial> {
+        Err(nest_rs_guards::Denial::forbidden("not yours"))
+    }
+}
+
+impl nest_rs_guards::GuardFor<nest_rs_graphql::GraphqlView> for Forbids {}
+
+#[operations]
+impl AnswersResolver {
+    #[query]
+    #[public]
+    async fn deliberate(&self) -> async_graphql::Result<String> {
+        Err(async_graphql::Error::new("no"))
+    }
+
+    #[query]
+    #[public]
+    async fn conflict(&self) -> Result<String, nest_rs_core::Problem> {
+        Err(nest_rs_core::Problem::new(
+            409,
+            nest_rs_core::code::CONFLICT,
+        ))
+    }
+
+    #[query]
+    #[use_guards(Forbids)]
+    #[public]
+    async fn forbidden(&self) -> async_graphql::Result<String> {
+        Ok("never reached".into())
+    }
+
+    #[query]
+    #[public]
+    async fn failed(&self) -> Result<String, nest_rs_core::Problem> {
+        Err(nest_rs_core::Problem::new(
+            500,
+            nest_rs_core::code::INTERNAL,
+        ))
+    }
+
+    #[query]
+    #[public]
+    async fn storage(&self) -> Result<String, nest_rs_core::Problem> {
+        Err(nest_rs_core::Problem::new(507, INSUFFICIENT_STORAGE))
+    }
+
+    #[query]
+    #[public]
+    async fn opaque(&self) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("the disk is gone"))
+    }
+
+    #[query]
+    #[use_guards(crate::FieldStoreDown)]
+    #[public]
+    async fn store_down(&self) -> async_graphql::Result<String> {
+        Ok("never reached".into())
+    }
+}
+
+#[module(
+    imports = [GraphqlModule],
+    providers = [AnswersResolver, Forbids, crate::FieldStoreDown],
+)]
+struct AnswersModule;
+
+/// A failure the caller's own request earned fails nothing on the server's
+/// span, as HTTP's `4xx` does: its line files `error`, and the span records
+/// neither `error.type` nor a status. A failure of the server's own — a `5xx`'s
+/// class, whatever its code — records both.
+#[tokio::test]
+async fn a_field_records_an_error_on_its_span_only_for_a_failure_of_the_servers_own() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<AnswersModule>()
+        .await
+        .expect("the schema boots");
+
+    post(
+        &app,
+        "{ deliberate conflict forbidden failed storage opaque storeDown }",
+    )
+    .await;
+
+    let served = lines(&logs);
+    assert_eq!(served.len(), 7, "{served:#?}");
+    for line in &served {
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "whoever earned it, the field failed: {line:#?}",
+        );
+    }
+    let spans = logs.spans();
+    let of = |field: &str| {
+        spans
+            .iter()
+            .find(|span| {
+                span.name == nest_rs_graphql::unit::FIELD.name()
+                    && span.field("graphql.field.name").as_deref() == Some(field)
+            })
+            .unwrap_or_else(|| panic!("the span of `{field}`"))
+    };
+    for field in ["deliberate", "conflict", "forbidden"] {
+        let span = of(field);
+        assert_eq!(span.field("error.type"), None, "{field}: {:?}", span.fields);
+        assert_eq!(
+            span.field("otel.status_code"),
+            None,
+            "{field}: {:?}",
+            span.fields
+        );
+    }
+    for field in ["failed", "storage", "opaque", "storeDown"] {
+        let span = of(field);
+        assert_eq!(
+            span.field("error.type").as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "{field}: {:?}",
+            span.fields,
+        );
+        assert_eq!(
+            span.field("otel.status_code").as_deref(),
+            Some("error"),
+            "{field}: {:?}",
+            span.fields,
+        );
+    }
 }
 
 #[tokio::test]

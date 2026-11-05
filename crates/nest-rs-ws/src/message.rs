@@ -200,20 +200,28 @@ pub(crate) struct Answered {
     pub(crate) reply: WsReply,
     /// Whether the unit failed: a failed unit never commits.
     pub(crate) failed: bool,
+    /// Whether it failed by the server's own fault, whatever `reply` says of it.
+    server_failed: bool,
 }
 
 impl Answered {
-    /// The unit failed, answered with `reply`.
-    pub(crate) fn failed(reply: WsReply) -> Self {
+    /// The server failed the unit, answered with `reply`.
+    pub(crate) fn server_failed(reply: WsReply) -> Self {
         Self {
             reply,
             failed: true,
+            server_failed: true,
         }
     }
 
     /// The opaque failure, its cause said where it was met.
     pub(crate) fn opaque() -> Self {
-        Self::failed(WsReply::Error(WsError::internal()))
+        Self::server_failed(WsReply::Error(WsError::internal()))
+    }
+
+    /// Whether the unit failed by what its client's own frame earned.
+    pub(crate) fn refused_its_client(&self) -> bool {
+        self.failed && !self.server_failed
     }
 }
 
@@ -266,12 +274,15 @@ pub(crate) async fn unserved(
 }
 
 /// The answer `outcome` comes to: the reply the view holds, or, for a failure
-/// nobody answered, the edge's one rule. What the answer withholds is filed
-/// here, once, as it goes out.
+/// nobody answered, the edge's one rule. Who failed is read off what the edge
+/// rendered, else off what it would have, never off a reply a layer wrote, which
+/// answers for nobody. What the answer withholds is filed here, once, as it goes
+/// out.
 fn rendered(view: WsView, outcome: Outcome, event: &str) -> Answered {
     let failed = outcome.is_err();
-    let (reply, withheld) = match (outcome, view.into_answer()) {
-        (Ok(_), (Some(reply), withheld)) => (reply, withheld),
+    let rendered_class = view.server_failed();
+    let (reply, withheld, server_failed) = match (outcome, view.into_answer()) {
+        (Ok(_), (Some(reply), withheld)) => (reply, withheld, false),
         (Ok(_), (None, _)) => {
             tracing::error!(
                 target: crate::TARGET,
@@ -280,16 +291,25 @@ fn rendered(view: WsView, outcome: Outcome, event: &str) -> Answered {
             );
             return Answered::opaque();
         }
-        (Err(failure), (Some(reply), withheld)) if failure.is_answered() => (reply, withheld),
+        (Err(failure), (Some(reply), withheld)) if failure.is_answered() => {
+            let server_failed =
+                rendered_class.unwrap_or_else(|| failure_rendered(&failure).frame.server_failed);
+            (reply, withheld, server_failed)
+        }
         (Err(failure), _) => {
             let Rendered { frame, withheld } = failure_rendered(&failure);
-            (WsReply::Error(frame), withheld)
+            let server_failed = frame.server_failed;
+            (WsReply::Error(frame), withheld, server_failed)
         }
     };
     if let Some(withheld) = withheld {
         crate::envelope::file(withheld, event);
     }
-    Answered { reply, failed }
+    Answered {
+        reply,
+        failed,
+        server_failed,
+    }
 }
 
 /// What a failure the view holds no answer to renders: an exception filter's
@@ -376,7 +396,7 @@ impl Tail for UnservedTail<'_> {
 /// What a message whose site did not compose answers: the opaque refusal, its
 /// cause the boot's refusal.
 pub(crate) fn refused() -> Answered {
-    Answered::failed(WsReply::Error(denial_to_ws_error(Denial::internal(
+    Answered::server_failed(WsReply::Error(denial_to_ws_error(Denial::internal(
         "the message's site did not compose",
     ))))
 }
@@ -386,11 +406,12 @@ mod tests {
     use super::*;
 
     /// A unit that could not begin and a site that did not compose answer the
-    /// one opaque frame, failing the unit.
+    /// one opaque frame, failing the unit, the server's own failure.
     #[test]
     fn what_the_message_cannot_run_answers_opaquely() {
         for answered in [Answered::opaque(), refused()] {
             assert!(answered.failed, "a failed unit never commits");
+            assert!(!answered.refused_its_client(), "no client earned it");
             let WsReply::Error(frame) = answered.reply else {
                 panic!("an error frame");
             };

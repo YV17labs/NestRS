@@ -849,6 +849,20 @@ impl<'a> UnitLine<'a> {
         self.emit(outcome);
     }
 
+    /// File what a message answered: `ok`, or `error`, which its span records
+    /// unless its client's own frame earned it, as an HTTP `4xx` fails nothing on
+    /// the server's span.
+    fn answered(mut self, answered: &Answered) {
+        if answered.refused_its_client() {
+            self.span = tracing::Span::none();
+        }
+        self.emit(if answered.failed {
+            operation_log::ERROR
+        } else {
+            operation_log::OK
+        });
+    }
+
     /// The unit unwound: file `panic`, and give the operator the panic's text,
     /// which the client is never told.
     fn unwound(mut self, payload: &(dyn std::any::Any + Send)) {
@@ -1030,11 +1044,7 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
     .await;
     match ran {
         Ok(answered) => {
-            line.file(if answered.failed {
-                operation_log::ERROR
-            } else {
-                operation_log::OK
-            });
+            line.answered(&answered);
             answered.reply
         }
         Err(payload) => {
@@ -1077,7 +1087,7 @@ fn timed_out(conn_id: ConnId, event: &str, timeout: Duration) -> Answered {
         timeout_secs = timeout.as_secs(),
         "websocket message not answered within its deadline; it is cut",
     );
-    Answered::failed(WsReply::Error(
+    Answered::server_failed(WsReply::Error(
         crate::WsError::classed("the message was not answered in time", code::UNAVAILABLE)
             .with_reason(TIMEOUT_REASON),
     ))
@@ -1422,9 +1432,9 @@ mod tests {
     }
 
     /// The `ws.message` line and span of a frame refused before any handler
-    /// read it, filed once under `_OTHER`; its report, `report`, at `debug`,
-    /// joined to the line's correlation, and returned; no `warn`; no value the
-    /// client sent.
+    /// read it, filed once under `_OTHER`, the span recording no error of the
+    /// server's; its report, `report`, at `debug`, joined to the line's
+    /// correlation, and returned; no `warn`; no value the client sent.
     fn assert_refused_unread(
         logs: &nest_rs_testing::LogCapture,
         report: &str,
@@ -1438,12 +1448,8 @@ mod tests {
             span.field("ws.event").as_deref(),
             Some(operation_log::OTHER)
         );
-        assert_eq!(
-            span.field("error.type").as_deref(),
-            Some(operation_log::ERROR),
-            "{:?}",
-            span.fields,
-        );
+        assert_eq!(span.field("error.type"), None, "{:?}", span.fields);
+        assert_eq!(span.field("otel.status_code"), None, "{:?}", span.fields);
         let reported = logs.expect_one(crate::TARGET, report);
         assert_eq!(reported.level, "debug");
         assert!(line.span_id.is_some(), "the line names its unit: {line:#?}");

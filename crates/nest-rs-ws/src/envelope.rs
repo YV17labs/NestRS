@@ -136,9 +136,9 @@ pub struct WsError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<Cow<'static, str>>,
     /// The scopes a scope denial requires (RFC 6750 §3.1) — the frame's
-    /// `data.requiredScopes`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub required_scopes: Vec<String>,
+    /// `data.requiredScopes`. A boxed slice, as `errors` is boxed.
+    #[serde(default, skip_serializing_if = "<[String]>::is_empty")]
+    pub required_scopes: Box<[String]>,
     /// The wait before a retry, in seconds — the frame's
     /// `data.retryAfterSeconds`, every edge's spelling of it.
     #[serde(
@@ -153,6 +153,10 @@ pub struct WsError {
     /// carry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub errors: Option<Box<serde_json::Value>>,
+    /// Whether the frame answers a failure of the server's own, a `5xx`'s
+    /// class: what the message's span records as an error. Never on the wire.
+    #[serde(skip)]
+    pub(crate) server_failed: bool,
 }
 
 impl WsError {
@@ -163,9 +167,10 @@ impl WsError {
             code: None,
             problem_type: None,
             reason: None,
-            required_scopes: Vec::new(),
+            required_scopes: Box::default(),
             retry_after_secs: None,
             errors: None,
+            server_failed: false,
         }
     }
 
@@ -209,6 +214,7 @@ impl WsError {
             }),
             retry_after_secs: problem.retry_after(),
             errors: problem.errors().cloned().map(Box::new),
+            server_failed: problem.status() >= 500,
             ..Self::classed(problem.client_message(), problem.code())
         }
     }
@@ -894,7 +900,7 @@ mod tests {
         assert_eq!(problem_type.uri, "https://example.com/problems/slow-down");
         assert_eq!(problem_type.title, "Slow down");
         assert_eq!(frame.reason.as_deref(), Some("rate_limited"));
-        assert_eq!(frame.required_scopes, ["posts:write"]);
+        assert_eq!(*frame.required_scopes, ["posts:write"]);
         assert_eq!(frame.retry_after_secs, Some(7));
         assert_eq!(
             frame.errors.as_deref(),

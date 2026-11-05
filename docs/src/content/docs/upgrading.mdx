@@ -557,6 +557,9 @@ lists what the boot, a log or the wire shows when one is missed.
    | `Box::new(http_transport).serve(cancel)` driven by hand | `http_transport.listen().await?` first; the port it bound is in `Listening::addresses` |
    | `TestClient::new(transport.take_endpoint()?)` on a hand-booted transport | `transport.take_endpoint()?.call(request)`, or `TestApp` |
    | `HttpCors { .. }.into_middleware()` | nothing: set `HttpConfig::cors`, which the transport checks at boot |
+   | `HttpConfig { trusted_proxies: vec![ip], .. }` | `vec![ip.into()]`, or `vec!["10.42.0.0/16".parse().expect("a CIDR range")]` for a range in a `#[module]`'s imports (`?` in a function returning `Result`): an entry is a `TrustedProxy` |
+   | `ClientOrigin::resolve(forwarded, forwarded_for, real_ip, peer, &[ip])` | `&[ip.into()]` for the last argument |
+   | `ClientIp`'s `ip` compared with `::ffff:a.b.c.d` on a listener on `[::]` | `a.b.c.d`: a mapped address is the IPv4 address it carries — not a compile error |
    | `HttpCors { methods: vec!["TRACE".into()], .. }` | drop the forbidden method; list the methods a page sends (`PUT`, `DELETE`, …) |
    | a CORS policy without `max_age`, whose preflight a browser kept a day | `max_age: Some(Duration::from_secs(86_400))`, or `<PREFIX>_HTTP__CORS_MAX_AGE_SECS=86400` — not a compile error: a preflight otherwise carries no `Access-Control-Max-Age` |
    | a write guarded by `If-Match` against the `ETag` of a read `compression` encoded | read the tag the write sends from an unencoded answer (a request without `Accept-Encoding`) — not a compile error: an encoded answer's strong tag is now sent weak (`W/"…"`, RFC 9110 §8.8.3), and a weak tag matches no `If-Match` |
@@ -1992,6 +1995,10 @@ lists what the boot, a log or the wire shows when one is missed.
   and the entry's place, never the entry. A preflight for a method no route
   serves is refused `403`, and each refused cross-origin request files one
   `warn` on `nest_rs::http`.
+- **`<PREFIX>_HTTP__TRUSTED_PROXIES`** with a `/0` (`0.0.0.0/0`, `::/0`) or a
+  range with address bits set past its prefix (`10.0.0.1/8`) fails the boot
+  naming the entry's place. Name your proxies' own range, written from its first
+  address.
 - **A cap or a deadline of `0`** — `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`,
   `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS`, an idle or send timeout — fails the
   boot naming the variable. A replica at its connection cap files

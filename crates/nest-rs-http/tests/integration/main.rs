@@ -10,6 +10,7 @@
 mod access_log;
 mod allow;
 mod body_limit;
+mod client_ip;
 mod compression;
 mod controller;
 mod cors;

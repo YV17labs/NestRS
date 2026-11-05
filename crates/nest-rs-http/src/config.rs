@@ -1,4 +1,3 @@
-use std::net::IpAddr;
 use std::time::Duration;
 
 use http::HeaderName;
@@ -11,6 +10,7 @@ use crate::cors::HttpCors;
 use crate::raw_body::RawBody;
 use crate::security_headers::HttpSecurityHeaders;
 use crate::tls::HttpTls;
+use crate::trusted_proxy::TrustedProxy;
 use crate::versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, VersionSelector};
 
 const DEFAULT_HOST: &str = "0.0.0.0";
@@ -310,17 +310,17 @@ pub struct HttpConfig {
     /// correlation id minted and echoed.
     pub access_log: bool,
     /// Reverse proxies whose `Forwarded` / `X-Forwarded-For` / `X-Real-IP` this
-    /// deployment believes. Empty by default: every caller is identified by its
-    /// transport peer.
+    /// deployment believes, each an address or a CIDR range. Empty by default:
+    /// every caller is identified by its transport peer.
     ///
-    /// Read from `<PREFIX>_HTTP__TRUSTED_PROXIES` (`10.0.0.1,10.0.0.2`) by
+    /// Read from `<PREFIX>_HTTP__TRUSTED_PROXIES` (`10.0.0.1,10.0.0.0/8`) by
     /// [`ClientIp`](crate::ClientIp), the throttler's rate-limit bucket and the
     /// browser-origin check of the WebSocket gateways, the graphql-ws upgrade
     /// and `/mcp`, where a trusted proxy's `Forwarded` (`proto=`, `host=`) or
     /// `X-Forwarded-Proto` / `X-Forwarded-Host` set the request's own origin;
-    /// an unparseable entry aborts the boot. See
-    /// `ClientOrigin` for the resolution rule.
-    pub trusted_proxies: Vec<IpAddr>,
+    /// an entry that is no [`TrustedProxy`], a `/0` among them, aborts the boot.
+    /// See `ClientOrigin` for the resolution rule.
+    pub trusted_proxies: Vec<TrustedProxy>,
     /// Maximum lifetime of a single `#[sse]` stream: when it elapses the stream
     /// ends, so the client's `EventSource` reconnects through the guard chain.
     /// A peer that stops reading is cut sooner, at
@@ -878,16 +878,18 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env(
                 nest_rs_config::var_name("http", "TRUSTED_PROXIES"),
-                "10.0.0.1, 2001:db8::1,10.0.0.2",
+                "10.0.0.1, 2001:db8::1,10.0.0.2,10.0.0.0/8,fd00::/8",
             );
             let env = ConfigService::for_namespace("http");
             let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
             assert_eq!(
                 cfg.trusted_proxies,
                 vec![
-                    "10.0.0.1".parse::<IpAddr>().unwrap(),
+                    "10.0.0.1".parse::<TrustedProxy>().unwrap(),
                     "2001:db8::1".parse().unwrap(),
                     "10.0.0.2".parse().unwrap(),
+                    "10.0.0.0/8".parse().unwrap(),
+                    "fd00::/8".parse().unwrap(),
                 ],
             );
             Ok(())
@@ -907,12 +909,36 @@ mod tests {
             let msg = err.to_string();
             assert!(msg.contains("TRUSTED_PROXIES"), "{msg}");
             assert!(
-                msg.contains("entry 2 of the list is not an IP address"),
+                msg.contains("entry 2 of the list is neither an IP address nor a CIDR range"),
                 "names the entry by its place, not its value: {msg}"
             );
             assert!(!msg.contains("10.0.0.oops"), "{msg}");
             Ok(())
         });
+    }
+
+    /// What the variable can write and the field's type holds no value of: so
+    /// nothing pinned in code reaches the transport either.
+    #[test]
+    fn a_range_no_deployment_means_fails_the_boot_by_place() {
+        for (every, sentence) in [
+            ("0.0.0.0/0", "entry 2 of the list is a `/0` range"),
+            ("::/0", "entry 2 of the list is a `/0` range"),
+            ("::ffff:0:0/96", "entry 2 of the list is a `/0` range"),
+            (
+                "10.0.0.1/8",
+                "entry 2 of the list is a CIDR range with address bits set",
+            ),
+        ] {
+            let list = format!("10.0.0.1,{every}");
+            let env = ConfigService::with_vars("http", [("TRUSTED_PROXIES", list.as_str())]);
+            let refused = HttpConfig::from_env(&env, HttpConfig::default())
+                .expect_err(every)
+                .to_string();
+            assert!(refused.contains("TRUSTED_PROXIES"), "{refused}");
+            assert!(refused.contains(sentence), "{refused}");
+            assert!(!refused.contains(every), "{refused}");
+        }
     }
 
     #[test]
@@ -928,7 +954,7 @@ mod tests {
             assert_eq!(cfg.port, 8080);
             assert_eq!(
                 cfg.trusted_proxies,
-                vec!["10.0.0.9".parse::<IpAddr>().unwrap()]
+                vec!["10.0.0.9".parse::<TrustedProxy>().unwrap()]
             );
             Ok(())
         });

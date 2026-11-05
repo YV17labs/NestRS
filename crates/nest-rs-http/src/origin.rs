@@ -10,7 +10,7 @@
 //! admits only what it lists, the server's own origin included; an entry point
 //! mounted outside the transport is held to this policy all the same.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use http::HeaderValue;
@@ -21,6 +21,7 @@ use crate::client_ip::forwarded_param;
 use crate::cors::{WILDCARD, holds_wildcard};
 use crate::endpoint::{BoxEndpoint, Endpoint, OriginCheck, OriginGate};
 use crate::error::{NotAnOrigin, OriginRefused, OriginRefusedReason, ResponseError};
+use crate::trusted_proxy::{TrustedProxy, lists};
 
 /// The de-facto forwarding headers for the scheme and the host, which the
 /// `http` crate does not name.
@@ -40,13 +41,13 @@ const X_FORWARDED_HOST: &str = "x-forwarded-host";
 pub(crate) struct OriginPolicy {
     /// What the CORS policy lists; `None` without one.
     listed: Option<ListedOrigins>,
-    trusted_proxies: Box<[IpAddr]>,
+    trusted_proxies: Box<[TrustedProxy]>,
 }
 
 impl OriginPolicy {
     /// The policy of a transport whose CORS policy lists `listed`, `None`
     /// without one, behind the proxies `trusted_proxies` names.
-    pub(crate) fn new(listed: Option<ListedOrigins>, trusted_proxies: Box<[IpAddr]>) -> Self {
+    pub(crate) fn new(listed: Option<ListedOrigins>, trusted_proxies: Box<[TrustedProxy]>) -> Self {
         Self {
             listed,
             trusted_proxies,
@@ -63,7 +64,7 @@ impl OriginPolicy {
         };
         let trusted_proxy = request
             .peer_addr()
-            .is_some_and(|peer| self.trusted_proxies.contains(&peer.ip()));
+            .is_some_and(|peer| lists(&self.trusted_proxies, peer.ip()));
         let refused = |reason, scheme| Err(OriginRefused::new(reason, scheme, trusted_proxy));
         if sent.next().is_some() {
             return refused(OriginRefusedReason::OriginRepeated, None);
@@ -522,7 +523,7 @@ mod tests {
             listed,
             trusted
                 .iter()
-                .map(|ip| ip.parse().expect("a test literal is an address"))
+                .map(|entry| entry.parse().expect("a test literal is an entry"))
                 .collect(),
         )
     }
@@ -772,6 +773,45 @@ mod tests {
         assert!(!kept.contains("8443"), "{kept}");
         assert_eq!(refused.reason(), OriginRefusedReason::SchemeDiffers);
         assert!(refused.trusted_proxy());
+    }
+
+    /// The same comparison the resolution makes: behind a dual-stack listener
+    /// the proxy's IPv4 entry names the `::ffff:a.b.c.d` it is reported as, so
+    /// what it forwards is read.
+    #[test]
+    fn a_mapped_peer_is_the_proxy_its_ipv4_entry_names() {
+        let forwarded = [
+            ("origin", "https://api.example"),
+            ("host", "api.internal:8080"),
+            ("forwarded", "proto=https;host=api.example"),
+        ];
+        assert!(
+            policy(&[], &[PROXY])
+                .allows(&request("/socket", "::ffff:10.0.0.1", &forwarded))
+                .is_ok()
+        );
+    }
+
+    /// A proxy inside a listed range forwards as a listed address does.
+    #[test]
+    fn a_peer_inside_a_listed_range_is_the_proxy_it_names() {
+        let forwarded = [
+            ("origin", "https://api.example"),
+            ("host", "api.internal:8080"),
+            ("forwarded", "proto=https;host=api.example"),
+        ];
+        let policy = policy(&[], &["10.0.0.0/8"]);
+        assert!(
+            policy
+                .allows(&request("/socket", "10.42.7.9", &forwarded))
+                .is_ok()
+        );
+        assert!(
+            policy
+                .allows(&request("/socket", "11.0.0.1", &forwarded))
+                .is_err(),
+            "past the range its headers are a stranger's",
+        );
     }
 
     /// The hint names the settings that admit the origin, with the

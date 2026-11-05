@@ -16,7 +16,6 @@
 
 use std::any::Any;
 use std::future::{Future, poll_fn};
-use std::net::IpAddr;
 use std::pin::pin;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -46,6 +45,7 @@ use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
 use crate::trace_context::KnownMethods;
+use crate::trusted_proxy::TrustedProxy;
 use crate::{response_body, trace_context};
 
 /// What a request whose unit of work did not settle within its `net` past the
@@ -134,7 +134,7 @@ pub(crate) struct EdgeEndpoint<E> {
     access_log: bool,
     /// Decides whether `X-Forwarded-For` and `X-Request-Id` may be believed,
     /// whether or not a line is filed.
-    trusted_proxies: Arc<[IpAddr]>,
+    trusted_proxies: Arc<[TrustedProxy]>,
     /// The methods the line and the span name as sent.
     known_methods: KnownMethods,
     drain: Arc<Drain>,

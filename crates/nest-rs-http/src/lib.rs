@@ -77,6 +77,7 @@ mod testing;
 mod tls;
 mod trace_context;
 mod transport;
+mod trusted_proxy;
 pub mod unit;
 mod vary;
 mod versioning;
@@ -212,7 +213,9 @@ pub use deprecation::DeprecationMeta;
 pub use detached::DetachedWork;
 pub use endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, declare_endpoint, endpoint_fn};
 pub use endpoint_guards::{CarriedView, EndpointGuards, GuardList};
-pub use error::{BodyError, HttpError, ResponseError, Result, RouteTemplateError};
+pub use error::{
+    BodyError, HttpError, NotATrustedProxy, ResponseError, Result, RouteTemplateError,
+};
 pub use fallback::HttpFallbackMeta;
 pub use form::Form;
 pub use headers::Header;
@@ -239,6 +242,7 @@ pub use trace_context::{
     TRACEPARENT_HEADER, TRACERESPONSE_HEADER, TRACESTATE_HEADER, UPSTREAM_REQUEST_ID_HEADER,
 };
 pub use transport::HttpTransport;
+pub use trusted_proxy::TrustedProxy;
 pub use versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM};
 pub use view::HttpView;
 

@@ -162,11 +162,30 @@ pub(crate) async fn serve_module<M: nest_rs_core::Module + 'static>(config: Http
     serve_app(App::builder().module::<M>(), config).await
 }
 
+/// [`serve_module`] listening on `host`, `config` also seeded in the container,
+/// where what a request reads of it lives.
+pub(crate) async fn serve_module_on<M: nest_rs_core::Module + 'static>(
+    host: &str,
+    config: HttpConfig,
+) -> Serving {
+    let builder = App::builder().module::<M>().provide(config.clone());
+    serve_app_on(builder, host, config).await
+}
+
 /// [`serve_module`] for an app built as `builder` describes.
 async fn serve_app(builder: nest_rs_core::AppBuilder, config: HttpConfig) -> Serving {
+    serve_app_on(builder, "127.0.0.1", config).await
+}
+
+/// [`serve_app`] listening on `host`.
+async fn serve_app_on(
+    builder: nest_rs_core::AppBuilder,
+    host: &str,
+    config: HttpConfig,
+) -> Serving {
     let app = builder.build().await.expect("module boots");
     let mut transport = crate::built(&HttpConfig {
-        host: "127.0.0.1".into(),
+        host: host.into(),
         port: 0,
         ..config
     });

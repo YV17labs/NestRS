@@ -34,7 +34,7 @@ async fn behind_the_proxy() -> TestApp {
     TestApp::builder()
         .module::<WhoModule>()
         .provide(HttpConfig {
-            trusted_proxies: vec![proxy.ip()],
+            trusted_proxies: vec![proxy.ip().into()],
             ..HttpConfig::default()
         })
         .build()

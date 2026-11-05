@@ -35,9 +35,10 @@ into its own outbound client. There is no separate request id:
 `X-Request-Id` is upstream data, recorded as a captured header behind a trusted
 peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
 
-- **Trust is one decision, one list.** An inbound `traceparent` is continued
-  only from a peer in `trusted_proxies` — the evidence `X-Forwarded-For` is
-  weighed on — and restarted otherwise, which is what the specification defines
+- **Trust is one decision, one list**
+  (`.claude/decisions/trusted-proxy-ranges.md`). An inbound `traceparent` is
+  continued only from a peer in `trusted_proxies` — the evidence
+  `X-Forwarded-For` is weighed on — and restarted otherwise, which is what the specification defines
   a front gate to do; an ungated one lets a public client pick its trace and set
   `sampled` on traffic it generates. `tracestate` is forwarded **verbatim**
   wherever the trace is continued, and dropped with its `traceparent` wherever

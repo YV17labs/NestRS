@@ -2,7 +2,8 @@
 //! consumer shares, and [`ClientIp`], the extractor over it.
 //!
 //! The forwarding headers are client-authored, so they are read only when the
-//! direct peer is in `<PREFIX>_HTTP__TRUSTED_PROXIES` (empty by default):
+//! direct peer is in `<PREFIX>_HTTP__TRUSTED_PROXIES` (empty by default), an
+//! address or a CIDR range ([`TrustedProxy`]):
 //!
 //! 1. no peer address at all (unix socket, or a proxy that hides it) ⇒
 //!    [`ClientOrigin::Unknown`];
@@ -11,6 +12,9 @@
 //!    `X-Real-IP` are read, and the client is the **rightmost** hop that is not
 //!    itself a trusted proxy ([`ClientOrigin::Forwarded`]): a proxy appends, a
 //!    caller can only prepend.
+//!
+//! An IPv4-mapped address, what a dual-stack listener reports an IPv4 peer as,
+//! is the IPv4 address it carries, in the peer, in a hop and in the answer.
 //!
 //! [`ClientIp`] and the throttler's bucket both resolve through
 //! [`ClientOrigin::of`]. Treat the result as observational, never as an authn
@@ -22,6 +26,7 @@ use http::{HeaderMap, header};
 use nest_rs_core::current_request_scope;
 
 use crate::HttpConfig;
+use crate::trusted_proxy::{TrustedProxy, lists};
 
 /// The de-facto forwarding headers, which the `http` crate does not name.
 const X_FORWARDED_FOR: &str = "x-forwarded-for";
@@ -72,7 +77,7 @@ impl ClientOrigin {
 
     /// [`of`](Self::of) against an explicit list, for the transport edge, which
     /// runs before the request scope `of` reads exists.
-    pub(crate) fn of_with(req: &crate::Request, trusted_proxies: &[IpAddr]) -> Self {
+    pub(crate) fn of_with(req: &crate::Request, trusted_proxies: &[TrustedProxy]) -> Self {
         Self::of_head(
             req.headers(),
             req.peer_addr().map(|peer| peer.ip()),
@@ -81,7 +86,11 @@ impl ClientOrigin {
     }
 
     /// The resolution over a request's head and its peer.
-    fn of_head(headers: &HeaderMap, peer: Option<IpAddr>, trusted_proxies: &[IpAddr]) -> Self {
+    fn of_head(
+        headers: &HeaderMap,
+        peer: Option<IpAddr>,
+        trusted_proxies: &[TrustedProxy],
+    ) -> Self {
         // Nothing trusted: no header can be believed, so none is read.
         let trusted = !trusted_proxies.is_empty();
         let believed = |name: &str| trusted.then(|| headers.get(name)?.to_str().ok()).flatten();
@@ -117,13 +126,13 @@ impl ClientOrigin {
         forwarded_for: Option<&str>,
         real_ip: Option<&str>,
         peer: Option<IpAddr>,
-        trusted_proxies: &[IpAddr],
+        trusted_proxies: &[TrustedProxy],
     ) -> Self {
-        let Some(peer) = peer else {
+        let Some(peer) = peer.map(|peer| peer.to_canonical()) else {
             return Self::Unknown;
         };
         // Anyone but a trusted proxy could have forged the headers.
-        if !trusted_proxies.contains(&peer) {
+        if !lists(trusted_proxies, peer) {
             return Self::Peer(peer);
         }
 
@@ -159,7 +168,7 @@ impl ClientOrigin {
         // nginx's single-hop form, after the chains: it carries no ordering.
         if let Some(ip) = real_ip
             .and_then(parse_forwarded_entry)
-            .filter(|ip| !trusted_proxies.contains(ip))
+            .filter(|&ip| !lists(trusted_proxies, ip))
         {
             return Self::Forwarded(ip);
         }
@@ -221,11 +230,11 @@ struct Chain {
 }
 
 impl Chain {
-    fn of(hops: impl Iterator<Item = IpAddr>, trusted_proxies: &[IpAddr]) -> Self {
+    fn of(hops: impl Iterator<Item = IpAddr>, trusted_proxies: &[TrustedProxy]) -> Self {
         let mut chain = Self::default();
         for hop in hops {
             chain.outermost.get_or_insert(hop);
-            if !trusted_proxies.contains(&hop) {
+            if !lists(trusted_proxies, hop) {
                 chain.client = Some(hop);
             }
         }
@@ -318,23 +327,20 @@ fn parse_forwarded_node(node: &str) -> Option<IpAddr> {
 
 /// Parse one forwarded entry — strip whitespace, accept a bare IP, `IP:port`,
 /// or a bracketed IPv6 (`[ip]` or `[ip]:port` per RFC 7239 — nginx and HAProxy
-/// emit the bracketed form). An unparseable entry yields `None` and is skipped
-/// rather than accepted as a key, so a caller cannot inject an arbitrary string
-/// into a rate-limit bucket name or a log field.
+/// emit the bracketed form) — in canonical form. An unparseable entry yields
+/// `None` and is skipped rather than accepted as a key, so a caller cannot
+/// inject an arbitrary string into a rate-limit bucket name or a log field.
 fn parse_forwarded_entry(raw: &str) -> Option<IpAddr> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    if let Ok(ip) = trimmed.parse::<IpAddr>() {
-        return Some(ip);
-    }
-    if let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
-        && let Ok(ip) = inner.parse::<IpAddr>()
-    {
-        return Some(ip);
-    }
-    trimmed.parse::<SocketAddr>().ok().map(|sa| sa.ip())
+    let ip = trimmed
+        .parse::<IpAddr>()
+        .ok()
+        .or_else(|| trimmed.strip_prefix('[')?.strip_suffix(']')?.parse().ok())
+        .or_else(|| trimmed.parse::<SocketAddr>().ok().map(|sa| sa.ip()))?;
+    Some(ip.to_canonical())
 }
 
 impl<'a> crate::FromRequest<'a> for ClientIp {
@@ -353,7 +359,7 @@ fn configured() -> Option<std::sync::Arc<HttpConfig>> {
 }
 
 /// The proxies `config` trusts; none without one.
-pub(crate) fn trusted_proxies(config: Option<&HttpConfig>) -> &[IpAddr] {
+pub(crate) fn trusted_proxies(config: Option<&HttpConfig>) -> &[TrustedProxy] {
     config.map_or(&[][..], |config| &config.trusted_proxies)
 }
 
@@ -366,14 +372,18 @@ mod tests {
         s.parse().expect("test literal is an IP")
     }
 
+    fn listed(addresses: &[IpAddr]) -> Vec<TrustedProxy> {
+        addresses.iter().copied().map(TrustedProxy::from).collect()
+    }
+
     fn resolve(xff: Option<&str>, peer: Option<IpAddr>, trusted: &[IpAddr]) -> ClientOrigin {
-        ClientOrigin::resolve(None, xff, None, peer, trusted)
+        ClientOrigin::resolve(None, xff, None, peer, &listed(trusted))
     }
 
     #[test]
     fn two_forwarding_headers_that_disagree_are_both_refused() {
         let proxy: IpAddr = "10.0.0.1".parse().unwrap();
-        let trusted = [proxy];
+        let trusted = listed(&[proxy]);
 
         let logs = nest_rs_testing::LogCapture::install();
         let spoofed = ClientOrigin::resolve(
@@ -431,7 +441,7 @@ mod tests {
         peer: Option<IpAddr>,
         trusted: &[IpAddr],
     ) -> ClientOrigin {
-        ClientOrigin::resolve(Some(forwarded), None, None, peer, trusted)
+        ClientOrigin::resolve(Some(forwarded), None, None, peer, &listed(trusted))
     }
 
     #[test]
@@ -548,8 +558,13 @@ mod tests {
     #[test]
     fn x_real_ip_answers_when_the_chain_does_not() {
         let proxy = ip("10.0.0.1");
-        let origin =
-            ClientOrigin::resolve(None, None, Some("198.51.100.20"), Some(proxy), &[proxy]);
+        let origin = ClientOrigin::resolve(
+            None,
+            None,
+            Some("198.51.100.20"),
+            Some(proxy),
+            &listed(&[proxy]),
+        );
         assert_eq!(origin, ClientOrigin::Forwarded(ip("198.51.100.20")));
 
         let origin = ClientOrigin::resolve(
@@ -557,7 +572,7 @@ mod tests {
             Some("203.0.113.50"),
             Some("198.51.100.20"),
             Some(proxy),
-            &[proxy],
+            &listed(&[proxy]),
         );
         assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
 
@@ -679,7 +694,7 @@ mod tests {
             Some("198.51.100.7"),
             Some("198.51.100.8"),
             Some(proxy),
-            &[proxy],
+            &listed(&[proxy]),
         );
         assert_eq!(
             origin,
@@ -692,7 +707,7 @@ mod tests {
             Some("198.51.100.7"),
             None,
             Some(proxy),
-            &[proxy],
+            &listed(&[proxy]),
         );
         assert_eq!(origin, ClientOrigin::Forwarded(ip("198.51.100.7")));
     }
@@ -729,6 +744,113 @@ mod tests {
         }
     }
 
+    /// An ingress whose pods move holds no address list: its range names every
+    /// pod, the peer and each hop of the chain alike.
+    #[test]
+    fn a_peer_inside_a_listed_range_is_trusted() {
+        let trusted: Vec<TrustedProxy> = ["10.0.0.0/8", "fd00::/8"]
+            .into_iter()
+            .map(|entry| entry.parse().expect("an entry"))
+            .collect();
+        let of = |xff, peer: &str| {
+            ClientOrigin::resolve(None, Some(xff), None, Some(ip(peer)), &trusted)
+        };
+        let client = ClientOrigin::Forwarded(ip("203.0.113.50"));
+        assert_eq!(of("203.0.113.50", "10.42.7.9"), client);
+        assert_eq!(of("203.0.113.50", "::ffff:10.42.7.9"), client);
+        assert_eq!(of("203.0.113.50", "fd12::9"), client);
+        assert_eq!(of("203.0.113.50, 10.42.0.1", "10.42.7.9"), client);
+        assert_eq!(of("203.0.113.50, fd12::1", "10.42.7.9"), client);
+        assert_eq!(
+            of("203.0.113.50", "11.0.0.1"),
+            ClientOrigin::Peer(ip("11.0.0.1")),
+            "a peer past the range forges nothing",
+        );
+    }
+
+    /// A dual-stack listener reports an IPv4 proxy as `::ffff:a.b.c.d`: it is
+    /// the proxy its IPv4 entry names, or every caller reads as the proxy.
+    #[test]
+    fn a_mapped_peer_matches_its_ipv4_entry() {
+        let origin = resolve(
+            Some("203.0.113.50"),
+            Some(ip("::ffff:10.0.0.1")),
+            &[ip("10.0.0.1")],
+        );
+        assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
+    }
+
+    /// Off any proxy a client is its IPv4 address, in the spelling a caller
+    /// compares and a bucket keys on, never the mapped one only the socket uses.
+    #[test]
+    fn a_mapped_peer_is_attributed_to_its_ipv4_address() {
+        assert_eq!(
+            resolve(None, Some(ip("::ffff:203.0.113.50")), &[]),
+            ClientOrigin::Peer(ip("203.0.113.50")),
+        );
+    }
+
+    #[test]
+    fn a_mapped_proxy_forwarding_nothing_is_reported_as_its_ipv4_address() {
+        let proxy = ip("10.0.0.1");
+        assert_eq!(
+            resolve(None, Some(ip("::ffff:10.0.0.1")), &[proxy]),
+            ClientOrigin::TrustedProxy(proxy),
+        );
+    }
+
+    /// A proxy records the peer it read, so a chain may hold the mapped form:
+    /// it names the same proxy, and the same client.
+    #[test]
+    fn a_mapped_hop_is_the_ipv4_address_it_carries() {
+        let proxy = ip("10.0.0.1");
+        assert_eq!(
+            resolve(
+                Some("203.0.113.50, ::ffff:10.0.0.2"),
+                Some(proxy),
+                &[proxy, ip("10.0.0.2")]
+            ),
+            ClientOrigin::Forwarded(ip("203.0.113.50")),
+            "a proxy's own hop in the chain",
+        );
+        assert_eq!(
+            resolve(Some("::ffff:203.0.113.50"), Some(proxy), &[proxy]),
+            ClientOrigin::Forwarded(ip("203.0.113.50")),
+            "the client's hop",
+        );
+    }
+
+    #[test]
+    fn a_real_ip_naming_a_mapped_proxy_names_no_client() {
+        let proxy = ip("10.0.0.1");
+        assert_eq!(
+            ClientOrigin::resolve(
+                None,
+                None,
+                Some("::ffff:10.0.0.1"),
+                Some(proxy),
+                &listed(&[proxy]),
+            ),
+            ClientOrigin::TrustedProxy(proxy),
+        );
+    }
+
+    /// Two proxies spelling one client two ways do not disagree about it.
+    #[test]
+    fn two_chains_naming_one_client_in_two_spellings_agree() {
+        let proxy = ip("10.0.0.1");
+        assert_eq!(
+            ClientOrigin::resolve(
+                Some("for=\"[::ffff:203.0.113.50]\""),
+                Some("203.0.113.50"),
+                None,
+                Some(proxy),
+                &listed(&[proxy]),
+            ),
+            ClientOrigin::Forwarded(ip("203.0.113.50")),
+        );
+    }
+
     /// A request carrying a real transport peer.
     fn req_from(peer: &str, headers: &[(&str, &str)]) -> Request {
         let socket: SocketAddr = format!("{peer}:54321").parse().expect("test literal");
@@ -761,7 +883,10 @@ mod tests {
 
     fn trusting(proxies: &[&str]) -> HttpConfig {
         HttpConfig {
-            trusted_proxies: proxies.iter().map(|p| ip(p)).collect(),
+            trusted_proxies: proxies
+                .iter()
+                .map(|p| p.parse().expect("an entry"))
+                .collect(),
             ..HttpConfig::default()
         }
     }

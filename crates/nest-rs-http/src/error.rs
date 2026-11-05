@@ -1259,6 +1259,49 @@ pub(crate) enum NotAnOrigin {
     Port,
 }
 
+/// Why a value is no [`TrustedProxy`](crate::TrustedProxy), by kind: it is a
+/// deployment's data and is never said.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum NotATrustedProxy {
+    /// Neither an IP address nor one and a prefix length.
+    Grammar,
+    /// A prefix length past the bits its address holds.
+    PrefixLength,
+    /// `/0`, whose list would believe every caller's forwarding headers.
+    EveryAddress,
+    /// An address with bits set past its prefix: a single proxy's address or
+    /// the range's first one, which of the two is not for the list to guess.
+    BitsPastPrefix,
+}
+
+impl NotATrustedProxy {
+    /// What the value is, to read after the words naming it: `entry 2 of the
+    /// list`, at a boot's refusal.
+    pub(crate) const fn predicate(self) -> &'static str {
+        match self {
+            Self::Grammar => "is neither an IP address nor a CIDR range (`10.0.0.0/8`)",
+            Self::PrefixLength => {
+                "is a CIDR range whose prefix length is past the bits its address holds"
+            }
+            Self::EveryAddress => {
+                "is a `/0` range, under which every caller could forge the address it is \
+                 attributed to; name your proxies' own range"
+            }
+            Self::BitsPastPrefix => {
+                "is a CIDR range with address bits set past its prefix; write the range's first \
+                 address, or the proxy's address alone"
+            }
+        }
+    }
+}
+
+impl fmt::Display for NotATrustedProxy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "this trusted proxy entry {}", self.predicate())
+    }
+}
+
 /// Why a WebSocket opening handshake was refused (RFC 6455 §4.2.1): each
 /// answers a problem document that names what the handshake lacks, never a
 /// value the request sent.

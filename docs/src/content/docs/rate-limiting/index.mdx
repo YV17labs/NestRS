@@ -191,9 +191,10 @@ The rest of the rule:
 - A forwarding header from a peer that is **not** a listed proxy is
   **ignored** — a direct client cannot bypass its own bucket by setting one.
 - An unparseable hop in the chain is skipped, never used as a key.
-- An unparseable IP in `TRUSTED_PROXIES` **aborts the boot** naming
-  the variable and the entry's place in the list, never its value — never a
-  silent skip.
+- An entry of `TRUSTED_PROXIES` that is no address or CIDR range, a `/0`, or a
+  range with address bits set past its prefix (`10.0.0.1/8`), **aborts the boot**
+  naming the variable and the entry's place in the list, never its value — never
+  a silent skip.
 - A request with no peer addr (synthetic, in-process) is counted
   against a literal `"global"` bucket.
 
@@ -217,8 +218,8 @@ line does not hold.
 
 <Aside type="caution">
 Trust the proxy header **only** when the request arrived through a
-proxy you control. Production behind an ingress: list the ingress IPs.
-Direct exposure: leave `TRUSTED_PROXIES` empty.
+proxy you control. Production behind an ingress: list its addresses, or the
+range its pods move within. Direct exposure: leave `TRUSTED_PROXIES` empty.
 </Aside>
 
 ## Run it

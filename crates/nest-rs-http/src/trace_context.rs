@@ -296,19 +296,19 @@ pub(crate) fn record_failure(span: &tracing::Span, status: StatusCode) {
 
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
 
     use super::*;
+    use crate::TrustedProxy;
 
     /// The specification's own example header.
     const UPSTREAM: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
     const UPSTREAM_TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 
-    fn ip(s: &str) -> IpAddr {
-        s.parse().expect("test literal is an IP")
+    fn ip(s: &str) -> TrustedProxy {
+        s.parse().expect("test literal is an entry")
     }
 
-    fn resolve(req: &Request, trusted_proxies: &[IpAddr]) -> Correlation {
+    fn resolve(req: &Request, trusted_proxies: &[TrustedProxy]) -> Correlation {
         super::resolve(req, ClientOrigin::of_with(req, trusted_proxies))
     }
 

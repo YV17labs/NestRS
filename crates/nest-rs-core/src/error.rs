@@ -1996,12 +1996,12 @@ mod boot_refusal_tests {
         let configure = BootInterruptedError {
             cause: crate::StopCause::Interrupt,
             step: crate::BootStep::Configure {
-                transport: "HttpTransport".to_owned(),
+                transport: "http".to_owned(),
             },
         };
         assert_eq!(
             configure.to_string(),
-            "the boot was stopped by SIGINT during the `configure` of transport `HttpTransport`"
+            "the boot was stopped by SIGINT during the `configure` of transport `http`"
         );
         let hook = BootInterruptedError {
             cause: crate::StopCause::Terminate,

@@ -55,6 +55,7 @@ feature.
 | `cx.unit()` | the unit running, by its name: `http.request`, `graphql.field`, `ws.message`, `mcp.operation`, `queue.job`, `schedule.tick`, `events.dispatch` |
 | `cx.edge()` | the edge dispatching it, `Some(Edge::Http)` and so on |
 | `cx.handler()` | the site it reaches: `host_name()`, `method()`, `address()` — the route template, the field, the event, the tool, the queue — and `posture()` |
+| `cx.served_address()` | where its edge says it is served, as its `mounted` line does: `verb` and `path`, `kind` and `field`, `event`, `tool`, `prompt` or `resource` |
 | `cx.reflector()` | what that site declared with `#[meta]`, and its posture |
 | `cx.switch_to::<V>()` | the edge's view of the unit, when the unit is that edge's |
 | `cx.attach(value)` | makes `value` ambient for the rest of the unit |

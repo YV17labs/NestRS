@@ -3,7 +3,9 @@
 //! chain whose declarations cannot line up fails boot with a named error
 //! instead of answering `500` on every request.
 
-use nest_rs_core::__private::{ResolvedLayer, compose_chain, dedup_bucket, resolve_scoped};
+use nest_rs_core::__private::{
+    ResolvedLayer, compose_chain, dedup_bucket, resolve_scoped, shorten,
+};
 use nest_rs_core::Container;
 use nest_rs_core::LayerSite;
 
@@ -57,10 +59,11 @@ fn validate(
                 if let Some(authz) = saw_authorization {
                     return Err(format!(
                         "guard chain for {label} lists authentication guard `{}` after \
-                         authorization guard `{authz}` — authentication must run first \
+                         authorization guard `{}` — authentication must run first \
                          so the principal it attaches is available; reorder the \
                          `use_guards` declaration",
-                        entry.name,
+                        shorten(entry.name),
+                        shorten(authz),
                     ));
                 }
             }
@@ -85,20 +88,24 @@ fn validate(
         {
             Some((j, _, _)) if *j < i => {}
             Some((_, late_name, _)) => {
+                let (guard, late_name) = (shorten(entry.name), shorten(late_name));
                 return Err(format!(
-                    "guard chain for {label}: `{}` expects principal `{}` which `{late_name}` \
-                     only attaches later in the chain — list `{late_name}` before `{}`",
-                    entry.name, expected.type_name, entry.name,
+                    "guard chain for {label}: `{guard}` expects principal `{}` which `{late_name}` \
+                     only attaches later in the chain — list `{late_name}` before `{guard}`",
+                    shorten(expected.type_name),
                 ));
             }
             None if !producers.is_empty() => {
-                let produced: Vec<&str> = producers.iter().map(|(_, _, c)| c.type_name).collect();
+                let produced: Vec<String> = producers
+                    .iter()
+                    .map(|(_, _, c)| shorten(c.type_name))
+                    .collect();
                 return Err(format!(
                     "guard chain for {label}: `{}` expects principal `{}` but the chain's \
                      authentication guard(s) attach [{}] — the auth strategy's principal and \
                      the ability factory's `Actor` must be the same type",
-                    entry.name,
-                    expected.type_name,
+                    shorten(entry.name),
+                    shorten(expected.type_name),
                     produced.join(", "),
                 ));
             }
@@ -108,8 +115,8 @@ fn validate(
                 tracing::warn!(
                     target: nest_rs_core::target::LAYERS,
                     route = label,
-                    guard = entry.name,
-                    expected = expected.type_name,
+                    guard = shorten(entry.name),
+                    expected = shorten(expected.type_name),
                     "guard expects a principal but no guard in the chain produces one — \
                      non-public routes will answer 500",
                 );
@@ -122,11 +129,12 @@ fn validate(
 /// The refusal of a guard requiring a principal nothing attaches: every request
 /// it runs on would answer `500`.
 fn unattached(label: &str, guard: &str, expected: crate::PrincipalClaim) -> String {
+    let guard = shorten(guard);
     format!(
         "guard chain for {label}: `{guard}` requires principal `{}` and no guard in the chain \
          attaches it — bind the guard attaching it ahead of `{guard}`, and have that guard \
          declare it (`produced_principal`)",
-        expected.type_name,
+        shorten(expected.type_name),
     )
 }
 
@@ -368,7 +376,7 @@ mod tests {
     #[test]
     fn consumer_without_any_producer_only_warns() {
         let logs = nest_rs_testing::LogCapture::install();
-        let chain = vec![entry(Authz, "Authz")];
+        let chain = vec![entry(Authz, "acme::guards::Authz")];
         validate_guard_chain("test", &chain).expect("no producer at all is a warn, not an error");
 
         // A warn, not a boot error: a `#[public]` route on the same chain is
@@ -381,12 +389,10 @@ mod tests {
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("route").as_deref(), Some("test"));
         assert_eq!(event.field("guard").as_deref(), Some("Authz"));
-        assert!(
-            event
-                .field("expected")
-                .is_some_and(|e| e.contains("ClaimsA")),
-            "the event names the principal type nobody attaches, got {:?}",
-            event.fields,
+        assert_eq!(
+            event.field("expected").as_deref(),
+            Some("ClaimsA"),
+            "the event names the principal type nobody attaches, as an app writes it",
         );
     }
 }

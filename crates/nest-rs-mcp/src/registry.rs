@@ -381,7 +381,7 @@ fn check_postures(
     match identifying_guard(&chain) {
         Some(entry) => Err(McpPostureError::PublicBehindGuard {
             operations,
-            guard: entry.name,
+            guard: nest_rs_core::__private::shorten(entry.name),
         }
         .into()),
         None => Ok(()),

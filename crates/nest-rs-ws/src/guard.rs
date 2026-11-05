@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use nest_rs_core::__private::{
-    ClassGate, GuardStage, ResolvedLayer, new_unit_context, report_unresolved,
+    ClassGate, GuardStage, ResolvedLayer, new_unit_context, report_unresolved, shorten,
 };
 use nest_rs_core::{Container, Failure, Handler, LayerSite, Peer, Posture, UnitContext};
 use nest_rs_guards::__private::{
@@ -178,7 +178,7 @@ pub(crate) fn check_posture(
     if let Some(entry) = identifying_guard(upgrade)
         && let Some(messages) = events(messages, is_public)
     {
-        let guard = entry.name;
+        let guard = shorten(entry.name);
         return Err(if matches!(entry.source, LayerSite::Global) {
             GatewayPostureError::PublicBehindPool {
                 path,

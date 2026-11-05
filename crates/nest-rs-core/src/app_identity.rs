@@ -1,7 +1,7 @@
 //! [`AppIdentity`] — the binary's name, version and description, read off its
 //! package's manifest where `#[nest_rs::main]` expands: what every surface
-//! naming the app defaults to, OpenAPI's `info`, MCP's `serverInfo` and
-//! OpenTelemetry's `service.name` and `service.version`.
+//! naming the app defaults to, the boot's first line, OpenAPI's `info`, MCP's
+//! `serverInfo` and OpenTelemetry's `service.name` and `service.version`.
 
 use std::sync::OnceLock;
 

@@ -769,7 +769,13 @@ pub(crate) mod __private {
         }
         let entries: Vec<String> = chain
             .iter()
-            .map(|e| format!("{} ({})", e.name, e.source.label()))
+            .map(|e| {
+                format!(
+                    "{} ({})",
+                    crate::type_name::shorten(e.name),
+                    e.source.label()
+                )
+            })
             .collect();
         tracing::trace!(
             target: crate::target::LAYERS,
@@ -799,7 +805,7 @@ pub(crate) mod __private {
 
 #[cfg(test)]
 mod tests {
-    use super::__private::{ResolvedLayer, compose_chain, dedup_bucket};
+    use super::__private::{ResolvedLayer, compose_chain, dedup_bucket, log_effective_chain};
     use super::*;
     use crate::layer::{Layer, LayerSite};
 
@@ -957,6 +963,26 @@ mod tests {
         assert_eq!(
             deduped[0].field("hint").as_deref(),
             Some("broadest site wins; `#[force_guards]` re-runs a guard"),
+        );
+    }
+
+    #[test]
+    fn the_effective_chain_names_a_layer_as_an_app_writes_it() {
+        let logs = nest_rs_testing::LogCapture::install();
+
+        log_effective_chain::<dyn Layer>(
+            "GET /posts",
+            "guards",
+            &[
+                entry(Authn, LayerSite::Global),
+                entry(Authz, LayerSite::Host),
+            ],
+        );
+
+        let line = logs.expect_one(crate::target::LAYERS, "effective layer chain");
+        assert_eq!(
+            line.field("chain").as_deref(),
+            Some("Authn (global), Authz (host)")
         );
     }
 

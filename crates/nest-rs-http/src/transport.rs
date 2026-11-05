@@ -295,7 +295,7 @@ fn mount_fallback(
     }
     tracing::info!(
         target: crate::target::ROUTES,
-        kind = "fallback",
+        surface = "fallback",
         path = meta.path(),
         "mounted endpoint",
     );
@@ -648,7 +648,7 @@ impl Transport for HttpTransport {
             }
             tracing::info!(
                 target: crate::target::ROUTES,
-                kind = d.meta.label(),
+                surface = d.meta.label(),
                 path = routes.served(d.meta.path()).as_str(),
                 "mounted endpoint",
             );

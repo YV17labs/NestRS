@@ -571,10 +571,7 @@ pub(crate) enum McpPostureError {
          covering an operation deciding it (`#[authorize(Action, Subject)]` adds a gate), or open \
          the endpoint with `McpModule::for_root(McpAccess::Public)`"
     )]
-    PublicBehindGuard {
-        operations: String,
-        guard: &'static str,
-    },
+    PublicBehindGuard { operations: String, guard: String },
     /// `#[public]` operations of an endpoint denying every request.
     #[error(
         "`#[public]` on {operations} can open nothing: no guard runs at the MCP endpoint's \

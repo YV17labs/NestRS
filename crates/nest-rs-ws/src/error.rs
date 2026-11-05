@@ -32,7 +32,7 @@ pub(crate) enum GatewayPostureError {
     PublicBehindGuard {
         path: String,
         messages: String,
-        guard: &'static str,
+        guard: String,
     },
     /// The same, past a guard of the app's pool, which runs at every upgrade.
     #[error(
@@ -45,6 +45,6 @@ pub(crate) enum GatewayPostureError {
     PublicBehindPool {
         path: String,
         messages: String,
-        guard: &'static str,
+        guard: String,
     },
 }

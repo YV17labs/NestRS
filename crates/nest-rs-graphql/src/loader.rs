@@ -1,9 +1,9 @@
 //! Request-scoped DataLoaders, discovered at link time.
 //!
 //! `#[dataloader]` generates one batching loader per method and submits a
-//! [`GraphqlLoaderRegistration`]; [`LoaderExtension`] rebuilds it per request
-//! and seeds it into the GraphQL context for a `#[field_resolver]` to read. A
-//! field whose resolver reads one — an exposed relation, a `#[field_resolver]`'s
+//! [`GraphqlLoaderRegistration`]; [`LoaderSeeds`] rebuilds it per request and
+//! seeds it into the GraphQL context for a `#[field_resolver]` to read. A field
+//! whose resolver reads one — an exposed relation, a `#[field_resolver]`'s
 //! `&DataLoader<L>` parameter — submits a [`GraphqlRelationRegistration`], so a
 //! served field whose loader's owner the app does not reach refuses the boot
 //! rather than every query selecting it.
@@ -16,12 +16,8 @@ use std::any::TypeId;
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use async_graphql::async_trait::async_trait;
 use async_graphql::dataloader::DataLoader;
-use async_graphql::extensions::{
-    Extension, ExtensionContext, ExtensionFactory, NextPrepareRequest,
-};
-use async_graphql::{Context, Request, ServerResult};
+use async_graphql::{Context, Request};
 use futures_util::future::Either;
 use nest_rs_core::{
     Container, Continuation, Failure, ReachableProviders, RequestContinuation,
@@ -163,8 +159,8 @@ impl Drop for Seeding {
     }
 }
 
-/// Seeds every discovered DataLoader into each GraphQL request.
-pub(crate) struct LoaderExtensionFactory {
+/// What seeds every discovered DataLoader into each GraphQL request.
+pub(crate) struct LoaderSeeds {
     container: Container,
     /// The reachable loaders, resolved **once** at schema build.
     seeds: Arc<[LoaderSeed]>,
@@ -175,7 +171,7 @@ pub(crate) struct LoaderExtensionFactory {
 /// What the loader registry holds, as a refusal to read it ungated names it.
 const LOADERS: &str = "#[dataloader] method";
 
-impl LoaderExtensionFactory {
+impl LoaderSeeds {
     /// The loaders the app reaches, or a refusal of a container no app sealed.
     pub(crate) fn new(
         container: Container,
@@ -187,6 +183,22 @@ impl LoaderExtensionFactory {
             seeds,
             batches,
         })
+    }
+
+    /// `request`, holding a loader of each owner the app reaches.
+    pub(crate) fn seed(&self, mut request: Request) -> Request {
+        let held = request
+            .data
+            .get(&TypeId::of::<BatchSpan>())
+            .and_then(|held| held.downcast_ref::<BatchSpan>())
+            .map(|held| held.0.clone());
+        // An ancestor of the current span cannot be entered again, so the
+        // spawners read it off the seeding instead.
+        let _seeding = Seeding::hold(held);
+        for seed in self.seeds.iter() {
+            request = seed(&self.container, &self.batches, request);
+        }
+        request
     }
 }
 
@@ -257,47 +269,6 @@ fn warn_unreachable_loaders(reachable: &ReachableProviders) {
             hint = "no field this schema serves reads them; import the modules that provide them if one should",
             "dataloaders linked but unreachable",
         );
-    }
-}
-
-impl ExtensionFactory for LoaderExtensionFactory {
-    fn create(&self) -> Arc<dyn Extension> {
-        Arc::new(LoaderExtension {
-            container: self.container.clone(),
-            seeds: Arc::clone(&self.seeds),
-            batches: self.batches.clone(),
-        })
-    }
-}
-
-struct LoaderExtension {
-    container: Container,
-    seeds: Arc<[LoaderSeed]>,
-    batches: DetachedWork,
-}
-
-#[async_trait]
-impl Extension for LoaderExtension {
-    async fn prepare_request(
-        &self,
-        ctx: &ExtensionContext<'_>,
-        mut request: Request,
-        next: NextPrepareRequest<'_>,
-    ) -> ServerResult<Request> {
-        let held = request
-            .data
-            .get(&TypeId::of::<BatchSpan>())
-            .and_then(|held| held.downcast_ref::<BatchSpan>())
-            .map(|held| held.0.clone());
-        {
-            // An ancestor of the current span cannot be entered again, so the
-            // spawners read it off the seeding instead.
-            let _seeding = Seeding::hold(held);
-            for seed in self.seeds.iter() {
-                request = seed(&self.container, &self.batches, request);
-            }
-        }
-        next.run(ctx, request).await
     }
 }
 

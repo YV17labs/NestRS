@@ -1345,6 +1345,12 @@ lists what the boot, a log or the wire shows when one is missed.
 
 ## What fails if you get it wrong
 
+- **A GraphQL client leaving a required variable out**, `$id: ID!` with no default,
+  reads `Variable "$id" of required type "ID!" was not provided.`, and the operation
+  runs nothing: it used to run, `@skip(if: $x)` keeping its selection,
+  `@include(if: $x)` dropping it, and an argument's root field alone failing. Send the
+  variable, or declare it a default. A client relying on `@skip` or `@include` ignoring
+  a default now reads what its document says.
 - **A guard declaring a status outside `400` to `599` in `denial_statuses`** refuses the
   boot, naming the guard and the status: list what its `Err` paths answer, an error each.
 - **A `(StatusCode, Json<T>)` route whose `T` has no schema** does not compile (`E0277`), as a

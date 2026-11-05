@@ -10,9 +10,10 @@ use nest_rs_testing::TestApp;
 use nest_rs_testing::ws::{WsApp, WsFrame, WsSocket};
 use serde_json::Value;
 
-/// Uppercases the `raw` string variable, rejects the literal `"boom"`, and
-/// flattens the variables into a string for `"flatten"` — exercises the
-/// transform, the pipe's own error, and a pipe that breaks the variables' shape.
+/// Uppercases the `raw` string variable, rejects the literal `"boom"`,
+/// flattens the variables into a string for `"flatten"` and negates the `flip`
+/// variable — exercises the transform, the pipe's own error, a pipe that breaks
+/// the variables' shape, and what a directive reads.
 #[injectable]
 #[derive(Default)]
 struct VarPipe;
@@ -41,6 +42,9 @@ impl GlobalPipe for VarPipe {
             }
             let upper = raw.to_uppercase();
             value["raw"] = Value::String(upper);
+        }
+        if let Some(flip) = value.get("flip").and_then(Value::as_bool) {
+            value["flip"] = Value::Bool(!flip);
         }
         Ok(())
     }
@@ -153,6 +157,33 @@ async fn a_global_pipe_transforms_operation_variables_before_execution() {
         .get("echo")
         .string();
     assert_eq!(echo, "HI");
+}
+
+/// `@skip` and `@include` run after the pipes, so they read what the pipes
+/// made of a variable; a default is the document's own, which no pipe is handed.
+#[tokio::test]
+async fn a_directive_reads_what_the_pipes_made_of_a_variable_and_a_default_reaches_no_pipe() {
+    let app = boot().await;
+    for (body, data) in [
+        (
+            serde_json::json!({
+                "query": "query($flip: Boolean!) { echo(raw: \"kept\") @skip(if: $flip) }",
+                "variables": { "flip": true },
+            }),
+            serde_json::json!({ "echo": "kept" }),
+        ),
+        (
+            serde_json::json!({
+                "query": "query($raw: String = \"default\") { echo(raw: $raw) }",
+            }),
+            serde_json::json!({ "echo": "default" }),
+        ),
+    ] {
+        let resp = app.http().post("/graphql").body_json(&body).send().await;
+        resp.assert_status_is_ok();
+        let answer: Value = resp.json().await.value().deserialize();
+        assert_eq!(answer["data"], data, "{body}: {answer}");
+    }
 }
 
 #[tokio::test]
@@ -324,6 +355,35 @@ async fn an_operation_on_the_socket_runs_the_global_pipes_over_its_variables() {
     let next = next_message(&mut socket).await;
     assert_eq!(next["type"], "next", "{next}");
     assert_eq!(next["payload"]["data"]["echo"], "HI", "{next}");
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[tokio::test]
+async fn on_the_socket_a_directive_reads_what_the_pipes_made_of_a_variable_and_no_pipe_a_default() {
+    let app = socket_app().await;
+    let mut socket = connected(&app).await;
+    for (id, payload, echoed) in [
+        (
+            "1",
+            serde_json::json!({
+                "query": "query($flip: Boolean!) { echo(raw: \"kept\") @skip(if: $flip) }",
+                "variables": { "flip": true },
+            }),
+            "kept",
+        ),
+        (
+            "2",
+            serde_json::json!({ "query": "query($raw: String = \"default\") { echo(raw: $raw) }" }),
+            "default",
+        ),
+    ] {
+        let subscribe = serde_json::json!({ "id": id, "type": "subscribe", "payload": payload });
+        socket.send_text(subscribe.to_string()).await;
+        let next = next_message(&mut socket).await;
+        assert_eq!(next["type"], "next", "{next}");
+        assert_eq!(next["payload"]["data"]["echo"], echoed, "{next}");
+        assert_eq!(next_message(&mut socket).await["type"], "complete");
+    }
     app.shutdown().await.expect("the transport stops cleanly");
 }
 

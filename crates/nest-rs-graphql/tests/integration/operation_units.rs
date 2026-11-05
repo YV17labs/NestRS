@@ -242,6 +242,12 @@ impl ProbeResolver {
         ambient_policy()
     }
 
+    #[query]
+    #[public]
+    async fn hinted(&self, hint: Option<String>) -> bool {
+        hint.is_some()
+    }
+
     #[mutation]
     #[public]
     async fn write(&self, fail: bool) -> Result<String> {
@@ -629,10 +635,6 @@ async fn a_mutation_selecting_one_root_field_twice_is_refused_before_any_runs() 
             r#""a""#,
         ),
         (
-            "mutation { a: maybeShaped { fine } a: maybeShaped @skip(if: true) { strict } }",
-            r#""a""#,
-        ),
-        (
             "mutation { maybeWrite(fail: false) ... on Mutation { maybeWrite(fail: false) } }",
             r#""maybeWrite""#,
         ),
@@ -684,6 +686,307 @@ async fn a_mutation_selecting_one_root_field_twice_is_refused_before_any_runs() 
         json!({ "a": "pool" }),
         "a query writes nothing, so it runs as async-graphql runs it: {reply}"
     );
+}
+
+/// A document validation refuses says what validation says of it: the repeat
+/// is refused only of a document that could have run.
+#[tokio::test]
+async fn a_mutation_selecting_one_root_field_twice_answers_validation_first() {
+    let (app, journal) = boot().await;
+    let reply = post(
+        &app,
+        json!({ "query": "mutation { a: write(fail: false) a: write(fail: false) unknownField }" }),
+    )
+    .await;
+    assert_eq!(reply["data"], Value::Null, "{reply}");
+    assert_eq!(reply["errors"].as_array().map(Vec::len), Some(1), "{reply}");
+    assert_eq!(
+        reply["errors"][0]["message"], r#"Unknown field "unknownField" on type "Mutation"."#,
+        "{reply}"
+    );
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "settle graphql.operation false"
+        ],
+    );
+}
+
+/// A copy a directive leaves out never runs, so it repeats nothing: the
+/// document runs what `@skip` and `@include` keep, once.
+#[tokio::test]
+async fn a_copy_a_directive_leaves_out_repeats_no_root_field() {
+    for (body, data) in [
+        (
+            json!({
+                "query": "mutation($x: Boolean!) { \
+                          maybeWrite(fail: false) @skip(if: $x) \
+                          maybeWrite(fail: false) @include(if: $x) }",
+                "variables": { "x": true },
+            }),
+            json!({ "maybeWrite": "block" }),
+        ),
+        (
+            json!({
+                "query": "mutation($x: Boolean = true) { \
+                          maybeWrite(fail: false) @skip(if: $x) \
+                          maybeWrite(fail: false) }",
+            }),
+            json!({ "maybeWrite": "block" }),
+        ),
+        (
+            json!({
+                "query": "mutation { \
+                          a: maybeShaped { fine } a: maybeShaped @skip(if: true) { strict } }",
+            }),
+            json!({ "a": { "fine": 1 } }),
+        ),
+        (
+            json!({
+                "query": "mutation { ...A @include(if: false) ...A } \
+                          fragment A on Mutation { maybeWrite(fail: false) }",
+            }),
+            json!({ "maybeWrite": "block" }),
+        ),
+        (
+            json!({
+                "query": "mutation { ...A maybeWrite(fail: false) } \
+                          fragment A on Mutation { maybeWrite(fail: false) @skip(if: true) }",
+            }),
+            json!({ "maybeWrite": "block" }),
+        ),
+    ] {
+        let (app, journal) = boot().await;
+        let reply = post(&app, body.clone()).await;
+        assert_eq!(reply["data"], data, "{body}: {reply}");
+        assert!(reply.get("errors").is_none(), "{body}: {reply}");
+        assert_eq!(
+            journal.read(),
+            [
+                "open graphql.operation per_unit",
+                "block released",
+                "settle graphql.operation true",
+            ],
+            "{body}: one root field, one block"
+        );
+    }
+}
+
+/// `@skip` and `@include` read a variable's default as an argument reads it,
+/// and what the request sent over it.
+#[tokio::test]
+async fn a_directive_reads_a_variables_default() {
+    let (app, _) = boot().await;
+    for (body, data) in [
+        (
+            json!({ "query": "query($x: Boolean = true) { policy @include(if: $x) }" }),
+            json!({ "policy": "pool" }),
+        ),
+        (
+            json!({ "query": "query($x: Boolean = false) { policy @skip(if: $x) }" }),
+            json!({ "policy": "pool" }),
+        ),
+        (
+            json!({ "query": "query($x: Boolean = true) { policy a: policy @skip(if: $x) }" }),
+            json!({ "policy": "pool" }),
+        ),
+        (
+            json!({
+                "query": "query($x: Boolean = true) { policy a: policy @include(if: $x) }",
+                "variables": { "x": false },
+            }),
+            json!({ "policy": "pool" }),
+        ),
+        (
+            json!({
+                "query": "query($x: Boolean = false) { policy @include(if: $x) a: policy }",
+                "variables": { "x": true },
+            }),
+            json!({ "policy": "pool", "a": "pool" }),
+        ),
+        (
+            json!({
+                "query": "query($x: Boolean = true) { ...F } \
+                          fragment F on Query { policy @include(if: $x) }",
+            }),
+            json!({ "policy": "pool" }),
+        ),
+        (
+            json!({
+                "query": "query A($x: Boolean = false) { policy @include(if: $x) a: policy } \
+                          query B($x: Boolean = true) { policy @include(if: $x) }",
+                "operationName": "B",
+            }),
+            json!({ "policy": "pool" }),
+        ),
+    ] {
+        let reply = post(&app, body.clone()).await;
+        assert_eq!(reply["data"], data, "{body}: {reply}");
+        assert!(reply.get("errors").is_none(), "{body}: {reply}");
+    }
+}
+
+/// Each operation of a batch is read by its own variables and its own defaults,
+/// and a refusal stays its own.
+#[tokio::test]
+async fn each_operation_of_a_batch_reads_its_own_variables() {
+    let (app, _) = boot().await;
+    let replies = post(
+        &app,
+        json!([
+            { "query": "query($x: Boolean = true) { policy @include(if: $x) }" },
+            {
+                "query": "query($x: Boolean = true) { policy @include(if: $x) a: policy }",
+                "variables": { "x": false },
+            },
+            { "query": "query($x: Boolean!) { policy @include(if: $x) }" },
+            {
+                "query": "mutation($x: Boolean = true) { \
+                          maybeWrite(fail: false) @skip(if: $x) maybeWrite(fail: false) }",
+            },
+        ]),
+    )
+    .await;
+    assert_eq!(replies[0]["data"], json!({ "policy": "pool" }), "{replies}");
+    assert_eq!(replies[1]["data"], json!({ "a": "pool" }), "{replies}");
+    assert_eq!(replies[2]["data"], Value::Null, "{replies}");
+    assert_eq!(
+        replies[2]["errors"][0]["message"],
+        r#"Variable "$x" of required type "Boolean!" was not provided."#,
+        "{replies}"
+    );
+    assert_eq!(
+        replies[3]["data"],
+        json!({ "maybeWrite": "block" }),
+        "{replies}"
+    );
+}
+
+/// What every root selection a directive leaves out answers: an operation that
+/// ran nothing and failed at nothing reports no error and an empty object.
+#[tokio::test]
+async fn an_operation_every_root_selection_of_which_is_left_out_answers_an_empty_object() {
+    let (app, journal) = boot().await;
+    for (query, settled) in [
+        ("{ policy @skip(if: true) }", false),
+        ("query($x: Boolean = true) { policy @skip(if: $x) }", false),
+        ("mutation { write(fail: false) @include(if: false) }", true),
+    ] {
+        let reply = post(&app, json!({ "query": query })).await;
+        assert_eq!(reply, json!({ "data": {} }), "{query}");
+        if settled {
+            assert_eq!(
+                journal.read().last().map(String::as_str),
+                Some("settle graphql.operation true"),
+                "{query}: nothing ran, and its answer reports no failure"
+            );
+        }
+    }
+}
+
+/// GraphQL §6.1.2, *CoerceVariableValues*: a Non-Null variable the request
+/// leaves absent, with no default, is a request error, so nothing runs —
+/// neither a write a directive would have kept, nor a root field before the one
+/// reading it.
+#[tokio::test]
+async fn a_required_variable_left_absent_is_refused_before_anything_runs() {
+    let logs = LogCapture::install();
+    let (app, journal) = boot().await;
+    let documents = [
+        (
+            "query($x: Boolean!) { policy @include(if: $x) }",
+            "x",
+            "Boolean!",
+        ),
+        (
+            "query($x: Boolean!) { policy @skip(if: $x) }",
+            "x",
+            "Boolean!",
+        ),
+        (
+            "mutation($x: Boolean!) { write(fail: false) @skip(if: $x) }",
+            "x",
+            "Boolean!",
+        ),
+        (
+            "mutation($fail: Boolean!) { first: write(fail: false) second: write(fail: $fail) }",
+            "fail",
+            "Boolean!",
+        ),
+    ];
+    for (query, name, ty) in documents {
+        let reply = post(&app, json!({ "query": query })).await;
+        assert_eq!(reply["data"], Value::Null, "{query}: {reply}");
+        assert_eq!(reply["errors"].as_array().map(Vec::len), Some(1), "{reply}");
+        assert_eq!(
+            reply["errors"][0]["message"],
+            format!(r#"Variable "${name}" of required type "{ty}" was not provided."#),
+            "{query}: {reply}"
+        );
+        assert_eq!(
+            reply["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
+            "{query}: {reply}"
+        );
+    }
+    assert!(dispatched(&logs).is_empty(), "no root field resolves");
+    assert!(
+        !journal.read().iter().any(|entry| entry.contains("block")),
+        "no root field opens a block: {:?}",
+        journal.read()
+    );
+
+    let reply = post(
+        &app,
+        json!({
+            "query": "query($x: Boolean!) { policy @include(if: $x) unknownField }",
+        }),
+    )
+    .await;
+    assert_eq!(
+        reply["errors"][0]["message"], r#"Unknown field "unknownField" on type "Query"."#,
+        "validation speaks first: {reply}"
+    );
+}
+
+/// A nullable variable left absent is no refusal: it reads `null`.
+#[tokio::test]
+async fn a_nullable_variable_left_absent_is_no_refusal() {
+    let (app, _) = boot().await;
+    let reply = post(
+        &app,
+        json!({ "query": "query($hint: String) { hinted(hint: $hint) }" }),
+    )
+    .await;
+    assert_eq!(reply["data"], json!({ "hinted": false }), "{reply}");
+}
+
+/// What a required variable sent as `null` reads, which §6.1.2 refuses too and
+/// async-graphql (`7.2.1`) does not: a directive's `if` is refused by validation,
+/// and a nullable argument reads the `null` the client wrote. Nothing runs that
+/// the client did not ask for, so it stands.
+#[tokio::test]
+async fn a_required_variable_sent_null_is_refused_only_where_its_position_refuses_it() {
+    let (app, _) = boot().await;
+    let argument = post(
+        &app,
+        json!({
+            "query": "query($hint: String!) { hinted(hint: $hint) }",
+            "variables": { "hint": null },
+        }),
+    )
+    .await;
+    assert_eq!(argument["data"], json!({ "hinted": false }), "{argument}");
+    let directive = post(
+        &app,
+        json!({
+            "query": "query($x: Boolean!) { policy @skip(if: $x) }",
+            "variables": { "x": null },
+        }),
+    )
+    .await;
+    assert_eq!(directive["data"], Value::Null, "{directive}");
+    assert!(directive["errors"].is_array(), "{directive}");
 }
 
 #[tokio::test]
@@ -1122,6 +1425,50 @@ async fn next_message(socket: &mut nest_rs_testing::ws::WsSocket) -> Value {
             serde_json::from_str(&text).expect("a protocol message")
         }
         other => panic!("expected a protocol message, got {other:?}"),
+    }
+}
+
+/// The socket executes through `execute_stream`: what a POST reads of a
+/// document, it reads.
+#[tokio::test]
+async fn over_graphql_ws_a_document_is_read_as_a_post_reads_it() {
+    let (app, _) = boot().await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    for (index, (query, data, message)) in [
+        (
+            "query($x: Boolean = true) { policy @include(if: $x) }",
+            json!({ "policy": "pool" }),
+            None,
+        ),
+        (
+            "query($x: Boolean!) { policy @include(if: $x) }",
+            Value::Null,
+            Some(r#"Variable "$x" of required type "Boolean!" was not provided."#),
+        ),
+        (
+            "mutation { a: write(fail: false) a: write(fail: false) unknownField }",
+            Value::Null,
+            Some(r#"Unknown field "unknownField" on type "Mutation"."#),
+        ),
+        (
+            "mutation { maybeWrite(fail: false) @skip(if: true) maybeWrite(fail: false) }",
+            json!({ "maybeWrite": "block" }),
+            None,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = index.to_string();
+        socket.subscribe(&id, query);
+        let item = socket.next_item(&id).await.expect("the operation answers");
+        assert_eq!(item["data"], data, "{query}: {item}");
+        assert_eq!(
+            item["errors"][0]["message"].as_str(),
+            message,
+            "{query}: {item}"
+        );
     }
 }
 

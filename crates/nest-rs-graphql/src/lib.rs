@@ -38,6 +38,7 @@ mod opaque;
 mod operation;
 mod operation_units;
 mod redact;
+mod request_extension;
 mod resolver;
 mod scope;
 mod subscription;

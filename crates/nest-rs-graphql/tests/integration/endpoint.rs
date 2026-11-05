@@ -121,3 +121,21 @@ async fn serves_both_surfaces<M: nest_rs_core::Module + 'static>() {
         "{body}"
     );
 }
+
+/// async-graphql 7.2.1 has neither, and `configuration.mdx` says so: a client
+/// asking for an incremental answer reads a refusal, never a whole one.
+#[tokio::test]
+async fn a_document_using_defer_or_stream_is_refused_as_an_unknown_directive() {
+    let app = TestApp::for_module::<BareModule>().await.expect("boots");
+    for (document, directive) in [
+        ("{ ... @defer { ping } }", "defer"),
+        ("{ ping @stream }", "stream"),
+    ] {
+        let answer = crate::graphql_answer(&app, document).await;
+        assert_eq!(
+            answer["errors"][0]["message"],
+            format!(r#"Unknown directive "{directive}""#),
+            "{document}: {answer}",
+        );
+    }
+}

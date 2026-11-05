@@ -28,10 +28,10 @@ use async_graphql::parser::types::{
 use async_graphql::parser::{parse_query, parse_schema};
 use async_graphql::{
     Context, Data, Executor, Name, PathSegment, Positioned, Request, Response, ServerError,
-    ServerResult, Value,
+    ServerResult, Value, Variables,
 };
 
-use crate::operation_units::selected_operation;
+use crate::operation_units::{is_skipped, read_selected, selected_operation};
 
 /// The schema `E`, each field that erred answering `null` where the
 /// specification places it.
@@ -99,8 +99,7 @@ impl<E: Executor> Executor for NullPropagated<E> {
 /// where each one's errors leave it, and whether one already nulled `data`.
 pub(crate) struct MutationAnswer {
     types: Arc<FieldTypes>,
-    /// The document the operation's answer places its nulls by: the one the
-    /// request sent, a copy a directive leaves out still in it.
+    /// The document the operation's answer places its nulls by.
     kept: Arc<Kept>,
     nulled: AtomicBool,
 }
@@ -266,6 +265,9 @@ struct Kept {
     text: String,
     /// The name the document declares the selected operation under.
     operation: Option<Name>,
+    /// What `@skip` and `@include` read in `text`: the request's variables,
+    /// held only when the text holds a directive.
+    variables: Variables,
     /// `text` parsed again, the first time a null is placed; `None` when it
     /// does not parse.
     parsed: OnceLock<Option<ExecutableDocument>>,
@@ -275,17 +277,18 @@ impl Kept {
     /// The document `request` executes, and the type of the operation it
     /// selects, when it selects one.
     fn take(request: &mut Request) -> Option<(Self, OperationType)> {
-        let wanted = request.operation_name.take();
-        let selected = request
-            .parsed_query()
-            .ok()
-            .and_then(|document| selected_operation(document, wanted.as_deref()))
-            .map(|(name, operation)| (name.cloned(), operation.node.ty));
-        request.operation_name = wanted;
-        let (operation, ty) = selected?;
+        let (operation, ty) = read_selected(request, |_, name, operation| {
+            (name.cloned(), operation.node.ty)
+        })?;
+        let text = std::mem::take(&mut request.query);
+        let variables = match text.contains('@') {
+            true => request.variables.clone(),
+            false => Variables::default(),
+        };
         let kept = Self {
             operation,
-            text: std::mem::take(&mut request.query),
+            text,
+            variables,
             parsed: OnceLock::new(),
         };
         Some((kept, ty))
@@ -299,11 +302,25 @@ impl Kept {
             .get_or_init(|| parse_query(&self.text).ok())
             .as_ref()?;
         let (_, operation) = selected_operation(document, self.operation.as_deref())?;
-        Some(Selections::new(&document.fragments, types, &operation.node))
+        Some(Selections::new(
+            &document.fragments,
+            types,
+            &operation.node,
+            &self.variables,
+        ))
     }
 
     /// `response`'s nulls, placed where its errors' paths say a field erred.
+    /// With no error at all, a `null` is an operation every root selection of
+    /// which a directive left out: async-graphql (`7.2.1`) answers one for an
+    /// object with no key, and the root object always is one.
     fn place_nulls(&self, response: &mut Response, types: &FieldTypes) {
+        if response.errors.is_empty() {
+            if response.data == Value::Null {
+                response.data = Value::Object(IndexMap::new());
+            }
+            return;
+        }
         if response.errors.iter().all(|error| error.path.is_empty()) {
             return;
         }
@@ -327,6 +344,8 @@ impl Kept {
 struct Selections<'a> {
     fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
     types: &'a FieldTypes,
+    /// What says which selections run.
+    variables: &'a Variables,
     /// The operation's root first, then each position read so far.
     positions: Vec<Position<'a>>,
 }
@@ -384,6 +403,7 @@ impl<'a> Selections<'a> {
         fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
         types: &'a FieldTypes,
         operation: &'a OperationDefinition,
+        variables: &'a Variables,
     ) -> Self {
         let root = Position {
             selections: 1,
@@ -396,6 +416,7 @@ impl<'a> Selections<'a> {
         Self {
             fragments,
             types,
+            variables,
             positions: vec![root],
         }
     }
@@ -513,17 +534,20 @@ impl<'a> Selections<'a> {
         self.positions[position].below.as_ref()?.get(key).copied()
     }
 
-    /// Each field of `set` under its response key, through its fragments, with
-    /// its type as the type it is selected on declares it. A document that
-    /// executed passed validation, which refuses a fragment cycle.
+    /// Each field of `set` that runs under its response key, through its
+    /// fragments, with its type as the type it is selected on declares it. A
+    /// document that executed passed validation, which refuses a fragment cycle.
     fn collect(
         &mut self,
         set: &'a SelectionSet,
         parent: Option<&'a str>,
         below: &mut IndexMap<&'a str, usize>,
     ) {
-        let (fragments, types) = (self.fragments, self.types);
+        let (fragments, types, variables) = (self.fragments, self.types, self.variables);
         for selection in &set.items {
+            if is_skipped(selection.node.directives(), variables) {
+                continue;
+            }
             match &selection.node {
                 Selection::Field(field) => {
                     let field = &field.node;
@@ -927,6 +951,19 @@ mod tests {
                 "{ leaves { broken } leaves { fine } }",
                 json!({ "leaves": null }),
             ),
+            // A copy a directive leaves out hides nothing.
+            (
+                "{ leaf { broken } leaf @skip(if: true) { fine } }",
+                json!({ "leaf": { "broken": null } }),
+            ),
+            (
+                "{ maybeLeaves { broken } maybeLeaves @include(if: false) { fine } }",
+                json!({ "maybeLeaves": [{ "broken": null }] }),
+            ),
+            (
+                "{ leaf { broken } ... @skip(if: true) { leaf { fine } } }",
+                json!({ "leaf": { "broken": null } }),
+            ),
             // The other order: the answered selection finished first.
             (
                 "{ maybeLeaves { fine } maybeLeaves { broken } }",
@@ -1086,8 +1123,13 @@ mod tests {
             panic!("the document selects its operation");
         };
         let mut data = value(json!({ "fine": { "fine": 1 }, "maybeLeaves": [{ "fine": 1 }] }));
-        Selections::new(&document.fragments, &types, &operation.node)
-            .place(&mut data, [&path(json!(["maybeLeaves", 5]))[..]]);
+        Selections::new(
+            &document.fragments,
+            &types,
+            &operation.node,
+            &Variables::default(),
+        )
+        .place(&mut data, [&path(json!(["maybeLeaves", 5]))[..]]);
         assert_eq!(data, Value::Null, "`[Leaf]!` hands it to `data`");
     }
 
@@ -1307,15 +1349,20 @@ mod tests {
                 "mutation { ...Writes } fragment Writes on Changes { leaf { strict } }",
                 vec![(Null, false)],
             ),
-            // A copy a directive leaves out still counts where the answer
-            // places its nulls, so it counts where the block reads them.
+            // A copy a directive leaves out is no copy, where the answer places
+            // its nulls and where the block reads them alike.
             (
                 "mutation { leaf { child { broken } child @skip(if: true) { fine } } }",
-                vec![(Null, false)],
+                vec![(Stands, false)],
             ),
             (
                 "mutation { sureLeaf { child { broken } child @include(if: false) { fine } } }",
-                vec![(NoData, true)],
+                vec![(Stands, false)],
+            ),
+            // Both copies run: the `null` may hide the other's answer.
+            (
+                "mutation { leaf { child { broken } child @skip(if: false) { fine } } }",
+                vec![(Null, false)],
             ),
         ] {
             let seen = Arc::new(std::sync::Mutex::new(Vec::new()));

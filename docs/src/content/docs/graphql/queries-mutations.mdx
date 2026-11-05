@@ -219,6 +219,25 @@ wrote — and drops the events it emitted — while the other fields of the
 operation commit; a Non-Null one's `null` reaches `data`, and the whole
 operation rolls back with it ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 
+## Variables and directives
+
+A variable reads what the request sent, or its default when it sent none, as
+much in `@skip` and `@include` as in an argument. With no variables sent, this
+selects `body`:
+
+```graphql
+query Post($full: Boolean = true) {
+  post { title body @include(if: $full) }
+}
+```
+
+A required variable the request leaves out — `$id: ID!`, no default — refuses
+the whole operation once validation passed, and nothing runs: `data: null` and
+one `INVALID_ARGUMENT` error, `Variable "$id" of required type "ID!" was not
+provided.` A [variable pipe](/fundamentals/pipes-beyond-http/) runs first, so a
+directive reads what it made of a variable; a default is the document's own, and
+no pipe is handed it.
+
 ## Reading the request context
 
 A resolver method takes an optional `ctx: &Context<'_>` first

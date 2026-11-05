@@ -854,7 +854,7 @@ pub(crate) fn build_schema(
     batches: &DetachedWork,
 ) -> Result<DiscoveredSchema, UngatedDiscoveryError> {
     let reachable = ReachableProviders::of(&container, RESOLVERS)?;
-    let loaders = crate::loader::LoaderExtensionFactory::new(container.clone(), batches.clone())?;
+    let loaders = crate::loader::LoaderSeeds::new(container.clone(), batches.clone())?;
     let _reset = ReachableResetGuard::set(reachable);
     let mut builder = Schema::build(
         DiscoveredQuery::from_registry(&container),
@@ -863,7 +863,9 @@ pub(crate) fn build_schema(
     )
     .data(container.clone())
     .data(crate::field_spellings::FieldSpellings::default())
-    .extension(loaders);
+    .extension(crate::request_extension::RequestExtensionFactory::new(
+        loaders,
+    ));
     if let Some(gate) =
         crate::federation::FederationExtensionFactory::for_schema(&container, config)
     {

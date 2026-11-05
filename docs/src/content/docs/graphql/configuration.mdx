@@ -143,6 +143,9 @@ and opens none of them in a deployment.
 
 Any other method is answered `405`, with `Allow: POST, GET, HEAD`.
 
+`@defer` and `@stream` are not offered: validation refuses a document using them
+as an unknown directive.
+
 An operation's answer is `application/json`, status `200` whatever its
 `errors` hold. It carries the schema's cache hints as `Cache-Control` when every
 operation in it succeeded, and every header a resolver set with

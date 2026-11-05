@@ -18,12 +18,12 @@ use std::time::Duration;
 use async_graphql::futures_util::StreamExt;
 use async_graphql::futures_util::stream::{self, BoxStream, FuturesOrdered, Stream};
 use async_graphql::parser::types::{
-    DocumentOperations, ExecutableDocument, FragmentDefinition, OperationDefinition, OperationType,
-    Selection, SelectionSet,
+    Directive, DocumentOperations, ExecutableDocument, FragmentDefinition, OperationDefinition,
+    OperationType, Selection, SelectionSet, VariableDefinition,
 };
 use async_graphql::{
-    BatchRequest, BatchResponse, Context, Data, Executor, Name, Pos, Positioned, Request, Response,
-    ServerError, ServerResult, Value,
+    BatchRequest, BatchResponse, Context, Data, Executor, InputType, Name, Pos, Positioned,
+    Request, Response, ServerError, ServerResult, Value, Variables,
 };
 use nest_rs_core::__private::{RequestScopes, nested_continuation};
 use nest_rs_core::operation_log::{CANCELLED, ERROR, OK, PANIC};
@@ -115,12 +115,12 @@ impl<E: Executor> OperationUnits<E> {
 
     async fn execute_selected(
         &self,
-        mut selected: Selected,
+        selected: Selected,
         request: Request,
         cut: Option<&RequestDeadline>,
     ) -> Response {
         let request = request.data(BatchSpan(tracing::Span::current()));
-        let body = refused_or(selected.refusal.take(), self.executor.execute(request));
+        let body = self.executor.execute(request);
         let scope = nest_rs_core::current_request_scope();
         self.run(selected, scope, cut, body).await
     }
@@ -211,7 +211,7 @@ impl<E: Executor> Executor for OperationUnits<E> {
         mut request: Request,
         session_data: Option<Arc<Data>>,
     ) -> BoxStream<'static, Response> {
-        let mut selected = Selected::of(&mut request);
+        let selected = Selected::of(&mut request);
         let scope = self.scopes.open();
         if selected.ty == Some(OperationType::Subscription) {
             return InScope {
@@ -232,7 +232,6 @@ impl<E: Executor> Executor for OperationUnits<E> {
                     .await
                     .unwrap_or_default()
             };
-            let answer = refused_or(selected.refusal.take(), answer);
             units.run(selected, Some(scope), None, answer).await
         })
         .boxed()
@@ -263,7 +262,23 @@ impl Stream for InScope {
 /// The type of the operation `request` selects, as async-graphql (`7.2.1`)
 /// selects it; `None` when it selects none and nothing runs.
 pub(crate) fn selected_type(request: &mut Request) -> Option<OperationType> {
-    Selected::of(request).ty
+    read_selected(request, |_, _, operation| operation.node.ty)
+}
+
+/// What `read` makes of the operation `request` selects, its document parsed
+/// once, since the request caches the parse for the executor; `None` when it
+/// selects none and nothing runs.
+pub(crate) fn read_selected<T>(
+    request: &mut Request,
+    read: impl FnOnce(&ExecutableDocument, Option<&Name>, &Positioned<OperationDefinition>) -> T,
+) -> Option<T> {
+    let wanted = request.operation_name.take();
+    let read = request.parsed_query().ok().and_then(|document| {
+        let (name, operation) = selected_operation(document, wanted.as_deref())?;
+        Some(read(document, name, operation))
+    });
+    request.operation_name = wanted;
+    read
 }
 
 /// The operation `document` runs for a request naming `wanted`, as
@@ -286,47 +301,53 @@ pub(crate) fn selected_operation<'d>(
     }
 }
 
-/// The operation a request selects, read off its document — parsed once,
-/// since the request caches the parse for the executor.
+/// What an operation answers in place of running, read off its document before
+/// the executor and said once validation passed
+/// ([`RequestExtension`](crate::request_extension)): a document validation
+/// refuses says what validation says of it.
+pub(crate) struct OperationRefusal(pub(crate) ServerError);
+
+/// The operation a request selects, read off its document.
 struct Selected {
     ty: Option<OperationType>,
     /// The operation's name as its document declares it: a GraphQL name, never
     /// the free text a request's `operationName` may hold.
     name: Option<Name>,
-    /// What a mutation naming one root field twice answers in place of
-    /// running ([`repeated_root_selection`]).
-    refusal: Option<ServerError>,
 }
 
 impl Selected {
     const NONE: Self = Self {
         ty: None,
         name: None,
-        refusal: None,
     };
 
+    /// Read the operation `request` selects, its variables coerced for what
+    /// reads them next, and any [`OperationRefusal`] left in its data. After a
+    /// global pipe, which is handed the variables as the request sent them.
     fn of(request: &mut Request) -> Self {
-        let wanted = request.operation_name.take();
-        let selected = request
-            .parsed_query()
-            .ok()
-            .and_then(|document| {
-                let (name, operation) = selected_operation(document, wanted.as_deref())?;
-                let refusal = match operation.node.ty {
+        let mut variables = std::mem::take(&mut request.variables);
+        let read = read_selected(request, |document, name, operation| {
+            let operation = &operation.node;
+            let refusal = coerce_variables(&operation.variable_definitions, &mut variables)
+                .or_else(|| match operation.ty {
                     OperationType::Mutation => repeated_root_selection(
                         &document.fragments,
-                        &operation.node.selection_set.node,
+                        &operation.selection_set.node,
+                        &variables,
                     ),
                     OperationType::Query | OperationType::Subscription => None,
-                };
-                Some(Self {
-                    ty: Some(operation.node.ty),
-                    name: name.cloned(),
-                    refusal,
-                })
-            })
-            .unwrap_or(Self::NONE);
-        request.operation_name = wanted;
+                });
+            let selected = Self {
+                ty: Some(operation.ty),
+                name: name.cloned(),
+            };
+            (selected, refusal)
+        });
+        request.variables = variables;
+        let (selected, refusal) = read.unwrap_or((Self::NONE, None));
+        if let Some(refusal) = refusal {
+            request.data.insert(OperationRefusal(refusal));
+        }
         selected
     }
 
@@ -396,28 +417,80 @@ impl Answered {
     }
 }
 
-/// `body`'s answer, or `refusal` in its place with nothing run.
-async fn refused_or<B>(refusal: Option<ServerError>, body: B) -> Response
-where
-    B: Future<Output = Response>,
-{
-    match refusal {
-        Some(refusal) => Response::from_errors(vec![refusal]),
-        None => body.await,
+/// GraphQL §6.1.2, *CoerceVariableValues*, for the absent variables
+/// async-graphql (`7.2.1`) leaves uncoerced: each takes its default, which
+/// `@skip` and `@include` read in `request.variables` alone (`schema.rs`,
+/// `remove_skipped_selection`) where an argument reads the definition too. The
+/// first Non-Null one with none is the request error it returns: async-graphql
+/// runs such an operation, reading the directive's `if` as `false` and failing
+/// only the fields whose arguments read it, after the root fields before them.
+fn coerce_variables(
+    definitions: &[Positioned<VariableDefinition>],
+    variables: &mut Variables,
+) -> Option<ServerError> {
+    let mut absent = None;
+    for definition in definitions {
+        let name = &definition.node.name.node;
+        if variables.contains_key(name) {
+            continue;
+        }
+        match &definition.node.default_value {
+            Some(default) => {
+                variables.insert(name.clone(), default.node.clone());
+            }
+            None if !definition.node.var_type.node.nullable => {
+                absent.get_or_insert(definition);
+            }
+            None => {}
+        }
     }
+    absent.map(|definition| {
+        let said = format!(
+            r#"Variable "${}" of required type "{}" was not provided."#,
+            definition.node.name.node, definition.node.var_type.node,
+        );
+        let problem = Problem::new(400, code::INVALID_ARGUMENT).with_detail(said);
+        crate::error::rendered(&problem).into_server_error(definition.pos)
+    })
+}
+
+/// Whether `directives` leave their selection out, as async-graphql (`7.2.1`)
+/// decides it where the rule is private (`schema.rs`,
+/// `remove_skipped_selection`): `@skip` and `@include`, each `if` read in
+/// `variables` alone, and anything but a boolean reading `false`. Pinned by
+/// `a_selection_is_left_out_as_async_graphql_leaves_it_out`.
+pub(crate) fn is_skipped(directives: &[Positioned<Directive>], variables: &Variables) -> bool {
+    directives.iter().any(|directive| {
+        let include = match directive.node.name.node.as_str() {
+            "skip" => false,
+            "include" => true,
+            _ => return false,
+        };
+        directive.node.get_argument("if").is_some_and(|condition| {
+            let value = condition
+                .node
+                .clone()
+                .into_const_with(|name| variables.get(&name).cloned().ok_or(()))
+                .unwrap_or_default();
+            include != <bool as InputType>::parse(Some(value)).unwrap_or_default()
+        })
+    })
 }
 
 /// The refusal of a mutation whose root selections, through its fragments,
 /// name one response key or spread one fragment more than once, pointing at
 /// the repeated selection: async-graphql (`7.2.1`) runs a root field once per
 /// selection — its writes twice — where GraphQL §6.3.2 runs one key once, and
-/// answers only one of the two.
+/// answers only one of the two. A selection `@skip` or `@include` leaves out
+/// runs nothing, so it repeats nothing.
 fn repeated_root_selection(
     fragments: &HashMap<Name, Positioned<FragmentDefinition>>,
     root: &SelectionSet,
+    variables: &Variables,
 ) -> Option<ServerError> {
     let mut selections = RootSelections {
         fragments,
+        variables,
         keys: HashSet::new(),
         spread: HashSet::new(),
         expanding: Vec::new(),
@@ -438,6 +511,7 @@ fn repeated_root_selection(
 /// fragment cycle, which validation refuses, ends it.
 struct RootSelections<'d> {
     fragments: &'d HashMap<Name, Positioned<FragmentDefinition>>,
+    variables: &'d Variables,
     keys: HashSet<&'d str>,
     spread: HashSet<&'d str>,
     /// The fragments being expanded, the innermost last.
@@ -454,8 +528,10 @@ impl<'d> RootSelections<'d> {
     /// The first selection of `set` naming a response key, or spreading a
     /// fragment, the root already holds, and where it stands.
     fn first_repeated(&mut self, set: &'d SelectionSet) -> Option<(Repeated<'d>, Pos)> {
+        let variables = self.variables;
         set.items
             .iter()
+            .filter(|selection| !is_skipped(selection.node.directives(), variables))
             .find_map(|selection| match &selection.node {
                 Selection::Field(field) => {
                     let key = field.node.response_key().node.as_str();
@@ -666,12 +742,16 @@ mod tests {
 
     use super::*;
 
-    fn selected(query: &str, name: Option<&str>) -> Selected {
-        let mut request = Request::new(query);
-        if let Some(name) = name {
-            request = request.operation_name(name);
+    fn request(query: &str, name: Option<&str>) -> Request {
+        let request = Request::new(query);
+        match name {
+            Some(name) => request.operation_name(name),
+            None => request,
         }
-        Selected::of(&mut request)
+    }
+
+    fn selected(query: &str, name: Option<&str>) -> Selected {
+        Selected::of(&mut request(query, name))
     }
 
     #[test]
@@ -734,9 +814,19 @@ mod tests {
         assert!(unnamed.name.is_none());
     }
 
+    /// What a read of `request` leaves it answering in place of running.
+    fn refused(mut request: Request) -> Option<ServerError> {
+        Selected::of(&mut request);
+        request
+            .data
+            .get(&std::any::TypeId::of::<OperationRefusal>())
+            .and_then(|held| held.downcast_ref::<OperationRefusal>())
+            .map(|refusal| refusal.0.clone())
+    }
+
     /// What a request is refused before it runs, when it is.
     fn refusal(query: &str, name: Option<&str>) -> Option<String> {
-        selected(query, name).refusal.map(|refusal| refusal.message)
+        refused(request(query, name)).map(|refusal| refusal.message)
     }
 
     #[test]
@@ -751,7 +841,6 @@ mod tests {
             ("mutation { a b: a a }", selects("a")),
             ("mutation { a ... { a } }", selects("a")),
             ("mutation { a ... on Mutation { a } }", selects("a")),
-            ("mutation { a @skip(if: true) a }", selects("a")),
             (
                 "mutation { ...A b } fragment A on Mutation { b }",
                 selects("b"),
@@ -780,7 +869,7 @@ mod tests {
 
     #[test]
     fn a_refusal_points_at_the_selection_repeated_and_says_its_class() {
-        let Some(refusal) = selected("mutation {\n  a\n  a\n}", None).refusal else {
+        let Some(refusal) = refused(request("mutation {\n  a\n  a\n}", None)) else {
             panic!("the mutation names `a` twice");
         };
         assert_eq!(refusal.locations, [Pos { line: 3, column: 3 }]);
@@ -816,6 +905,167 @@ mod tests {
         }
     }
 
+    /// `query`'s variables once read, sent as `variables`.
+    fn coerced(query: &str, variables: serde_json::Value) -> serde_json::Value {
+        let mut request = Request::new(query).variables(Variables::from_json(variables));
+        Selected::of(&mut request);
+        request.variables.into_value().into_json().unwrap()
+    }
+
+    #[test]
+    fn an_absent_variable_takes_its_default_and_a_sent_one_keeps_its_value() {
+        use serde_json::json;
+        for (query, sent, read) in [
+            (
+                "query($a: Boolean = true) { x }",
+                json!({}),
+                json!({ "a": true }),
+            ),
+            (
+                "query($a: Boolean = true) { x }",
+                json!({ "a": false }),
+                json!({ "a": false }),
+            ),
+            (
+                "query($a: Boolean = true) { x }",
+                json!({ "a": null }),
+                json!({ "a": null }),
+            ),
+            ("query($a: Int) { x }", json!({}), json!({})),
+            (
+                "query($a: Int = 1, $b: [String!] = [\"c\"], $d: Int) { x }",
+                json!({}),
+                json!({ "a": 1, "b": ["c"] }),
+            ),
+            (
+                "query A($a: Int = 1) { x } query B($b: Int = 2) { x }",
+                json!({}),
+                json!({}),
+            ),
+        ] {
+            assert_eq!(coerced(query, sent), read, "{query}");
+        }
+    }
+
+    #[test]
+    fn the_operation_a_name_selects_gives_its_own_defaults() {
+        let mut request = Request::new("query A($a: Int = 1) { x } query B($a: Int = 2) { x }")
+            .operation_name("B");
+        Selected::of(&mut request);
+        assert_eq!(
+            request.variables.into_value().into_json().unwrap(),
+            serde_json::json!({ "a": 2 })
+        );
+    }
+
+    #[test]
+    fn a_required_variable_absent_refuses_the_operation_naming_it_and_where_it_is_declared() {
+        let Some(refusal) = refused(request(
+            "query(\n  $a: Int = 1,\n  $b: [Int!]!\n) { x }",
+            None,
+        )) else {
+            panic!("`$b` is required and absent");
+        };
+        assert_eq!(
+            refusal.message,
+            r#"Variable "$b" of required type "[Int!]!" was not provided."#
+        );
+        assert_eq!(refusal.locations, [Pos { line: 3, column: 3 }]);
+        let code = refusal
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get(crate::error::CODE_EXTENSION));
+        assert_eq!(code, Some(&Value::from(code::INVALID_ARGUMENT.as_str())));
+        assert!(
+            refused(
+                request("query($b: Int!) { x }", None)
+                    .variables(Variables::from_json(serde_json::json!({ "b": 1 })))
+            )
+            .is_none(),
+            "sent"
+        );
+        assert!(
+            refused(request("query($b: Int! = 1) { x }", None)).is_none(),
+            "its default"
+        );
+        assert!(refused(request("query($b: Int) { x }", None)).is_none());
+        assert!(
+            refused(request("query A($b: Int!) { x } query B { x }", Some("B"))).is_none(),
+            "another operation's"
+        );
+    }
+
+    #[test]
+    fn a_selection_a_directive_leaves_out_repeats_nothing() {
+        let with = |query: &str, variables: serde_json::Value| {
+            refused(request(query, None).variables(Variables::from_json(variables)))
+                .map(|refusal| refusal.message)
+        };
+        for (query, variables) in [
+            ("mutation { a @skip(if: true) a }", serde_json::json!({})),
+            (
+                "mutation { a a @include(if: false) }",
+                serde_json::json!({}),
+            ),
+            (
+                "mutation($x: Boolean!) { a @skip(if: $x) a @include(if: $x) }",
+                serde_json::json!({ "x": true }),
+            ),
+            (
+                "mutation($x: Boolean!) { a @skip(if: $x) a @include(if: $x) }",
+                serde_json::json!({ "x": false }),
+            ),
+            (
+                "mutation($x: Boolean = true) { a @skip(if: $x) a }",
+                serde_json::json!({}),
+            ),
+            (
+                "mutation { ...A @skip(if: true) ...A } fragment A on Mutation { a }",
+                serde_json::json!({}),
+            ),
+            (
+                "mutation { a ... @skip(if: true) { a } }",
+                serde_json::json!({}),
+            ),
+            (
+                "mutation { a ...A } fragment A on Mutation { a @skip(if: true) }",
+                serde_json::json!({}),
+            ),
+        ] {
+            assert_eq!(with(query, variables), None, "{query}");
+        }
+        for (query, variables, key) in [
+            (
+                "mutation { a @skip(if: false) a }",
+                serde_json::json!({}),
+                "a",
+            ),
+            (
+                "mutation { a a @include(if: true) }",
+                serde_json::json!({}),
+                "a",
+            ),
+            (
+                "mutation($x: Boolean = false) { a @skip(if: $x) a }",
+                serde_json::json!({}),
+                "a",
+            ),
+            (
+                "mutation($x: Boolean = false) { a @skip(if: $x) a }",
+                serde_json::json!({ "x": false }),
+                "a",
+            ),
+        ] {
+            assert_eq!(
+                with(query, variables),
+                Some(format!(
+                    r#"the mutation selects "{key}" more than once at its root"#
+                )),
+                "{query}"
+            );
+        }
+    }
+
     struct Query;
 
     #[Object]
@@ -823,6 +1073,64 @@ mod tests {
         async fn up(&self) -> bool {
             true
         }
+    }
+
+    /// [`is_skipped`] copies a private rule of async-graphql's: a bump that
+    /// moves the rule fails here, not in a mutation refused or an answer placed
+    /// by another reading of the document than the one that ran.
+    #[tokio::test]
+    async fn a_selection_is_left_out_as_async_graphql_leaves_it_out() {
+        let schema = Schema::new(Query, async_graphql::EmptyMutation, EmptySubscription);
+        for directives in [
+            "",
+            "@skip(if: true)",
+            "@skip(if: false)",
+            "@include(if: true)",
+            "@include(if: false)",
+            "@skip(if: true) @include(if: true)",
+            "@skip(if: false) @include(if: false)",
+            "@skip(if: false) @include(if: true)",
+            "@include(if: false) @skip(if: true)",
+        ] {
+            let query = format!("{{ up {directives} kept: up }}");
+            assert_runs_as_read(&schema, &query, serde_json::json!({})).await;
+        }
+        for directives in ["@skip(if: $x)", "@include(if: $x)"] {
+            let query = format!("query($x: Boolean!) {{ up {directives} kept: up }}");
+            for sent in [
+                serde_json::json!({ "x": true }),
+                serde_json::json!({ "x": false }),
+                serde_json::json!({}),
+            ] {
+                assert_runs_as_read(&schema, &query, sent).await;
+            }
+        }
+    }
+
+    /// `query`, its `up` selection read by [`is_skipped`], and what the schema
+    /// itself ran of it, agree.
+    async fn assert_runs_as_read(
+        schema: &Schema<Query, async_graphql::EmptyMutation, EmptySubscription>,
+        query: &str,
+        sent: serde_json::Value,
+    ) {
+        let variables = Variables::from_json(sent);
+        let document = async_graphql::parser::parse_query(query).unwrap();
+        let Some((_, operation)) = selected_operation(&document, None) else {
+            panic!("{query} selects its operation");
+        };
+        let Selection::Field(up) = &operation.node.selection_set.node.items[0].node else {
+            panic!("{query} opens on `up`");
+        };
+        let read = is_skipped(&up.node.directives, &variables);
+        let response = schema
+            .execute(Request::new(query).variables(variables))
+            .await;
+        assert!(response.errors.is_empty(), "{query}: {:?}", response.errors);
+        let Value::Object(answered) = &response.data else {
+            panic!("{query}: `kept` answers");
+        };
+        assert_eq!(read, !answered.contains_key("up"), "{query}");
     }
 
     struct Mutation;

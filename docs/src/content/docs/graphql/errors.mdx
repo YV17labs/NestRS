@@ -346,10 +346,16 @@ the path, so its `null` lands. And an object selected twice at one place — two
 fragments that each select `org` — keeps whichever copy finishes first. When
 that copy's every field failed, the object answers `null`, or its nearest
 nullable parent does, never an object missing what the other copy answered; a
-copy that `@skip` or `@include` leaves out still counts here. At a mutation's
-root, where each copy would run its writes, such a document is refused before
-anything runs
+copy that `@skip` or `@include` leaves out is no copy, so the object answers as
+the one that ran. At a mutation's root, where each copy would run its writes,
+such a document is refused before anything runs
 ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
+
+One more answers `null` with no error beside it, also from async-graphql 7.2.1:
+an object every selection of which a directive leaves out, at a Non-Null position
+too, where the specification answers `{}`. The answer cannot tell it from a
+resolver's `None`, so it stands. An operation every root selection of which is
+left out has no such doubt, and answers `{"data": {}}`.
 
 ## Multiple errors in one response
 

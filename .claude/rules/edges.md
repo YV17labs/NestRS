@@ -604,7 +604,8 @@ router parses. The rewrite is skipped when nothing is versioned.
   with `PipeError::from`, so it answers as the edge does. Global
   pipes register in `nest-rs-pipes`, beside their contract, and run over an
   HTTP body, `/graphql` variables — a POST's, or an operation's on the
-  graphql-ws socket, a subscription included — and a WS message's `data`,
+  graphql-ws socket, a subscription included, a default never, which is the
+  document's own and is read after them — and a WS message's `data`,
   each edge resolving the pool once at mount; MCP and queues have none. One
   entry, `GlobalPipe::transform(cx, ArgumentKind, input)`: the unit's context
   says which site, the kind which input, so an edge adds a kind, never a

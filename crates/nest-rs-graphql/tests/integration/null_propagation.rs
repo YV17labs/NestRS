@@ -195,6 +195,72 @@ async fn an_operation_over_the_socket_answers_its_nulls() {
     }
 }
 
+/// A copy a directive leaves out is no copy: the object answers as the one
+/// that ran, its nulls placed, on `POST` and in a batch alike.
+#[tokio::test]
+async fn a_copy_a_directive_leaves_out_hides_no_answer() {
+    let app = boot().await;
+    for (body, data) in [
+        (
+            json!({ "query": "{ shape { broken } shape @skip(if: true) { fine } }" }),
+            json!({ "shape": { "broken": null } }),
+        ),
+        (
+            json!({
+                "query": "query($x: Boolean!) { shape { broken } shape @include(if: $x) { fine } }",
+                "variables": { "x": false },
+            }),
+            json!({ "shape": { "broken": null } }),
+        ),
+        (
+            json!({
+                "query": "query($x: Boolean = true) { shape { broken } shape @skip(if: $x) { fine } }",
+            }),
+            json!({ "shape": { "broken": null } }),
+        ),
+        (
+            json!({
+                "query": "{ ...A ...B } fragment A on Query { shape { broken } } \
+                          fragment B on Query { shape @skip(if: true) { fine } }",
+            }),
+            json!({ "shape": { "broken": null } }),
+        ),
+        (
+            json!({
+                "query": "{ shapes { broken } shapes { fine @skip(if: true) } }",
+            }),
+            json!({ "shapes": [{ "broken": null }, { "broken": null }] }),
+        ),
+        // Both copies run: the `null` may hide what the other answered, so it stands.
+        (
+            json!({
+                "query": "query($x: Boolean!) { shape { broken } shape @include(if: $x) { fine } }",
+                "variables": { "x": true },
+            }),
+            json!({ "shape": null }),
+        ),
+    ] {
+        let answer = post(&app, &body).await;
+        assert_eq!(answer["data"], data, "{body}: {answer}");
+    }
+}
+
+/// async-graphql (`7.2.1`, `do_resolve_container`) answers `null` for an object
+/// with no key to answer, and an object every selection of which a directive
+/// leaves out has none. A `null` under a resolver's `None` and one here look
+/// the same, so it stands, `null` at a Non-Null position included, as the docs
+/// say. When this fails, a release answers `{}`.
+#[tokio::test]
+async fn an_object_every_selection_of_which_is_left_out_answers_null() {
+    let app = boot().await;
+    let answer = post(
+        &app,
+        &json!({ "query": "{ shape { fine @skip(if: true) } }" }),
+    )
+    .await;
+    assert_eq!(answer, json!({ "data": { "shape": null } }));
+}
+
 #[tokio::test]
 async fn a_subscription_item_answers_its_nulls() {
     let app = boot().await;

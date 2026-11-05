@@ -512,7 +512,8 @@ registration, a scope it is not registered for refuses the request whole as
 parameter the request does not define is ignored (§3.2). What the transport refuses before a parameter is read keeps
 the edge's answer: a body past the cap its `413`, a `GET` the router's
 `405`, and the throttler's `429`, the protection §2.3.1 asks of a token
-endpoint without fixing its shape.
+endpoint without fixing its shape. The route's document lists each as it answers:
+§5.2's body on the request's `400`, a problem document on that `413`.
 
 `resource` is the one parameter that may repeat: [RFC 8707
 §2](https://datatracker.ietf.org/doc/html/rfc8707#section-2) lets a client name

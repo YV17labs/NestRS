@@ -575,6 +575,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .collect();
         let shaper_selection = shaper_selection(&probe_types);
         let typed_body = documented_body(&param_types);
+        let typed_refusal = documented_refusal(&param_types);
 
         // Checked like a `Scoped<T>` parameter's: an unimported service fails
         // the boot.
@@ -699,6 +700,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
+        let mut request_refusal = quote! { ::core::option::Option::None };
         let request_body = match (&api.multipart, &json_body) {
             (Some(ty), _) => quote! {
                 ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Multipart(
@@ -723,7 +725,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         ::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
                     ))
                 },
-                None => typed_body,
+                None => {
+                    request_refusal = typed_refusal;
+                    typed_body
+                }
             },
         };
         // Probed by its type for its body and what it answers beside it, so an
@@ -841,6 +846,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 description: #description,
                 tags: #tags,
                 request_body: #request_body,
+                request_refusal: #request_refusal,
                 response: #response,
                 response_content_type: #response_content_type,
                 error_responses: #error_responses,
@@ -1280,23 +1286,40 @@ fn param_types(inputs: &[FnArg]) -> Vec<Type> {
         .collect()
 }
 
-/// The body an extractor that is the body itself documents, selected by type
-/// after name resolution like the shaper: the first parameter that is a
-/// `DocumentedBody`, which no spelling names.
-fn documented_body(param_types: &[Type]) -> TokenStream2 {
+/// The first answer `probe!` gives over `param_types`, of type `Option<answer>`,
+/// selected by type after name resolution.
+fn first_probed(param_types: &[Type], answer: &TokenStream2, probe: &TokenStream2) -> TokenStream2 {
     if param_types.is_empty() {
-        return quote! { ::core::option::Option::None };
+        return quote! { ::core::option::Option::<#answer>::None };
     }
     quote! {{
-        let mut __nestrs_body: ::core::option::Option<::nest_rs_http::RequestBodyMeta> =
-            ::core::option::Option::None;
+        let mut __nestrs_first: ::core::option::Option<#answer> = ::core::option::Option::None;
         #(
-            if __nestrs_body.is_none() {
-                __nestrs_body = ::nest_rs_http::__body_of!(#param_types);
+            if __nestrs_first.is_none() {
+                __nestrs_first = #probe!(#param_types);
             }
         )*
-        __nestrs_body
+        __nestrs_first
     }}
+}
+
+/// The body an extractor that is the body itself documents, selected like the
+/// shaper: the first parameter that is a `DocumentedBody`, which no spelling names.
+fn documented_body(param_types: &[Type]) -> TokenStream2 {
+    first_probed(
+        param_types,
+        &quote! { ::nest_rs_http::RequestBodyMeta },
+        &quote! { ::nest_rs_http::__body_of },
+    )
+}
+
+/// What the first `DocumentedBody` parameter refuses in, when its own words.
+fn documented_refusal(param_types: &[Type]) -> TokenStream2 {
+    first_probed(
+        param_types,
+        &quote! { ::nest_rs_http::SchemaFn },
+        &quote! { ::nest_rs_http::__refusal_of },
+    )
 }
 
 /// The route's class gates, selected by type after name resolution like its
@@ -1323,19 +1346,11 @@ fn gate_selection(probe_types: &[Type]) -> TokenStream2 {
 /// first parameter that is a `RouteResponseShaper` arms the route, so an
 /// aliased import arms too.
 fn shaper_selection(param_types: &[Type]) -> TokenStream2 {
-    if param_types.is_empty() {
-        return quote! { ::core::option::Option::<::nest_rs_http::__private::CaptureFn>::None };
-    }
-    quote! {{
-        let mut __nestrs_shaper: ::core::option::Option<::nest_rs_http::__private::CaptureFn> =
-            ::core::option::Option::None;
-        #(
-            if __nestrs_shaper.is_none() {
-                __nestrs_shaper = ::nest_rs_http::__shaper_of!(#param_types);
-            }
-        )*
-        __nestrs_shaper
-    }}
+    first_probed(
+        param_types,
+        &quote! { ::nest_rs_http::__private::CaptureFn },
+        &quote! { ::nest_rs_http::__shaper_of },
+    )
 }
 
 /// One routed handler, as its route's site declares it and its mount mounts

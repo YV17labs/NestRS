@@ -71,6 +71,7 @@ impl RequestBodyMeta {
 /// #   description: None,
 /// #   tags: &[],
 /// #   request_body: None,
+/// #   request_refusal: None,
 /// #   response: None,
 /// #   response_content_type: None,
 /// #   error_responses: &[],
@@ -109,6 +110,7 @@ pub struct HttpRouteParts {
     pub description: Option<&'static str>,
     pub tags: &'static [&'static str],
     pub request_body: Option<RequestBodyMeta>,
+    pub request_refusal: Option<SchemaFn>,
     pub response: Option<SchemaFn>,
     pub response_content_type: Option<&'static str>,
     pub error_responses: &'static [(u16, SchemaFn)],
@@ -199,6 +201,14 @@ impl HttpRouteMeta {
     /// The request body this route accepts, or `None` when it takes none.
     pub fn request_body(&self) -> Option<RequestBodyMeta> {
         self.parts.request_body
+    }
+
+    /// The schema of the `application/json` body a `400` on this route's request
+    /// body answers, when its extractor refuses in its protocol's own words (RFC
+    /// 6749 §5.2's at a token endpoint), or `None` for the problem document the
+    /// edge renders.
+    pub fn request_refusal(&self) -> Option<SchemaFn> {
+        self.parts.request_refusal
     }
 
     /// Schema builder for the response payload — read off the return type,
@@ -531,6 +541,7 @@ mod tests {
             description: None,
             tags: &["Users"],
             request_body: None,
+            request_refusal: None,
             response: None,
             response_content_type: None,
             error_responses: &[],
@@ -582,6 +593,7 @@ mod tests {
             description: Some("Every writable field."),
             tags: &["Users"],
             request_body: Some(RequestBodyMeta::Json(schema)),
+            request_refusal: Some(schema),
             response: Some(schema),
             response_content_type: Some("text/plain"),
             error_responses: &[(503, schema)],
@@ -609,6 +621,7 @@ mod tests {
             route.request_body().map(RequestBodyMeta::media_type),
             Some("application/json"),
         );
+        assert!(route.request_refusal().is_some());
         assert!(route.response().is_some());
         assert_eq!(route.response_content_type(), Some("text/plain"));
         assert_eq!(route.error_responses()[0].0, 503);

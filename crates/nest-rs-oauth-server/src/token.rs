@@ -5,6 +5,7 @@ use std::fmt;
 
 use nest_rs_core::Secret;
 use nest_rs_http::__private::{DocumentedBody, DocumentedPayload, schema_of};
+use nest_rs_http::SchemaFn;
 use nest_rs_http::{
     Form, FromRequest, HeaderValue, HttpError, IntoResponse, Json, Request, RequestBody,
     RequestBodyMeta, Response, StatusCode, header,
@@ -265,10 +266,14 @@ fn malformed(refused: HttpError) -> HttpError {
     }
 }
 
-/// The body a route reading it documents: §4.4.2's form.
+/// The body a route reading it documents: §4.4.2's form, refused in §5.2's words.
 impl DocumentedBody for AccessTokenRequest {
     fn request_body() -> RequestBodyMeta {
         RequestBodyMeta::Form(schema_of::<Self>)
+    }
+
+    fn refusal() -> Option<SchemaFn> {
+        Some(schema_of::<TokenError>)
     }
 }
 

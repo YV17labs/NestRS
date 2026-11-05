@@ -1,10 +1,12 @@
 //! RFC 6749 §4.4.2 and §5.1 on the wire.
 
+use nest_rs_config::Surface;
 use nest_rs_core::{Discovery, module};
 use nest_rs_http::{
     HttpConfig, HttpControllerMeta, HttpModule, IntoResponse, StatusCode, controller, routes,
 };
 use nest_rs_oauth_server::{AccessTokenRequest, AccessTokenResponse};
+use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_testing::{LogCapture, TestApp, TestResponse};
 
 /// The one encoding RFC 6749 §4.4.2 gives a token request.
@@ -164,6 +166,18 @@ struct RequestApp;
     providers = [RequestController],
 )]
 struct CappedRequestApp;
+
+#[module(
+    imports = [
+        HttpModule,
+        OpenApiModule::for_root(OpenApiConfig {
+            enabled: Surface::Open,
+            ..OpenApiConfig::default()
+        }),
+    ],
+    providers = [RequestController],
+)]
+struct DocumentedRequestApp;
 
 async fn token_request(app: &TestApp, content_type: &str, body: &str) -> TestResponse {
     app.http()
@@ -393,6 +407,31 @@ async fn a_body_past_the_cap_stays_the_transports_413() {
 
     response.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
     response.assert_header("content-type", "application/problem+json");
+}
+
+/// The document reads what the request answers, with no guard saying it: §5.2's
+/// body on a `400`, where the transport's cap keeps its problem document.
+#[tokio::test]
+async fn the_route_documents_the_refusal_the_request_answers() {
+    let app = TestApp::for_module::<DocumentedRequestApp>()
+        .await
+        .expect("boots");
+
+    let response = app.http().get("/api-json").send().await;
+    let doc: serde_json::Value = response.json().await.value().deserialize();
+
+    let responses = &doc["paths"]["/token"]["post"]["responses"];
+    let refused = &responses["400"]["content"];
+    assert!(
+        refused.get("application/problem+json").is_none(),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["application/json"]["schema"]["$ref"], "#/components/schemas/TokenError",
+        "{refused}",
+    );
+    let capped = &responses["413"]["content"];
+    assert!(capped.get("application/problem+json").is_some(), "{capped}");
 }
 
 /// The extractor documents its body as a `Form<…>` spelling would.

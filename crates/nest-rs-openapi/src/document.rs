@@ -561,10 +561,13 @@ fn operation_object(
         ok.insert("headers".into(), Value::Object(headers));
     }
     responses.insert(status.to_string(), Value::Object(ok));
-    for status in error_statuses(route, full_path, denials, requires_parameter) {
+    let edge = edge_statuses(route, full_path, requires_parameter);
+    for status in error_statuses(&edge, route, denials) {
         let declared = || denials.iter().filter(|(denied, _)| *denied == status);
-        let own_body = declared().find_map(|(_, document)| document.body);
-        let mut response = if own_body.is_none() || declared().any(|(_, d)| d.body.is_none()) {
+        let own_body = declared()
+            .find_map(|(_, document)| document.body)
+            .or(route.request_refusal().filter(|_| status == 400));
+        let mut response = if edge.contains(&status) || declared().any(|(_, d)| d.body.is_none()) {
             problem_response(&error_title(status))
         } else {
             json!({ "description": error_title(status) })
@@ -693,17 +696,34 @@ fn add_json_body(response: &mut Value, schema: Value) {
 }
 
 /// The error statuses an operation can actually produce, ascending: what the
-/// edge answers on the route's behalf, and the `denials` its guards declare.
+/// `edge` answers on the route's behalf, what its body refuses in its own words,
+/// and the `denials` its guards declare.
 fn error_statuses(
+    edge: &BTreeSet<u16>,
+    route: &HttpRouteMeta,
+    denials: &[(u16, DenialDocument)],
+) -> BTreeSet<u16> {
+    let mut out = edge.clone();
+    out.extend(denials.iter().map(|(status, _)| *status));
+    if route.request_refusal().is_some() {
+        out.insert(400);
+    }
+    out
+}
+
+/// What the edge answers on the route's behalf, each in a problem document,
+/// whatever a guard answers on the same status.
+fn edge_statuses(
     route: &HttpRouteMeta,
     full_path: &RouteTemplate,
-    denials: &[(u16, DenialDocument)],
     requires_parameter: bool,
 ) -> BTreeSet<u16> {
-    let mut out: BTreeSet<u16> = denials.iter().map(|(status, _)| *status).collect();
+    let mut out = BTreeSet::new();
     // Edge validation answers `400`, never `422` (`nest_rs_http::pipe_error`),
     // and a list linking its next page refuses a cursor no page issued.
-    if route.request_body().is_some() || requires_parameter || route.sets_next_link() {
+    let body_refused_by_the_edge =
+        route.request_body().is_some() && route.request_refusal().is_none();
+    if body_refused_by_the_edge || requires_parameter || route.sets_next_link() {
         out.insert(400);
     }
     if route.request_body().is_some() {
@@ -1094,6 +1114,7 @@ mod tests {
             summary: None,
             description: None,
             request_body: None,
+            request_refusal: None,
             response: None,
             response_content_type: None,
             error_responses: &[],
@@ -1226,20 +1247,78 @@ mod tests {
         );
     }
 
+    /// What the edge refuses in a problem document stays listed beside a guard's
+    /// own words on one status: a body it decodes, a required parameter, a cursor.
+    #[test]
+    fn a_guards_own_words_sit_beside_the_problem_the_edge_answers_on_that_status() {
+        let own = DenialDocument::answering(ChallengeScheme::Basic, own_words);
+        let mut body = route("body", "/x");
+        body.request_body = Some(RequestBodyMeta::Json(schema_for_dummy));
+        let mut cursor = route("cursor", "/x");
+        cursor.sets_next_link = true;
+        let parameter = Some(json!({ "name": "v", "in": "header", "required": true }));
+        for (parts, version_parameter) in [
+            (body, None),
+            (cursor, None),
+            (route("parameter", "/x"), parameter),
+        ] {
+            let mut g = generator();
+            let op = operation_object(
+                &http_route_meta(parts),
+                &template("/x"),
+                "x",
+                &mut g,
+                &[(400, own)],
+                version_parameter,
+            );
+
+            let listed = &op["responses"]["400"]["content"];
+            assert!(listed.get(JSON_MEDIA_TYPE).is_some(), "{listed}");
+            assert!(listed.get("application/problem+json").is_some(), "{listed}");
+        }
+    }
+
+    /// A body refusing in its protocol's own words documents them on its `400`,
+    /// alone unless the edge can answer that status for another reason. The
+    /// transport's cap stays the edge's.
+    #[test]
+    fn a_body_refusing_in_its_own_words_documents_them_on_its_400() {
+        let mut parts = route("token", "/token");
+        parts.request_body = Some(RequestBodyMeta::Form(schema_for_dummy));
+        parts.request_refusal = Some(own_words);
+        let meta = http_route_meta(parts);
+
+        let mut g = generator();
+        let op = operation_object(&meta, &template("/token"), "token", &mut g, &[], None);
+        let refused = &op["responses"]["400"]["content"];
+        assert!(refused.get(JSON_MEDIA_TYPE).is_some(), "{refused}");
+        assert!(
+            refused.get("application/problem+json").is_none(),
+            "{refused}"
+        );
+        let capped = &op["responses"]["413"]["content"];
+        assert!(capped.get("application/problem+json").is_some(), "{capped}");
+
+        let parameter = Some(json!({ "name": "v", "in": "header", "required": true }));
+        let mut g = generator();
+        let op = operation_object(&meta, &template("/token"), "token", &mut g, &[], parameter);
+        let both = &op["responses"]["400"]["content"];
+        assert!(both.get(JSON_MEDIA_TYPE).is_some(), "{both}");
+        assert!(both.get("application/problem+json").is_some(), "{both}");
+    }
+
     #[test]
     fn a_path_param_segment_advertises_404_but_a_literal_segment_does_not() {
-        let bound = error_statuses(
+        let bound = edge_statuses(
             &http_route_meta(route("get_user", "/users/{id}")),
             &template("/users/{id}"),
-            &[],
             false,
         );
         assert!(bound.contains(&404), "an `{{id}}` route advertises 404");
 
-        let literal = error_statuses(
+        let literal = edge_statuses(
             &http_route_meta(route("weird", "/a-b/list")),
             &template("/a-b/list"),
-            &[],
             false,
         );
         assert!(
@@ -1401,11 +1480,11 @@ mod tests {
 
     #[test]
     fn a_route_whose_guards_declare_no_rate_limit_documents_no_429() {
+        let meta = http_route_meta(route("list", "/audio"));
         let statuses = error_statuses(
-            &http_route_meta(route("list", "/audio")),
-            &template("/audio"),
+            &edge_statuses(&meta, &template("/audio"), false),
+            &meta,
             &problems(&[401, 403]),
-            false,
         );
         assert!(
             !statuses.contains(&429),

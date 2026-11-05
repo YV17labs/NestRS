@@ -10,11 +10,11 @@ use base64::Engine as _;
 use nest_rs_authn::{AuthError, AuthnConfig, AuthnModule, Strategy, basic_credentials};
 use nest_rs_config::Surface;
 use nest_rs_core::{Ambient, async_trait, injectable, module};
-use nest_rs_http::{HttpModule, Request, StatusCode, controller, routes};
+use nest_rs_http::{HttpModule, Json, Request, StatusCode, controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule};
 use nest_rs_oauth_server::{
-    AuthenticatedClient, ClientAuthenticationGuard, RegisteredClient, TokenError,
-    authenticate_against_registry,
+    AccessTokenRequest, AuthenticatedClient, ClientAuthenticationGuard, RegisteredClient,
+    TokenError, authenticate_against_registry,
 };
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_testing::{LogCapture, TestApp, TestResponse};
@@ -70,6 +70,12 @@ impl Strategy for Outage {
 type Authenticated = ClientAuthenticationGuard<Registry>;
 type Unavailable = ClientAuthenticationGuard<Outage>;
 
+/// A body the edge decodes, on a route a client's guard stands in front of.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct Declared {
+    name: String,
+}
+
 #[controller(path = "/")]
 struct TokenController;
 
@@ -94,6 +100,18 @@ impl TokenController {
     #[use_guards(Unavailable)]
     async fn outage(&self) -> nest_rs_http::Result<String> {
         Ok("issued".to_owned())
+    }
+
+    #[post("/token/declared")]
+    #[use_guards(Authenticated)]
+    async fn declared(&self, Json(declared): Json<Declared>) -> nest_rs_http::Result<String> {
+        Ok(declared.name)
+    }
+
+    #[post("/token/request")]
+    #[use_guards(Authenticated)]
+    async fn request(&self, request: AccessTokenRequest) -> nest_rs_http::Result<String> {
+        Ok(request.grant_type.to_string())
     }
 }
 
@@ -424,6 +442,52 @@ async fn the_document_says_basic_and_the_body_every_refusal_answers() {
         serde_json::json!([{ "basicAuth": [] }]),
         "`#[public]` opens nothing the guard holds shut",
     );
+}
+
+/// The guard's words do not hide the edge's on one status: a body the edge
+/// decodes is refused in a problem document, the client in §5.2's, each on a
+/// `400`, and the document lists both.
+#[tokio::test]
+async fn a_guards_body_sits_beside_the_problem_the_edge_answers_on_its_status() {
+    let app = TestApp::for_module::<DocumentedTokenApp>()
+        .await
+        .expect("boots");
+
+    let response = app.http().get("/api-json").send().await;
+    let doc: Value = response.json().await.value().deserialize();
+    let listed = &doc["paths"]["/token/declared"]["post"]["responses"]["400"]["content"];
+    assert!(listed.get("application/json").is_some(), "{listed}");
+    assert!(listed.get("application/problem+json").is_some(), "{listed}");
+
+    let undecoded = app
+        .http()
+        .post("/token/declared")
+        .header("authorization", basic(CLIENT_ID, SECRET))
+        .content_type("application/json")
+        .body("{no json")
+        .send()
+        .await;
+    undecoded.assert_status(StatusCode::BAD_REQUEST);
+    undecoded.assert_header("content-type", "application/problem+json");
+
+    let refused = post(&app, "/token/declared", None).await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    refused.assert_header("content-type", "application/json");
+}
+
+/// Where the request itself refuses in §5.2's words, as the guard does, the
+/// `400` is those words alone.
+#[tokio::test]
+async fn a_request_refusing_as_its_guard_does_lists_one_body_on_its_400() {
+    let app = TestApp::for_module::<DocumentedTokenApp>()
+        .await
+        .expect("boots");
+
+    let response = app.http().get("/api-json").send().await;
+    let doc: Value = response.json().await.value().deserialize();
+    let listed = &doc["paths"]["/token/request"]["post"]["responses"]["400"]["content"];
+    assert!(listed.get("application/json").is_some(), "{listed}");
+    assert!(listed.get("application/problem+json").is_none(), "{listed}");
 }
 
 /// In an app that is also a resource server, a client's refusal stays §5.2's:

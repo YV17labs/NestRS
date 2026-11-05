@@ -159,6 +159,11 @@ On the owner's mandate of 2026-11-05. Each seen run first.
   neighbour, the `server_error`
   a handler answers at `500`, is `#[api(error(500 = TokenError))]`, the existing seam for a
   body a handler writes; a guard does not declare `500` (`Guard::denial_statuses`).
+- **A status the edge answers too lists both.** A guard's own body does not replace what the
+  edge answers on that status, so a `Json<T>` body behind this guard documents §5.2's body and
+  the problem document on `400`, as the wire answers each. `AccessTokenRequest` refuses in §5.2's
+  words itself, which it declares on `DocumentedBody::refusal` (tier 2, read through
+  `HttpRouteMeta::request_refusal`), so its `400` is §5.2's body alone, with this guard or none.
 - **A guard declaring `401` on a `#[public]` route keeps the route's requirement**: `#[public]`
   opens nothing here (§3.2.1), and `security: []` said it did.
 - **`RegisteredClient::client_secret` is `pub(crate)`.** Nothing outside the crate reads it, and a
@@ -169,6 +174,4 @@ On the owner's mandate of 2026-11-05. Each seen run first.
   The resource server's `scopes_supported` already held the same grammar.
 - **Not covered:** `OAuthClientConfig::scopes` and each social provider's, which a provider
   reads and this server never grants; a refusal there would refuse what works today, so it
-  waits for a caller it harms. A route reading `AccessTokenRequest` with no
-  `ClientAuthenticationGuard` documents its `400` as a problem document while the request answers
-  §5.2's body: every client authenticates at a token endpoint, so no such route is taught.
+  waits for a caller it harms.

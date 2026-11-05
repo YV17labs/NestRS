@@ -214,7 +214,8 @@ A refusal through `Denial` reads as a problem document, its `401` challenged
 protocol's words. `denial_document` says which, in `nest_rs::core`'s
 `DenialDocument`: `ClientAuthenticationGuard` declares the `Basic` challenge and
 RFC 6749 §5.2's body, so a token endpoint's route requires `basicAuth` and lists
-that body on each status the guard declares.
+that body on each status the guard declares, beside the problem document of a
+status the edge answers too: a `Json<T>` body it cannot decode, on the same `400`.
 
 ```rust title="nest_rs::oauth::server::ClientAuthenticationGuard"
 fn denial_document(&self) -> DenialDocument {

@@ -442,8 +442,10 @@ adds no line to the root, and writing it is the visible opening.
   (`.claude/decisions/mcp-discovery-at-transport.md`).
 - **A document generator reads the refusals the composed chain declares**
   (`Guard::denial_statuses` and `Guard::denial_document`, through the site's
-  guard stage), never a guard's name, so an alias, a wrapper or the global pool
-  is listed as it runs; held by the OpenAPI suite.
+  guard stage) and the one its body declares (`DocumentedBody::refusal`), never a
+  guard's name, so an alias, a wrapper or the global pool is listed as it runs;
+  what the edge answers on one of those statuses stays listed beside it; held by
+  the OpenAPI suite.
 
 **The edge-neutral pipeline is in core** (`.claude/decisions/one-execution-pipeline.md`):
 `nest_rs::core::{Interceptor, ExceptionFilter}`, `GlobalInterceptors` (handler

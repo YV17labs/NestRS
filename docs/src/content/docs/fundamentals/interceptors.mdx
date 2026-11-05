@@ -283,7 +283,8 @@ rolls its writes back.
 - **Answer instead** — a cache answers through `HttpView::of(cx)?.respond(..)`
   and returns its `Settled` without running the rest of the unit. A GraphQL
   field has no reply an interceptor writes: its value is typed, so it fails
-  the field or runs it.
+  the field or runs it. An MCP operation has no reply an interceptor writes
+  either.
 - **Audit** — record what the unit answered, as the demo's posts controller
   does.
 

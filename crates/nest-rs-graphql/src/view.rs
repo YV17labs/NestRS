@@ -10,7 +10,19 @@ use nest_rs_http::CarriedView;
 /// A guard reaches it through `UnitContext::switch_to` in
 /// `Guard::check`. The field's arguments are not on it: refusing a payload is
 /// a pipe's job.
-#[derive(Clone, Copy, Debug)]
+///
+/// It is read in place, never copied: it stays where a layer's answer can be
+/// written, as every edge's view is, and what it says outlives the unit by
+/// value (`field`, `operation`, `role`).
+///
+/// ```compile_fail,E0308
+/// use nest_rs_graphql::GraphqlView;
+///
+/// fn kept(view: &GraphqlView) -> GraphqlView {
+///     view.clone()
+/// }
+/// ```
+#[derive(Debug)]
 pub struct GraphqlView {
     field: &'static str,
     operation: OperationType,

@@ -372,3 +372,13 @@ the attribute too. It would put a `GlobalInterceptors` line beside every
 capability module an app imports, against *nothing to wire*, and move no decision
 out of the source. **Refused:** a stage key defaulting to `unit`, which would
 drop the visible line.
+
+**2026-11-05 — a view is read in place, on every edge.** `GraphqlView` derived
+`Clone, Copy` and `McpView` `Clone`, the only two of the family that did. Neither
+holds a reply an interceptor writes today, but one holding it would have to keep
+the value in the view, as `WsView` does, and a derive dropped after 7.0 is a break;
+the opening itself stays additive. Both derives go. **Rule 2 read first**: no page,
+test or demo copies a view, and a layer has no need to: it asks `cx.switch_to` again
+once `next.run(cx)` returned, and `field`, `operation`, `role` answer by value.
+Held by a `compile_fail` doctest on each. **Refused:** `respond` on the two now, a
+reply for an operation no caller asked to answer.

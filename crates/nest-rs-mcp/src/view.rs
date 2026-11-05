@@ -77,7 +77,19 @@ use crate::operation::McpOperationKind;
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Clone, Debug)]
+///
+/// It is read in place, never copied: it stays where a layer's answer can be
+/// written, as every edge's view is, and a layer keeps what it reads of it by
+/// value.
+///
+/// ```compile_fail,E0308
+/// use nest_rs_mcp::McpView;
+///
+/// fn kept(view: &McpView) -> McpView {
+///     view.clone()
+/// }
+/// ```
+#[derive(Debug)]
 pub struct McpView {
     method: Cow<'static, str>,
     kind: Option<McpOperationKind>,

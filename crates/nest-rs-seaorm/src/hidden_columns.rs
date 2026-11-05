@@ -1,12 +1,6 @@
 //! What `#[expose]` bounds the wire impls it emits on a row on, so that a row
-//! crosses no wire and no other impl fits beside them.
-//!
-//! No impl of the trait exists or can be written: everything the bound names is
-//! foreign to the crate an expansion lands in, so the orphan rule refuses one
-//! there, and rustc reports an impl beside the emitted one as `E0119` rather than
-//! `type annotations needed`. The lifetime keeps the bound from reading as a
-//! trivially false one, refused at the emitted impl
-//! (`decisions/mask-provenance.md`).
+//! crosses no wire and no other impl fits beside them. Any other shape reads as
+//! `E0283` or fails at the emitted impl (`decisions/mask-provenance.md`).
 
 use std::marker::PhantomData;
 

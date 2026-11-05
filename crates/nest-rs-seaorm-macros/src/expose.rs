@@ -3,7 +3,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Item, ItemStruct};
 
-use crate::{active, attr, dto, input, lifecycle, relations, wire};
+use crate::{active, attr, dto, input, lifecycle, refused_wires, relations, wire};
 
 pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut item = match parse_struct(item.into()) {
@@ -47,11 +47,11 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
         .into();
     }
 
-    let derive_refused = wire::derive_refusals(&item.attrs, &model);
+    let derive_refused = refused_wires::derive_refusals(&item.attrs, &model);
     // A derive just refused would overlap these too, one misuse said twice.
-    let refused_wires = derive_refused
+    let wires_refused = derive_refused
         .is_none()
-        .then(|| wire::refused_wires(&item.attrs, &model));
+        .then(|| refused_wires::emit(&item.attrs, &model));
     let output = dto::emit(&model);
     let inputs = input::emit(&model);
     let active = active::emit(&model);
@@ -73,7 +73,7 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
         #inputs
         #active
         #wire_defaults
-        #refused_wires
+        #wires_refused
         #lifecycle
         #relations
     }

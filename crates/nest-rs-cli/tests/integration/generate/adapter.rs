@@ -873,7 +873,8 @@ fn generate_events_imports_the_bus_into_the_port_that_emits() {
 
     let port = fs::read_to_string(dir.path().join("crates/features/src/posts/module.rs")).unwrap();
     assert!(
-        port.contains("use nest_rs::events::EventsModule;") && port.contains("EventsModule"),
+        port.contains("use nest_rs::events::EventsModule;")
+            && port.contains("imports = [EventsModule"),
         "{port}"
     );
 }

@@ -2,14 +2,10 @@
 //! names each indicator's host the app reaches without the health probes.
 
 use std::any::TypeId;
-use std::borrow::Cow;
 
 use crate::access::__private::ModuleDescriptor;
 use crate::access::{Composition, ReachableProviders};
 use crate::container::Container;
-
-/// Each indicator's host, by its type and the name a line gives it.
-pub type ProbeHosts = Vec<(TypeId, Cow<'static, str>)>;
 
 /// The health probes, under which alone a `#[liveness]`, `#[readiness]` or
 /// `#[startup]` indicator runs — submitted once by the health crate, so the
@@ -19,9 +15,9 @@ pub struct ProbeRuntime {
     pub import: &'static str,
     /// Whether the app `container` was booted for mounts the probes.
     pub attached: fn(&Container) -> bool,
-    /// Each indicator's host this binary links, by type and name: the kernel
-    /// keeps those the app reaches.
-    pub hosts: fn(&Container) -> ProbeHosts,
+    /// Each indicator's host this binary links, by the name a line gives it and
+    /// its type: the kernel keeps those the app reaches.
+    pub hosts: fn() -> Vec<(&'static str, TypeId)>,
 }
 
 inventory::collect!(ProbeRuntime);
@@ -40,16 +36,14 @@ pub(crate) fn report_unserved(container: &Container) -> anyhow::Result<()> {
         if (probes.attached)(container) {
             continue;
         }
-        let mut hosts = (probes.hosts)(container);
-        hosts.retain(|(host, _)| reachable.reaches(*host));
-        // By name, then type, so a host's entries sit together for the dedup
-        // even where two hosts share a name.
-        hosts.sort_unstable_by(|(a, a_name), (b, b_name)| a_name.cmp(b_name).then(a.cmp(b)));
-        hosts.dedup_by_key(|(host, _)| *host);
-        for (host, name) in hosts {
+        let mut hosts = (probes.hosts)();
+        hosts.retain(|&(_, host)| reachable.reaches(host));
+        hosts.sort_unstable();
+        hosts.dedup();
+        for (name, host) in hosts {
             tracing::warn!(
                 target: crate::target::APP,
-                host = &*name,
+                host = name,
                 module = listing_module(&descriptors, composition.as_deref(), host),
                 import = probes.import,
                 "host not served: the health probes are not mounted",

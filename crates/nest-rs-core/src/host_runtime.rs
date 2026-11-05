@@ -50,17 +50,17 @@ static BY_HOST: LazyLock<HashMap<TypeId, Vec<&'static RuntimeModule>>> = LazyLoc
     by_host
 });
 
-/// Import what the provider `host` runs on, in the phase `builder` is in;
-/// emitted by `#[module]` for each provider it lists, in both phases.
-pub fn import_host_runtime(mut builder: ContainerBuilder, host: TypeId) -> ContainerBuilder {
-    for module in BY_HOST.get(&host).into_iter().flatten() {
+/// Import what each provider of `listed` runs on, in the phase `builder` is in;
+/// emitted by `#[module]` over the providers it lists, in both phases.
+pub fn import_host_runtime(mut builder: ContainerBuilder, listed: &[TypeId]) -> ContainerBuilder {
+    for module in listed.iter().filter_map(|host| BY_HOST.get(host)).flatten() {
         builder = (module.import)(builder);
     }
     builder
 }
 
 /// The modules the provider `host` runs on, for the access graph's walks.
-pub(crate) fn runtime_modules(host: TypeId) -> impl Iterator<Item = TypeId> {
+pub(crate) fn runtime_modules(host: TypeId) -> impl DoubleEndedIterator<Item = TypeId> {
     BY_HOST
         .get(&host)
         .into_iter()

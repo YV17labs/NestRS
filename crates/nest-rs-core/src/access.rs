@@ -158,18 +158,13 @@ inventory::collect!(DependencyRemedy);
 
 /// Every module `module` imports: those its `imports = [...]` names, in order,
 /// then what each of its providers' decorators brings.
-fn imported_by(module: &ModuleDescriptor) -> Vec<TypeId> {
-    module
-        .imports
-        .iter()
-        .map(|import| import())
-        .chain(
-            module
-                .providers
-                .iter()
-                .flat_map(|provider| runtime_modules((provider.provider)())),
-        )
-        .collect()
+fn imported_by(module: &ModuleDescriptor) -> impl DoubleEndedIterator<Item = TypeId> {
+    module.imports.iter().map(|import| import()).chain(
+        module
+            .providers
+            .iter()
+            .flat_map(|provider| runtime_modules((provider.provider)())),
+    )
 }
 
 /// What a decorator declares of each host, by host, with the labels: the
@@ -832,7 +827,7 @@ fn reachable_in_order(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescripto
         }
         order.push(id);
         if let Some(desc) = by_id.get(&id) {
-            stack.extend(imported_by(desc).into_iter().rev());
+            stack.extend(imported_by(desc).rev());
         }
     }
     order

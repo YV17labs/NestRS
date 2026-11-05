@@ -133,6 +133,11 @@ pub(crate) fn rendered(problem: &Problem) -> Error {
     })
 }
 
+/// What the request sent, refused: `detail`, under the `INVALID_ARGUMENT` code.
+pub(crate) fn invalid_argument(detail: String) -> Error {
+    rendered(&Problem::new(400, code::INVALID_ARGUMENT).with_detail(detail))
+}
+
 /// The opaque answer, with `error`'s whole chain on the operator's line: what
 /// a failure the client is owed no explanation for becomes.
 pub(crate) fn opaque_error(error: &(dyn StdError + 'static)) -> Error {
@@ -170,9 +175,7 @@ fn chain_error(error: &(dyn StdError + 'static)) -> Error {
         return pipe_error(rejection);
     }
     if let Some(report) = DecodeError::in_chain(error) {
-        return rendered(
-            &Problem::new(400, code::INVALID_ARGUMENT).with_detail(report.to_string()),
-        );
+        return invalid_argument(report.to_string());
     }
     opaque_error(error)
 }

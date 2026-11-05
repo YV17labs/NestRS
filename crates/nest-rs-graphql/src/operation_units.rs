@@ -22,8 +22,8 @@ use async_graphql::parser::types::{
     OperationType, Selection, SelectionSet, VariableDefinition,
 };
 use async_graphql::{
-    BatchRequest, BatchResponse, Context, Data, Executor, InputType, Name, Pos, Positioned,
-    Request, Response, ServerError, ServerResult, Value, Variables,
+    BatchRequest, BatchResponse, Context, Data, Executor, Name, Pos, Positioned, Request, Response,
+    ServerError, ServerResult, Value, Variables,
 };
 use nest_rs_core::__private::{RequestScopes, nested_continuation};
 use nest_rs_core::operation_log::{CANCELLED, ERROR, OK, PANIC};
@@ -307,7 +307,9 @@ pub(crate) fn selected_operation<'d>(
 /// refuses says what validation says of it.
 pub(crate) struct OperationRefusal(pub(crate) ServerError);
 
-/// The operation a request selects, read off its document.
+/// The operation a request selects, read off its document; nothing when it
+/// selects none.
+#[derive(Default)]
 struct Selected {
     ty: Option<OperationType>,
     /// The operation's name as its document declares it: a GraphQL name, never
@@ -316,11 +318,6 @@ struct Selected {
 }
 
 impl Selected {
-    const NONE: Self = Self {
-        ty: None,
-        name: None,
-    };
-
     /// Read the operation `request` selects, its variables coerced for what
     /// reads them next, and any [`OperationRefusal`] left in its data. After a
     /// global pipe, which is handed the variables as the request sent them.
@@ -344,7 +341,7 @@ impl Selected {
             (selected, refusal)
         });
         request.variables = variables;
-        let (selected, refusal) = read.unwrap_or((Self::NONE, None));
+        let (selected, refusal) = read.unwrap_or_default();
         if let Some(refusal) = refusal {
             request.data.insert(OperationRefusal(refusal));
         }
@@ -449,8 +446,7 @@ fn coerce_variables(
             r#"Variable "${}" of required type "{}" was not provided."#,
             definition.node.name.node, definition.node.var_type.node,
         );
-        let problem = Problem::new(400, code::INVALID_ARGUMENT).with_detail(said);
-        crate::error::rendered(&problem).into_server_error(definition.pos)
+        crate::error::invalid_argument(said).into_server_error(definition.pos)
     })
 }
 
@@ -470,9 +466,8 @@ pub(crate) fn is_skipped(directives: &[Positioned<Directive>], variables: &Varia
             let value = condition
                 .node
                 .clone()
-                .into_const_with(|name| variables.get(&name).cloned().ok_or(()))
-                .unwrap_or_default();
-            include != <bool as InputType>::parse(Some(value)).unwrap_or_default()
+                .into_const_with(|name| variables.get(&name).cloned().ok_or(()));
+            include != matches!(value, Ok(Value::Boolean(true)))
         })
     })
 }
@@ -502,8 +497,7 @@ fn repeated_root_selection(
             format!(r#"the mutation spreads "{name}" more than once at its root"#)
         }
     };
-    let problem = Problem::new(400, code::INVALID_ARGUMENT).with_detail(said);
-    Some(crate::error::rendered(&problem).into_server_error(at))
+    Some(crate::error::invalid_argument(said).into_server_error(at))
 }
 
 /// A mutation's root selections, read before validation: each fragment is

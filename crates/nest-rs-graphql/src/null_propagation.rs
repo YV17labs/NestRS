@@ -315,11 +315,8 @@ impl Kept {
     /// which a directive left out: async-graphql (`7.2.1`) answers one for an
     /// object with no key, and the root object always is one.
     fn place_nulls(&self, response: &mut Response, types: &FieldTypes) {
-        if response.errors.is_empty() {
-            if response.data == Value::Null {
-                response.data = Value::Object(IndexMap::new());
-            }
-            return;
+        if response.errors.is_empty() && response.data == Value::Null {
+            response.data = Value::Object(IndexMap::new());
         }
         if response.errors.iter().all(|error| error.path.is_empty()) {
             return;

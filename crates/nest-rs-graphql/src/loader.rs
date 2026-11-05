@@ -15,7 +15,6 @@
 
 use std::any::TypeId;
 use std::cell::RefCell;
-use std::sync::Arc;
 
 use async_graphql::dataloader::DataLoader;
 use async_graphql::{Context, Request};
@@ -184,7 +183,7 @@ impl Drop for Seeding {
 pub(crate) struct LoaderSeeds {
     container: Container,
     /// The reachable loaders, resolved **once** at schema build.
-    seeds: Arc<[LoaderSeed]>,
+    seeds: Box<[LoaderSeed]>,
     /// What the batches are carried by — the `/graphql` mount's.
     batches: DetachedWork,
 }
@@ -224,7 +223,7 @@ impl LoaderSeeds {
 }
 
 /// Freeze the seeds of the loaders the app reaches.
-fn reachable_seeds(container: &Container) -> Result<Arc<[LoaderSeed]>, UngatedDiscoveryError> {
+fn reachable_seeds(container: &Container) -> Result<Box<[LoaderSeed]>, UngatedDiscoveryError> {
     let reachable = ReachableProviders::of(container, LOADERS)?;
     Ok(inventory::iter::<GraphqlLoaderRegistration>()
         .filter(|reg| reachable.reaches((reg.owner_type_id)()))
@@ -314,6 +313,8 @@ fn warn_unreachable_loaders(reachable: &ReachableProviders) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use async_graphql::registry::Registry;
 
     use super::*;

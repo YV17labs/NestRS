@@ -1723,12 +1723,12 @@ fn loader_read_by(ty: &Type) -> Option<&Type> {
 fn loader_args(sig: &Signature) -> Vec<(Ident, Type)> {
     sig.inputs
         .iter()
-        .filter_map(|arg| match arg {
-            FnArg::Typed(pt) => match (&*pt.pat, loader_read_by(&pt.ty)) {
-                (syn::Pat::Ident(pi), Some(loader)) => Some((pi.ident.clone(), loader.clone())),
-                _ => None,
-            },
-            FnArg::Receiver(_) => None,
+        .filter_map(|arg| {
+            let FnArg::Typed(pt) = arg else { return None };
+            let syn::Pat::Ident(pi) = &*pt.pat else {
+                return None;
+            };
+            loader_read_by(&pt.ty).map(|loader| (pi.ident.clone(), loader.clone()))
         })
         .collect()
 }

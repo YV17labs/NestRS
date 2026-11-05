@@ -27,7 +27,7 @@ use async_graphql::futures_util::stream::BoxStream;
 use async_graphql::{Data, Executor, Request, Response, ServerError};
 use nest_rs_core::DecodeError;
 
-use crate::error::UnheldData;
+use crate::error::{UnheldData, opaque_error};
 
 /// The schema, answering with every error message redacted; a batch goes
 /// through [`execute`](Executor::execute), the trait's default.
@@ -75,7 +75,7 @@ fn redact(error: &mut ServerError) {
             .strip_prefix(NO_DATA.0)
             .and_then(|rest| rest.strip_suffix(NO_DATA.1))
         {
-            let opaque = crate::error::opaque_error(&UnheldData {
+            let opaque = opaque_error(&UnheldData {
                 data: data.to_owned(),
             });
             error.message = opaque.message;

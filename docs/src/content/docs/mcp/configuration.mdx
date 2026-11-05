@@ -175,7 +175,9 @@ for a principal naming no subject`, and their clients open new ones.
 A task lives in the host its session built, and every session builds its own
 hosts, so a task id reaches its task only through the session that started it.
 A `TaskManager` a host shares across sessions — held by a provider it injects —
-is your own state, and its `tasks/*` methods decide who may reach each task.
+is your own state, and its `tasks/*` methods decide who may reach each task. A
+stateless `2026-07-28` request builds its hosts afresh, so a task outlives it only
+in a provider's `TaskManager`, whose methods must then check the caller.
 
 ## The host allowlist
 

@@ -2925,6 +2925,15 @@ async fn an_upgrade_listing_websocket_among_others_is_origin_checked_and_served(
 /// The head `method /socket` with a whole handshake is answered over a real
 /// connection.
 async fn handshake_answer(app: &nest_rs_testing::ws::WsApp, method: &str) -> String {
+    handshake_answer_with(app, method, "").await
+}
+
+/// The same, the handshake carrying `extra`, whole header lines.
+async fn handshake_answer_with(
+    app: &nest_rs_testing::ws::WsApp,
+    method: &str,
+    extra: &str,
+) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let mut stream = tokio::net::TcpStream::connect(app.addr())
@@ -2935,7 +2944,7 @@ async fn handshake_answer(app: &nest_rs_testing::ws::WsApp, method: &str) -> Str
             format!(
                 "{method} /socket HTTP/1.1\r\nhost: localhost\r\nupgrade: websocket\r\n\
                  connection: Upgrade\r\nsec-websocket-version: 13\r\n\
-                 sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+                 sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n{extra}\r\n"
             )
             .as_bytes(),
         )
@@ -2952,6 +2961,29 @@ async fn handshake_answer(app: &nest_rs_testing::ws::WsApp, method: &str) -> Str
         head.push(byte[0]);
     }
     String::from_utf8(head).expect("an HTTP head")
+}
+
+/// A socket speaks plain frames: a client offering `permessage-deflate` (RFC
+/// 7692) is answered no extension, which RFC 6455 §9.1 lets it go on without.
+#[tokio::test]
+async fn a_handshake_offering_permessage_deflate_negotiates_no_extension() {
+    let app = socket_app::<SocketModule>().await;
+
+    let head = handshake_answer_with(
+        &app,
+        "GET",
+        "sec-websocket-extensions: permessage-deflate; client_max_window_bits\r\n",
+    )
+    .await;
+
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    assert!(
+        !head
+            .to_ascii_lowercase()
+            .contains("sec-websocket-extensions"),
+        "{head}"
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
 }
 
 /// A gateway serves its handshake at `GET` alone: a `HEAD`, which the route

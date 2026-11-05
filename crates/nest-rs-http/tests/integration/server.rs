@@ -215,6 +215,28 @@ async fn an_http1_head_past_64_kib_answers_431() {
     cancel.cancel();
 }
 
+/// A socket opens over HTTP/1.1: an HTTP/2 connection advertises no RFC 8441
+/// extended CONNECT, which a WebSocket over its streams would need.
+#[tokio::test]
+async fn an_http2_connection_advertises_no_extended_connect() {
+    let (port, cancel) = serve(HttpConfig::default()).await;
+    let (client, mut connection) = h2::client::handshake(connect(port).await)
+        .await
+        .expect("the HTTP/2 preface is accepted");
+    let mut client = client.ready().await.expect("a stream can open");
+    let request = http::Request::get(format!("http://127.0.0.1:{port}/server/ping"))
+        .body(())
+        .expect("a request");
+    let (response, _) = client.send_request(request, true).expect("sent");
+    // An answer means the server's SETTINGS came first.
+    tokio::select! {
+        response = response => assert_eq!(response.expect("answered").status(), 200),
+        ended = &mut connection => panic!("the connection ended first: {ended:?}"),
+    }
+    assert!(!client.is_extended_connect_protocol_enabled());
+    cancel.cancel();
+}
+
 /// A plaintext client speaking HTTP/2 from its first byte is served, and told
 /// how many streams it may open at once.
 #[tokio::test]

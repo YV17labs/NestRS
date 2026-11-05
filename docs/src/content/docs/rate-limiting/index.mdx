@@ -38,6 +38,10 @@ operation's bucket; the guard reports that once per process, at `warn`, as
 `rate-limit keying degraded to a shared bucket`. The global binding is what
 meters that traffic per address.
 
+On an endpoint `McpAccess::Public` opens, no guard runs at the request, so no
+throttler meters its sessions: `<PREFIX>_MCP__LEGACY_SESSION_MODE=false` or a
+proxy's limit does.
+
 `#[meta(Throttle::…)]` overrides the module default on every edge — beside a
 route, a `#[query]`, a `#[subscribe_message]` or a `#[tool]`, or on its host
 for all of them; a unit that pins none counts against `ThrottlerConfig`'s

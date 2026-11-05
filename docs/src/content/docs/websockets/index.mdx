@@ -199,6 +199,10 @@ answered before any socket opens, with a problem document saying what it lacks
 `Upgrade: h2c, websocket` asks for a WebSocket, and the browser-origin check
 reads it the same way.
 
+A socket opens over HTTP/1.1: the server advertises no RFC 8441 extended CONNECT,
+so a browser opens an HTTP/1.1 connection for it, and no `permessage-deflate` (RFC
+7692) is negotiated.
+
 ## When the server closes a socket
 
 The server closes a socket with the RFC 6455 code for the cause, and a reason,

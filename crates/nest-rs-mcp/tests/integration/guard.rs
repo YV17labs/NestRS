@@ -300,6 +300,29 @@ async fn mcp_access_public_opens_the_endpoint() {
         .assert_status(StatusCode::OK);
 }
 
+#[module(
+    imports = [OpenedModule, ThrottlerModule::for_root(one_per_minute())],
+    providers = [GlobalGuards<(ThrottlerGuard,)>],
+)]
+struct OpenedUnderAThrottlerApp;
+
+/// The pool runs at no request of an opened endpoint, so a throttler in it
+/// meters none: past its budget, a session still opens.
+#[tokio::test]
+async fn a_throttler_in_the_pool_meters_no_request_of_an_opened_endpoint() {
+    let app = TestApp::builder()
+        .module::<OpenedUnderAThrottlerApp>()
+        .build()
+        .await
+        .expect("boots");
+
+    for _ in 0..3 {
+        post_message(app.http(), "/mcp", None, None, &initialize_request())
+            .await
+            .assert_status(StatusCode::OK);
+    }
+}
+
 #[module(imports = [OpenedModule, crate::open_mcp()])]
 struct OpenedTwiceApp;
 

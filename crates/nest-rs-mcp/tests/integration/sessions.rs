@@ -16,7 +16,10 @@ use nest_rs_mcp::rmcp::transport::streamable_http_server::session::store::{
     SessionState, SessionStore, SessionStoreError,
 };
 use nest_rs_mcp::{McpConfig, McpError, McpModule, mcp, tools};
-use nest_rs_testing::mcp::{call_method, initialize_request, open_session, post_message, result};
+use nest_rs_testing::mcp::{
+    call_method, call_tool_statelessly, initialize_request, open_session, post_message,
+    post_message_with, result,
+};
 use nest_rs_testing::{LogCapture, TestApp, TestResponse};
 use serde_json::json;
 use tokio::sync::{Notify, Semaphore};
@@ -491,6 +494,55 @@ async fn on_task(app: &TestApp, session: &str, named: &str, method: &str, task: 
         params,
     )
     .await
+}
+
+/// A stateless request builds its hosts afresh, so a task it started goes with
+/// them: the next request, the same caller's, finds none.
+#[tokio::test]
+async fn a_task_a_stateless_request_started_goes_with_its_hosts() {
+    let app = serving::<GatedModule>(None).await;
+    let alice = bearer("alice@acme");
+    let started = result(
+        &call_tool_statelessly(app.http(), TASKS, "start", Some(&alice), &[], json!({})).await,
+    );
+    let task = started["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the started task's id: {started}"))
+        .to_owned();
+
+    let response = post_message_with(
+        app.http(),
+        TASKS,
+        None,
+        Some(&alice),
+        &[
+            ("mcp-protocol-version", "2026-07-28"),
+            ("mcp-method", "tasks/get"),
+            ("mcp-name", task.as_str()),
+        ],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tasks/get",
+            "params": {
+                "taskId": task,
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientInfo": { "name": "test", "version": "0" },
+                    "io.modelcontextprotocol/clientCapabilities": {
+                        "extensions": { "io.modelcontextprotocol/tasks": {} },
+                    },
+                },
+            },
+        }),
+    )
+    .await;
+    let body = response.0.into_body().into_string().await.expect("a body");
+    assert_eq!(
+        result(&body)["error"]["message"],
+        json!("unknown task"),
+        "{body}"
+    );
 }
 
 /// A host is built for each session, so the `TaskManager` it holds is that

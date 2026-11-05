@@ -1487,6 +1487,14 @@ pub(crate) mod tests {
             }
             other => panic!("expected Conflict, got {other:?}"),
         }
+        let problem = nest_rs_core::ToProblem::to_problem(&ServiceError::from(taken_email()))
+            .expect("a conflict says its problem");
+        assert_eq!(problem.status(), 409);
+        assert_eq!(
+            problem.errors(),
+            None,
+            "the conversion never sees the input, so it names no field",
+        );
         assert!(matches!(
             ServiceError::from(DbErr::RecordNotUpdated),
             ServiceError::NotFound(_)

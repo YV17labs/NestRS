@@ -1350,7 +1350,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 gate,
                 withheld,
             }));
-            site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
+            let site = site_ref(&self_ty, &method_name);
+            site_refs.push((cfgs.clone(), site.clone()));
             // After the class gate, so a class-denied caller never reaches the database.
             let bind_prelude = bind_info.as_ref().map(|(service, _, id_ident, action)| {
                 quote! {
@@ -1361,7 +1362,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     .map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
                 }
             });
-            let item_site = site_ref(&self_ty, &method_name);
             let body = match authorize_spec.as_ref().filter(|spec| !spec.unmasked) {
                 Some(spec) => {
                     let action = &spec.action;
@@ -1379,7 +1379,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                                             |__value| {
                                                 ::nest_rs_authz::__private::graphql_masked_value::<
                                                     #action, #entity, _,
-                                                >(#gctx, #item_site, __value)
+                                                >(#gctx, #site, __value)
                                             },
                                         ),
                                         ::nest_rs_graphql::__private::FieldFailure::from,
@@ -1403,10 +1403,10 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                                             __stream,
                                             move |__item| ::core::future::ready(
                                                 ::nest_rs_graphql::__private::keep_masked_item(
-                                                    #item_site,
+                                                    #site,
                                                     ::nest_rs_authz::__private::graphql_masked_item::<
                                                         #action, #entity, _,
-                                                    >(#gctx, #item_site, &__ability, __item),
+                                                    >(#gctx, #site, &__ability, __item),
                                                 ),
                                             ),
                                         ),
@@ -1469,7 +1469,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     quote!(::nest_rs_graphql::__private::run_field)
                 }
             };
-            let site = site_ref(&self_ty, &method_name);
             let site_kind = chain_site.path();
             // async-graphql's `#[Subscription]` awaits the method it is given.
             gsig.asyncness = Some(syn::token::Async(proc_macro2::Span::call_site()));

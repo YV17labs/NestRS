@@ -63,6 +63,7 @@ pub fn keep_masked_item<T>(
     masked: Result<Option<T>, async_graphql::Error>,
 ) -> Option<T> {
     let handler = site.handler();
+    let kind = crate::operation::operation_label(OperationType::Subscription);
     match masked {
         Ok(Some(item)) => Some(item),
         Ok(None) => {
@@ -70,7 +71,7 @@ pub fn keep_masked_item<T>(
                 target: crate::TARGET,
                 host = handler.host_name(),
                 method = handler.method(),
-                kind = crate::operation::operation_label(OperationType::Subscription),
+                kind,
                 field = handler.address(),
                 reason = "not_granted",
                 "subscription item withheld",
@@ -82,7 +83,7 @@ pub fn keep_masked_item<T>(
                 target: crate::TARGET,
                 host = handler.host_name(),
                 method = handler.method(),
-                kind = crate::operation::operation_label(OperationType::Subscription),
+                kind,
                 field = handler.address(),
                 reason = "mask_failed",
                 error = %err.message,

@@ -247,7 +247,7 @@ impl EventBus {
 /// trace; dropped with its emitter, it is filed `cancelled` by [`DispatchLine`].
 async fn dispatch_one(
     cause: &nest_rs_core::Correlation,
-    event: &'static str,
+    event_name: &'static str,
     listener: &Listener,
     body: ListenerFuture,
 ) {
@@ -255,16 +255,17 @@ async fn dispatch_one(
     // two listeners would share one `span_id`.
     let correlation = cause.child();
     let handler = listener.handler;
+    let event = &*listener.event;
     let span = nest_rs_core::operation_span!(
         crate::unit::DISPATCH,
         &correlation,
-        event = &*listener.event,
+        event = event,
         host = handler.host_name(),
         method = handler.method(),
     );
     let continuation = nest_rs_core::RequestContinuation::new(None, correlation.clone());
     let line = DispatchLine {
-        event: &listener.event,
+        event,
         handler,
         continuation: &continuation,
         span: span.clone(),
@@ -276,7 +277,7 @@ async fn dispatch_one(
     let outcome = nest_rs_core::with_request_scope(
         None,
         correlation,
-        nest_rs_core::panic::contain(run(listener, event, &mut tail)),
+        nest_rs_core::panic::contain(run(listener, event_name, &mut tail)),
     )
     .instrument(span)
     .await;
@@ -287,7 +288,7 @@ async fn dispatch_one(
                 continuation.enter(|| {
                     tracing::debug!(
                         target: crate::TARGET,
-                        event = &*listener.event,
+                        event = event,
                         host = handler.host_name(),
                         method = handler.method(),
                         "event listener skipped by a layer",
@@ -305,7 +306,7 @@ async fn dispatch_one(
             continuation.enter(|| {
                 tracing::warn!(
                     target: crate::TARGET,
-                    event = &*listener.event,
+                    event = event,
                     host = handler.host_name(),
                     method = handler.method(),
                     error = %nest_rs_core::error_message(failure.error()),
@@ -319,7 +320,7 @@ async fn dispatch_one(
             continuation.enter(|| {
                 tracing::error!(
                     target: crate::TARGET,
-                    event = &*listener.event,
+                    event = event,
                     host = handler.host_name(),
                     method = handler.method(),
                     error = %nest_rs_core::error_message(failure.error()),
@@ -334,7 +335,7 @@ async fn dispatch_one(
                     target: crate::TARGET,
                     payload.as_ref(),
                     "event listener panicked — dispatch continues with the next listener",
-                    event = &*listener.event,
+                    event = event,
                     host = handler.host_name(),
                     method = handler.method(),
                 );

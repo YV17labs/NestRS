@@ -681,7 +681,6 @@ fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2>
         role,
         wrapper,
         sig,
-        posture,
         cfgs,
         ..
     } = op;
@@ -696,7 +695,7 @@ fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2>
     // At the return type, so a value that is no resource's answer is refused there.
     let into = role.wire_answer();
     let (params, output, answered) = if *role == Role::Resource {
-        let masked = masked(self_ty, op, *role, posture, sig)?;
+        let masked = masked(self_ty, op)?;
         let read = quote_spanned! {answer_span(sig)=>
             #into::into_read(__nestrs_value, __nestrs_uri)
         };
@@ -747,7 +746,6 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         role_attr,
         wrapper,
         sig,
-        posture,
         pipes,
         tail,
         ..
@@ -801,7 +799,7 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         self_ty,
         op,
         quote!(#(#validate_prelude)* #(#pipe_prelude)*),
-        masked(self_ty, op, *role, posture, sig)?,
+        masked(self_ty, op)?,
     )?;
     Ok(quote! {
         #role_attr
@@ -971,13 +969,10 @@ fn parameters_args(sig: &Signature) -> Vec<&syn::Ident> {
 /// neither `Serialize` nor `DeserializeOwned`. A resource's `Option<Json<T>>`
 /// is masked inside the `Option`, `None` passing through. `take_operation`
 /// already refused a masked role whose every answer is opaque.
-fn masked(
-    self_ty: &Type,
-    op: &Operation,
-    role: Role,
-    posture: &Posture,
-    sig: &Signature,
-) -> syn::Result<TokenStream2> {
+fn masked(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
+    let Operation {
+        role, posture, sig, ..
+    } = op;
     let unmasked = quote!(::core::result::Result::Ok(__nestrs_value));
     let Some(PostureGate {
         action,
@@ -995,7 +990,7 @@ fn masked(
     };
     // Opaque content: refused here, or it fails deep inside the expansion or,
     // compiled, every call closed.
-    if let Some(opaque) = opaque_answer(role, ok_ty) {
+    if let Some(opaque) = opaque_answer(*role, ok_ty) {
         let remedy = match role {
             Role::Resource => role.mask_unwraps(),
             Role::Tool | Role::Prompt | Role::Resources => "`Json<T>` or `T`",

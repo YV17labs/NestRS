@@ -216,7 +216,7 @@ impl ScheduledMethod {
         self.parts.method
     }
 
-    /// `TypeId::of::<Provider>()`, which a reader gates on
+    /// `TypeId` of the host provider, which a reader gates on
     /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) as the
     /// scheduler does.
     pub fn host_type_id(&self) -> TypeId {

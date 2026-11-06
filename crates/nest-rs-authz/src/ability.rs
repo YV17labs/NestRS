@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use nest_rs_core::ServedAddress;
-#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 use nest_rs_core::{Edge, Handler};
 use sea_orm::sea_query::Condition;
 use sea_orm::{EntityTrait, IdenStatic, Value};
@@ -17,7 +17,7 @@ use crate::wire_model::WireModel;
 
 /// The unit a mask answers for, as a line names it: nothing on the ambient
 /// [`Ability::mask`] and a value masked by hand, which run in no unit they know.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct MaskedUnit<'a> {
     /// The edge dispatching it, by its [`Edge`] word.
     pub(crate) transport: Option<&'static str>,
@@ -28,12 +28,13 @@ pub(crate) struct MaskedUnit<'a> {
 }
 
 impl<'a> MaskedUnit<'a> {
-    /// The unit `handler` declares on `edge`, served at `served`.
-    #[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-    pub(crate) fn declared(edge: Edge, handler: &Handler, served: ServedAddress<'a>) -> Self {
+    /// The unit on `edge` served at `served`, by what `handler` declares where a
+    /// site reached one.
+    #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+    pub(crate) fn on(edge: Edge, handler: Option<&Handler>, served: ServedAddress<'a>) -> Self {
         Self {
             transport: Some(edge.as_str()),
-            site: Some((handler.host_name(), handler.method())),
+            site: handler.map(|handler| (handler.host_name(), handler.method())),
             served,
         }
     }

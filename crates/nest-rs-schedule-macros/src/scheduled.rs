@@ -43,11 +43,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let self_ty = item.self_ty.clone();
-    let provider = match impl_self_ident(&self_ty, "#[scheduled]") {
+    let host = match impl_self_ident(&self_ty, "#[scheduled]") {
         Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),
     };
-    let provider_name = provider.unraw().to_string();
+    let host_name = host.unraw().to_string();
     let host_layers = match take_layers(&pair::SCHEDULED, LayerScope::Host, &mut item.attrs) {
         Ok(layers) => layers,
         Err(err) => return err.to_compile_error().into(),
@@ -74,7 +74,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let member = JobDecorator::named(&key)
             .unwrap_or_else(|| unreachable!("one_role_per_method matched a trigger attribute"));
         let written = format!("#[{key}]");
-        if let Err(err) = shared_receiver(method, &written, &provider, HostBorrow::Arc) {
+        if let Err(err) = shared_receiver(method, &written, &host, HostBorrow::Arc) {
             return err.to_compile_error().into();
         }
         if let Err(err) = concrete_signature(method, &written) {
@@ -112,18 +112,18 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 Ok(layers) => layers,
                 Err(err) => return err.to_compile_error().into(),
             };
-        // The job's pinned key, else the provider and method its derived key ends with.
+        // The job's pinned key, else the host and method its derived key ends with.
         let address = match &key {
             Some(key) => quote!(#key),
             None => {
-                let derived = format!("{provider_name}::{method_name}");
+                let derived = format!("{host_name}::{method_name}");
                 quote!(#derived)
             }
         };
         handler_consts.push(handler_const(&HandlerSite {
             unit: quote!(::nest_rs_schedule::unit::TICK),
             self_ty: &self_ty,
-            host_name: &provider,
+            host_name: &host,
             method: &method_ident,
             address,
             posture: SitePosture::System,
@@ -159,7 +159,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 ::nest_rs_schedule::__private::scheduled_method(
                     ::nest_rs_schedule::__private::ScheduledMethodParts {
                     origin: ::core::module_path!(),
-                    host: #provider_name,
+                    host: #host_name,
                     method: #method_name,
                     host_type_id: || ::std::any::TypeId::of::<#self_ty>(),
                     trigger: #trigger_tokens,
@@ -171,7 +171,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     run: |__container| ::std::boxed::Box::pin(async move {
                         let __provider = ::nest_rs_core::Container::get::<#self_ty>(__container)
                             .expect(::std::concat!(
-                                "scheduled provider `", #provider_name,
+                                "scheduled provider `", #host_name,
                                 "` is not registered — add it to a reachable module's \
                                  `providers = [...]`",
                             ));

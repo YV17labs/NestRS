@@ -505,7 +505,7 @@ fn fill_pinned<E: EntityTrait>(
         }
     }
     if !filled.is_empty() {
-        tracing::debug!(target: crate::target::ORM, entity, columns = filled.join(",").as_str(), "create filled from the ability's grants");
+        tracing::debug!(target: crate::target::ORM, entity, columns = filled.join(","), "create filled from the ability's grants");
     }
     active
 }

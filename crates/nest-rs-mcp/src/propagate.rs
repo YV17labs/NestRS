@@ -251,17 +251,12 @@ impl OperationUnits {
             Some(served) => Either::Left(nest_rs_core::with_ambient(Arc::clone(served), inner)),
             None => Either::Right(inner),
         };
-        let address = LineAddress {
+        let address = &LineAddress {
             declared,
             served_resource,
         };
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
-        let line = OperationLine::open(
-            named,
-            address.clone(),
-            correlation.clone(),
-            operation.clone(),
-        );
+        let line = OperationLine::open(named, address, correlation.clone(), operation.clone());
 
         let deadline = timeout.map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
         let spec = UnitSpec::new(
@@ -289,7 +284,7 @@ impl OperationUnits {
                             Some((timeout, at)) => tokio::time::timeout_at(at, dispatched)
                                 .await
                                 .unwrap_or_else(|_| {
-                                    Answered::refused(timed_out(named, &address, timeout))
+                                    Answered::refused(timed_out(named, address, timeout))
                                 }),
                             None => dispatched.await,
                         }
@@ -707,7 +702,7 @@ impl Addressed {
 /// The template a `resources/read`'s `#[resource]` served it through: the
 /// server's name for a URI the client chose. The last one running says it, as
 /// a host answering not-found hands the URI to the next.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct ServedResource(Mutex<Option<&'static str>>);
 
 impl ServedResource {
@@ -725,7 +720,7 @@ impl ServedResource {
 impl AmbientValue for ServedResource {}
 
 /// What an operation's lines name it by.
-#[derive(Clone)]
+#[derive(Default)]
 struct LineAddress<'a> {
     declared: ServedAddress<'a>,
     /// On an operation a URI addresses, where its unit says the template.
@@ -752,7 +747,7 @@ impl LineAddress<'_> {
 /// addressed as its `mounted` line does.
 struct OperationLine<'a> {
     mcp_method: &'static str,
-    address: LineAddress<'a>,
+    address: &'a LineAddress<'a>,
     /// Entered to file the line, which sits outside the scope the operation installs.
     correlation: Correlation,
     /// The operation's own span; [`Span::none`](tracing::Span::none) for a
@@ -765,7 +760,7 @@ struct OperationLine<'a> {
 impl<'a> OperationLine<'a> {
     fn open(
         mcp_method: &'static str,
-        address: LineAddress<'a>,
+        address: &'a LineAddress<'a>,
         correlation: Correlation,
         span: tracing::Span,
     ) -> Self {
@@ -912,12 +907,10 @@ macro_rules! notification_method {
                 Box::pin(nest_rs_core::panic::contain(self.inner.$name($($arg,)* context)));
             let run = async move {
                 let correlation = Correlation::inherited();
+                let address = LineAddress::default();
                 let line = OperationLine::open(
                     method.named(),
-                    LineAddress {
-                        declared: ServedAddress::default(),
-                        served_resource: None,
-                    },
+                    &address,
                     correlation.clone(),
                     tracing::Span::none(),
                 );

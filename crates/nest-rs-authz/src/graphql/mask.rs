@@ -503,15 +503,10 @@ impl<'c, 'q> MaskedField<'c, 'q> {
     /// emits, no site of its own.
     fn of(ctx: &'c Context<'q>, site: Option<&'static Site>) -> Self {
         let served = served_field(ctx, site);
-        let unit = match site {
-            Some(site) => MaskedUnit::declared(Edge::Graphql, site.handler(), served),
-            None => MaskedUnit {
-                transport: Some(Edge::Graphql.as_str()),
-                site: None,
-                served,
-            },
-        };
-        Self { ctx, unit }
+        Self {
+            ctx,
+            unit: MaskedUnit::on(Edge::Graphql, site.map(Site::handler), served),
+        }
     }
 
     /// Whether this field has yet to file `fact` in its operation. A line names its unit,

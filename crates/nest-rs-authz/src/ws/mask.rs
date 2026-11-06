@@ -97,7 +97,7 @@ where
     fn masked_reply(site: &'static Site, value: &O) -> WsReply {
         let handler = site.handler();
         let served = ServedAddress::event(handler.address());
-        let unit = MaskedUnit::declared(Edge::Ws, handler, served);
+        let unit = MaskedUnit::on(Edge::Ws, Some(handler), served);
         match masked_reply_for::<A, E, O>(unit, value) {
             Ok(masked) => WsReply::Reply(masked),
             Err(failed) => WsReply::Error(failed),

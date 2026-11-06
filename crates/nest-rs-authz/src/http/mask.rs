@@ -19,7 +19,7 @@ use crate::ability::{Provenance, mask_reason};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use nest_rs_core::Edge;
+use nest_rs_core::{Edge, ServedAddress};
 use nest_rs_http::__private::ServedRoute;
 use nest_rs_http::{
     Request, Response, ResponseShaping, RouteFuture, RouteResponseShaper, StatusCode, header,
@@ -123,14 +123,7 @@ where
     fn apply<'a>(self: Box<Self>, inner: RouteFuture<'a>) -> RouteFuture<'a> {
         Box::pin(async move {
             let resp = inner.await?;
-            let unit = MaskedUnit {
-                site: self
-                    .route
-                    .handler()
-                    .map(|handler| (handler.host_name(), handler.method())),
-                served: self.route.address(),
-                ..http_unit()
-            };
+            let unit = MaskedUnit::on(Edge::Http, self.route.handler(), self.route.address());
             Ok(masked_response::<S>(unit, &self.ability, self.action, resp).await)
         })
     }
@@ -209,15 +202,8 @@ pub async fn mask_entity_response<S>(ability: &Ability, action: Action, resp: Re
 where
     S: WireModel,
 {
-    masked_response::<S>(http_unit(), ability, action, resp).await
-}
-
-/// The edge's own word, for a body masked off any site a request reached.
-fn http_unit() -> MaskedUnit<'static> {
-    MaskedUnit {
-        transport: Some(Edge::Http.as_str()),
-        ..MaskedUnit::default()
-    }
+    let unit = MaskedUnit::on(Edge::Http, None, ServedAddress::default());
+    masked_response::<S>(unit, ability, action, resp).await
 }
 
 /// [`mask_entity_response`], what it refuses naming `unit`.

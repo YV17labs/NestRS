@@ -88,7 +88,7 @@ impl Routed {
 
 /// What a line names a request by, kept past the request: the site it runs as,
 /// its verb and the template it matched.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ServedRoute {
     handler: Option<&'static Handler>,
     verb: Cow<'static, str>,
@@ -103,9 +103,7 @@ impl ServedRoute {
             handler: request.facts.handler,
             verb: match &request.facts.verb {
                 Some(verb) => verb.clone(),
-                None => Cow::Borrowed(
-                    crate::trace_context::conventional(request.method()).unwrap_or(OTHER),
-                ),
+                None => Cow::Borrowed(request.conventional_verb()),
             },
             path: request
                 .facts
@@ -532,8 +530,12 @@ impl Request {
     pub(crate) fn verb(&self) -> &str {
         match &self.facts.verb {
             Some(verb) => verb,
-            None => crate::trace_context::conventional(self.method()).unwrap_or(OTHER),
+            None => self.conventional_verb(),
         }
+    }
+
+    fn conventional_verb(&self) -> &'static str {
+        crate::trace_context::conventional(self.method()).unwrap_or(OTHER)
     }
 
     /// Records the method as a line names it.

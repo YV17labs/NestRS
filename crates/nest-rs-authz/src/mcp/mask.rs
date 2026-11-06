@@ -176,7 +176,7 @@ where
     fn masked_value(site: &'static Site, kind: McpOperationKind, value: O) -> Result<O, McpError> {
         let handler = site.handler();
         let served = nest_rs_mcp::__private::served_operation(kind, handler.address());
-        let unit = MaskedUnit::declared(Edge::Mcp, handler, served);
+        let unit = MaskedUnit::on(Edge::Mcp, Some(handler), served);
         masked_value_for::<A, E, O>(unit, value)
     }
 }

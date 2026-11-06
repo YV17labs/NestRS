@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 
 use nest_rs_core::__private::Site;
 use nest_rs_core::Edge;
-use nest_rs_graphql::__private::{first_in_operation, served_field};
+use nest_rs_graphql::__private::{first_in_operation, schema_field_spelling, served_field};
 use nest_rs_graphql::async_graphql::{Context, Error, SelectionField};
 use nest_rs_guards::Denial;
 use sea_orm::{EntityTrait, Iterable, PrimaryKeyToColumn};
@@ -557,7 +557,8 @@ fn refused_field<E: EntityTrait>(
 /// What a selection reads of each row of a connection: the fields its `nodes` and
 /// its edges' `node` select, every exposed column where those select nothing, a
 /// scalar, which serializes whole, and the primary key when it asks a cursor, whose
-/// text is the row's key on a list relation's page.
+/// text is the row's key on a list relation's page, as the schema spells that field
+/// though no selection named it.
 fn page_selection<'c, E: WireModel>(ctx: &'c Context<'_>) -> Vec<&'c str> {
     let mut selected = Vec::new();
     let mut cursor = false;
@@ -589,13 +590,18 @@ fn page_selection<'c, E: WireModel>(ctx: &'c Context<'_>) -> Vec<&'c str> {
         }
     }
     if cursor {
-        selected.extend(E::PrimaryKey::iter().filter_map(|key| E::wire_key(key.into_column())));
+        selected.extend(
+            E::PrimaryKey::iter()
+                .filter_map(|key| E::wire_key(key.into_column()))
+                .map(|key| schema_field_spelling(ctx, key)),
+        );
     }
     selected
 }
 
 /// Whether the keys the mask stripped refuse the *field* that `selected` is read
-/// off.
+/// off, each named to the client as `selected` spells it, and on the line by its key,
+/// which every edge's line files.
 ///
 /// A key outside the selection set of an object is never serialized, so it cannot
 /// leak; a field with no selection is [`refused_field`]'s to read.
@@ -605,17 +611,19 @@ fn refused_selection<E: EntityTrait>(
     action: Action,
     removed: &BTreeSet<String>,
 ) -> Option<Error> {
-    let refused: Vec<&str> = removed
+    let (keys, names): (Vec<&str>, Vec<String>) = removed
         .iter()
-        .filter(|key| selected.iter().any(|name| same_key(name, key)))
-        .map(String::as_str)
-        .collect();
-    if refused.is_empty() {
+        .filter_map(|key| {
+            let name = selected.iter().find(|name| same_key(name, key))?;
+            Some((key.as_str(), (*name).to_owned()))
+        })
+        .unzip();
+    if keys.is_empty() {
         return None;
     }
     // A tracing field must be a scalar, so the log keeps the joined form; the
     // wire keeps the list.
-    let joined = refused.join(",");
+    let joined = keys.join(",");
     let subject = E::default().table_name();
     if field.first_to_file(format_args!("{subject} {action:?} {joined}")) {
         crate::gate::warn_denied(Refusal {
@@ -626,8 +634,7 @@ fn refused_selection<E: EntityTrait>(
             ..Refusal::of_mask(field.unit)
         });
     }
-    let refused: Vec<String> = refused.into_iter().map(str::to_owned).collect();
-    Some(forbidden_fields(&refused))
+    Some(forbidden_fields(&names))
 }
 
 /// One shape for every fail-closed masking exit: the queryable `warn`, one per field of

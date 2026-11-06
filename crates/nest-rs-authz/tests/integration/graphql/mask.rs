@@ -54,6 +54,35 @@ mod widget {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+/// A column of two words, which the schema and the wire spell differently.
+mod review {
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Review")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "reviews")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key)]
+        #[expose]
+        pub id: i32,
+        #[expose]
+        pub work_status: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// A review as a query returns it, every field required.
+#[derive(SimpleObject, Serialize, Deserialize)]
+struct ReviewDto {
+    id: i32,
+    work_status: String,
+}
+
 /// The wire shape: `name` optional so a field-restricted mask yields `None`
 /// rather than an irreconcilable value.
 #[derive(Clone, Debug, SimpleObject, Serialize, Deserialize)]
@@ -106,7 +135,7 @@ impl Guard for PassGuard {
 /// Builds the caller's ability from an `x-role` header: `admin` reads widgets
 /// unrestricted; `viewer` reads widgets but only the `id` field; `auditor`
 /// reads only widget 1 and only its `id`; `headlines` reads a story's `id` and
-/// renamed column; anyone else gets nothing.
+/// renamed column; `reader` reads a review's `id`; anyone else gets nothing.
 #[injectable]
 #[derive(Default)]
 struct AbilityInjector;
@@ -142,6 +171,10 @@ impl Guard for AbilityInjector {
             "headlines" => {
                 b.can(Action::Read, story::Entity)
                     .fields([story::Column::Id, story::Column::Headline]);
+            }
+            "reader" => {
+                b.can(Action::Read, review::Entity)
+                    .fields([review::Column::Id]);
             }
             _ => {}
         }
@@ -331,6 +364,26 @@ impl MaskResolver {
             headline: "first".into(),
             body: "withheld".into(),
         })
+    }
+
+    /// A review, whose `work_status` the schema serves as `workStatus`.
+    #[query]
+    #[authorize(Read, review::Entity)]
+    async fn review(&self) -> GqlResult<ReviewDto> {
+        Ok(ReviewDto {
+            id: 1,
+            work_status: "withheld".into(),
+        })
+    }
+
+    /// The same review as a scalar, whose keys are the wire's.
+    #[query]
+    #[authorize(Read, review::Entity)]
+    async fn json_review(&self) -> GqlResult<Json<ReviewDto>> {
+        Ok(Json(ReviewDto {
+            id: 1,
+            work_status: "withheld".into(),
+        }))
     }
 
     /// A scalar: it serializes whole, and a client selects nothing into it.
@@ -625,6 +678,43 @@ async fn an_unrestricted_caller_reads_every_field_of_a_strict_shape() {
     let app = boot().await;
     let json = query(&app, "admin", "{ strictWidget { id name } }").await;
     assert_eq!(json["data"]["strictWidget"]["name"], "ada", "{json}");
+}
+
+/// A client matches a refusal to the field it selected, so it reads the name that
+/// field has in the schema; the operator's line keeps the key every edge files, so one
+/// filter reads the refusals of all of them.
+#[tokio::test]
+async fn a_refusal_names_a_field_as_the_schema_spells_it() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+
+    let json = query(&app, "reader", "{ review { id workStatus } }").await;
+
+    assert_eq!(
+        json["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{json}"
+    );
+    assert_eq!(
+        json["errors"][0]["extensions"]["fields"],
+        serde_json::json!(["workStatus"]),
+        "{json}",
+    );
+    let event = logs.expect_one("nest_rs::authz", "authorization denied");
+    assert_eq!(event.field("fields").as_deref(), Some("work_status"));
+}
+
+/// A scalar's keys are what its client reads back, so they are what it hears.
+#[tokio::test]
+async fn a_refusal_of_a_scalar_names_the_key_its_client_reads() {
+    let app = boot().await;
+
+    let json = query(&app, "reader", "{ jsonReview }").await;
+
+    assert_eq!(
+        json["errors"][0]["extensions"]["fields"],
+        serde_json::json!(["work_status"]),
+        "{json}",
+    );
 }
 
 /// A scalar has no selection to acquit a stripped key, so every one refuses.

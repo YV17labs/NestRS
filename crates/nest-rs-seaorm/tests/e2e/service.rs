@@ -340,6 +340,11 @@ async fn a_mutation_selecting_what_its_grant_withholds_rolls_the_write_back() {
         code::FORBIDDEN.as_str(),
         "{body}",
     );
+    assert_eq!(
+        body["errors"][0]["extensions"]["fields"],
+        json!(["workStatus"]),
+        "{body}",
+    );
     assert_eq!(stored(&conn, row.id).await, row);
 }
 

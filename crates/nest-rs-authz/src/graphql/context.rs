@@ -61,9 +61,10 @@ pub fn forbidden() -> Error {
     nest_rs_graphql::problem_error(&Problem::new(403, code::FORBIDDEN))
 }
 
-/// [`forbidden`] naming the response fields the caller's field grant refuses —
-/// the answer to an operation that selected a column it may not read. The
-/// `fields` extension is a list, so a name containing a comma stays one entry.
+/// [`forbidden`] naming the response fields the caller's field grant refuses, as
+/// the schema spells them — the answer to an operation that selected a column it may
+/// not read. The `fields` extension is a list, so a name containing a comma stays
+/// one entry.
 pub(crate) fn forbidden_fields(fields: &[String]) -> Error {
     let names = fields.to_vec();
     forbidden().extend_with(move |_, e| e.set("fields", names))

@@ -5,7 +5,8 @@
 //! not match the one to the other. The rename rule is async-graphql's derive's,
 //! and all it leaves at run time is its result, the names in the registry: a key
 //! is matched to those, never re-cased, so an input under any rule answers in the
-//! spelling it declares.
+//! spelling it declares. A column a refusal names without any selection naming it,
+//! a primary key a cursor reads, is matched to the objects' names the same way.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -18,10 +19,15 @@ use crate::error::FIELD_ERRORS_EXTENSION;
 /// Every spelling a schema's inputs and arguments serve, by the word it spells.
 type Index = HashMap<String, Vec<String>>;
 
-/// A schema's [`Index`], read off its registry by the first field error that needs
-/// it: a request that fails on nothing pays for none of it.
+/// A schema's [`Index`]es, each read off its registry by the first refusal that
+/// needs it: a request that fails on nothing pays for none of it.
 #[derive(Default)]
-pub(crate) struct FieldSpellings(OnceLock<Index>);
+pub(crate) struct FieldSpellings {
+    /// What its inputs and arguments serve.
+    inputs: OnceLock<Index>,
+    /// What its objects and interfaces answer.
+    outputs: OnceLock<Index>,
+}
 
 /// `error`, the keys of its field map spelled as `ctx`'s schema spells them.
 pub(crate) fn spelled_by_schema(ctx: &Context<'_>, mut error: Error) -> Error {
@@ -30,33 +36,60 @@ pub(crate) fn spelled_by_schema(ctx: &Context<'_>, mut error: Error) -> Error {
         && let Some(spellings) = ctx.data_opt::<FieldSpellings>()
     {
         let index = spellings
-            .0
-            .get_or_init(|| index_of(&ctx.schema_env.registry));
+            .inputs
+            .get_or_init(|| inputs_of(&ctx.schema_env.registry));
         let spelled = respelled(fields, index);
         extensions.set(FIELD_ERRORS_EXTENSION, spelled);
     }
     error
 }
 
-fn index_of(registry: &Registry) -> Index {
+/// `key`, a column's wire key, as `ctx`'s schema spells that field on its objects, or
+/// as it was said when none serves it.
+pub fn schema_field_spelling<'c>(ctx: &'c Context<'_>, key: &'c str) -> &'c str {
+    let Some(spellings) = ctx.data_opt::<FieldSpellings>() else {
+        return key;
+    };
+    let index = spellings
+        .outputs
+        .get_or_init(|| outputs_of(&ctx.schema_env.registry));
+    spelling(key, index).unwrap_or(key)
+}
+
+/// `names` by the word each spells.
+fn index_of<'r>(names: impl Iterator<Item = &'r String>) -> Index {
     let mut index = Index::new();
-    let mut add = |name: &String| {
+    for name in names {
         let spellings = index.entry(word_of(name)).or_default();
         if !spellings.contains(name) {
             spellings.push(name.clone());
         }
-    };
-    for ty in registry.types.values() {
+    }
+    index
+}
+
+fn inputs_of(registry: &Registry) -> Index {
+    index_of(registry.types.values().flat_map(|ty| -> Vec<&String> {
         match ty {
-            MetaType::InputObject { input_fields, .. } => input_fields.keys().for_each(&mut add),
+            MetaType::InputObject { input_fields, .. } => input_fields.keys().collect(),
             MetaType::Object { fields, .. } | MetaType::Interface { fields, .. } => fields
                 .values()
                 .flat_map(|field| field.args.keys())
-                .for_each(&mut add),
-            MetaType::Scalar { .. } | MetaType::Enum { .. } | MetaType::Union { .. } => {}
+                .collect(),
+            MetaType::Scalar { .. } | MetaType::Enum { .. } | MetaType::Union { .. } => Vec::new(),
         }
-    }
-    index
+    }))
+}
+
+fn outputs_of(registry: &Registry) -> Index {
+    index_of(registry.types.values().flat_map(|ty| -> Vec<&String> {
+        match ty {
+            MetaType::Object { fields, .. } | MetaType::Interface { fields, .. } => {
+                fields.keys().collect()
+            }
+            _ => Vec::new(),
+        }
+    }))
 }
 
 /// What a rename rule leaves of a name: async-graphql's rules move only its case
@@ -82,24 +115,30 @@ fn respelled(fields: &Value, index: &Index) -> Value {
     }
 }
 
-/// `key` as the schema spells it, or as it was said when no input spells it. A key
-/// one of the schema's own spellings stays, since inputs under two rules can both
-/// serve its word. GraphQL reserves `__`, so `__all__`, validator's key for a rule
-/// over a whole struct, is no field whatever its word.
+/// `key` as the schema spells it, or as it was said when no input spells it.
+/// GraphQL reserves `__`, so `__all__`, validator's key for a rule over a whole
+/// struct, is no field whatever its word.
 fn spelled(key: &Name, index: &Index) -> Name {
     if key.starts_with("__") {
         return key.clone();
     }
+    spelling(key, index).map_or_else(|| key.clone(), Name::new)
+}
+
+/// How the schema spells `key`, when it serves its word under another spelling. A key
+/// one of the schema's own spellings stays, since names under two rules can both
+/// serve its word.
+fn spelling<'i>(key: &str, index: &'i Index) -> Option<&'i str> {
     index
         .get(&word_of(key))
-        .filter(|spellings| !spellings.iter().any(|spelling| spelling == key.as_str()))
+        .filter(|spellings| !spellings.iter().any(|spelling| spelling == key))
         .and_then(|spellings| spellings.first())
-        .map_or_else(|| key.clone(), Name::new)
+        .map(String::as_str)
 }
 
 #[cfg(test)]
 mod tests {
-    use async_graphql::{InputObject, InputType};
+    use async_graphql::{InputObject, InputType, OutputType, SimpleObject};
 
     use super::*;
 
@@ -122,7 +161,7 @@ mod tests {
         for register in inputs {
             register(&mut registry);
         }
-        index_of(&registry)
+        inputs_of(&registry)
     }
 
     fn field_map(json: serde_json::Value) -> Value {
@@ -148,6 +187,30 @@ mod tests {
                 "nested": { "orgId": { "0": { "orgId": [] } } },
             }),
         );
+    }
+
+    #[test]
+    fn a_column_takes_the_spelling_its_object_declares_and_no_input_says_it() {
+        #[derive(SimpleObject)]
+        struct Camel {
+            volume_id: String,
+        }
+
+        #[derive(SimpleObject)]
+        #[graphql(rename_fields = "snake_case")]
+        struct Snake {
+            tax_code: String,
+        }
+
+        let mut registry = Registry::default();
+        Camel::create_type_info(&mut registry);
+        Snake::create_type_info(&mut registry);
+        CamelInput::create_type_info(&mut registry);
+        let outputs = outputs_of(&registry);
+
+        assert_eq!(spelling("volume_id", &outputs), Some("volumeId"));
+        assert_eq!(spelling("tax_code", &outputs), None, "its own spelling");
+        assert_eq!(spelling("org_id", &outputs), None, "an input's alone");
     }
 
     #[test]

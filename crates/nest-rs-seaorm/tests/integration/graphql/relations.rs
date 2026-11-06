@@ -107,6 +107,31 @@ pub(crate) mod novel {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+/// A novel keyed by a column of two words, so its cursor reads a field the schema and
+/// the wire spell differently.
+pub(crate) mod volume {
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Volume", graphql)]
+    #[sea_orm::model]
+    #[derive(Clone, Debug, DeriveEntityModel)]
+    #[sea_orm(table_name = "volumes")]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub volume_id: Uuid,
+        #[expose]
+        pub title: String,
+        #[expose]
+        pub shelf_id: Uuid,
+        #[sea_orm(belongs_to, from = "shelf_id", to = "id")]
+        pub shelf: HasOne<super::shelf::Entity>,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 pub(crate) mod shelf {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
@@ -122,6 +147,9 @@ pub(crate) mod shelf {
         #[sea_orm(has_many)]
         #[expose]
         pub novels: HasMany<super::novel::Entity>,
+        #[sea_orm(has_many)]
+        #[expose]
+        pub volumes: HasMany<super::volume::Entity>,
     }
 
     impl ActiveModelBehavior for ActiveModel {}
@@ -286,6 +314,28 @@ impl Rows {
         }
         Ok(pages)
     }
+
+    async fn volumes(
+        &self,
+        keys: &[RelationKey<Uuid>],
+    ) -> Result<HashMap<RelationKey<Uuid>, RelationPage<volume::Volume>>, ServiceError> {
+        let row = volume::Model {
+            volume_id: novel_ids()[0],
+            title: "Sketches".to_owned(),
+            shelf_id: shelf_id(),
+        };
+        Ok(keys
+            .iter()
+            .map(|key| {
+                let edge = (
+                    PageCursor::from(row.volume_id).to_string(),
+                    volume::Volume::from(&row),
+                );
+                let page = nest_rs_seaorm::__private::relation_page(vec![edge], false);
+                (key.clone(), page)
+            })
+            .collect())
+    }
 }
 
 impl PkLoadable for writer::Entity {
@@ -294,6 +344,10 @@ impl PkLoadable for writer::Entity {
 
 impl RelatedTo<shelf::Entity> for novel::Entity {
     type Loader = RowsNovels;
+}
+
+impl RelatedTo<shelf::Entity> for volume::Entity {
+    type Loader = RowsVolumes;
 }
 
 fn ability_of(role: &str) -> nest_rs_authz::Ability {
@@ -327,6 +381,8 @@ fn ability_of(role: &str) -> nest_rs_authz::Ability {
         "keyless" => {
             ab.can(Action::Read, novel::Entity)
                 .fields([novel::Column::Title]);
+            ab.can(Action::Read, volume::Entity)
+                .fields([volume::Column::Title]);
         }
         // Reads the writers of one circle by a narrow grant, those of another whole.
         "circle" => {
@@ -1136,6 +1192,27 @@ async fn a_has_many_pages_under_a_narrow_grant() {
     assert_eq!(page["nodes"][0]["id"], novel_ids()[1].to_string());
     assert_eq!(page["pageInfo"]["hasNextPage"], false, "{second}");
     assert_eq!(page["pageInfo"]["hasPreviousPage"], true, "{second}");
+}
+
+/// A client matches a refusal to its schema, under a page's nodes and its edges, and
+/// where only a cursor reads the column: no selection names it there, and the schema's
+/// is the one name the client knows it by.
+#[tokio::test]
+async fn a_refusal_names_a_two_word_field_as_the_schema_spells_it() {
+    let app = library().await;
+
+    for query in [
+        "{ shelves { novels { nodes { shelfId } } } }",
+        "{ shelves { novels { edges { node { shelfId } } } } }",
+    ] {
+        assert_forbidden(&answer(&app, "keyless", query).await, &["shelfId"]);
+    }
+    for query in [
+        "{ shelves { volumes { edges { cursor } } } }",
+        "{ shelves { volumes { pageInfo { endCursor } } } }",
+    ] {
+        assert_forbidden(&answer(&app, "keyless", query).await, &["volumeId"]);
+    }
 }
 
 /// A cursor is the row's primary key, so a grant withholding the key withholds it.

@@ -1821,6 +1821,9 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A client branching on `FORBIDDEN` for a visitor's call to a field whose guard reads
   the principal** now reads `UNAUTHENTICATED`, the class a missing credential answers
   everywhere. On HTTP, a `#[public]` route with such a guard answers `401`, not `500`.
+- **A GraphQL client reading a `FORBIDDEN`'s `extensions.fields`** reads each as the schema
+  spells it, `workStatus` where it read `work_status`. A scalar's keys stay what it reads
+  in the scalar.
 - **A `#[field_resolver]` answering an `#[expose]`d wire type**, whatever holds its rows,
   answers `FORBIDDEN` naming a selected column the caller's `.fields` grant withholds, and
   every selected column to a caller no grant reaches on that entity, where 6.x served

@@ -352,7 +352,7 @@ mask, decided by the subject's type:
   for a shape the round-trip cannot see through (a cursor connection). A
   subscription masks each item as a row, a list item row by row: refused means
   dropped. **A masked-out non-nullable field refuses the field selecting it**, `FORBIDDEN`
-  naming it, since the schema cannot ship it, and is served where nothing selects
+  naming it as the schema spells it, since the schema cannot ship it, and is served where nothing selects
   it, a key outside an object's selection never being serialized: a column a field
   grant may mask and a client may still select is `Option` on the entity. A field
   with no selection is a scalar (`Json<Wire>`), which serializes whole, so every

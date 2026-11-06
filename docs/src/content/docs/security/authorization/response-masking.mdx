@@ -65,7 +65,9 @@ field is refused and one that does not select it is served. A scalar such as
 would take from it refuses it. Row dropping applies either way.
 
 The refusal carries `extensions.code = "FORBIDDEN"` and `extensions.fields` —
-a **list** of the column names it refused:
+a **list** of the fields it refused, each as the schema spells it, `workStatus` for
+a `work_status` column, so a client matches it to what it selected. A scalar's are
+the keys its client reads in it, `work_status` there:
 
 ```json
 {"data":null,"errors":[{"message":"forbidden","path":["users"],

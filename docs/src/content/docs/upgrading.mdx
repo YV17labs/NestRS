@@ -1527,6 +1527,8 @@ lists what the boot, a log or the wire shows when one is missed.
   `OTEL_RESOURCE_ATTRIBUTES`, or an empty or blank pinned `service_name`
   fails the boot naming it, where the app exported under the blank name.
   Write the service's name, or leave it unset for the binary's.
+  A binary built without the `otlp` feature holds to it too, and fails on an
+  `OTEL_RESOURCE_ATTRIBUTES` that does not read.
 - **A filter on `an OpenTelemetry variable does not hold what it must`**
   reads `an OpenTelemetry variable is passed over` now, its `expected` field
   `reason`; it names, too, each specification variable this build serves

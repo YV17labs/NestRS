@@ -151,17 +151,18 @@ impl OpenTelemetry {
         #[cfg(not(feature = "otlp"))]
         {
             refuse_what_no_exporter_serves(&config, &nest_rs_config::env_var)?;
+            let service = console_service(
+                &config,
+                nest_rs_core::AppIdentity::current(),
+                &nest_rs_config::env_var,
+            )?;
             if !install_global_subscriber(Registry::default().with(filter).with(console_layer)) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
             say_retired_variables();
             tracing::info!(
                 target: crate::TARGET,
-                service = config
-                    .service_name
-                    .as_deref()
-                    .or_else(|| nest_rs_core::AppIdentity::current().map(|app| app.name.as_str()))
-                    .unwrap_or_default(),
+                service = service.as_str(),
                 mode = "console",
                 log_format,
                 "OpenTelemetry initialised"
@@ -169,6 +170,33 @@ impl OpenTelemetry {
             Ok(OpenTelemetry {})
         }
     }
+}
+
+/// The service a binary built without the `otlp` feature names on its boot
+/// line, as the exporters' resource would name it: `OTEL_SERVICE_NAME`, then
+/// `service.name` in `OTEL_RESOURCE_ATTRIBUTES`, then the pin, then the binary.
+/// What names none is refused as it is there. `read` is the environment as
+/// written: a blank `OTEL_SERVICE_NAME` is refused, never read as unset.
+#[cfg(not(feature = "otlp"))]
+fn console_service(
+    config: &OpenTelemetryConfig,
+    binary: Option<&nest_rs_core::AppIdentity>,
+    read: &impl Fn(&str) -> Option<String>,
+) -> Result<String, nest_rs_config::ConfigError> {
+    use crate::config::{SERVICE_NAME, resource_attributes, service_name};
+
+    let pinned = config.pinned_service_name()?;
+    let attributes = resource_attributes(read)?;
+    Ok(service_name(read)?
+        .or_else(|| {
+            attributes
+                .into_iter()
+                .rev()
+                .find_map(|(key, value)| (key == SERVICE_NAME).then_some(value))
+        })
+        .or_else(|| pinned.map(str::to_owned))
+        .or_else(|| binary.map(|binary| binary.name.clone()))
+        .unwrap_or_default())
 }
 
 /// What a binary built without the `otlp` feature cannot honour, refused
@@ -434,6 +462,45 @@ mod tests {
         refuse_what_no_exporter_serves(config, &reading(set))
             .expect_err("an endpoint nothing exports to")
             .to_string()
+    }
+
+    /// The binary's name stands where nothing else names the service, and the
+    /// last of two `service.name`s wins, as the resource holds them.
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_the_service_is_named_as_the_resource_would_name_it() {
+        let binary = nest_rs_core::__private::package_identity("auth", "7.0.0", "");
+        let pinned = OpenTelemetryConfig {
+            service_name: Some("pinned".into()),
+            ..OpenTelemetryConfig::default()
+        };
+        let default = OpenTelemetryConfig::default();
+        for (config, set, named) in [
+            (&default, vec![], "auth"),
+            (&pinned, vec![], "pinned"),
+            (
+                &pinned,
+                vec![(
+                    "OTEL_RESOURCE_ATTRIBUTES",
+                    "service.name=one,service.name=two",
+                )],
+                "two",
+            ),
+            (
+                &pinned,
+                vec![
+                    ("OTEL_SERVICE_NAME", "named"),
+                    ("OTEL_RESOURCE_ATTRIBUTES", "service.name=one"),
+                ],
+                "named",
+            ),
+        ] {
+            assert_eq!(
+                console_service(config, Some(&binary), &reading(&set)).expect("a name"),
+                named,
+                "{set:?}"
+            );
+        }
     }
 
     #[cfg(not(feature = "otlp"))]

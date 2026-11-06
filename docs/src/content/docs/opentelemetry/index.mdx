@@ -347,7 +347,8 @@ umbrella's `opentelemetry` feature turns it on.
   framework's span constructor, and provides `Metrics` through
   `OpenTelemetryModule`. Without it, the subscriber stays a console-only
   `tracing` setup, and neither `Metrics` nor its module exists — useful for a
-  tiny binary that should not link the OTel SDK.
+  tiny binary that should not link the OTel SDK. Its boot line names the service
+  as the exporters' resource would, under the same variables and the same refusals.
   Such a binary still reads the three selectors: `none` is all it honours, and
   any other value, `otlp` included, fails the boot naming the variable, since
   nothing would ship. For the same reason an endpoint set for a signal its

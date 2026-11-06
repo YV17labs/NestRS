@@ -424,7 +424,6 @@ fn otel_propagators_naming_a_format_the_framework_does_not_speak_is_refused() {
 
 /// `key=value` pairs of a logfmt line, as an operator's filter reads them: a
 /// value runs to the next space unless it is quoted.
-#[cfg(feature = "otlp")]
 fn logfmt(line: &str) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
     let mut rest = line.trim();
@@ -729,4 +728,103 @@ fn app_run_refuses_an_endpoint_when_main_never_called_init() {
         format!("{refused:#}").contains("OpenTelemetry::init()"),
         "{refused:#}"
     );
+}
+
+/// The service the boot line names under the variables `set`, in a binary with
+/// the exporters or without them: the two read the specification's variables
+/// alike.
+fn service_named_under(set: &[(&str, &str)]) -> String {
+    let output = child_in(BOOT_LINE, set);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{set:?}: {stdout}");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("OpenTelemetry initialised"))
+        .unwrap_or_else(|| panic!("the boot line under {set:?}: {stdout}"));
+    logfmt(line)
+        .into_iter()
+        .find(|(key, _)| key == "service")
+        .map(|(_, value)| value)
+        .unwrap_or_else(|| panic!("the service in {line}"))
+}
+
+#[test]
+fn the_boot_line_names_the_service_the_specification_s_variables_name() {
+    for (set, named) in [
+        (vec![("OTEL_SERVICE_NAME", "billing")], "billing"),
+        (
+            vec![("OTEL_RESOURCE_ATTRIBUTES", "service.name=ledger")],
+            "ledger",
+        ),
+        (
+            vec![("OTEL_RESOURCE_ATTRIBUTES", "team=core,service.name=a%2Cb")],
+            "a,b",
+        ),
+        (
+            vec![
+                ("OTEL_SERVICE_NAME", "billing"),
+                ("OTEL_RESOURCE_ATTRIBUTES", "service.name=ledger"),
+            ],
+            "billing",
+        ),
+        (
+            vec![
+                ("OTEL_SERVICE_NAME", ""),
+                ("OTEL_RESOURCE_ATTRIBUTES", "service.name=ledger"),
+            ],
+            "ledger",
+        ),
+    ] {
+        assert_eq!(service_named_under(&set), named, "{set:?}");
+    }
+}
+
+/// A name in code stands under variables naming none, an empty one among them,
+/// which the specification reads as unset.
+#[test]
+fn the_boot_line_names_the_service_pinned_under_an_empty_variable() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let otel = init_under(
+        &[("OTEL_SERVICE_NAME", "")],
+        OpenTelemetryConfig {
+            service_name: Some("pinned".into()),
+            ..OpenTelemetryConfig::default()
+        },
+    )
+    .expect("the process's first subscriber");
+    let event = logs.expect_one(nest_rs_opentelemetry::TARGET, "OpenTelemetry initialised");
+    assert_eq!(event.field("service").as_deref(), Some("pinned"));
+    drop(otel);
+}
+
+/// What names no service fails the boot naming where it is set, in a binary
+/// with the exporters or without them.
+#[test]
+fn a_service_name_that_names_nothing_is_refused_naming_where_it_is_set() {
+    let pinned = |name: &str| OpenTelemetryConfig {
+        service_name: Some(name.to_owned()),
+        ..OpenTelemetryConfig::default()
+    };
+    for (set, config, named) in [
+        (
+            vec![("OTEL_SERVICE_NAME", "   ")],
+            OpenTelemetryConfig::default(),
+            "OTEL_SERVICE_NAME",
+        ),
+        (
+            vec![("OTEL_RESOURCE_ATTRIBUTES", "service.name=%20")],
+            OpenTelemetryConfig::default(),
+            "OTEL_RESOURCE_ATTRIBUTES",
+        ),
+        (
+            vec![("OTEL_RESOURCE_ATTRIBUTES", "service.name")],
+            OpenTelemetryConfig::default(),
+            "OTEL_RESOURCE_ATTRIBUTES",
+        ),
+        (vec![], pinned(""), "OpenTelemetryConfig::service_name"),
+        (vec![], pinned("  "), "OpenTelemetryConfig::service_name"),
+    ] {
+        let said = refused_under(&set, config);
+        assert!(said.contains(named), "{set:?}: {said}");
+    }
 }

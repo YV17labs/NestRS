@@ -16,12 +16,23 @@ pub(crate) const PINNED_TLS: &str = "`OpenTelemetryConfig::tls` in code";
 pub(crate) const PINNED_INTERVAL: &str = "`OpenTelemetryConfig::metric_interval` in code";
 #[cfg(feature = "otlp")]
 pub(crate) const PINNED_RATIO: &str = "`OpenTelemetryConfig::trace_sample_ratio` in code";
-#[cfg(feature = "otlp")]
 pub(crate) const PINNED_SERVICE_NAME: &str = "`OpenTelemetryConfig::service_name` in code";
 
 /// The specification's file configuration, under its name and the name it had
 /// while experimental.
 const CONFIG_FILES: [&str; 2] = ["OTEL_CONFIG_FILE", "OTEL_EXPERIMENTAL_CONFIG_FILE"];
+
+#[cfg(feature = "otlp")]
+pub(crate) use opentelemetry_semantic_conventions::attribute::SERVICE_NAME;
+/// The resource attribute naming the service, as the semantic conventions spell
+/// it; the crate exporting the constant is the `otlp` feature's.
+#[cfg(not(feature = "otlp"))]
+pub(crate) const SERVICE_NAME: &str = "service.name";
+
+/// The specification's variable naming the service.
+pub(crate) const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
+/// The specification's variable listing the resource's attributes.
+pub(crate) const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 
 /// What an app pins about its telemetry, under what the variables set: the
 /// OpenTelemetry specification's own (`OTEL_*`) and the console's (`RUST_LOG`,
@@ -47,10 +58,10 @@ const CONFIG_FILES: [&str; 2] = ["OTEL_CONFIG_FILE", "OTEL_EXPERIMENTAL_CONFIG_F
 /// query may carry a collector's credential.
 #[derive(Clone)]
 pub struct OpenTelemetryConfig {
-    /// `service.name` on every span, metric and log; `None` is the binary's
-    /// package name ([`AppIdentity`](nest_rs_core::AppIdentity)). An empty or
-    /// blank one names no service, and fails `init_with` where the `otlp`
-    /// feature builds the exporters.
+    /// `service.name` on every span, metric and log, and on the boot line;
+    /// `None` is the binary's package name
+    /// ([`AppIdentity`](nest_rs_core::AppIdentity)). An empty or blank one names
+    /// no service, and fails `init_with`.
     /// `OTEL_SERVICE_NAME`, then `service.name` in `OTEL_RESOURCE_ATTRIBUTES`,
     /// override it.
     pub service_name: Option<String>,
@@ -174,6 +185,120 @@ impl OpenTelemetryConfig {
         pinned.format = self.log_format;
         pinned.source_location = self.log_source_location;
         Ok(pinned.overlaid_by_env()?)
+    }
+
+    /// The service name set in code, refused when it names nothing.
+    pub(crate) fn pinned_service_name(&self) -> Result<Option<&str>, ConfigError> {
+        match self.service_name.as_deref() {
+            Some(name) if names_no_service(name) => Err(ConfigError::parse(
+                PINNED_SERVICE_NAME,
+                format!(
+                    "is empty or blank, so it {NAMES_NO_SERVICE} — set the service's name, or \
+                     leave it None to name the service after the binary"
+                ),
+            )),
+            name => Ok(name),
+        }
+    }
+}
+
+/// What `OTEL_RESOURCE_ATTRIBUTES` must hold.
+const RESOURCE_ATTRIBUTES: &str = "must list key=value pairs separated by commas, each key not \
+                                   empty, a comma or an equals sign in a key or a value \
+                                   percent-encoded and every escape decoding to UTF-8, as the \
+                                   resource specification writes them";
+
+/// What an empty or blank service name is said to do: export under a name no
+/// backend shows, in place of the binary's.
+const NAMES_NO_SERVICE: &str = "names no service";
+
+/// Whether a service name names nothing: empty, or blank.
+fn names_no_service(name: &str) -> bool {
+    name.trim().is_empty()
+}
+
+/// The attributes `OTEL_RESOURCE_ATTRIBUTES` lists, as the resource
+/// specification writes them: each key and value trimmed and percent-decoded,
+/// a blank member skipped. What opentelemetry_sdk 0.33's detector would drop
+/// in silence — a member with no `=` — or keep under no name — an empty key —
+/// and an escape that does not decode, where the specification discards the
+/// whole variable, are refused naming it, never quoted; so is a
+/// `service.name` that names no service, which would sit over the binary's.
+pub(crate) fn resource_attributes(
+    read: &impl Fn(&str) -> Option<String>,
+) -> Result<Vec<(String, String)>, ConfigError> {
+    let Some(raw) = read(OTEL_RESOURCE_ATTRIBUTES) else {
+        return Ok(Vec::new());
+    };
+    raw.split_terminator(',')
+        .map(str::trim)
+        .filter(|member| !member.is_empty())
+        .map(|member| {
+            let (key, value) = member
+                .split_once('=')
+                .and_then(|(key, value)| {
+                    Some((percent_decoded(key.trim())?, percent_decoded(value.trim())?))
+                })
+                .filter(|(key, _)| !key.is_empty())
+                .ok_or_else(|| ConfigError::parse(OTEL_RESOURCE_ATTRIBUTES, RESOURCE_ATTRIBUTES))?;
+            if key == SERVICE_NAME && names_no_service(&value) {
+                return Err(ConfigError::parse(
+                    OTEL_RESOURCE_ATTRIBUTES,
+                    format!(
+                        "holds an empty or blank {SERVICE_NAME}, which {NAMES_NO_SERVICE} — set \
+                         the service's name there, or leave it out to name the service after \
+                         the binary"
+                    ),
+                ));
+            }
+            Ok((key, value))
+        })
+        .collect()
+}
+
+/// `OTEL_SERVICE_NAME`, as written, or `None` where it is unset or empty, as
+/// the specification reads an empty variable. A blank one names no service, and
+/// the SDK's detector, run for its `unknown_service` fallback, would take it as
+/// the name: refused naming it, so the two never read it apart.
+pub(crate) fn service_name(
+    read: &impl Fn(&str) -> Option<String>,
+) -> Result<Option<String>, ConfigError> {
+    match read(OTEL_SERVICE_NAME) {
+        Some(name) if name.is_empty() => Ok(None),
+        Some(name) if names_no_service(&name) => Err(ConfigError::parse(
+            OTEL_SERVICE_NAME,
+            format!(
+                "is blank, so it {NAMES_NO_SERVICE} — set the service's name, or unset it to \
+                 name the service after the binary"
+            ),
+        )),
+        name => Ok(name),
+    }
+}
+
+/// `value` percent-decoded as opentelemetry-otlp 0.33 decodes a header's,
+/// a run of escapes at a time: `None` when a `%` is not followed by two hex
+/// digits or a run is not UTF-8, where the SDK sends a header's value as
+/// written.
+pub(crate) fn percent_decoded(value: &str) -> Option<String> {
+    let mut decoded = String::with_capacity(value.len());
+    let mut run = Vec::new();
+    let mut chars = value.chars();
+    loop {
+        let next = chars.next();
+        if next == Some('%') {
+            let hex: String = [chars.next()?, chars.next()?].iter().collect();
+            run.push(u8::from_str_radix(&hex, 16).ok()?);
+            continue;
+        }
+        if !run.is_empty() {
+            decoded.push_str(std::str::from_utf8(&run).ok()?);
+            run.clear();
+        }
+        match next {
+            Some(c) => decoded.push(c),
+            None => return Some(decoded),
+        }
     }
 }
 

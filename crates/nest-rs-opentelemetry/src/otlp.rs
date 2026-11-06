@@ -64,14 +64,14 @@ use opentelemetry_sdk::trace::{
 };
 use opentelemetry_semantic_conventions::{
     SCHEMA_URL,
-    attribute::{DEPLOYMENT_ENVIRONMENT_NAME, SERVICE_INSTANCE_ID, SERVICE_NAME, SERVICE_VERSION},
+    attribute::{DEPLOYMENT_ENVIRONMENT_NAME, SERVICE_INSTANCE_ID, SERVICE_VERSION},
 };
 use reqwest::header::{HeaderName, HeaderValue};
 use uuid::Uuid;
 
 use crate::config::{
-    OpenTelemetryConfig, PINNED_ENDPOINT, PINNED_INTERVAL, PINNED_RATIO, PINNED_SERVICE_NAME,
-    PINNED_TLS, blank_as_unset, refuse_config_file,
+    OpenTelemetryConfig, PINNED_ENDPOINT, PINNED_INTERVAL, PINNED_RATIO, PINNED_TLS, SERVICE_NAME,
+    blank_as_unset, percent_decoded, refuse_config_file, resource_attributes, service_name,
 };
 use crate::error::OpenTelemetryError;
 use crate::propagators::{global_propagator, read_propagators};
@@ -93,8 +93,6 @@ nest_rs_core::inventory::submit! {
 
 // The specification's names for what the SDK reads itself, or not at all;
 // opentelemetry_sdk 0.33 keeps its own private.
-const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
-const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 const OTEL_TRACES_SAMPLER: &str = "OTEL_TRACES_SAMPLER";
 const OTEL_TRACES_SAMPLER_ARG: &str = "OTEL_TRACES_SAMPLER_ARG";
 const OTEL_METRIC_EXPORT_TIMEOUT: &str = "OTEL_METRIC_EXPORT_TIMEOUT";
@@ -1040,32 +1038,6 @@ fn headers(
     }))
 }
 
-/// `value` percent-decoded as opentelemetry-otlp 0.33 decodes a header's,
-/// a run of escapes at a time: `None` when a `%` is not followed by two hex
-/// digits or a run is not UTF-8, where the SDK sends a header's value as
-/// written.
-fn percent_decoded(value: &str) -> Option<String> {
-    let mut decoded = String::with_capacity(value.len());
-    let mut run = Vec::new();
-    let mut chars = value.chars();
-    loop {
-        let next = chars.next();
-        if next == Some('%') {
-            let hex: String = [chars.next()?, chars.next()?].iter().collect();
-            run.push(u8::from_str_radix(&hex, 16).ok()?);
-            continue;
-        }
-        if !run.is_empty() {
-            decoded.push_str(std::str::from_utf8(&run).ok()?);
-            run.clear();
-        }
-        match next {
-            Some(c) => decoded.push(c),
-            None => return Some(decoded),
-        }
-    }
-}
-
 /// Refuses what may carry a collector's credential to `url`, an `http://`
 /// endpoint on another host, where RFC 6750 §5.3 sends one over TLS alone:
 /// the headers the exports carry, set by `headers_set_by`, and the endpoint's
@@ -1545,78 +1517,6 @@ fn not_built(
     }
 }
 
-/// What `OTEL_RESOURCE_ATTRIBUTES` must hold.
-const RESOURCE_ATTRIBUTES: &str = "must list key=value pairs separated by commas, each key not \
-                                   empty, a comma or an equals sign in a key or a value \
-                                   percent-encoded and every escape decoding to UTF-8, as the \
-                                   resource specification writes them";
-
-/// Whether a service name names nothing: empty, or blank.
-fn names_no_service(name: &str) -> bool {
-    name.trim().is_empty()
-}
-
-/// The attributes `OTEL_RESOURCE_ATTRIBUTES` lists, as the resource
-/// specification writes them: each key and value trimmed and percent-decoded,
-/// a blank member skipped. What opentelemetry_sdk 0.33's detector would drop
-/// in silence — a member with no `=` — or keep under no name — an empty key —
-/// and an escape that does not decode, where the specification discards the
-/// whole variable, are refused naming it, never quoted; so is a
-/// `service.name` that names no service, which would sit over the binary's.
-fn resource_attributes(
-    read: &impl Fn(&str) -> Option<String>,
-) -> Result<Vec<KeyValue>, ConfigError> {
-    let Some(raw) = read(OTEL_RESOURCE_ATTRIBUTES) else {
-        return Ok(Vec::new());
-    };
-    raw.split_terminator(',')
-        .map(str::trim)
-        .filter(|member| !member.is_empty())
-        .map(|member| {
-            let (key, value) = member
-                .split_once('=')
-                .and_then(|(key, value)| {
-                    Some((percent_decoded(key.trim())?, percent_decoded(value.trim())?))
-                })
-                .filter(|(key, _)| !key.is_empty())
-                .ok_or_else(|| ConfigError::parse(OTEL_RESOURCE_ATTRIBUTES, RESOURCE_ATTRIBUTES))?;
-            if key == SERVICE_NAME && names_no_service(&value) {
-                return Err(ConfigError::parse(
-                    OTEL_RESOURCE_ATTRIBUTES,
-                    format!(
-                        "holds an empty or blank {SERVICE_NAME}, which {NAMES_NO_SERVICE} — set \
-                         the service's name there, or leave it out to name the service after \
-                         the binary"
-                    ),
-                ));
-            }
-            Ok(KeyValue::new(key, value))
-        })
-        .collect()
-}
-
-/// What an empty or blank service name is said to do: export under a name no
-/// backend shows, in place of the binary's.
-const NAMES_NO_SERVICE: &str = "names no service";
-
-/// `OTEL_SERVICE_NAME`, as written, or `None` where it is unset or empty, as
-/// the specification reads an empty variable. A blank one names no service, and
-/// the SDK's detector, run for its `unknown_service` fallback, would take it as
-/// the name: refused naming it, so the two never read it apart.
-fn service_name(read: &impl Fn(&str) -> Option<String>) -> Result<Option<String>, ConfigError> {
-    match read(OTEL_SERVICE_NAME) {
-        Some(name) if name.is_empty() => Ok(None),
-        Some(name) if names_no_service(&name) => Err(ConfigError::parse(
-            OTEL_SERVICE_NAME,
-            format!(
-                "is blank, so it {NAMES_NO_SERVICE} — set the service's name, or unset it to \
-                 name the service after the binary"
-            ),
-        )),
-        name => Ok(name),
-    }
-}
-
 /// The resource every signal carries: what the app pinned, and the binary's
 /// name and version, under `OTEL_RESOURCE_ATTRIBUTES`, under
 /// `OTEL_SERVICE_NAME`, which wins. `read` is the environment as written, a
@@ -1627,15 +1527,7 @@ fn build_resource(
     binary: Option<&AppIdentity>,
     read: &impl Fn(&str) -> Option<String>,
 ) -> Result<Resource, ConfigError> {
-    if config.service_name.as_deref().is_some_and(names_no_service) {
-        return Err(ConfigError::parse(
-            PINNED_SERVICE_NAME,
-            format!(
-                "is empty or blank, so it {NAMES_NO_SERVICE} — set the service's name, or leave \
-                 it None to name the service after the binary"
-            ),
-        ));
-    }
+    config.pinned_service_name()?;
     let attributes = resource_attributes(read)?;
     let service_name = service_name(read)?;
     // The SDK's environment detector, which `Resource::builder` runs, reads
@@ -1689,7 +1581,11 @@ fn build_resource(
         .with_schema_url(Vec::<KeyValue>::new(), SCHEMA_URL)
         .with_attributes(ours)
         .with_attributes(over)
-        .with_attributes(attributes)
+        .with_attributes(
+            attributes
+                .into_iter()
+                .map(|(key, value)| KeyValue::new(key, value)),
+        )
         .with_attributes(service_name)
         .build())
 }
@@ -1706,6 +1602,7 @@ mod tests {
     use opentelemetry_sdk::metrics::OTEL_METRIC_EXPORT_INTERVAL_DEFAULT;
 
     use super::*;
+    use crate::config::{OTEL_RESOURCE_ATTRIBUTES, OTEL_SERVICE_NAME, PINNED_SERVICE_NAME};
     use crate::testing::reading;
 
     /// `build` mutates `opentelemetry::global`, so every `build()` in this file is

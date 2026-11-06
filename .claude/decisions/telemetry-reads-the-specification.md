@@ -540,3 +540,24 @@ agreement to the identity audit's second pass ("Tout faire (Recommandé)",
   wherever they are injected, whatever the order: a hand-written `register`
   has no gated seam, and `EventBus` is installed the same way; a seam serving
   both is a kernel change of its own, not this one.
+
+## 2026-11-06 — a plaintext export is said, `INSECURE` too, and the console names the service alike
+
+- **An `http://` export off this machine is said once per signal at `warn` in a
+  deployed profile**, a loopback collector saying nothing
+  (`plaintext-opening-is-said.md`). The earlier entry's "the opening `http://`
+  declares is the telemetry's" still holds: the export goes out, and it is now
+  visible.
+- **`OTEL_EXPORTER_OTLP_INSECURE` and its three per-signal spellings join the
+  variables said at `warn`**, each with `false` honoured in silence. The record
+  above promised a line for what no linked crate reads, and these four appeared
+  nowhere: opentelemetry-otlp 0.33.1 reads them behind `grpc-tonic` alone, which
+  this crate does not build, and over OTLP/HTTP the endpoint's scheme decides, as
+  the specification writes.
+- **A binary built without `otlp` reads the service's name as the exporters'
+  resource does**: `OTEL_SERVICE_NAME`, then `service.name` in
+  `OTEL_RESOURCE_ATTRIBUTES`, then the pin, then the binary, under the same
+  refusals, through one reading in `config.rs`. Its boot line said another name,
+  and a blank one booted, against the docs. A malformed `OTEL_RESOURCE_ATTRIBUTES`
+  fails such a binary too: one variable, one reading, whichever binary a platform
+  sets it for.

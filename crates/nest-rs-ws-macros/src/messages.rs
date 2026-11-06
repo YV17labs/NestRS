@@ -180,6 +180,22 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             return err.to_compile_error().into();
         }
         if let Some(hook) = hook {
+            let posture = method
+                .attrs
+                .iter()
+                .find(|attr| attr.path().is_ident("authorize") || attr.path().is_ident("public"));
+            if let Some(posture) = posture {
+                return syn::Error::new_spanned(
+                    posture,
+                    format!(
+                        "`#[{hook}]` takes no posture: no mask shapes what a connection hook \
+                         sends, so it reads nothing a grant guards. Read what the client should \
+                         see in a `#[subscribe_message]` whose posture names it"
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
             if let Err(err) = take_layers(&pair::WS, LayerScope::Hook, &mut method.attrs) {
                 return err.to_compile_error().into();
             }

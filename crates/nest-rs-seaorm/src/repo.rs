@@ -89,7 +89,8 @@ fn denying_for_want_of_an_ability<E: EntityTrait>(action: Action) {
         scope = ?current_executor_scope(),
         hint = "bind #[use_guards(AuthnGuard, AuthzGuard)], and declare what this unit reads: \
                 #[authorize(Read, Entity)], or #[public(Read, Entity)] where a caller with no \
-                credential is admitted",
+                credential is admitted; a websocket connection hook declares none, so read it \
+                in a message",
         "no ambient Ability outside a worker job — denying all rows",
     );
 }
@@ -1214,6 +1215,12 @@ mod tests {
         );
         assert_eq!(said.len(), 2, "{said:#?}");
         assert!(said.iter().all(|event| event.level == "warn"), "{said:#?}");
+        assert!(
+            said.iter().all(|event| event
+                .field("hint")
+                .is_some_and(|hint| hint.contains("connection hook"))),
+            "a hook declares no posture, so the line says where to read instead: {said:#?}",
+        );
     }
 
     /// A job holds no ability and is unscoped: its save reaches the hook and the

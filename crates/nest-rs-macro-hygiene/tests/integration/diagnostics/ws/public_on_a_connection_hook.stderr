@@ -1,0 +1,5 @@
+error: `#[on_connect]` takes no posture: no mask shapes what a connection hook sends, so it reads nothing a grant guards. Read what the client should see in a `#[subscribe_message]` whose posture names it
+  --> tests/integration/diagnostics/ws/public_on_a_connection_hook.rs:12:5
+   |
+12 |     #[public]
+   |     ^^^^^^^^^

@@ -1,5 +1,6 @@
 //! The [`Ability`] a GraphQL field runs under — the one its unit carries,
-//! which its class gate checked — and GraphQL's denial shape.
+//! which its class gate checked — GraphQL's denial shape, and what a request
+//! already filed of those denials.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};

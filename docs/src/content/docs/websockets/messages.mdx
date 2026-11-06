@@ -534,7 +534,8 @@ payload's own pipe's is.
 The connection hooks run no layer yet: `#[use_interceptors]` and
 `#[use_exception_filters]` beside `#[on_connect]` are named compile errors, as
 are a guard (the upgrade's guards admitted the socket), a pipe (a hook has no
-payload) and a `#[meta]` value (no layer would read it).
+payload), a `#[meta]` value (no layer would read it) and a posture (no mask shapes
+what a hook sends, so it reads nothing a grant guards).
 
 ## The envelope itself
 

@@ -8,5 +8,6 @@
 mod harness;
 
 mod chat;
+mod health;
 mod module;
 mod users;

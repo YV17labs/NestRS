@@ -78,6 +78,9 @@ listener closes at the shutdown signal. Taking a replica out of rotation before
 it stops listening is the platform's — see
 [leaving the load balancer first](/fundamentals/shutdown/#leaving-the-load-balancer-first).
 
+`/health/*` are `#[public]` routes, so a pool's `AuthnGuard` runs on them, and a
+probe carrying a credential answers `503` during a strategy outage; send none.
+
 ## The JSON shape
 
 Every probe returns the same body. `info` holds the up indicators,

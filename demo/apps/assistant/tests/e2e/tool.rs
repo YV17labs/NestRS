@@ -19,6 +19,11 @@ fn is_rmcp_own_event_below_info(event: &CapturedEvent) -> bool {
 }
 
 #[tokio::test]
+async fn a_probe_reads_no_credential() {
+    features::testing::assert_a_probe_reads_no_credential(&boot().await).await;
+}
+
+#[tokio::test]
 async fn health_live_probe_is_ok() {
     let app = boot().await;
     app.http()

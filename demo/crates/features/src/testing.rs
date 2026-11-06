@@ -3,9 +3,10 @@ use std::time::Duration;
 
 use nest_rs::config::Config;
 use nest_rs::core::Container;
+use nest_rs::http::header;
 use nest_rs::redis::{RedisConfig, RedisConnection};
 use nest_rs::storage::Storage;
-use nest_rs::testing::{url_on, wait_for};
+use nest_rs::testing::{LogCapture, TestApp, url_on, wait_for};
 use sea_orm::{
     ActiveModelTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, Set, Statement,
     TransactionTrait,
@@ -57,6 +58,24 @@ pub fn connection(container: &Container) -> Arc<DatabaseConnection> {
     container
         .get::<DatabaseConnection>()
         .expect("the app's pool is its throwaway database")
+}
+
+pub async fn assert_a_probe_reads_no_credential(app: &TestApp) {
+    let logs = LogCapture::install();
+    for probe in ["/health/live", "/health/ready"] {
+        app.http()
+            .get(probe)
+            .header(header::AUTHORIZATION, "Bearer not-a-token")
+            .send()
+            .await
+            .assert_status_is_ok();
+    }
+    let authn: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.target == nest_rs::authn::TARGET)
+        .collect();
+    assert!(authn.is_empty(), "{authn:?}");
 }
 
 pub async fn seed_org(conn: &DatabaseConnection, name: &str) -> Uuid {

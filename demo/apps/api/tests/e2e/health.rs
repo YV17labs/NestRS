@@ -35,3 +35,8 @@ async fn health_ready_probe_reports_every_resource_the_app_opens_up() {
         "ready probe error bucket is empty against live services",
     );
 }
+
+#[tokio::test]
+async fn a_probe_reads_no_credential() {
+    features::testing::assert_a_probe_reads_no_credential(&boot().await).await;
+}

@@ -7,6 +7,7 @@
 )]
 mod harness;
 
+mod health;
 mod login;
 mod social;
 mod token;

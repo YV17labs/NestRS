@@ -940,7 +940,7 @@ mod tests {
     /// where a copy per reference cost several times that.
     #[test]
     fn reading_a_directive_copies_no_variable() {
-        use crate::null_propagation::tests::thread_cpu_time;
+        use crate::testing::thread_cpu_time;
 
         let references = "@skip(if: $v) ".repeat(2_000);
         let document =

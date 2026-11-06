@@ -396,7 +396,7 @@ mod tests {
     use nest_rs_testing::LogCapture;
 
     use super::*;
-    use crate::null_propagation::tests::thread_cpu_time;
+    use crate::testing::thread_cpu_time;
 
     struct Query;
 

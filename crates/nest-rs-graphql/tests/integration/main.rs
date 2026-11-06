@@ -133,3 +133,17 @@ async fn graphql_answer(app: &nest_rs_testing::TestApp, query: &str) -> serde_js
         .value()
         .deserialize()
 }
+
+/// `root { ...F0 }` under `operation`, each fragment on `on` spreading the next
+/// twice, the last holding `leaf`.
+fn fan_out(operation: &str, on: &str, depth: usize, leaf: &str) -> String {
+    let mut document = format!("{operation} {{ ...F0 }}");
+    for at in 0..depth {
+        document.push_str(&format!(
+            " fragment F{at} on {on} {{ ...F{next} ...F{next} }}",
+            next = at + 1
+        ));
+    }
+    document.push_str(&format!(" fragment F{depth} on {on} {{ {leaf} }}"));
+    document
+}

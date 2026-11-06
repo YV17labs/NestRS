@@ -49,6 +49,8 @@ mod request_extension;
 mod resolver;
 mod scope;
 mod subscription;
+#[cfg(test)]
+mod testing;
 pub mod unit;
 mod view;
 mod wire_answer;

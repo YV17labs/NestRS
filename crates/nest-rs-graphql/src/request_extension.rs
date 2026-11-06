@@ -19,34 +19,29 @@ use crate::filed_once::FiledOnce;
 use crate::loader::LoaderSeeds;
 use crate::operation_units::OperationRefusal;
 
-/// Builds each request's [`RequestExtension`].
-pub(crate) struct RequestExtensionFactory {
-    seeds: Arc<LoaderSeeds>,
-    repeated_selections: usize,
-}
+/// Hands each request the schema's one [`RequestExtension`], which holds nothing of
+/// a request's.
+pub(crate) struct RequestExtensionFactory(Arc<RequestExtension>);
 
 impl RequestExtensionFactory {
     /// Each request seeded from `seeds`, what spreading a fragment again adds to its
     /// document held to `repeated_selections`.
     pub(crate) fn new(seeds: LoaderSeeds, repeated_selections: usize) -> Self {
-        Self {
-            seeds: Arc::new(seeds),
+        Self(Arc::new(RequestExtension {
+            seeds,
             repeated_selections,
-        }
+        }))
     }
 }
 
 impl ExtensionFactory for RequestExtensionFactory {
     fn create(&self) -> Arc<dyn Extension> {
-        Arc::new(RequestExtension {
-            seeds: Arc::clone(&self.seeds),
-            repeated_selections: self.repeated_selections,
-        })
+        self.0.clone()
     }
 }
 
 struct RequestExtension {
-    seeds: Arc<LoaderSeeds>,
+    seeds: LoaderSeeds,
     repeated_selections: usize,
 }
 
@@ -70,16 +65,13 @@ impl Extension for RequestExtension {
         mut request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
-        // The operation's read cached this parse; one that fails is answered by
-        // async-graphql's own, ahead.
-        let limits = self.limits();
         let variables = std::mem::take(&mut request.variables);
         // The operation's read cached this parse; one that fails is answered by
         // async-graphql's own, ahead.
         let refusal = request
             .parsed_query()
             .ok()
-            .and_then(|document| document_cost::refusal(document, &variables, limits));
+            .and_then(|document| document_cost::refusal(document, &variables, self.limits()));
         request.variables = variables;
         if let Some(refusal) = refusal {
             return Err(refusal);

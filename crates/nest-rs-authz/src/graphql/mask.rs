@@ -634,7 +634,7 @@ fn refused_selection<E: EntityTrait>(
             ..Refusal::of_mask(field.unit)
         });
     }
-    Some(forbidden_fields(&names))
+    Some(forbidden_fields(names))
 }
 
 /// One shape for every fail-closed masking exit: the queryable `warn`, one per field of

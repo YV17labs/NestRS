@@ -857,14 +857,7 @@ fn fragment_chain(links: usize, last: &str) -> String {
 async fn a_mutation_fanning_out_runs_nothing() {
     let logs = LogCapture::install();
     let (app, journal) = boot().await;
-    let mut document = String::from("mutation { ...F0 }");
-    for at in 0..14 {
-        document.push_str(&format!(
-            " fragment F{at} on Mutation {{ ...F{next} ...F{next} }}",
-            next = at + 1
-        ));
-    }
-    document.push_str(" fragment F14 on Mutation { __typename }");
+    let document = crate::fan_out("mutation", "Mutation", 14, "__typename");
     let reply = post(&app, json!({ "query": document })).await;
     assert_eq!(reply["data"], Value::Null, "{reply}");
     assert_eq!(

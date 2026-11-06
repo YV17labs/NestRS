@@ -87,7 +87,10 @@ fn outputs_of(registry: &Registry) -> Index {
             MetaType::Object { fields, .. } | MetaType::Interface { fields, .. } => {
                 fields.keys().collect()
             }
-            _ => Vec::new(),
+            MetaType::InputObject { .. }
+            | MetaType::Scalar { .. }
+            | MetaType::Enum { .. }
+            | MetaType::Union { .. } => Vec::new(),
         }
     }))
 }

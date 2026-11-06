@@ -14,6 +14,8 @@ use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_testing::TestApp;
 use serde_json::{Value, json};
 
+use crate::fan_out;
+
 #[derive(SimpleObject)]
 struct Leaf {
     label: String,
@@ -109,20 +111,6 @@ async fn answer_past_the_limit(app: &TestApp) -> Value {
     let answered = answer(app, &format!("{{ {wide}}}")).await;
     assert_eq!(answered["data"], Value::Null, "{answered}");
     answered
-}
-
-/// `root { ...F0 }` under `operation`, each fragment on `on` spreading the next
-/// twice, the last holding `leaf`.
-fn fan_out(operation: &str, on: &str, depth: usize, leaf: &str) -> String {
-    let mut document = format!("{operation} {{ ...F0 }}");
-    for at in 0..depth {
-        document.push_str(&format!(
-            " fragment F{at} on {on} {{ ...F{next} ...F{next} }}",
-            next = at + 1
-        ));
-    }
-    document.push_str(&format!(" fragment F{depth} on {on} {{ {leaf} }}"));
-    document
 }
 
 fn query_fan_out(depth: usize, leaf: &str) -> String {

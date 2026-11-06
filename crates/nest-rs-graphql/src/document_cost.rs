@@ -58,7 +58,7 @@ pub(crate) fn refusal(
 }
 
 /// Why a count stopped, each said in async-graphql's (`7.2.1`) own words.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum Past<'d> {
     /// The document costs more than a limit.
     Limit,
@@ -102,12 +102,11 @@ impl Weight {
 /// One document's cost, as far as it was read.
 struct DocumentCost<'d> {
     fragments: &'d HashMap<Name, Positioned<FragmentDefinition>>,
-    variables: &'d Variables,
     limits: DocumentLimits,
     /// What each fragment read so far holds.
     read: HashMap<&'d str, Weight>,
-    /// How many bytes each variable read so far holds.
-    sizes: HashMap<Name, usize>,
+    /// How many bytes each variable holds.
+    sizes: HashMap<&'d str, usize>,
     /// What the spreads of a fragment already read added.
     repeated: usize,
     /// What the arguments read so far copy.
@@ -122,10 +121,12 @@ impl<'d> DocumentCost<'d> {
     ) -> Self {
         Self {
             fragments: &document.fragments,
-            variables,
             limits,
             read: HashMap::with_capacity(document.fragments.len()),
-            sizes: HashMap::new(),
+            sizes: variables
+                .iter()
+                .map(|(name, value)| (name.as_str(), size_of(value)))
+                .collect(),
             repeated: 0,
             copied: 0,
         }
@@ -154,23 +155,23 @@ impl<'d> DocumentCost<'d> {
     }
 
     /// What `set`, `depth` selection sets down, holds: a field counts one and what it
-    /// selects, a fragment what it holds. A selection set is never empty, so a count
-    /// of none hides no walk.
+    /// selects, a fragment what it holds. Only a leaf's set is empty, so a count of
+    /// none hides no walk.
     fn of_set(
         &mut self,
         set: &'d Positioned<SelectionSet>,
         depth: usize,
     ) -> Result<Weight, Past<'d>> {
+        // A leaf's empty set is no level: async-graphql goes no deeper.
+        if set.node.items.is_empty() {
+            return Ok(Weight::default());
+        }
         if depth > RECURSIVE_DEPTH {
             return Err(Past::Depth(set.pos));
         }
         let mut weight = Weight::default();
         for selection in &set.node.items {
             let (selected, field) = match &selection.node {
-                // A leaf's empty set is no level: async-graphql goes no deeper.
-                Selection::Field(field) if field.node.selection_set.node.items.is_empty() => {
-                    (Weight::default(), Some(&field.node))
-                }
                 Selection::Field(field) => (
                     self.of_set(&field.node.selection_set, depth + 1)?,
                     Some(&field.node),
@@ -184,11 +185,10 @@ impl<'d> DocumentCost<'d> {
                 ),
             };
             weight.add(selected);
-            weight.selections = weight
-                .selections
-                .saturating_add(usize::from(field.is_some()));
-            let copied = self.of_arguments(selection.node.directives(), field)?;
-            weight.copied = weight.copied.saturating_add(copied);
+            weight.add(Weight {
+                selections: usize::from(field.is_some()),
+                copied: self.of_arguments(selection.node.directives(), field)?,
+            });
         }
         Ok(weight)
     }
@@ -200,10 +200,8 @@ impl<'d> DocumentCost<'d> {
         if let Some(weight) = self.read.get(name).copied() {
             self.repeated = self.repeated.saturating_add(weight.selections);
             self.copied = self.copied.saturating_add(weight.copied);
-            return match self.past_a_limit() {
-                true => Err(Past::Limit),
-                false => Ok(weight),
-            };
+            self.within_limits()?;
+            return Ok(weight);
         }
         let one = Weight {
             selections: 1,
@@ -223,8 +221,8 @@ impl<'d> DocumentCost<'d> {
     /// What the arguments of `directives` and of `field` copy.
     fn of_arguments(
         &mut self,
-        directives: &'d [Positioned<Directive>],
-        field: Option<&'d Field>,
+        directives: &[Positioned<Directive>],
+        field: Option<&Field>,
     ) -> Result<usize, Past<'d>> {
         let mut copied = 0_usize;
         let held = directives
@@ -235,29 +233,23 @@ impl<'d> DocumentCost<'d> {
             // Built as async-graphql builds it, since async-graphql re-exports only
             // the const `Value`, each reference standing in for what it copies.
             let Ok(written) = value.node.clone().into_const_with::<Infallible>(|name| {
-                copied = copied.saturating_add(self.size_of_variable(name));
+                let size = self.sizes.get(name.as_str()).copied().unwrap_or(0);
+                copied = copied.saturating_add(size);
                 Ok(Value::Null)
             });
             copied = copied.saturating_add(size_of(&written));
         }
         self.copied = self.copied.saturating_add(copied);
-        match self.past_a_limit() {
-            true => Err(Past::Limit),
-            false => Ok(copied),
-        }
+        self.within_limits()?;
+        Ok(copied)
     }
 
-    fn past_a_limit(&self) -> bool {
-        self.repeated > self.limits.repeated_selections || self.copied > self.limits.copied_bytes
-    }
-
-    fn size_of_variable(&mut self, name: Name) -> usize {
-        if let Some(size) = self.sizes.get(&name) {
-            return *size;
+    fn within_limits(&self) -> Result<(), Past<'d>> {
+        if self.repeated > self.limits.repeated_selections || self.copied > self.limits.copied_bytes
+        {
+            return Err(Past::Limit);
         }
-        let size = self.variables.get(&name).map_or(0, size_of);
-        self.sizes.insert(name, size);
-        size
+        Ok(())
     }
 }
 
@@ -268,13 +260,13 @@ fn size_of(value: &Value) -> usize {
         Value::String(text) => text.len(),
         Value::Enum(name) => name.len(),
         Value::Binary(bytes) => bytes.len(),
-        Value::List(items) => items
-            .iter()
-            .fold(8_usize, |size, item| size.saturating_add(size_of(item))),
-        Value::Object(members) => members.iter().fold(8_usize, |size, (key, member)| {
-            size.saturating_add(key.len())
-                .saturating_add(size_of(member))
-        }),
+        Value::List(items) => 8 + items.iter().map(size_of).sum::<usize>(),
+        Value::Object(members) => {
+            8 + members
+                .iter()
+                .map(|(key, member)| key.len() + size_of(member))
+                .sum::<usize>()
+        }
     }
 }
 

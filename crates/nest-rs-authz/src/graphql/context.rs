@@ -65,7 +65,6 @@ pub fn forbidden() -> Error {
 /// the schema spells them — the answer to an operation that selected a column it may
 /// not read. The `fields` extension is a list, so a name containing a comma stays
 /// one entry.
-pub(crate) fn forbidden_fields(fields: &[String]) -> Error {
-    let names = fields.to_vec();
-    forbidden().extend_with(move |_, e| e.set("fields", names))
+pub(crate) fn forbidden_fields(fields: Vec<String>) -> Error {
+    forbidden().extend_with(move |_, e| e.set("fields", fields))
 }

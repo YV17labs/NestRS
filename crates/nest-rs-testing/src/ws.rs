@@ -71,8 +71,10 @@ use crate::headless::{HeadlessApp, TransportHandle};
 
 use nest_rs_ws::CloseCode;
 
-/// How long [`WsSocket::next_frame`] waits before reporting silence.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long [`WsSocket::next_frame`] waits before reporting silence: a guard
+/// against a hang, wide of any stall, since a test asserting silence names its own
+/// bound ([`expect_silence`](WsSocket::expect_silence)).
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Serve `app` on the transport `config` describes, on a free loopback port
 /// in place of its own, once its init phases ran.

@@ -72,8 +72,10 @@ use nest_rs_graphql::GraphqlConfig;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-/// How long [`GraphqlSocket::next_message`] waits before reporting silence.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long [`GraphqlSocket::next_message`] waits before reporting silence: a
+/// guard against a hang, wide of any stall, since a test asserting silence names
+/// its own bound ([`next_message_within`](GraphqlSocket::next_message_within)).
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Builds a [`GraphqlSocket`] against an app's composed schema.
 pub struct GraphqlSocketBuilder {

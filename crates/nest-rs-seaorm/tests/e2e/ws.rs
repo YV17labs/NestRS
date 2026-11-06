@@ -554,11 +554,7 @@ async fn a_message_whose_statement_is_blocked_is_answered_at_its_deadline() {
     // The lock goes only once the message is answered, so the deadline alone
     // can answer it; the read's bound turns a message waiting on the lock into
     // a failure rather than a hang.
-    let mut socket = app
-        .socket("/ws/unit/blocked")
-        .timeout(std::time::Duration::from_secs(60))
-        .connect()
-        .await;
+    let mut socket = app.socket("/ws/unit/blocked").connect().await;
     socket.send("write", json!(null)).await;
     BLOCKED_STARTED.notified().await;
     let answer = socket.next_envelope().await;

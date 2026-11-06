@@ -744,7 +744,7 @@ impl OperationLine {
     fn cut(&self, timeout: Duration) {
         tracing::warn!(
             target: crate::TARGET,
-            operation_type = self.ty,
+            kind = self.ty,
             ?timeout,
             "graphql operation not answered by the request deadline; it is cut",
         );
@@ -758,7 +758,7 @@ impl OperationLine {
                 span: &self.span,
                 outcome: outcome,
                 started: self.started,
-                operation_type = self.ty,
+                kind = self.ty,
             );
         });
     }

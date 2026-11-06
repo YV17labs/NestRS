@@ -1306,7 +1306,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 root_kind.label()
             };
             let route_label = format!("{role_label} {method_name}");
-            let route_label_lit = LitStr::new(&route_label, proc_macro2::Span::call_site());
             let (mut gsig, gctx) = ensure_ctx_param(&wrapper_sig);
             gsig.output = wrapper_output(&sig);
             let authz_entity = |spec: &AuthorizeSpec| match &subject_entity {
@@ -1362,6 +1361,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     .map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
                 }
             });
+            let item_site = site_ref(&self_ty, &method_name);
             let body = match authorize_spec.as_ref().filter(|spec| !spec.unmasked) {
                 Some(spec) => {
                     let action = &spec.action;
@@ -1403,7 +1403,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                                             __stream,
                                             move |__item| ::core::future::ready(
                                                 ::nest_rs_graphql::__private::keep_masked_item(
-                                                    #route_label_lit,
+                                                    #item_site,
                                                     ::nest_rs_authz::__private::graphql_masked_item::<
                                                         #action, #entity, _,
                                                     >(#gctx, &__ability, __item),

@@ -30,6 +30,7 @@ mod interceptors;
 mod layer_pool;
 mod lifecycle_hooks;
 mod mcp;
+mod operation_lines;
 mod pipe_codes;
 mod pipes;
 mod reflector;

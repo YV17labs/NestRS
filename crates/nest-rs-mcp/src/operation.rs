@@ -33,6 +33,7 @@ use rmcp::model::{
 use crate::McpError;
 use crate::error::{OperationFailure, Reply, answer, opaque_answer};
 use crate::module::McpModule;
+use crate::propagate::ServedResource;
 use crate::view::McpView;
 
 /// The container serving the current MCP operation, read off the ambient request
@@ -239,6 +240,11 @@ where
     // `tail` is a closure: the operation's future is built in `dispatch`'s
     // own frame, held once (rust-lang/rust#62958).
     let handler = site.handler();
+    if view.kind() == Some(McpOperationKind::Resource)
+        && let Some(served) = nest_rs_core::ambient::<ServedResource>()
+    {
+        served.serves(handler.address());
+    }
     // Composed against an empty container where no app is ambient: a site
     // declaring nothing still runs, one declaring a layer is refused.
     let container = current_container().unwrap_or_default();

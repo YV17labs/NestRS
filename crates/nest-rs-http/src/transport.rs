@@ -289,7 +289,7 @@ fn mount_fallback(
         tracing::warn!(
             target: crate::target::ROUTES,
             path = meta.path(),
-            controller,
+            host = controller,
             fallback = meta.owner(),
             "a route answers GET at the router fallback's own path, which the fallback never \
              answers",

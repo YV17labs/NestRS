@@ -91,8 +91,8 @@ pub(crate) fn build_document(
                 Err(refused) => {
                     tracing::warn!(
                         target: crate::TARGET,
-                        controller = meta.controller(),
-                        handler = route.handler(),
+                        host = meta.controller(),
+                        method = route.handler(),
                         error = %nest_rs_core::error_message(&refused),
                         "route omitted from the document: its path is not a route template",
                     );
@@ -102,8 +102,8 @@ pub(crate) fn build_document(
             let Some(key) = openapi_path(&full).map(str::to_owned) else {
                 tracing::warn!(
                     target: crate::TARGET,
-                    controller = meta.controller(),
-                    handler = route.handler(),
+                    host = meta.controller(),
+                    method = route.handler(),
                     path = %full,
                     "route omitted from the document: an OpenAPI path template names one \
                      segment's value, so a catch-all or a literal brace cannot be described",
@@ -138,9 +138,9 @@ pub(crate) fn build_document(
                     target: crate::TARGET,
                     operation_id = id.as_str(),
                     path = key.as_str(),
-                    method = method,
+                    verb = method,
                     conflicting_path = previous.0.as_str(),
-                    conflicting_method = previous.1,
+                    conflicting_verb = previous.1,
                     hint = DUPLICATE_ID_REMEDY,
                     "two operations share one operationId",
                 );
@@ -153,7 +153,7 @@ pub(crate) fn build_document(
                 tracing::warn!(
                     target: crate::TARGET,
                     path = key.as_str(),
-                    method = method,
+                    verb = method,
                     described = version_label(version),
                     omitted = version_label(previous),
                     hint = contested_path_remedy().as_str(),
@@ -456,8 +456,8 @@ fn guard_denials(
     route_denials(container, route).unwrap_or_else(|refused| {
         tracing::warn!(
             target: crate::TARGET,
-            controller = meta.controller(),
-            handler = route.handler(),
+            host = meta.controller(),
+            method = route.handler(),
             error = %nest_rs_core::error_message(&*refused),
             "the route's guard refusals are omitted from the document: its chain does not compose",
         );
@@ -2570,7 +2570,7 @@ mod tests {
         );
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("path").as_deref(), Some("/posts"));
-        assert_eq!(event.field("method").as_deref(), Some("GET"));
+        assert_eq!(event.field("verb").as_deref(), Some("GET"));
         assert_eq!(event.field("described").as_deref(), Some("2"));
         assert_eq!(event.field("omitted").as_deref(), Some("1"));
         assert!(
@@ -2669,6 +2669,8 @@ mod tests {
         let event = logs.expect_one("nest_rs::openapi", "two operations share one operationId");
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("operation_id").as_deref(), Some("probe_r_type"));
+        assert_eq!(event.field("verb").as_deref(), Some("GET"));
+        assert_eq!(event.field("conflicting_verb").as_deref(), Some("GET"));
         let addresses = [event.field("path"), event.field("conflicting_path")];
         assert!(
             addresses.iter().flatten().any(|p| p == "/probe/raw")
@@ -2748,7 +2750,7 @@ mod tests {
                 && addresses.iter().flatten().any(|p| p == "/archive/posts"),
             "the warning names both operations: {event:#?}",
         );
-        assert_eq!(event.field("method").as_deref(), Some("GET"));
+        assert_eq!(event.field("verb").as_deref(), Some("GET"));
         assert!(
             event
                 .field("hint")

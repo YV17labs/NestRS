@@ -114,7 +114,7 @@ async fn the_standalone_stream_ends_at_the_shutdown_signal() {
             nest_rs_http::unit::REQUEST.name(),
         )
         .into_iter()
-        .filter(|line| line.field("method").as_deref() == Some("GET"))
+        .filter(|line| line.field("verb").as_deref() == Some("GET"))
         .collect();
     assert_eq!(lines.len(), 1, "one line for the stream: {lines:#?}");
     assert_eq!(lines[0].field("status").as_deref(), Some("200"));

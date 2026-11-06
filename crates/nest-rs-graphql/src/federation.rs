@@ -234,18 +234,24 @@ impl Extension for FederationExtension {
                 FieldFailure::from(carried)
             })
         };
-        in_field_unit("federation", field, async move {
-            unit.run(tail).await.map_err(|error| {
-                match error
-                    .source
-                    .as_ref()
-                    .and_then(|source| source.downcast_ref::<Answered>())
-                {
-                    Some(Answered(answered)) => answered.clone(),
-                    None => error.into_server_error(position),
-                }
-            })
-        })
+        in_field_unit(
+            site.handler(),
+            OperationType::Query,
+            "federation",
+            field,
+            async move {
+                unit.run(tail).await.map_err(|error| {
+                    match error
+                        .source
+                        .as_ref()
+                        .and_then(|source| source.downcast_ref::<Answered>())
+                    {
+                        Some(Answered(answered)) => answered.clone(),
+                        None => error.into_server_error(position),
+                    }
+                })
+            },
+        )
         .await
     }
 }

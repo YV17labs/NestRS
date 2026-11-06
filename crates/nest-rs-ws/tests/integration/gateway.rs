@@ -965,6 +965,7 @@ async fn the_boot_log_names_the_address_a_client_connects_to() {
     let endpoint = logs.expect_one("nest_rs::routes", "mounted endpoint");
     assert_eq!(endpoint.field("path").as_deref(), Some("/v1/ws"));
     assert_eq!(endpoint.field("surface").as_deref(), Some("ws"));
+    assert_eq!(endpoint.field("host").as_deref(), Some("VersionedGateway"));
 
     let message = logs.expect_one("nest_rs::routes", "mounted");
     assert_eq!(message.field("path").as_deref(), Some("/v1/ws"));

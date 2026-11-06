@@ -467,7 +467,7 @@ fn dispatched(logs: &LogCapture) -> Vec<String> {
         nest_rs_graphql::unit::FIELD.name(),
     )
     .into_iter()
-    .filter_map(|line| line.field("operation"))
+    .filter_map(|line| line.field("field"))
     .collect()
 }
 
@@ -1292,16 +1292,13 @@ async fn each_operation_files_one_line_naming_its_type_and_its_span_its_name() {
             );
         }
     }
-    assert_eq!(
-        lines[0].field("operation_type").as_deref(),
-        Some("mutation")
-    );
+    assert_eq!(lines[0].field("kind").as_deref(), Some("mutation"));
     assert_eq!(
         lines[0].field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::ERROR),
         "its response carries an error"
     );
-    assert_eq!(lines[1].field("operation_type").as_deref(), Some("query"));
+    assert_eq!(lines[1].field("kind").as_deref(), Some("query"));
     assert_eq!(
         lines[1].field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::OK)
@@ -1504,7 +1501,7 @@ async fn a_mutation_past_the_request_deadline_is_cut_inside_its_unit_and_answere
         "graphql operation not answered by the request deadline; it is cut",
     );
     assert_eq!(cut.level, "warn");
-    assert_eq!(cut.field("operation_type").as_deref(), Some("mutation"));
+    assert_eq!(cut.field("kind").as_deref(), Some("mutation"));
     assert_eq!(
         cut.field("operation_name"),
         None,

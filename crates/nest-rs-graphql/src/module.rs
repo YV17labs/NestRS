@@ -223,7 +223,7 @@ fn check_membership(reachable: &ReachableProviders, strict: bool) -> anyhow::Res
     for resolver in unreachable {
         tracing::warn!(
             target: crate::TARGET,
-            resolver,
+            host = resolver,
             hint = "add it to a feature module's `#[module(providers = [...])]` if you meant to expose it",
             "unreachable resolver skipped from the GraphQL schema",
         );

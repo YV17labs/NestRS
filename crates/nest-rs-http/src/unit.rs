@@ -16,7 +16,7 @@
 //!     span: &span,
 //!     outcome: OK,
 //!     started: started,
-//!     method = "GET",
+//!     verb = "GET",
 //! );
 //! assert_eq!(nest_rs_http::unit::REQUEST.name(), "http.request");
 //! ```

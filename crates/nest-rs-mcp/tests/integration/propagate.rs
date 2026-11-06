@@ -498,7 +498,7 @@ async fn an_operation_line_names_nothing_only_the_client_named() {
         lines()
             .iter()
             .filter(|line| {
-                line.field("method").as_deref() == Some(nest_rs_core::operation_log::OTHER)
+                line.field("mcp_method").as_deref() == Some(nest_rs_core::operation_log::OTHER)
             })
             .count()
             == 2
@@ -522,16 +522,26 @@ async fn an_operation_line_names_nothing_only_the_client_named() {
     let line = |method: &str| {
         lines
             .iter()
-            .find(|line| line.field("method").as_deref() == Some(method))
+            .find(|line| line.field("mcp_method").as_deref() == Some(method))
             .unwrap_or_else(|| panic!("a `{method}` line: {lines:#?}"))
     };
     assert_eq!(
-        line("tools/call").field("operation").as_deref(),
+        line("tools/call").field("tool").as_deref(),
         Some(nest_rs_core::operation_log::OTHER),
         "a tool no host declares"
     );
-    for method in ["prompts/get", "resources/read", "tasks/get"] {
-        assert_eq!(line(method).field("operation"), None, "{method}");
+    assert_eq!(
+        line("prompts/get").field("prompt").as_deref(),
+        Some(nest_rs_core::operation_log::OTHER),
+        "a prompt no host declares"
+    );
+    assert_eq!(
+        line("resources/read").field("resource").as_deref(),
+        Some(nest_rs_core::operation_log::OTHER),
+        "a URI no template serves"
+    );
+    for field in ["tool", "prompt", "resource"] {
+        assert_eq!(line("tasks/get").field(field), None, "{field}");
     }
 
     let span = |method: &str| {
@@ -570,6 +580,47 @@ impl DraftPrompts {
 
 #[module(imports = [crate::open_mcp()], providers = [DraftPrompts])]
 struct DraftModule;
+
+/// A prompt's line names it as its `mounted` line does, and `_OTHER` for a name
+/// no host declares.
+#[tokio::test]
+async fn a_prompt_line_names_what_the_mount_declares() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<DraftModule>()
+        .await
+        .expect("a prompt host boots");
+    let session = open_session(app.http(), REFUSALS, None).await;
+    for name in ["draft", "marked-prompt"] {
+        call_method(
+            app.http(),
+            REFUSALS,
+            &session,
+            None,
+            "prompts/get",
+            json!({ "name": name }),
+        )
+        .await;
+    }
+
+    let named: Vec<_> = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_mcp::unit::OPERATION.name(),
+        )
+        .into_iter()
+        .filter(|line| line.field("mcp_method").as_deref() == Some("prompts/get"))
+        .map(|line| line.field("prompt"))
+        .collect();
+    assert_eq!(
+        named,
+        [
+            Some("draft".to_owned()),
+            Some(nest_rs_core::operation_log::OTHER.to_owned()),
+        ],
+    );
+    let mounted = logs.expect_one(nest_rs_http::target::ROUTES, "mounted");
+    assert_eq!(mounted.field("prompt").as_deref(), Some("draft"));
+}
 
 /// rmcp refuses a prompt its host does not declare, and a method no host
 /// serves, in words quoting the name a client sent: each is answered by
@@ -854,7 +905,7 @@ fn tool_call_lines(logs: &LogCapture) -> Vec<nest_rs_testing::CapturedEvent> {
         nest_rs_mcp::unit::OPERATION.name(),
     )
     .into_iter()
-    .filter(|line| line.field("method").as_deref() == Some("tools/call"))
+    .filter(|line| line.field("mcp_method").as_deref() == Some("tools/call"))
     .collect()
 }
 
@@ -907,7 +958,7 @@ async fn a_tool_no_host_declares_names_the_not_found_class_at_every_version() {
                 "{path} at {version}",
             );
             assert_eq!(
-                line.field("operation").as_deref(),
+                line.field("tool").as_deref(),
                 Some(nest_rs_core::operation_log::OTHER),
                 "{path} at {version}",
             );
@@ -1053,7 +1104,7 @@ async fn operation_line(logs: &LogCapture, operation: &str) -> nest_rs_testing::
                 nest_rs_mcp::unit::OPERATION.name(),
             )
             .into_iter()
-            .filter(|line| line.field("operation").as_deref() == Some(operation))
+            .filter(|line| line.field("tool").as_deref() == Some(operation))
             .collect();
         match filed.as_slice() {
             [] => tokio::time::sleep(Duration::from_millis(10)).await,
@@ -1270,7 +1321,7 @@ async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
         "mcp operation panicked; its client is answered with an internal error",
     );
     assert_eq!(contained.level, "error");
-    assert_eq!(contained.field("operation").as_deref(), Some("boom"));
+    assert_eq!(contained.field("tool").as_deref(), Some("boom"));
     assert!(
         contained
             .field(nest_rs_core::panic::FIELD)
@@ -1380,7 +1431,7 @@ async fn a_tool_error_in_band_files_its_line_error_and_its_span_tool_error() {
             nest_rs_mcp::unit::OPERATION.name(),
         )
         .into_iter()
-        .filter(|line| line.field("operation").as_deref() == Some("amount"))
+        .filter(|line| line.field("tool").as_deref() == Some("amount"))
         .nth(1)
     };
     nest_rs_testing::wait_until(Duration::from_secs(2), || answered().is_some()).await;
@@ -1530,7 +1581,7 @@ async fn a_json_rpc_error_records_its_code_on_the_operations_span() {
         .iter()
         .filter(|line| {
             matches!(
-                line.field("method").as_deref(),
+                line.field("mcp_method").as_deref(),
                 Some("tools/call" | "prompts/get" | "resources/read")
             )
         })
@@ -1607,7 +1658,7 @@ async fn a_subscription_is_answered_its_final_result_at_the_shutdown_signal() {
             nest_rs_mcp::unit::OPERATION.name(),
         )
         .into_iter()
-        .filter(|line| line.field("method").as_deref() == Some("subscriptions/listen"))
+        .filter(|line| line.field("mcp_method").as_deref() == Some("subscriptions/listen"))
         .collect::<Vec<_>>()
     };
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1773,7 +1824,7 @@ async fn assert_cut_at_the_operation_deadline(
     );
     assert_eq!(cut.level, "warn");
     assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
-    assert_eq!(cut.field("operation").as_deref(), Some("stalled"));
+    assert_eq!(cut.field("tool").as_deref(), Some("stalled"));
     assert_eq!(cut.field("operation_timeout_secs").as_deref(), Some("20"));
 }
 

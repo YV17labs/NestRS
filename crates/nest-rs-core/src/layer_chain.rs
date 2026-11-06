@@ -779,7 +779,7 @@ pub(crate) mod __private {
             .collect();
         tracing::trace!(
             target: crate::target::LAYERS,
-            route = site,
+            site,
             kind,
             chain = entries.join(", ").as_str(),
             "effective layer chain",

@@ -238,7 +238,7 @@ fn unmasked(marked: bool, resp: Result<Response>, route: &'static str) -> Result
     if marked && resp.status().is_success() {
         tracing::error!(
             target: crate::target::HTTP,
-            route = route,
+            site = route,
             "a masking extractor ran but no response shaper armed on this route — \
              declare it as a handler parameter (a nested or hand-rolled extractor \
              is invisible to the type-directed arm); failing closed",
@@ -342,7 +342,7 @@ mod tests {
              is invisible to the type-directed arm); failing closed",
         );
         assert_eq!(event.level, "error");
-        assert_eq!(event.field("route").as_deref(), Some("GET /users"));
+        assert_eq!(event.field("site").as_deref(), Some("GET /users"));
     }
 
     #[tokio::test]

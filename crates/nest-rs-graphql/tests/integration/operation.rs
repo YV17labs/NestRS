@@ -168,7 +168,7 @@ async fn every_dispatched_root_field_files_one_line_naming_itself() {
     // `body` is async-graphql's own accessor, never dispatched by this crate.
     let named: Vec<(Option<String>, Option<String>)> = served
         .iter()
-        .map(|line| (line.field("role"), line.field("operation")))
+        .map(|line| (line.field("kind"), line.field("field")))
         .collect();
     assert_eq!(
         named,
@@ -200,7 +200,7 @@ async fn a_field_resolver_over_many_parents_files_no_line_of_its_own() {
 
     let served = lines(&logs);
     assert_eq!(served.len(), 1, "one line, the root field's: {served:#?}");
-    assert_eq!(served[0].field("operation").as_deref(), Some("notes"));
+    assert_eq!(served[0].field("field").as_deref(), Some("notes"));
     assert_eq!(
         logs.find(
             nest_rs_core::operation_log::TARGET,
@@ -228,9 +228,9 @@ async fn a_mutation_is_the_same_unit_under_its_own_role() {
     let served = lines(&logs);
     let touch = served
         .iter()
-        .find(|line| line.field("operation").as_deref() == Some("touch"))
+        .find(|line| line.field("field").as_deref() == Some("touch"))
         .unwrap_or_else(|| panic!("the mutation files a line: {served:?}"));
-    assert_eq!(touch.field("role").as_deref(), Some("mutation"));
+    assert_eq!(touch.field("kind").as_deref(), Some("mutation"));
 }
 
 #[tokio::test]
@@ -243,7 +243,7 @@ async fn a_failing_operation_says_so() {
     let served = lines(&logs);
     let refused = served
         .iter()
-        .find(|line| line.field("operation").as_deref() == Some("refused"))
+        .find(|line| line.field("field").as_deref() == Some("refused"))
         .unwrap_or_else(|| panic!("the failing query files a line: {served:?}"));
     assert_eq!(
         refused.field("outcome").as_deref(),
@@ -448,7 +448,7 @@ async fn a_return_is_fallible_by_its_type_never_by_its_name() {
     let outcome = |operation: &str| {
         served
             .iter()
-            .find(|line| line.field("operation").as_deref() == Some(operation))
+            .find(|line| line.field("field").as_deref() == Some(operation))
             .unwrap_or_else(|| panic!("`{operation}` files a line: {served:?}"))
             .field("outcome")
     };
@@ -523,7 +523,7 @@ async fn a_field_whose_request_is_dropped_files_its_line_cancelled() {
 
     let filed = lines(&logs);
     assert_eq!(filed.len(), 1, "one line for the field: {filed:#?}");
-    assert_eq!(filed[0].field("operation").as_deref(), Some("slow"));
+    assert_eq!(filed[0].field("field").as_deref(), Some("slow"));
     assert_eq!(
         filed[0].field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::CANCELLED),
@@ -548,7 +548,7 @@ async fn a_field_that_panics_files_its_line_panic() {
 
     let filed = lines(&logs);
     assert_eq!(filed.len(), 1, "one line for the field: {filed:#?}");
-    assert_eq!(filed[0].field("operation").as_deref(), Some("explode"));
+    assert_eq!(filed[0].field("field").as_deref(), Some("explode"));
     assert_eq!(
         filed[0].field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::PANIC),
@@ -585,7 +585,7 @@ async fn a_field_torn_down_by_a_sibling_that_panics_files_cancelled() {
     let outcome = |operation: &str| {
         filed
             .iter()
-            .find(|line| line.field("operation").as_deref() == Some(operation))
+            .find(|line| line.field("field").as_deref() == Some(operation))
             .and_then(|line| line.field("outcome"))
     };
     assert_eq!(filed.len(), 2, "one line per field: {filed:#?}");

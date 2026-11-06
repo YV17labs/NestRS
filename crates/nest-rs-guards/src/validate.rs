@@ -130,7 +130,7 @@ fn validate(
             None => {
                 tracing::warn!(
                     target: nest_rs_core::target::LAYERS,
-                    route = label,
+                    site = label,
                     guard = shorten(entry.name),
                     expected = shorten(expected.type_name),
                     "guard expects a principal but no guard in the chain produces one — \
@@ -543,7 +543,7 @@ mod tests {
              non-public routes will answer 500",
         );
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("route").as_deref(), Some("test"));
+        assert_eq!(event.field("site").as_deref(), Some("test"));
         assert_eq!(event.field("guard").as_deref(), Some("Authz"));
         assert_eq!(
             event.field("expected").as_deref(),

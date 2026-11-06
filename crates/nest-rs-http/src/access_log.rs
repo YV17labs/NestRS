@@ -3,11 +3,11 @@
 //! `trace_id` and `span_id` are not fields: every line carries its unit's
 //! correlation from the ambient context, which the body re-enters
 //! (`response_body`). The line carries the server's values only
-//! (`.claude/decisions/payload-never-quoted.md`): the route template the router
-//! matched (`/posts/{id}`), never the path the client sent, and a request no
-//! route matched files no route at all; the method as the HTTP conventions
-//! know it, `_OTHER` for a token the client chose; no user agent, which is
-//! free text.
+//! (`.claude/decisions/payload-never-quoted.md`): `path` is the route template
+//! the router matched (`/posts/{id}`), never the path the client sent, and a
+//! request no route matched files none at all; `verb` is the method as the HTTP
+//! conventions know it, `_OTHER` for a token the client chose; no user agent,
+//! which is free text. Both read as the route's `mounted` line says them.
 //!
 //! A request dropped before it answers — by the shutdown window or a client's
 //! reset — files its line [`CANCELLED`] through [`Unanswered`], with no `status`
@@ -30,7 +30,7 @@ use crate::matched::MatchedRoute;
 /// response body has been written.
 pub(crate) struct AccessLog {
     /// The [`KnownMethods`](crate::trace_context::KnownMethods) name.
-    method: Cow<'static, str>,
+    verb: Cow<'static, str>,
     /// The slot the router notes the matched template in; read when the line
     /// is filed.
     matched: MatchedRoute,
@@ -41,9 +41,9 @@ impl AccessLog {
     /// Snapshot what only the *request* can answer, before it is consumed:
     /// its method as the line names it. `start` is the instant the request
     /// arrived, which its budget counts from too.
-    pub(crate) fn open(method: Cow<'static, str>, matched: &MatchedRoute, start: Instant) -> Self {
+    pub(crate) fn open(verb: Cow<'static, str>, matched: &MatchedRoute, start: Instant) -> Self {
         Self {
-            method,
+            verb,
             matched: matched.clone(),
             start,
         }
@@ -63,14 +63,14 @@ impl AccessLog {
         bytes: u64,
         outcome: Option<&'static str>,
     ) {
-        let route = self.matched.route();
+        let path = self.matched.route();
         nest_rs_core::operation_line!(
             crate::unit::REQUEST,
             span: span,
             outcome: outcome,
             started: self.start,
-            method = %self.method,
-            route = route.as_deref(),
+            verb = %self.verb,
+            path = path.as_deref(),
             status,
             bytes,
         );
@@ -79,14 +79,14 @@ impl AccessLog {
     /// File a request that ended before it answered. No `status` and no
     /// `bytes`: a `0` in either would claim a response nobody sent.
     fn unanswered(self, span: &tracing::Span, outcome: &'static str) {
-        let route = self.matched.route();
+        let path = self.matched.route();
         nest_rs_core::operation_line!(
             crate::unit::REQUEST,
             span: span,
             outcome: outcome,
             started: self.start,
-            method = %self.method,
-            route = route.as_deref(),
+            verb = %self.verb,
+            path = path.as_deref(),
         );
     }
 }
@@ -201,12 +201,12 @@ mod tests {
         );
         assert_eq!(line.field("status"), None);
         assert_eq!(line.field("bytes"), None);
-        assert_eq!(line.field("route").as_deref(), Some("/reports/{id}"));
+        assert_eq!(line.field("path").as_deref(), Some("/reports/{id}"));
         assert!(line.trace_id.is_some(), "{line:#?}");
     }
 
-    /// A path is what the client sent: the line names the template it
-    /// matched, and a request that matched none names no route at all.
+    /// A path as sent is the client's: the line names the template it matched,
+    /// and a request that matched none names no path at all.
     #[test]
     fn the_line_names_the_matched_template_never_the_path_sent() {
         for (route, named) in [
@@ -217,7 +217,7 @@ mod tests {
             let (log, _continuation) = held(&route);
             log.emit(&tracing::Span::none(), 200, 2, None);
             let line = the_line(&logs);
-            assert_eq!(line.field("route").as_deref(), named);
+            assert_eq!(line.field("path").as_deref(), named);
         }
     }
 
@@ -248,10 +248,10 @@ mod tests {
     }
 
     /// The console's text format prints a field written as a `&str` in quotes
-    /// and one written through `Display` bare: the method is printed
-    /// `method=GET`, as a query on the console's lines matches it.
+    /// and one written through `Display` bare: the verb is printed `verb=GET`,
+    /// as a query on the console's lines matches it.
     #[test]
-    fn the_console_line_prints_the_method_bare() {
+    fn the_console_line_prints_the_verb_bare() {
         use tracing_subscriber::layer::SubscriberExt as _;
 
         let written = Written::default();
@@ -266,7 +266,7 @@ mod tests {
         });
         let line = String::from_utf8(written.0.lock().expect("unpoisoned").clone())
             .expect("the console writes UTF-8");
-        assert!(line.contains(" method=GET "), "{line}");
+        assert!(line.contains(" verb=GET "), "{line}");
     }
 
     #[test]

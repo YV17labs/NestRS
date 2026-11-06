@@ -237,7 +237,7 @@ mod a_resolver_no_module_lists {
         );
         let ours = reported
             .iter()
-            .find(|event| event.field("resolver").as_deref() == Some("OrphanResolver"))
+            .find(|event| event.field("host").as_deref() == Some("OrphanResolver"))
             .unwrap_or_else(|| panic!("the unlisted resolver is named: {reported:#?}"));
         assert_eq!(ours.level, "warn");
         assert!(
@@ -248,7 +248,7 @@ mod a_resolver_no_module_lists {
         assert!(
             !reported
                 .iter()
-                .any(|event| event.field("resolver").as_deref() == Some("ListedResolver")),
+                .any(|event| event.field("host").as_deref() == Some("ListedResolver")),
             "a listed resolver is never reported: {reported:#?}",
         );
     }

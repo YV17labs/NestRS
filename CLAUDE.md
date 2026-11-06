@@ -188,9 +188,10 @@ never a value in the message; an `error` field is the whole chain
 (`nest_rs_core::error_message`). `trace_id`, `span_id` and `actor_id` come from
 context, never as fields; `actor_id` is audit, never authorization. A line naming
 a dispatched unit names it as its `mounted` line does (`host`, `method`, then the
-edge's coordinates), an edge's operation line alone speaking its protocol; a guard
-reads as an app writes it (`short_type_name`), and a value an operator sets or a
-standard names in that word, never its `Debug` (`naming.md`).
+edge's coordinates; `http.request`, `ws.message` and `mcp.operation` say the
+coordinates alone), and `method` is the Rust method wherever a line says it; a
+guard reads as an app writes it (`short_type_name`), and a value an operator sets
+or a standard names in that word, never its `Debug` (`naming.md`).
 
 ## Comments
 

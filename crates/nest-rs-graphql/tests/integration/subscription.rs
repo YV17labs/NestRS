@@ -14,7 +14,11 @@ use async_graphql::futures_util::StreamExt as _;
 /// async-graphql's own `futures_util` re-export, reached through the framework.
 use async_graphql::futures_util::stream as futures_stream;
 use nest_rs_config::Surface;
-use nest_rs_core::{Scoped, module};
+use nest_rs_core::__private::{
+    GlobalLayers, HandlerDeclaration, MetaLevels, Site, SiteDeclaration, SiteLayers,
+    declare_handler, declare_site,
+};
+use nest_rs_core::{Handler, Scoped, module};
 use nest_rs_graphql::async_graphql;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_pipes::{Piped, Trim};
@@ -245,19 +249,40 @@ async fn each_operation_on_a_socket_runs_in_a_request_scope_of_its_own() {
     assert_ne!(second, subscribed, "a subscription shares no query's scope");
 }
 
+static TICKS_HANDLER: Handler = declare_handler(HandlerDeclaration {
+    unit: nest_rs_graphql::unit::FIELD,
+    host: std::any::TypeId::of::<u8>(),
+    host_name: "Withholding",
+    method: "ticks",
+    address: "ticks",
+    posture: nest_rs_core::Posture::Public,
+    meta: MetaLevels::default,
+});
+
+static TICKS_SITE: Site = declare_site(
+    &TICKS_HANDLER,
+    SiteDeclaration {
+        layers: SiteLayers::default,
+        global: GlobalLayers::NONE,
+        guard_stage: None,
+        class_gate: None,
+    },
+);
+
+const TICKS: &Site = &TICKS_SITE;
+
 #[test]
-fn a_withheld_item_is_reported_with_the_operation_that_withheld_it() {
+fn a_withheld_item_is_reported_with_the_unit_that_withheld_it() {
     let logs = LogCapture::install();
 
-    let kept = nest_rs_graphql::__private::keep_masked_item("subscription ticks", Ok(Some(7)));
+    let kept = nest_rs_graphql::__private::keep_masked_item(TICKS, Ok(Some(7)));
     assert_eq!(kept, Some(7), "a granted item is pushed unchanged");
 
-    let refused: Option<i32> =
-        nest_rs_graphql::__private::keep_masked_item("subscription ticks", Ok(None));
+    let refused: Option<i32> = nest_rs_graphql::__private::keep_masked_item(TICKS, Ok(None));
     assert!(refused.is_none(), "an item outside the grant is dropped");
 
     let failed: Option<i32> = nest_rs_graphql::__private::keep_masked_item(
-        "subscription ticks",
+        TICKS,
         Err(async_graphql::Error::new("value did not reconcile")),
     );
     assert!(failed.is_none(), "a masking failure fails closed");
@@ -272,12 +297,16 @@ fn a_withheld_item_is_reported_with_the_operation_that_withheld_it() {
         vec!["not_granted", "mask_failed"],
         "both drops are traceable, and they are told apart by `reason`",
     );
-    assert!(
-        reported
-            .iter()
-            .all(|event| event.field("operation").as_deref() == Some("subscription ticks")),
-        "each names the operation that withheld the item",
-    );
+    for event in &reported {
+        for (field, named) in [
+            ("host", "Withholding"),
+            ("method", "ticks"),
+            ("kind", "subscription"),
+            ("field", "ticks"),
+        ] {
+            assert_eq!(event.field(field).as_deref(), Some(named), "{field}");
+        }
+    }
 }
 
 #[test]

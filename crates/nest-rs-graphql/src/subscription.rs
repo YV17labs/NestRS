@@ -22,6 +22,7 @@ use futures_util::future::Either;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, Stream, StreamExt};
 
+use nest_rs_core::__private::Site;
 use nest_rs_core::anyhow;
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
 use nest_rs_http::__private::websocket::{
@@ -58,15 +59,19 @@ pub fn compose_schema(
 /// `#[subscription]` expansion: a refused row is dropped at `debug`; a mask
 /// failure is dropped at `warn`, since an item has no error channel.
 pub fn keep_masked_item<T>(
-    operation: &'static str,
+    site: &'static Site,
     masked: Result<Option<T>, async_graphql::Error>,
 ) -> Option<T> {
+    let handler = site.handler();
     match masked {
         Ok(Some(item)) => Some(item),
         Ok(None) => {
             tracing::debug!(
                 target: crate::TARGET,
-                operation,
+                host = handler.host_name(),
+                method = handler.method(),
+                kind = crate::operation::operation_label(OperationType::Subscription),
+                field = handler.address(),
                 reason = "not_granted",
                 "subscription item withheld",
             );
@@ -75,7 +80,10 @@ pub fn keep_masked_item<T>(
         Err(err) => {
             tracing::warn!(
                 target: crate::TARGET,
-                operation,
+                host = handler.host_name(),
+                method = handler.method(),
+                kind = crate::operation::operation_label(OperationType::Subscription),
+                field = handler.address(),
                 reason = "mask_failed",
                 error = %err.message,
                 "subscription item withheld",

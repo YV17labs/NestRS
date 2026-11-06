@@ -166,12 +166,12 @@ impl CompositeHandler {
         unhandled.unwrap_or_else(|| Err(no_hosts()))
     }
 
-    fn warn_cursor(&self, host: &MountedHost, method: &str) {
+    fn warn_cursor(&self, host: &MountedHost, mcp_method: &str) {
         tracing::warn!(
             target: crate::TARGET,
             path = &*self.path,
             host = host.name,
-            method,
+            mcp_method,
             reason = "pagination_across_hosts",
             "an MCP host on a shared path returned a pagination cursor — the merged page drops it",
         );

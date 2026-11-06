@@ -443,6 +443,15 @@ struct HeaderVersionedDoorModule;
 
 #[module(
     imports = [HttpModule::for_root(HttpConfig {
+        versioning: ApiVersioning::MediaType,
+        ..HttpConfig::default()
+    })],
+    providers = [DeclaredDoor, VersionedDoorController, GlobalGuards<(DeclaredDoor,)>],
+)]
+struct MediaTypeVersionedDoorModule;
+
+#[module(
+    imports = [HttpModule::for_root(HttpConfig {
         versioning: ApiVersioning::Uri,
         ..HttpConfig::default()
     })],
@@ -450,18 +459,18 @@ struct HeaderVersionedDoorModule;
 )]
 struct UriVersionedDoorModule;
 
-/// A denial under `M`'s version strategy, reached by `request`: its `path` is
-/// where the route mounts, which its `mounted` line says too, with the version
-/// a field of its own. The operation line says the same `verb` and `path`.
+/// A denial under `M`'s version strategy, reached at `path` with `stated`: its
+/// `path` is where the route mounts, which its `mounted` line and the request's
+/// own line say too, with the version a field of its own on the first.
 async fn assert_a_versioned_denial_joins_its_mount<M: Module + 'static>(
     logs: &LogCapture,
     path: &str,
-    version_header: Option<&str>,
+    stated: Option<(&str, &str)>,
 ) {
     let app = booted::<M>().await;
     let request = app.http().get(path);
-    let request = match version_header {
-        Some(version) => request.header(DEFAULT_VERSION_HEADER, version),
+    let request = match stated {
+        Some((header, value)) => request.header(header, value),
         None => request,
     };
     request.send().await.assert_status(StatusCode::FORBIDDEN);
@@ -473,6 +482,13 @@ async fn assert_a_versioned_denial_joins_its_mount<M: Module + 'static>(
     for join in ["host", "method", "verb", "path"] {
         assert_eq!(line.field(join), mounted.field(join), "{join}");
     }
+    let request_line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_http::unit::REQUEST.name(),
+    );
+    for join in ["verb", "path"] {
+        assert_eq!(request_line.field(join), mounted.field(join), "{join}");
+    }
 }
 
 /// Under a version a header selects, the denial and the `mounted` line both say
@@ -483,7 +499,19 @@ async fn a_denial_under_a_header_version_joins_its_mount() {
     assert_a_versioned_denial_joins_its_mount::<HeaderVersionedDoorModule>(
         &logs,
         "/door/versioned",
-        Some("2"),
+        Some((DEFAULT_VERSION_HEADER, "2")),
+    )
+    .await;
+}
+
+/// Under a version the media type states, likewise.
+#[tokio::test]
+async fn a_denial_under_a_media_type_version_joins_its_mount() {
+    let logs = LogCapture::install();
+    assert_a_versioned_denial_joins_its_mount::<MediaTypeVersionedDoorModule>(
+        &logs,
+        "/door/versioned",
+        Some(("accept", "application/json; version=2")),
     )
     .await;
 }

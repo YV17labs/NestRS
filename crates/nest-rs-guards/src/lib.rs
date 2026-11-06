@@ -55,7 +55,7 @@
 //! impl Guard for AuditGuard {
 //!     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
 //!         let request = HttpView::of(cx)?.request();
-//!         tracing::info!(target: audit::TARGET, method = %request.method(), "request seen");
+//!         tracing::info!(target: audit::TARGET, verb = %request.method(), "request seen");
 //!         Ok(())
 //!     }
 //! }

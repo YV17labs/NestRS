@@ -204,8 +204,8 @@ pub fn field_name<'a>(ctx: &'a Context<'_>) -> &'a str {
 /// `site`'s chains, the rest of the field being `tail`: its argument pipes, the
 /// call and the posture's mask.
 ///
-/// The line names the field **as the client wrote it** (`listUsers`, not
-/// `list_users`), so it joins against a capture of the request. It files `ok`
+/// The line names the field as its `mounted` line does, by `host`, `method`,
+/// `kind` and `field` (`listUsers`, not `list_users`). It files `ok`
 /// or `error` on return, `cancelled` when dropped first, and `panic` when it
 /// unwinds — caught only to be named, then resumed. A sibling torn down by
 /// that unwind files `cancelled`: one panic is one `panic` line.
@@ -232,6 +232,8 @@ where
         kind.role(),
     );
     in_field_unit(
+        site.handler(),
+        operation,
         role,
         field_name(ctx),
         unit.run(tail)
@@ -239,10 +241,13 @@ where
     )
 }
 
-/// `unit`, a root field playing `role` under the name `field`, as a
-/// `graphql.field` unit of its own: its span, its line, its correlation and
-/// the request's scope, its panic named then resumed.
+/// `unit`, the root field `handler` declares, playing `role` under the name
+/// `field` in an `operation`, as a `graphql.field` unit of its own: its span,
+/// its line, its correlation and the request's scope, its panic named then
+/// resumed.
 pub(crate) fn in_field_unit<'a, F, T, E>(
+    handler: &'static Handler,
+    operation: OperationType,
     role: &'static str,
     field: &'a str,
     unit: F,
@@ -264,8 +269,8 @@ where
         graphql.field.name = field,
     );
     let line = FieldLine {
-        role,
-        operation: field,
+        handler,
+        kind: operation_label(operation),
         correlation: correlation.clone(),
         span: span.clone(),
         started: std::time::Instant::now(),
@@ -463,14 +468,14 @@ where
 pin_project_lite::pin_project! {
     /// A root field's unit with its line, filed once it ends: `ok` or `error`
     /// by what it answered, `panic` when it unwound — the unwind then resumed.
-    struct Filed<'l, F> {
-        line: Option<FieldLine<'l>>,
+    struct Filed<F> {
+        line: Option<FieldLine>,
         #[pin]
         unit: F,
     }
 }
 
-impl<T, E, F> Future for Filed<'_, F>
+impl<T, E, F> Future for Filed<F>
 where
     E: AnsweredError,
     F: Future<Output = Result<Result<T, E>, Box<dyn Any + Send>>>,
@@ -503,16 +508,16 @@ where
 ///
 /// The correlation is held: a `Drop` runs while the future is torn down, not
 /// reliably inside the scope that future installed.
-struct FieldLine<'a> {
-    role: &'static str,
-    operation: &'a str,
+struct FieldLine {
+    handler: &'static Handler,
+    kind: &'static str,
     correlation: nest_rs_core::Correlation,
     span: tracing::Span,
     started: std::time::Instant,
     filed: bool,
 }
 
-impl FieldLine<'_> {
+impl FieldLine {
     fn file(mut self, outcome: &'static str) {
         self.emit(outcome);
     }
@@ -542,14 +547,17 @@ impl FieldLine<'_> {
                 span: &self.span,
                 outcome: outcome,
                 started: self.started,
-                role = self.role,
-                operation = self.operation,
+                host = self.handler.host_name(),
+                // A federation field dispatches to no method of its own.
+                method = Some(self.handler.method()).filter(|method| !method.is_empty()),
+                kind = self.kind,
+                field = self.handler.address(),
             );
         });
     }
 }
 
-impl Drop for FieldLine<'_> {
+impl Drop for FieldLine {
     fn drop(&mut self) {
         if !self.filed {
             self.emit(nest_rs_core::operation_log::CANCELLED);

@@ -2116,7 +2116,7 @@ async fn a_dropped_cursor_names_the_host_whose_listing_is_truncated() {
         event.fields,
     );
     assert_eq!(
-        event.field("method").as_deref(),
+        event.field("mcp_method").as_deref(),
         Some("resources/list"),
         "…on the listing method that truncated: {:?}",
         event.fields,

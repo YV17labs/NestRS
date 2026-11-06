@@ -556,7 +556,8 @@ async fn a_versioned_root_catch_all_does_not_swallow_the_documents_own_addresses
     );
     for event in &omitted {
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("handler").as_deref(), Some("anything"));
+        assert_eq!(event.field("method").as_deref(), Some("anything"));
+        assert!(event.field("host").is_some(), "{:?}", event.fields);
         assert!(
             event.field("path").is_some_and(|p| p.contains("*rest")),
             "the event names the path it could not template, got {:?}",

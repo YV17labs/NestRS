@@ -307,25 +307,25 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         operations.len(),
     );
     assert!(
-        served.iter().all(|line| line.field("method").is_some()),
+        served.iter().all(|line| line.field("mcp_method").is_some()),
         "every line names the JSON-RPC method a client addressed: {served:?}",
     );
     // The protocol's method name, never rmcp's ident (`call_tool`).
     let tool_call = served
         .iter()
-        .find(|line| line.field("method").as_deref() == Some("tools/call"))
+        .find(|line| line.field("mcp_method").as_deref() == Some("tools/call"))
         .unwrap_or_else(|| panic!("the tool call files a line: {served:?}"));
     assert_eq!(
-        tool_call.field("operation").as_deref(),
+        tool_call.field("tool").as_deref(),
         Some("probe_span"),
         "the line names the tool the request addressed: {served:?}",
     );
     // Absent, not empty, where the protocol addresses nothing.
     let handshake = served
         .iter()
-        .find(|line| line.field("method").as_deref() == Some("initialize"))
+        .find(|line| line.field("mcp_method").as_deref() == Some("initialize"))
         .unwrap_or_else(|| panic!("the handshake files a line: {served:?}"));
-    assert_eq!(handshake.field("operation"), None, "{served:?}");
+    assert_eq!(handshake.field("tool"), None, "{served:?}");
     assert!(
         served
             .iter()

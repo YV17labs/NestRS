@@ -124,10 +124,7 @@ async fn routes_take_precedence_and_the_fallback_answers_the_rest() {
         "a route answers GET at the router fallback's own path, which the fallback never answers",
     );
     assert_eq!(warned.level, "warn");
-    assert_eq!(
-        warned.field("controller").as_deref(),
-        Some("HomeController")
-    );
+    assert_eq!(warned.field("host").as_deref(), Some("HomeController"));
 
     assert_eq!(text(&client, "/").await, (StatusCode::OK, "home".into()));
     assert_eq!(
@@ -168,7 +165,7 @@ async fn a_request_the_fallback_answers_is_named_for_its_mount() {
             nest_rs_core::operation_log::TARGET,
             nest_rs_http::unit::REQUEST.name(),
         );
-        assert_eq!(line.field("route").as_deref(), Some(named), "{path}");
+        assert_eq!(line.field("path").as_deref(), Some(named), "{path}");
         let span = logs.expect_span("nest_rs::http", "http.request");
         assert_eq!(span.field("http.route").as_deref(), Some(named), "{path}");
     }

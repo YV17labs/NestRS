@@ -36,14 +36,15 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use futures_util::future::Either;
 use nest_rs_core::__private::{Tail, UnitChains, dispatch, new_unit_context, settled};
 use nest_rs_core::{
-    Correlation, Deadline, Failure, Outcome, RequestContinuation, UnitContext, operation_log,
+    AmbientValue, Correlation, Deadline, Failure, Outcome, RequestContinuation, ServedAddress,
+    UnitContext, operation_log,
 };
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_http::DetachedWork;
@@ -169,7 +170,7 @@ impl OperationUnits {
     ///
     /// `method` is the JSON-RPC method and `addressed` what it named, which the
     /// span and the view record as the conventions ask; the line names
-    /// `declared` alone, a tool the host declares under that name. `unit` is
+    /// `declared` alone, what the mount declares under that name. `unit` is
     /// `false` for an operation that runs neither the request's site, a unit
     /// of work nor the deadline, which cuts the body, never its settle, so a
     /// commit is never cut. `stopped` resolves when the operation is to end
@@ -184,7 +185,7 @@ impl OperationUnits {
         &self,
         method: &Method,
         addressed: &Addressed,
-        declared: Option<&str>,
+        declared: ServedAddress<'_>,
         ambient: Option<McpAmbient>,
         unit: bool,
         stopped: S,
@@ -214,7 +215,7 @@ impl OperationUnits {
         &self,
         method: &Method,
         addressed: &Addressed,
-        declared: Option<&str>,
+        declared: ServedAddress<'_>,
         unit: bool,
         stopped: S,
         inner: F,
@@ -242,8 +243,25 @@ impl OperationUnits {
             rpc.response.status_code = tracing::field::Empty,
         );
         let named = method.named();
+        // Only the `#[resource]` serving a URI knows the template it matched,
+        // and the line is filed outside the unit it runs in.
+        let served_resource = matches!(addressed, Addressed::Resource(_))
+            .then(|| Arc::new(ServedResource::default()));
+        let inner = match &served_resource {
+            Some(served) => Either::Left(nest_rs_core::with_ambient(Arc::clone(served), inner)),
+            None => Either::Right(inner),
+        };
+        let address = LineAddress {
+            declared,
+            served_resource,
+        };
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
-        let line = OperationLine::open(named, declared, correlation.clone(), operation.clone());
+        let line = OperationLine::open(
+            named,
+            address.clone(),
+            correlation.clone(),
+            operation.clone(),
+        );
 
         let deadline = timeout.map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
         let spec = UnitSpec::new(
@@ -271,7 +289,7 @@ impl OperationUnits {
                             Some((timeout, at)) => tokio::time::timeout_at(at, dispatched)
                                 .await
                                 .unwrap_or_else(|_| {
-                                    Answered::refused(timed_out(named, declared, timeout))
+                                    Answered::refused(timed_out(named, &address, timeout))
                                 }),
                             None => dispatched.await,
                         }
@@ -436,7 +454,7 @@ impl<T: 'static> Answered<T> {
             (Ok(_), None) => {
                 tracing::error!(
                     target: crate::TARGET,
-                    method,
+                    mcp_method = method,
                     "an MCP operation settled without an answer; it is refused",
                 );
                 Self::refused(opaque_answer())
@@ -531,11 +549,14 @@ where
 /// What an operation past its deadline is answered: an internal error in the
 /// class HTTP's request timeout answers (`UNAVAILABLE`), with `timeout` as its
 /// reason, said once at `warn` for the operator.
-fn timed_out(method: &str, operation: Option<&str>, timeout: Duration) -> McpError {
+fn timed_out(mcp_method: &str, address: &LineAddress<'_>, timeout: Duration) -> McpError {
+    let named = address.named();
     tracing::warn!(
         target: crate::TARGET,
-        method,
-        operation,
+        mcp_method,
+        tool = named.tool,
+        prompt = named.prompt,
+        resource = named.resource,
         reason = TIMEOUT_REASON,
         operation_timeout_secs = timeout.as_secs(),
         "mcp operation not answered within its deadline; it is cut",
@@ -637,19 +658,29 @@ impl Addressed {
         }
     }
 
-    /// What a line names: a tool by the name `host` declares — read off the
-    /// mount's `index`, or `host`'s `get_tool` where it cannot say — and
-    /// [`OTHER`](operation_log::OTHER) for one it does not; nothing else the
-    /// client named, which no declaration answers for.
-    fn declared(&self, host: &impl ServerHandler, index: Option<&MountIndex>) -> Option<&str> {
+    /// What a line names, as the operation's `mounted` line does: a tool by the
+    /// name `host` declares — read off the mount's `index`, or `host`'s
+    /// `get_tool` where it cannot say — a prompt by the name the mount's `index`
+    /// reads declared, and [`OTHER`](operation_log::OTHER) for one neither
+    /// declares; nothing else the client named, a resource's template being
+    /// what its unit says ([`LineAddress`]).
+    fn declared(&self, host: &impl ServerHandler, index: Option<&MountIndex>) -> ServedAddress<'_> {
         match self {
             Self::Tool(name) => {
                 let declared = index
                     .and_then(|index| index.tools.declares(name))
                     .unwrap_or_else(|| host.get_tool(name).is_some());
-                Some(if declared { name } else { operation_log::OTHER })
+                ServedAddress::tool(if declared { name } else { operation_log::OTHER })
             }
-            Self::Nothing | Self::Prompt(_) | Self::Resource(_) | Self::Task(_) => None,
+            Self::Prompt(name) => {
+                let declared = index.and_then(|index| index.prompts.declares(name));
+                ServedAddress::prompt(if declared == Some(true) {
+                    name
+                } else {
+                    operation_log::OTHER
+                })
+            }
+            Self::Nothing | Self::Resource(_) | Self::Task(_) => ServedAddress::default(),
         }
     }
 
@@ -673,13 +704,55 @@ impl Addressed {
     }
 }
 
+/// The template a `resources/read`'s `#[resource]` served it through: the
+/// server's name for a URI the client chose. The last one running says it, as
+/// a host answering not-found hands the URI to the next.
+#[derive(Debug, Default)]
+pub(crate) struct ServedResource(Mutex<Option<&'static str>>);
+
+impl ServedResource {
+    /// The unit serving the read matched `template`.
+    pub(crate) fn serves(&self, template: &'static str) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(template);
+    }
+
+    /// The template that served the read, if a declared one did.
+    fn template(&self) -> Option<&'static str> {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl AmbientValue for ServedResource {}
+
+/// What an operation's lines name it by.
+#[derive(Clone)]
+struct LineAddress<'a> {
+    declared: ServedAddress<'a>,
+    /// On an operation a URI addresses, where its unit says the template.
+    served_resource: Option<Arc<ServedResource>>,
+}
+
+impl LineAddress<'_> {
+    /// `tool`, `prompt` or `resource` as the mount declares it, or
+    /// [`OTHER`](operation_log::OTHER) for what it does not.
+    fn named(&self) -> ServedAddress<'_> {
+        match &self.served_resource {
+            Some(served) => {
+                ServedAddress::resource(served.template().unwrap_or(operation_log::OTHER))
+            }
+            None => self.declared,
+        }
+    }
+}
+
 /// One operation's `mcp.operation` line, filed exactly once — by the end the
 /// dispatch saw, else by `Drop` as [`CANCELLED`](operation_log::CANCELLED).
 /// It names the server's values only: the protocol's method or
-/// [`OTHER`](operation_log::OTHER), and a tool by the name a host declares.
+/// [`OTHER`](operation_log::OTHER) as `mcp_method`, and what the method
+/// addressed as its `mounted` line does.
 struct OperationLine<'a> {
-    method: &'static str,
-    declared: Option<&'a str>,
+    mcp_method: &'static str,
+    address: LineAddress<'a>,
     /// Entered to file the line, which sits outside the scope the operation installs.
     correlation: Correlation,
     /// The operation's own span; [`Span::none`](tracing::Span::none) for a
@@ -691,14 +764,14 @@ struct OperationLine<'a> {
 
 impl<'a> OperationLine<'a> {
     fn open(
-        method: &'static str,
-        declared: Option<&'a str>,
+        mcp_method: &'static str,
+        address: LineAddress<'a>,
         correlation: Correlation,
         span: tracing::Span,
     ) -> Self {
         Self {
-            method,
-            declared,
+            mcp_method,
+            address,
             correlation,
             span,
             started: std::time::Instant::now(),
@@ -740,12 +813,15 @@ impl<'a> OperationLine<'a> {
         }
         self.emit(operation_log::PANIC);
         RequestContinuation::new(None, self.correlation.clone()).enter(|| {
+            let named = self.address.named();
             nest_rs_core::contained_panic!(
                 target: crate::TARGET,
                 payload,
                 "mcp operation panicked; its client is answered with an internal error",
-                method = self.method,
-                operation = self.declared,
+                mcp_method = self.mcp_method,
+                tool = named.tool,
+                prompt = named.prompt,
+                resource = named.resource,
             );
         });
     }
@@ -753,6 +829,7 @@ impl<'a> OperationLine<'a> {
     fn emit(&mut self, outcome: &'static str) {
         self.filed = true;
         RequestContinuation::new(None, self.correlation.clone()).enter(|| {
+            let named = self.address.named();
             nest_rs_core::operation_line!(
                 crate::unit::OPERATION,
                 span: &self.span,
@@ -760,8 +837,10 @@ impl<'a> OperationLine<'a> {
                 started: self.started,
                 // Flat, never dotted: a dotted field name is ambiguous to
                 // `tracing`'s parser beside a path target.
-                method = self.method,
-                operation = self.declared,
+                mcp_method = self.mcp_method,
+                tool = named.tool,
+                prompt = named.prompt,
+                resource = named.resource,
             );
         });
     }
@@ -835,7 +914,10 @@ macro_rules! notification_method {
                 let correlation = Correlation::inherited();
                 let line = OperationLine::open(
                     method.named(),
-                    None,
+                    LineAddress {
+                        declared: ServedAddress::default(),
+                        served_resource: None,
+                    },
                     correlation.clone(),
                     tracing::Span::none(),
                 );

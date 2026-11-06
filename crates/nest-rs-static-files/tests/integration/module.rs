@@ -152,10 +152,7 @@ async fn routes_take_precedence_and_one_at_the_index_path_is_reported() {
         "a route answers GET at the router fallback's own path, which the fallback never answers",
     );
     assert_eq!(warned.level, "warn");
-    assert_eq!(
-        warned.field("controller").as_deref(),
-        Some("HomeController")
-    );
+    assert_eq!(warned.field("host").as_deref(), Some("HomeController"));
 
     let home = app
         .http()

@@ -62,7 +62,7 @@ async fn the_line_carries_no_value_the_client_chose() {
             "{field} = {value}"
         );
     }
-    assert_eq!(line.field("method").as_deref(), Some("_OTHER"));
+    assert_eq!(line.field("verb").as_deref(), Some("_OTHER"));
     assert_eq!(line.field("user_agent"), None, "{:?}", line.fields);
 }
 
@@ -78,7 +78,7 @@ async fn the_line_names_a_known_method() {
         nest_rs_core::operation_log::TARGET,
         nest_rs_http::unit::REQUEST.name(),
     );
-    assert_eq!(line.field("method").as_deref(), Some("GET"));
+    assert_eq!(line.field("verb").as_deref(), Some("GET"));
 }
 
 /// A self-mount answering a method outside the conventions' set, as a WebDAV
@@ -130,7 +130,7 @@ async fn a_method_a_route_registers_is_named_as_registered() {
             nest_rs_core::operation_log::TARGET,
             nest_rs_http::unit::REQUEST.name(),
         );
-        assert_eq!(line.field("method").as_deref(), Some(named), "{sent}");
+        assert_eq!(line.field("verb").as_deref(), Some(named), "{sent}");
         let span = logs.expect_span("nest_rs::http", "http.request");
         assert_eq!(
             span.field("http.request.method").as_deref(),

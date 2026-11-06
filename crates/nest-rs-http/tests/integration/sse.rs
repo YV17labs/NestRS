@@ -290,7 +290,7 @@ async fn a_stream_that_panics_ends_its_body_and_files_panic() {
             nest_rs_http::unit::REQUEST.name(),
         )
         .into_iter()
-        .filter(|line| line.field("route").as_deref() == Some("/flaky/events"))
+        .filter(|line| line.field("path").as_deref() == Some("/flaky/events"))
         .collect();
     assert_eq!(lines.len(), 1, "{lines:#?}");
     assert_eq!(

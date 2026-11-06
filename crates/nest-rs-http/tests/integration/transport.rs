@@ -218,7 +218,7 @@ fn operation_line(logs: &LogCapture, route: &str) -> nest_rs_testing::CapturedEv
             nest_rs_http::unit::REQUEST.name(),
         )
         .into_iter()
-        .filter(|line| line.field("route").as_deref() == Some(route))
+        .filter(|line| line.field("path").as_deref() == Some(route))
         .collect();
     assert_eq!(lines.len(), 1, "one line for {route}, got {lines:?}");
     lines.remove(0)

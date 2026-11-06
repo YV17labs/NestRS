@@ -188,6 +188,38 @@ async fn an_entity_resolver_answers_a_reference_the_client_never_named() {
     assert_eq!(entity["id"], 7, "carrying the key it was resolved by");
 }
 
+/// An `#[entity]` and the `_entities` field that reaches it each file their own
+/// line, naming their host: `kind` is GraphQL's operation type on both, and the
+/// federation field dispatches to no method of its own.
+#[tokio::test]
+async fn an_entity_and_its_federation_field_each_name_their_unit() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<FederatedModule>()
+        .await
+        .expect("a federated schema boots");
+
+    entities(&app, 7).await;
+
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::FIELD.name(),
+    );
+    let said = |host: &str| {
+        lines
+            .iter()
+            .find(|line| line.field("host").as_deref() == Some(host))
+            .unwrap_or_else(|| panic!("a line of {host}: {lines:#?}"))
+    };
+    let entity = said("WidgetsResolver");
+    assert_eq!(entity.field("kind").as_deref(), Some("query"));
+    assert_eq!(entity.field("method").as_deref(), Some("find_widget_by_id"));
+    assert_eq!(entity.field("field").as_deref(), Some("findWidgetById"));
+    let federation = said("FederationExtension");
+    assert_eq!(federation.field("kind").as_deref(), Some("query"));
+    assert_eq!(federation.field("method"), None);
+    assert_eq!(federation.field("field").as_deref(), Some("_entities"));
+}
+
 #[tokio::test]
 async fn a_synchronous_entity_resolver_answers_a_reference() {
     let app = TestApp::for_module::<FederatedModule>()

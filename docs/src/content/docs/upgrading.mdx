@@ -1327,7 +1327,7 @@ lists what the boot, a log or the wire shows when one is missed.
       panics `outcome="panic"` with `status=500`, and a stream ended at the
       signal `outcome="cancelled"` beside its `status`; every other edge files
       both words too, and an MCP tool that answered `isError: true` files
-      `outcome="error"`. The request line names its `route` template
+      `outcome="error"`. The request line names its `path` template
       (`/posts/{id}`), not the path; a method outside RFC 9110's is `_OTHER`; a
       WebSocket event no handler serves is `_OTHER`; `user_agent`,
       `operation_name` and an MCP operation's name moved to the spans
@@ -1966,7 +1966,21 @@ lists what the boot, a log or the wire shows when one is missed.
   `resource`, `queue`, `trigger`), and the module line at register reads
   `module registered`. On HTTP's mount line `method` is now the Rust method
   and the HTTP method is `verb`, so a filter on `method="GET"` there reads
-  nothing; the request's own line keeps `method` for the HTTP method.
+  nothing.
+- **A log filter or a dashboard on an operation line's protocol fields** reads
+  nothing under its old word; `method` is the Rust method wherever a line says it.
+  `http.request`'s `method` and `route` are `verb` and `path`. `mcp.operation`'s
+  `method` is `mcp_method`, and its `operation` is `tool`, beside a new `prompt` and
+  `resource`. `graphql.field`'s `role` and `operation` are `kind` and `field`, with
+  `host` and `method` beside them; `role="entity"` and `role="federation"` read
+  `kind="query"`, their `host` and `method` saying which. `graphql.operation`'s
+  `operation_type` is `kind`. `subscription item withheld` says `host`, `method`,
+  `kind` and `field` where `operation` held `subscription ticks`. OpenAPI's duplicate
+  warnings say `verb` and `conflicting_verb`, and three lines naming a site say `site`
+  where they said `route`. OpenAPI's lines omitting a route say `host` and `method` where
+  they said `controller` and `handler`, HTTP's warning on a route at the fallback's path
+  `host` where it said `controller`, and GraphQL's unreachable resolver `host` where it said
+  `resolver`. Spans keep their conventions' names.
 - **A log filter or a dashboard keyed on a line naming a unit** reads nothing under
   its old field: a guard's denial says `method` and the unit's coordinates (`verb`
   and `path`, `kind` and `field`, `event`, `tool`, `prompt` or `resource`) where it

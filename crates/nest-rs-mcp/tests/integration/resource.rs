@@ -227,6 +227,44 @@ async fn every_template_is_advertised_with_what_it_declares() {
     assert_eq!(templates[2]["uriTemplate"], "secret://{name}");
 }
 
+/// A URI is the client's: the line names the template that served it, as the
+/// resource's `mounted` line does, and `_OTHER` for a URI none serves.
+#[tokio::test]
+async fn a_read_line_names_the_template_never_the_uri() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+
+    ask(&app, "resources/read", json!({ "uri": "note://1" })).await;
+    ask(&app, "resources/read", json!({ "uri": "marked://7" })).await;
+
+    let lines: Vec<_> = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_mcp::unit::OPERATION.name(),
+        )
+        .into_iter()
+        .filter(|line| line.field("mcp_method").as_deref() == Some("resources/read"))
+        .collect();
+    let named: Vec<_> = lines.iter().map(|line| line.field("resource")).collect();
+    assert_eq!(
+        named,
+        [
+            Some("note://{id}".to_owned()),
+            Some(nest_rs_core::operation_log::OTHER.to_owned()),
+        ],
+    );
+    for line in &lines {
+        assert!(!line.quotes("marked"), "{:?}", line.fields);
+    }
+    let mounted = logs.find(nest_rs_http::target::ROUTES, "mounted");
+    assert!(
+        mounted
+            .iter()
+            .any(|line| line.field("resource").as_deref() == Some("note://{id}")),
+        "{mounted:#?}",
+    );
+}
+
 #[tokio::test]
 async fn the_listing_answers_resources_list() {
     let app = boot().await;

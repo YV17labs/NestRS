@@ -54,6 +54,15 @@ nest_rs_core::inventory::submit! {
     )
 }
 
+// sea-orm 2.0's `connect` span holds its whole `ConnectOptions`, the URL's password
+// included, and every span it opens is at `trace`.
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::LibraryClamp::new(
+        "sea_orm",
+        tracing::level_filters::LevelFilter::DEBUG,
+    )
+}
+
 /// The acquire budget when none is set: under the authentication guard's 18 s
 /// net and the HTTP edge's default 20 s deadline, so a dry pool answers with its
 /// own error.
@@ -1050,5 +1059,30 @@ mod tests {
             "sqlx_postgres::options::pgpass",
             WARN
         ));
+    }
+
+    /// sea-orm's `connect` span holds its whole `ConnectOptions` at `trace`, the
+    /// URL's password included, and an exporter ships a span's fields whatever
+    /// the console prints. Its `debug` and above quote nothing.
+    #[test]
+    fn sea_orms_spans_open_only_under_a_filter_naming_it() {
+        use nest_rs_core::__written_under as written;
+
+        let opens = |directive: &str| {
+            tracing::dispatcher::with_default(
+                &nest_rs_core::__private::filter_dispatch(directive),
+                || {
+                    tracing::span_enabled!(
+                        target: "sea_orm::driver::sqlx_postgres",
+                        tracing::Level::TRACE
+                    )
+                },
+            )
+        };
+        for directive in ["info", "debug", "trace"] {
+            assert!(!opens(directive), "{directive}");
+        }
+        assert!(opens("info,sea_orm=trace"));
+        assert!(written!("debug", "sea_orm::schema::builder", DEBUG));
     }
 }

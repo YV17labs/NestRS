@@ -106,10 +106,15 @@ page of its listing under the URL's prefix, within `OPERATION_TIMEOUT_SECS`:
 - a status every attempt would meet — a redirect, the sign of a wrong region,
   or a `400` — fails it at once, naming the status and the variables that shape
   the request: `REGION`, `ENDPOINT`, `FORCE_PATH_STYLE`;
-- a store that refuses to list — its credentials, or a policy without
-  `s3:ListBucket` — boots on with one `warn` on `nest_rs::storage` naming the
+- a store that rejects the key — a `401`, or S3's `InvalidAccessKeyId`,
+  `SignatureDoesNotMatch` or `InvalidSecurity` — fails it at once, naming
+  `ACCESS_KEY` and `SECRET_KEY`, since every call would fail the same way;
+- a store whose policy refuses the listing — `AccessDenied`, or a `403` saying
+  nothing of the key — boots on with one `warn` on `nest_rs::storage` naming the
   credential variables. A least-privilege policy is no reason to stop an app;
-  grant `s3:ListBucket` on the prefix to silence the line;
+  grant `s3:ListBucket` on the prefix to silence the line. A valid key whose
+  policies were all removed answers the same, so this line is all it gets
+  until its first call fails;
 - anything else — no answer, a `5xx`, a `408` or a `429` — is retried within
   the budget, each attempt a `warn`, then fails the boot as unreachable with
   its last cause.
@@ -123,10 +128,10 @@ ours runs against them.
 `StorageModule` attaches the store's indicator, so an app importing
 `HealthModule` gates `/health/ready` and `/health/startup` on one attempt of
 that proof, under the key `storage`, with no import of its own:
-what the boot refuses reads `down`, what it boots on reads `up` — a store
-refusing the listing itself included, with the boot's `warn` filed by the
-probe that first meets the refusal, never by every probe — and what it would
-retry reads `down` until the store answers again. One listing request per
+what the boot refuses reads `down`, a key the store rejects included; what it
+boots on reads `up` — a policy refusing the listing included, with the boot's
+`warn` filed by the probe that first meets the refusal, never by every probe —
+and what it would retry reads `down` until the store answers again. One listing request per
 probe; see
 [Indicators](/health/indicators/#framework-shipped-indicators).
 

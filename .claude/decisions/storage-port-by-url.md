@@ -73,3 +73,33 @@ object_store's `head` keeps only `ObjectMeta`.
 - **Signing with a SigV4 implementation of our own, or a second signer beside
   object_store's** to reach the length: a signature improvised, or the
   bucket's URL built twice.
+
+## 2026-11-06 — a key the store rejects refuses the boot; only a policy boots on
+
+The reason recorded above for booting on a `403` or a `401` ("a least-privilege
+policy without `s3:ListBucket` is correct") covers a policy, and the proof gave
+it to every refusal: a revoked or mistyped key booted and read `up`, with one
+`warn`, while every call failed. S3 tells them apart in its error document, so
+the connector reads a refusal's, at most 64 KiB and handing it back, and the
+`<Code>` decides. `InvalidAccessKeyId`, `SignatureDoesNotMatch`,
+`InvalidSecurity` and any `401` refuse the boot naming both credential variables,
+and read `down` on a probe. `AccessDenied` boots on with the `warn`, and so does
+what names no key: a code nobody listed, a gateway's page, no document. A boot is
+never refused over a word this code cannot read.
+
+**Refused:**
+
+- **Reading the code off object_store's error.** Its type is unreachable, as the
+  status's is; the connector already stands where the answer is.
+- **A second request to tell them apart** (a `HeadBucket`, a `GetObject` of a key
+  that does not exist). Each costs every probe a request, and a policy may refuse
+  those too.
+- **An XML parser for one element.** The code is matched against a closed list,
+  so what a parser would add is rejecting a malformed document that names no
+  rejected key anyway.
+
+**The limit.** A valid key whose policies were all removed still answers
+`AccessDenied`, which nothing tells from least privilege: it boots, reads `up`,
+and shows at its first call. A server speaking S3's API with a code of its own
+for a rejected key reads as a policy's refusal until its code joins the list.
+

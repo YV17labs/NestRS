@@ -1098,7 +1098,8 @@ lists what the boot, a log or the wire shows when one is missed.
     listening yet, starting or full is waited for within
     `<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`, a refused login fails at once naming
     the host and the SQLSTATE; a bucket that does not exist fails the boot
-    naming `<PREFIX>_STORAGE__URL`, and credentials the store refuses leave one
+    naming `<PREFIX>_STORAGE__URL`, a key the store rejects fails it naming the
+    credential variables, and a policy refusing the listing leaves one
     `warn`. A deployed profile reaching a backend in plaintext off this machine is one
     `warn` per opening and the connection opens all the same: `Redis is reached in
     plaintext outside a dev profile`, `Postgres is reached in plaintext outside a dev
@@ -2088,8 +2089,9 @@ lists what the boot, a log or the wire shows when one is missed.
   over plain `http`, a non-loopback `http` redirect, or a loopback one outside a
   development or test profile, fails the boot naming its variable and the RFC.
 - **Storage**: `<PREFIX>_STORAGE__BUCKET` fails the boot naming
-  `<PREFIX>_STORAGE__URL`, a bucket that does not exist fails it at once, and
-  half a credential pair fails it where 6.x paired it with a default. A client
+  `<PREFIX>_STORAGE__URL`, a bucket that does not exist fails it at once, a key
+  the store rejects fails it at once naming the credential variables, and half
+  a credential pair fails it where 6.x paired it with a default. A client
   uploading through a presigned URL with another content type than the one
   signed, or none, is refused `403` by the store.
 - **A CORS list** with `null`, a path, a trailing `/`, a Unicode host or a

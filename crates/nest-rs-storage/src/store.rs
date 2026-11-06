@@ -15,7 +15,8 @@ use nest_rs_config::{ClientTls, ConfigService, Namespaced, endpoint_shown};
 use nest_rs_core::{Attempt, Backoff, Proving, Unproved, process_seed, prove};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::client::{
-    HttpClient, HttpConnector, HttpError, HttpRequest, HttpResponse, HttpService, ReqwestConnector,
+    HttpClient, HttpConnector, HttpError, HttpRequest, HttpResponse, HttpResponseBody, HttpService,
+    ReqwestConnector,
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -29,6 +30,19 @@ use crate::error::{Exchange, Result, StorageError};
 /// The longest a dial to S3 waits — DNS, TCP and the TLS handshake; never
 /// scaled down with the budget, since a dial cut shorter never connects.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How much of a refusal is read for what S3's error document says: far more
+/// than any such document holds, and a store sending more says nothing by it.
+const REFUSAL_DOCUMENT_BOUND: usize = 64 * 1024;
+
+/// The codes S3 answers for a key it rejects before it reads any policy: one it
+/// does not know, a signature its secret does not make, a security token it does
+/// not accept. Every call would fail alike, so no policy explains them away.
+const KEY_REJECTED: [&str; 3] = [
+    "InvalidAccessKeyId",
+    "SignatureDoesNotMatch",
+    "InvalidSecurity",
+];
 
 /// Retries stop at half of `budget` and back off at most an eighth, so a call
 /// whose attempts keep failing ends on the store's own error before the budget
@@ -136,10 +150,10 @@ impl Store {
 
     /// Whether the store answers its listing now: one attempt of the boot's
     /// proof, read as the proof reads it — a store reached over verified TLS
-    /// answers, even one refusing the listing itself (its credentials, or a
-    /// policy granting no `s3:ListBucket`), as it boots, with the boot's
-    /// `warn` filed again whenever the store starts refusing; an in-process
-    /// store has nothing to reach.
+    /// answers, even one whose policy grants no `s3:ListBucket`, as it boots,
+    /// with the boot's `warn` filed again whenever the store starts refusing;
+    /// a store rejecting the key is refused, as the boot refuses it; an
+    /// in-process store has nothing to reach.
     #[cfg(feature = "health")]
     pub(crate) async fn answers(&self) -> Result<()> {
         let Some(probe) = &self.probe else {
@@ -249,8 +263,9 @@ fn s3<C: HttpConnector>(
 enum Listed {
     /// The bucket answered its first page.
     Answered,
-    /// The store was reached over verified TLS and refused to list it: the
-    /// credentials, or a policy granting no `s3:ListBucket`.
+    /// The store was reached over verified TLS and its policy refused to list
+    /// the bucket: no `s3:ListBucket`, or no grant at all on a key it knows,
+    /// which S3 answers alike.
     Forbidden(object_store::Error),
 }
 
@@ -289,8 +304,9 @@ impl Probe {
     }
 
     /// List one page under the prefix, once: `Ok` when the store answered it
-    /// or refused it, and a refusal is said at the listing that first meets
-    /// it — the boot's, or the probe's after the store stopped listing.
+    /// or its policy refused it, and that refusal is said at the listing that
+    /// first meets it — the boot's, or the probe's after the store stopped
+    /// listing.
     async fn listed(
         &self,
         env: &ConfigService,
@@ -299,9 +315,7 @@ impl Probe {
         let mut refusing = self.refusing.lock().await;
         let prefix = (!self.prefix.as_ref().is_empty()).then_some(&self.prefix);
         let listed = match witnessed(self.client.list(prefix).next()).await {
-            (Some(Err(error)), last) => {
-                classify(error, last.as_ref().and_then(Exchange::status), env, shown)
-            }
+            (Some(Err(error)), last) => classify(error, last.as_ref(), env, shown),
             _ => Ok(Listed::Answered),
         };
         let was_refusing =
@@ -316,9 +330,9 @@ impl Probe {
                     env.var_name(StorageConfig::SECRET_KEY.key())
                 ),
                 error = %nest_rs_core::error_message(&error),
-                "the object store refused to list its bucket — its credentials are refused, or \
-                 its policy grants no s3:ListBucket on the prefix; read as answering, and the \
-                 next call will say which",
+                "the object store refused to list its bucket — its policy grants these \
+                 credentials no s3:ListBucket on the prefix; read as answering, and the next call \
+                 will say whether it grants what the app does",
             ),
             Listed::Answered | Listed::Forbidden(_) => {}
         }
@@ -350,42 +364,49 @@ async fn proved(probe: &Probe, budget: Duration, shown: &str) -> Result<()> {
 }
 
 /// What one failed listing met: a refusal every attempt would repeat, a
-/// store that refused the credentials, or a failure that may clear — no
+/// store whose policy refused the listing, or a failure that may clear — no
 /// answer, or a status the store answers while it recovers.
 fn classify(
     error: object_store::Error,
-    answered: Option<StatusCode>,
+    last: Option<&Exchange>,
     env: &ConfigService,
     shown: &str,
 ) -> std::result::Result<Listed, Attempt<object_store::Error, StorageError>> {
-    let reason = match answered {
-        Some(StatusCode::NOT_FOUND) => format!(
+    let reason = match last {
+        Some(rejected @ Exchange::KeyRejected { .. }) => format!(
+            "{rejected}, as it would on every call — set {} and {} to a pair it knows",
+            env.var_name(StorageConfig::ACCESS_KEY.key()),
+            env.var_name(StorageConfig::SECRET_KEY.key()),
+        ),
+        Some(Exchange::Answered(StatusCode::NOT_FOUND)) => format!(
             "the bucket {} names does not exist — create it, or name one that does",
             env.var_name(StorageConfig::URL.key())
         ),
-        Some(StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED) => {
-            return Ok(Listed::Forbidden(error));
-        }
-        Some(status) if status.is_redirection() => format!(
+        Some(Exchange::Answered(StatusCode::FORBIDDEN)) => return Ok(Listed::Forbidden(error)),
+        Some(Exchange::Answered(status)) if status.is_redirection() => format!(
             "the store answered {status}, sending the bucket elsewhere — set {} to the bucket's \
              region, or {} and {} to the store that serves it",
             env.var_name(StorageConfig::REGION.key()),
             env.var_name(StorageConfig::ENDPOINT.key()),
             env.var_name(StorageConfig::FORCE_PATH_STYLE.key()),
         ),
-        Some(status) if !(status.is_success() || may_clear(status)) => format!(
-            "the store answered {status}, as it would every attempt — check that {}, {} and {} \
-             are the store's",
-            env.var_name(StorageConfig::REGION.key()),
-            env.var_name(StorageConfig::ENDPOINT.key()),
-            env.var_name(StorageConfig::FORCE_PATH_STYLE.key()),
-        ),
-        None if ClientTls::negotiation_failed(&error) => ClientTls::remedy(
-            env,
-            "the object store",
-            StorageConfig::ENDPOINT.key(),
-            &error,
-        ),
+        Some(Exchange::Answered(status)) if !(status.is_success() || may_clear(*status)) => {
+            format!(
+                "the store answered {status}, as it would every attempt — check that {}, {} and \
+                 {} are the store's",
+                env.var_name(StorageConfig::REGION.key()),
+                env.var_name(StorageConfig::ENDPOINT.key()),
+                env.var_name(StorageConfig::FORCE_PATH_STYLE.key()),
+            )
+        }
+        Some(Exchange::Unanswered { .. }) | None if ClientTls::negotiation_failed(&error) => {
+            ClientTls::remedy(
+                env,
+                "the object store",
+                StorageConfig::ENDPOINT.key(),
+                &error,
+            )
+        }
         _ => return Err(Attempt::Failed(error)),
     };
     Err(Attempt::Refused(StorageError::Refused {
@@ -466,16 +487,62 @@ struct Witness(HttpClient);
 #[async_trait::async_trait]
 impl HttpService for Witness {
     async fn call(&self, request: HttpRequest) -> std::result::Result<HttpResponse, HttpError> {
-        let answer = self.0.execute(request).await;
-        let exchange = match &answer {
-            Ok(answered) => Exchange::Answered(answered.status()),
-            Err(failed) => Exchange::unanswered(failed),
+        let (answer, exchange) = match self.0.execute(request).await {
+            Ok(answered) => {
+                let (answered, exchange) = read(answered).await;
+                (Ok(answered), exchange)
+            }
+            Err(failed) => {
+                let exchange = Exchange::unanswered(&failed);
+                (Err(failed), exchange)
+            }
         };
         // An exchange outside a witnessed unit has no reader: object_store's
         // own resume of a download's body, read after its call returned.
         LAST_EXCHANGE.try_with(|last| last.set(Some(exchange))).ok();
         answer
     }
+}
+
+/// `answered`, and the exchange it ended: a refusal's error document is read and
+/// handed back, so object_store still meets the answer it was sent; every other
+/// answer's body is left unread, a download's above all.
+async fn read(answered: HttpResponse) -> (HttpResponse, Exchange) {
+    let status = answered.status();
+    if !matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        return (answered, Exchange::Answered(status));
+    }
+    let (parts, body) = answered.into_parts();
+    let document = refusal_document(body).await;
+    let code = key_rejected_by(&document);
+    let exchange = if code.is_some() || status == StatusCode::UNAUTHORIZED {
+        Exchange::KeyRejected { status, code }
+    } else {
+        Exchange::Answered(status)
+    };
+    (HttpResponse::from_parts(parts, document.into()), exchange)
+}
+
+/// What a refusal's body holds, up to [`REFUSAL_DOCUMENT_BOUND`]: nothing when
+/// it holds more, and what arrived when it stops short.
+async fn refusal_document(body: HttpResponseBody) -> bytes::Bytes {
+    let mut document = Vec::new();
+    let mut chunks = body.bytes_stream();
+    while let Some(Ok(chunk)) = chunks.next().await {
+        document.extend_from_slice(&chunk);
+        if document.len() > REFUSAL_DOCUMENT_BOUND {
+            return bytes::Bytes::new();
+        }
+    }
+    document.into()
+}
+
+/// The [`KEY_REJECTED`] code `document`'s `<Code>` holds, S3's error document
+/// naming its error first and in that one element.
+fn key_rejected_by(document: &[u8]) -> Option<&'static str> {
+    let (_, code) = std::str::from_utf8(document).ok()?.split_once("<Code>")?;
+    let (code, _) = code.split_once("</Code>")?;
+    KEY_REJECTED.into_iter().find(|rejected| *rejected == code)
 }
 
 #[cfg(test)]
@@ -488,9 +555,60 @@ mod tests {
     use super::*;
 
     /// What a store refusing its listing is said as, on this crate's target.
-    const REFUSED_TO_LIST: &str = "the object store refused to list its bucket — its credentials \
-         are refused, or its policy grants no s3:ListBucket on the prefix; read as answering, and \
-         the next call will say which";
+    const REFUSED_TO_LIST: &str = "the object store refused to list its bucket — its policy \
+         grants these credentials no s3:ListBucket on the prefix; read as answering, and the next \
+         call will say whether it grants what the app does";
+
+    /// The access key a refusal's document echoes, which no sentence repeats.
+    const ECHOED_KEY: &str = "AKIAECHOED";
+
+    /// Every answer that says the store rejects the key itself.
+    fn rejected_keys() -> [(u16, String); 4] {
+        [
+            (403, error_document("InvalidAccessKeyId")),
+            (403, error_document("SignatureDoesNotMatch")),
+            (403, error_document("InvalidSecurity")),
+            (401, String::new()),
+        ]
+    }
+
+    /// Every answer a least-privilege policy or a proxy gives, or that says
+    /// nothing of the key: an unknown code never refuses a boot.
+    fn policy_refusals() -> [(u16, String); 4] {
+        [
+            (403, error_document("AccessDenied")),
+            (403, error_document("SomeVendorsOwnCode")),
+            (403, "<html>forbidden by the gateway</html>".to_owned()),
+            (403, String::new()),
+        ]
+    }
+
+    #[test]
+    fn a_refusal_names_a_key_rejected_only_by_s3s_own_code_in_its_own_element() {
+        for (document, rejected) in [
+            (
+                error_document("InvalidAccessKeyId"),
+                Some("InvalidAccessKeyId"),
+            ),
+            (
+                error_document("SignatureDoesNotMatch"),
+                Some("SignatureDoesNotMatch"),
+            ),
+            (error_document("InvalidSecurity"), Some("InvalidSecurity")),
+            (error_document("AccessDenied"), None),
+            (error_document("SomeVendorsOwnCode"), None),
+            (error_document("signaturedoesnotmatch"), None),
+            ("<Error><Code>SignatureDoesNotMatch".to_owned(), None),
+            (
+                "<Error><Message>SignatureDoesNotMatch</Message></Error>".to_owned(),
+                None,
+            ),
+            (String::new(), None),
+        ] {
+            assert_eq!(key_rejected_by(document.as_bytes()), rejected, "{document}");
+        }
+        assert_eq!(key_rejected_by(&[0xff, 0xfe]), None, "not a document");
+    }
 
     #[test]
     fn the_last_backoff_ends_within_the_budget_whatever_the_budget() {
@@ -548,6 +666,26 @@ mod tests {
         authority: &nest_rs_testing::TestAuthority,
         listing: Arc<AtomicU16>,
     ) -> (String, Heard) {
+        store_refusing(authority, listing, String::new()).await
+    }
+
+    /// The error document S3 answers a refusal with, echoing the key it was
+    /// signed with, as `SignatureDoesNotMatch` does.
+    fn error_document(code: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>{code}</Code>\
+             <Message>refused</Message><AWSAccessKeyId>{ECHOED_KEY}</AWSAccessKeyId>\
+             <RequestId>1</RequestId></Error>"
+        )
+    }
+
+    /// [`store_answering`], whose answer to a listing it does not serve carries
+    /// `document`.
+    async fn store_refusing(
+        authority: &nest_rs_testing::TestAuthority,
+        listing: Arc<AtomicU16>,
+        document: String,
+    ) -> (String, Heard) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a port");
@@ -560,6 +698,7 @@ mod tests {
                 kept.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let (acceptor, kept) = (acceptor.clone(), kept.clone());
                 let listing = listing.load(Ordering::SeqCst);
+                let document = document.clone();
                 tokio::spawn(async move {
                     let Ok(mut tls) = acceptor.accept(stream).await else {
                         return;
@@ -578,7 +717,14 @@ mod tests {
                         .unwrap_or_default()
                         .to_owned();
                     let (status, body) = if line.contains("list-type=2") {
-                        (listing, if listing == 200 { EMPTY_PAGE } else { "" })
+                        (
+                            listing,
+                            if listing == 200 {
+                                EMPTY_PAGE
+                            } else {
+                                document.as_str()
+                            },
+                        )
                     } else {
                         (404, "")
                     };
@@ -694,17 +840,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_store_refusing_the_credentials_boots_with_one_warn_naming_them() {
+    async fn a_store_rejecting_the_key_refuses_the_boot_at_once_naming_the_credentials() {
         let authority = nest_rs_testing::TestAuthority::new();
         let logs = nest_rs_testing::LogCapture::install();
-        for status in [403, 401] {
-            let (endpoint, _) = store_presenting(&authority, status).await;
+        for (status, document) in rejected_keys() {
+            let (endpoint, heard) =
+                store_refusing(&authority, Arc::new(AtomicU16::new(status)), document).await;
+            let refused = Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
+                .await
+                .expect_err("every real call would fail as this listing did");
+            assert!(
+                matches!(refused, StorageError::Refused { .. }),
+                "{status}: {refused:?}"
+            );
+            let chain = nest_rs_core::error_message(&refused);
+            for credential in ["ACCESS_KEY", "SECRET_KEY"] {
+                assert!(
+                    chain.contains(&nest_rs_config::var_name("storage", credential)),
+                    "{chain}"
+                );
+            }
+            assert!(!chain.contains(ECHOED_KEY), "{chain}");
+            assert_eq!(heard.lines().len(), 1, "never retried: {:?}", heard.lines());
+        }
+        assert!(
+            logs.find(crate::TARGET, REFUSED_TO_LIST).is_empty(),
+            "a refusal is no warn and boot on: {:#?}",
+            logs.events()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_store_refusing_by_its_policy_boots_with_one_warn_naming_the_credentials() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let logs = nest_rs_testing::LogCapture::install();
+        let answers = policy_refusals();
+        for (status, document) in answers.clone() {
+            let (endpoint, _) =
+                store_refusing(&authority, Arc::new(AtomicU16::new(status)), document).await;
             Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
                 .await
                 .expect("a least-privilege policy is no reason to refuse the boot");
         }
         let warned = logs.find(crate::TARGET, REFUSED_TO_LIST);
-        assert_eq!(warned.len(), 2, "one per boot: {:#?}", logs.events());
+        assert_eq!(
+            warned.len(),
+            answers.len(),
+            "one per boot: {:#?}",
+            logs.events()
+        );
         for warn in warned {
             assert_eq!(warn.level, "warn");
             let credentials = warn.field("credentials").unwrap_or_default();
@@ -831,15 +1015,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_probe_reads_a_store_refusing_the_listing_itself_as_answering_as_the_boot_does() {
+    async fn a_probe_reads_a_store_refusing_by_its_policy_as_answering_as_the_boot_does() {
         let authority = nest_rs_testing::TestAuthority::new();
-        for status in [403, 401] {
-            let (endpoint, _) = store_presenting(&authority, status).await;
+        for (status, document) in policy_refusals() {
+            let (endpoint, _) =
+                store_refusing(&authority, Arc::new(AtomicU16::new(status)), document).await;
             unproved(&endpoint, &authority)
                 .answers()
                 .await
                 .expect("a least-privilege policy is no reason to turn traffic away");
         }
+    }
+
+    #[tokio::test]
+    async fn a_probe_reads_a_store_rejecting_the_key_as_the_boot_refuses_it() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        for (status, document) in rejected_keys() {
+            let (endpoint, heard) =
+                store_refusing(&authority, Arc::new(AtomicU16::new(status)), document).await;
+            let refused = unproved(&endpoint, &authority)
+                .answers()
+                .await
+                .expect_err("every real call would fail as this listing did");
+            assert!(
+                matches!(refused, StorageError::Refused { .. }),
+                "{status}: {refused:?}"
+            );
+            assert_eq!(heard.lines().len(), 1, "{:?}", heard.lines());
+        }
+    }
+
+    /// object_store reads the answer's body again, so what it meets is what the
+    /// store sent.
+    #[tokio::test]
+    async fn a_refusal_read_hands_its_document_on_as_it_was_sent() {
+        let document = error_document("SignatureDoesNotMatch");
+        let sent = http::Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(HttpResponseBody::from(document.clone()))
+            .expect("a response");
+
+        let (answered, exchange) = read(sent).await;
+
+        assert_eq!(answered.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            answered.into_body().bytes().await.expect("its body"),
+            document.as_bytes(),
+        );
+        assert_eq!(
+            exchange.to_string(),
+            "the store rejected the key: 403 Forbidden, SignatureDoesNotMatch",
+        );
+    }
+
+    /// Past the bound a refusal reads as one that says nothing: a store naming
+    /// the key's code past it boots on, and nothing it sends is held in memory.
+    #[tokio::test]
+    async fn a_refusal_past_its_bound_is_read_as_saying_nothing_of_the_key() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let padded = format!(
+            "{}{}",
+            " ".repeat(REFUSAL_DOCUMENT_BOUND),
+            error_document("SignatureDoesNotMatch")
+        );
+        let (endpoint, _) = store_refusing(&authority, Arc::new(AtomicU16::new(403)), padded).await;
+        Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
+            .await
+            .expect("read as a refusal saying nothing of the key");
     }
 
     #[tokio::test]
@@ -856,7 +1098,7 @@ mod tests {
             1,
             "the boot's"
         );
-        for (status, said) in [(403, 1), (200, 1), (401, 2), (401, 2), (500, 2), (403, 3)] {
+        for (status, said) in [(403, 1), (200, 1), (403, 2), (403, 2), (500, 2), (403, 3)] {
             listing.store(status, Ordering::SeqCst);
             let answered = store.answers().await;
             assert_eq!(answered.is_ok(), status != 500, "{status}: {answered:?}");

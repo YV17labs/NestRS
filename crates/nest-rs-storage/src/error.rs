@@ -177,6 +177,16 @@ pub(crate) enum Exchange {
     /// The store answered.
     #[error("the store answered {0}")]
     Answered(StatusCode),
+    /// The store answered that it rejects the key the request was signed with:
+    /// a `401`, or S3's own code for it. Its document is never quoted past that
+    /// code, for it echoes the key and the request signed.
+    #[error("the store rejected the key: {status}{}", said_code(*.code))]
+    KeyRejected {
+        /// The status it answered.
+        status: StatusCode,
+        /// S3's code for the rejection, when its document names one.
+        code: Option<&'static str>,
+    },
     /// No answer came.
     #[error("{}", http_kind(*.kind))]
     Unanswered {
@@ -203,7 +213,7 @@ impl Exchange {
     /// The status the store answered, if it answered.
     pub(crate) fn status(&self) -> Option<StatusCode> {
         match self {
-            Self::Answered(status) => Some(*status),
+            Self::Answered(status) | Self::KeyRejected { status, .. } => Some(*status),
             Self::Unanswered { .. } => None,
         }
     }
@@ -213,6 +223,11 @@ impl Exchange {
     pub(crate) fn failed(&self) -> bool {
         !self.status().is_some_and(|status| status.is_success())
     }
+}
+
+/// S3's code for a rejected key, said after the status it came with.
+fn said_code(code: Option<&str>) -> String {
+    code.map_or_else(String::new, |code| format!(", {code}"))
 }
 
 /// How object_store's errors are said: its sentences quote the object's path,
@@ -346,6 +361,13 @@ mod tests {
     fn an_exchange_failed_unless_the_store_answered_a_success() {
         assert!(!Exchange::Answered(StatusCode::OK).failed());
         assert!(Exchange::Answered(StatusCode::SERVICE_UNAVAILABLE).failed());
+        assert!(
+            Exchange::KeyRejected {
+                status: StatusCode::UNAUTHORIZED,
+                code: None
+            }
+            .failed()
+        );
         assert!(
             Exchange::Unanswered {
                 kind: HttpErrorKind::Connect,

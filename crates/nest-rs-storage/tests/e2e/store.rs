@@ -32,33 +32,45 @@ async fn a_bucket_that_does_not_exist_refuses_to_open_naming_the_url_variable() 
 }
 
 #[tokio::test]
-async fn a_secret_the_store_refuses_opens_with_one_warn_naming_the_credentials() {
-    let logs = nest_rs_testing::LogCapture::install();
-    let storage = Storage::connect(&StorageConfig {
+async fn a_secret_the_store_rejects_refuses_to_open_naming_the_credentials() {
+    let Err(refused) = Storage::connect(&StorageConfig {
         secret_key: "not-the-secret".into(),
         ..config()
     })
     .await
-    .expect("a store refusing to list is no reason to refuse the boot");
-    let warned = logs.expect_one(
-        nest_rs_storage::TARGET,
-        "the object store refused to list its bucket — its credentials are refused, or its \
-         policy grants no s3:ListBucket on the prefix; read as answering, and the next call will \
-         say which",
-    );
-    assert_eq!(warned.level, "warn");
+    else {
+        panic!("every real call would fail as the proof's listing did");
+    };
     assert!(
-        warned
-            .field("credentials")
-            .is_some_and(|set| set.contains(&nest_rs_config::var_name("storage", "SECRET_KEY"))),
-        "{:?}",
-        warned.fields
+        matches!(refused, StorageError::Refused { .. }),
+        "{refused:?}"
     );
-    let refused = storage
-        .head("anything")
-        .await
-        .expect_err("and the first call says the store refused it");
-    assert!(matches!(refused, StorageError::Head { .. }), "{refused:?}");
+    let chain = nest_rs_core::error_message(&refused);
+    assert!(
+        chain.contains(&nest_rs_config::var_name("storage", "SECRET_KEY")),
+        "{chain}"
+    );
+}
+
+#[tokio::test]
+async fn an_access_key_the_store_does_not_know_refuses_to_open_naming_the_credentials() {
+    let Err(refused) = Storage::connect(&StorageConfig {
+        access_key: "not-the-key".into(),
+        ..config()
+    })
+    .await
+    else {
+        panic!("every real call would fail as the proof's listing did");
+    };
+    assert!(
+        matches!(refused, StorageError::Refused { .. }),
+        "{refused:?}"
+    );
+    let chain = nest_rs_core::error_message(&refused);
+    assert!(
+        chain.contains(&nest_rs_config::var_name("storage", "ACCESS_KEY")),
+        "{chain}"
+    );
 }
 
 #[tokio::test]

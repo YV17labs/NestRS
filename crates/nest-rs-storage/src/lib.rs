@@ -77,19 +77,21 @@
 //! one page of its listing under the URL's prefix within
 //! [`StorageConfig::operation_timeout`]. A bucket that does not exist, a
 //! certificate the client does not accept, or a status every attempt would
-//! meet (a redirect, a `400`) refuses the boot at once; a store that refuses
-//! to list — its credentials, or a policy granting no `s3:ListBucket` — boots
-//! with one `warn`; anything else — no answer, a `5xx`, a `408` or a `429` —
-//! is retried within the budget, then refused as unreachable.
+//! meet (a redirect, a `400`) refuses the boot at once, as does a store
+//! rejecting the key (a `401`, or S3's `InvalidAccessKeyId`,
+//! `SignatureDoesNotMatch` or `InvalidSecurity`); a store whose policy refuses
+//! the listing (`AccessDenied`, no `s3:ListBucket`) boots with one `warn`;
+//! anything else — no answer, a `5xx`, a `408` or a `429` — is retried within
+//! the budget, then refused as unreachable.
 //!
 //! ## Health
 //!
 //! Under the `health` feature, [`StorageModule`] attaches the store's
 //! indicator, which an app importing `HealthModule` runs on the readiness and
 //! startup probes: one attempt of that proof, under the name `storage`. A
-//! store reached over verified TLS reads up, even one refusing the listing
-//! itself, as it boots — and the probe that first meets that refusal files the
-//! boot's `warn`.
+//! store reached over verified TLS reads up, even one whose policy refuses the
+//! listing itself, as it boots — and the probe that first meets that refusal
+//! files the boot's `warn`. A store rejecting the key reads down.
 //!
 //! ## How long a call waits
 //!

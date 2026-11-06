@@ -124,7 +124,7 @@ pub mod __private {
     pub use crate::deprecation::{deprecation_header, refuse_rust_deprecated};
     pub use crate::dispatch::DispatchKeys;
     pub use crate::entry::{ENTRY, entry_needs_an_async_fn, entry_takes_no_arguments};
-    pub use crate::host_runtime::host_runtime_entry;
+    pub use crate::host_runtime::{HostMount, host_runtime_entry};
     pub use crate::identity::{
         KEY, invalid_job_key, is_valid_job_key, key_value, key_without_replicas_one,
     };

@@ -9,7 +9,7 @@ use nest_rs_codegen::__private::layers::{
     Cell, LayerAttribute, LayerScope, Layers, cell, take_layers,
 };
 use nest_rs_codegen::__private::{
-    InjectableBody, MCP_GRAMMAR, MountPath, VersionedEdge, build_injectable_body,
+    HostMount, InjectableBody, MCP_GRAMMAR, MountPath, VersionedEdge, build_injectable_body,
     exception_filter_specs, from_container_method, guard_capability_bounds, host_meta_fn,
     host_runtime_entry, injected_keys_with_layers, injected_names_with_layers,
     injected_optional_method, injected_optional_names_method, interceptor_specs, layer_deps,
@@ -114,7 +114,12 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         (opt_str(args.name.as_ref()), opt_str(args.title.as_ref()));
 
     let residency = pair::MCP.host_residency(&name, &item.generics);
-    let host_runtime = host_runtime_entry(&name, &quote!(::nest_rs_mcp::__private::RUNTIME), &[]);
+    let host_runtime = host_runtime_entry(
+        &name,
+        &quote!(::nest_rs_mcp::__private::RUNTIME),
+        HostMount::Attached,
+        &[],
+    );
 
     quote! {
         #item

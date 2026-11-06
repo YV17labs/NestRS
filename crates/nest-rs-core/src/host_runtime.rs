@@ -4,7 +4,7 @@
 //! `#[module]` lists brings nothing, and [`App::run`](crate::App::run) says so.
 
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::LazyLock;
 
 use crate::access::Composition;
@@ -30,6 +30,19 @@ impl RuntimeModule {
     }
 }
 
+/// How an edge finds its hosts, which decides what an instance the container
+/// holds under a host's type is to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HostMount {
+    /// It mounts what the host's `Discoverable::register` attached and builds
+    /// its own instance from that, so an instance held is no host of its.
+    Attached,
+    /// It reads the link-time registry against what the app reaches, as a seeded
+    /// instance is.
+    Linked,
+}
+
 /// What one host runs on, submitted by the decorator that makes a provider an
 /// edge's host, so what is linked and listed by no module the app reaches
 /// brings nothing.
@@ -38,9 +51,15 @@ pub struct HostRuntime {
     pub host: fn() -> TypeId,
     /// That type's name, shortened where a line gives it.
     pub name: fn() -> &'static str,
+    /// How its edge finds it.
+    pub mount: HostMount,
     /// The modules its edge's crate declares.
     pub modules: &'static [RuntimeModule],
 }
+
+/// What a host's `Discoverable::register` attaches when its edge reads nothing
+/// off it, so the run can tell the registration was made.
+pub struct RegisteredHost;
 
 inventory::collect!(HostRuntime);
 
@@ -75,28 +94,57 @@ pub(crate) fn runtime_modules(host: TypeId) -> impl DoubleEndedIterator<Item = T
         .map(|module| (module.module)())
 }
 
-/// File one `warn` per host the app `container` was booted for holds with none
-/// of the modules it runs on imported: seeded, or registered by a hand-written
-/// module, so no `#[module]` listing brought them, and no edge will dispatch it.
+/// What a host held as an instance does instead, on an edge that mounts none.
+const INSTANCE_HINT: &str = "list it in a `#[module]`'s `providers`: its edge mounts what that \
+                             registration attaches and builds its own instance from it";
+
+/// File one `warn` per host of the app `container` was booted for that an edge
+/// leaves unserved. Each entry is judged alone, since a host on two edges may
+/// have one of them served: an entry with none of its modules imported is named
+/// for those modules, seeded or registered by a hand-written module, so no
+/// `#[module]` listing brought them. An instance on an edge mounting none is
+/// said apart, whatever is imported: the import is not its fix.
 pub(crate) fn report_unserved(container: &Container) {
     let Some(composition) = container.get::<Composition>() else {
         return;
     };
-    let mut hosts: Vec<&'static HostRuntime> = inventory::iter::<HostRuntime>()
-        .filter(|entry| container.holds((entry.host)()))
-        .filter(|entry| !runtime_modules((entry.host)()).any(|module| composition.imports(module)))
-        .collect();
-    hosts.sort_unstable_by_key(|entry| ((entry.name)(), (entry.host)()));
-    hosts.dedup_by_key(|entry| (entry.host)());
-    for entry in hosts {
-        let import: Vec<String> = entry
+    let attached = container.attached_hosts();
+    let mut instances = BTreeSet::new();
+    let mut unserved: BTreeMap<_, BTreeSet<String>> = BTreeMap::new();
+    for entry in inventory::iter::<HostRuntime>() {
+        let host = (entry.host)();
+        let held = container.holds(host);
+        let registered = attached.contains(&host);
+        if entry.mount == HostMount::Attached && !registered {
+            if held {
+                instances.insert(((entry.name)(), host));
+            }
+            continue;
+        }
+        let imported = entry
             .modules
             .iter()
-            .map(|module| shorten((module.name)()))
-            .collect();
+            .any(|module| composition.imports((module.module)()));
+        if (held || registered) && !imported {
+            unserved
+                .entry(((entry.name)(), host))
+                .or_default()
+                .extend(entry.modules.iter().map(|module| shorten((module.name)())));
+        }
+    }
+    for (name, _) in instances {
         tracing::warn!(
             target: crate::target::APP,
-            host = shorten((entry.name)()),
+            host = shorten(name),
+            hint = INSTANCE_HINT,
+            "host not served: its edge does not mount an instance",
+        );
+    }
+    for ((name, _), import) in unserved {
+        let import: Vec<String> = import.into_iter().collect();
+        tracing::warn!(
+            target: crate::target::APP,
+            host = shorten(name),
             import = import.join(", "),
             "host not served: its edge's transport is not attached",
         );

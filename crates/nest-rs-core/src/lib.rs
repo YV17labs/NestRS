@@ -261,7 +261,9 @@ pub mod __private {
     pub use crate::handler::{
         HandlerDeclaration, MetaLevels, MetaValue, declare_handler, meta_value,
     };
-    pub use crate::host_runtime::{HostRuntime, RuntimeModule, import_host_runtime};
+    pub use crate::host_runtime::{
+        HostMount, HostRuntime, RegisteredHost, RuntimeModule, import_host_runtime,
+    };
     pub use crate::injected_factory::InjectedFactory;
     pub use crate::injects::Injects;
     pub use crate::instance::{InstanceDeclaration, InstanceSeal};

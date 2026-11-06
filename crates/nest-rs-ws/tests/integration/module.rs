@@ -3,9 +3,12 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{App, AppLifecycle, Module, injectable, module, target};
-use nest_rs_http::{HttpConfig, HttpModule};
-use nest_rs_testing::{HeadlessApp, LogCapture};
+use nest_rs_core::{
+    App, AppLifecycle, Collecting, ContainerBuilder, Discoverable, Module, Registering, injectable,
+    module, target,
+};
+use nest_rs_http::{HttpConfig, HttpModule, StatusCode};
+use nest_rs_testing::{HeadlessApp, LogCapture, TestApp};
 use nest_rs_ws::{WsClient, WsConfig, WsModule, WsServer, gateway, messages};
 
 #[gateway(path = "/wired")]
@@ -168,4 +171,104 @@ async fn a_service_in_a_module_the_gateway_imports_still_resolves_the_registry()
         .get::<RoomsNotifier>()
         .expect("RoomsNotifier is built");
     assert_eq!(notifier.live(), 0, "and it holds a real, empty registry");
+}
+
+/// What `App::run` files for a host whose edge nothing in the boot imports.
+const UNSERVED: &str = "host not served: its edge's transport is not attached";
+
+/// What it files for an instance, which this edge does not mount.
+const INSTANCE: &str = "host not served: its edge does not mount an instance";
+
+/// Registered as `#[module]` registers a provider it lists, with nothing of the
+/// edge's beside it.
+struct HandRegistersWired;
+
+impl Module for HandRegistersWired {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <WiredGateway as Discoverable>::register(builder)
+    }
+}
+
+#[tokio::test]
+async fn a_gateway_registered_by_hand_with_no_transport_is_named_at_run() {
+    let logs = LogCapture::install();
+    App::builder()
+        .module::<HandRegistersWired>()
+        .build()
+        .await
+        .expect("the module boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(unserved.field("host").as_deref(), Some("WiredGateway"));
+    assert_eq!(
+        unserved.field("import").as_deref(),
+        Some("HttpModule, WsModule")
+    );
+    logs.expect_none(target::APP, INSTANCE);
+}
+
+/// The same registration, beside what that line says to import.
+struct HandRegistersWiredBesideItsEdge;
+
+impl Module for HandRegistersWiredBesideItsEdge {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<HttpModule>().import::<WsModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <WiredGateway as Discoverable>::register(
+            builder.import::<HttpModule>().import::<WsModule>(),
+        )
+    }
+}
+
+#[module(imports = [HandRegistersWiredBesideItsEdge])]
+struct FollowedTheLineRoot;
+
+#[tokio::test]
+async fn a_gateway_registered_by_hand_beside_its_edge_is_served() {
+    let app = TestApp::for_module::<FollowedTheLineRoot>()
+        .await
+        .expect("the module boots");
+    let reply = app.http().get("/wired").send().await;
+    assert_ne!(reply.0.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_gateway_seeded_with_no_transport_is_told_its_edge_mounts_no_instance() {
+    let logs = LogCapture::install();
+    App::builder()
+        .provide(WiredGateway)
+        .build()
+        .await
+        .expect("the app boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let instance = logs.expect_one(target::APP, INSTANCE);
+    assert_eq!(instance.field("host").as_deref(), Some("WiredGateway"));
+    logs.expect_none(target::APP, UNSERVED);
+}
+
+#[module(imports = [HttpModule, WsModule])]
+struct EdgeAlone;
+
+/// Not there beside its edge either, which is why the line does not name it.
+#[tokio::test]
+async fn a_gateway_seeded_beside_its_edge_serves_nothing() {
+    let app = TestApp::builder()
+        .provide(WiredGateway)
+        .module::<EdgeAlone>()
+        .build()
+        .await
+        .expect("the module boots");
+    app.http()
+        .get("/wired")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }

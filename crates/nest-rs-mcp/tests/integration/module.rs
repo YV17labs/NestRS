@@ -2,8 +2,11 @@
 //! reads `<PREFIX>_MCP__*` and attaches the HTTP transport, for a root that
 //! names nothing of MCP's and for an adapter that names `HttpModule` alone.
 
-use nest_rs_core::{App, AppLifecycle, module, target};
-use nest_rs_http::{HttpConfig, HttpModule};
+use nest_rs_core::{
+    App, AppLifecycle, Collecting, ContainerBuilder, Discoverable, Module, Registering, module,
+    target,
+};
+use nest_rs_http::{HttpConfig, HttpModule, StatusCode};
 use nest_rs_mcp::{McpConfig, McpError, McpIdentity, McpModule, mcp, tools};
 use nest_rs_testing::{HeadlessApp, LogCapture, TestApp};
 
@@ -144,4 +147,103 @@ fn an_app_reads_the_mcp_variables_through_its_adapter() {
         });
         Ok(())
     });
+}
+
+/// What `App::run` files for a host whose edge nothing in the boot imports.
+const UNSERVED: &str = "host not served: its edge's transport is not attached";
+
+/// What it files for an instance, which this edge does not mount.
+const INSTANCE: &str = "host not served: its edge does not mount an instance";
+
+/// Registered as `#[module]` registers a provider it lists, with nothing of the
+/// edge's beside it.
+struct HandRegistersReports;
+
+impl Module for HandRegistersReports {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <ReportsTool as Discoverable>::register(builder)
+    }
+}
+
+#[tokio::test]
+async fn an_mcp_host_registered_by_hand_with_no_transport_is_named_at_run() {
+    let logs = LogCapture::install();
+    App::builder()
+        .module::<HandRegistersReports>()
+        .build()
+        .await
+        .expect("the module boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(unserved.field("host").as_deref(), Some("ReportsTool"));
+    assert_eq!(unserved.field("import").as_deref(), Some("McpModule"));
+    logs.expect_none(target::APP, INSTANCE);
+}
+
+/// The same registration, beside what that line says to import.
+struct HandRegistersReportsBesideItsEdge;
+
+impl Module for HandRegistersReportsBesideItsEdge {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<McpModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <ReportsTool as Discoverable>::register(builder.import::<McpModule>())
+    }
+}
+
+#[module(imports = [HandRegistersReportsBesideItsEdge])]
+struct FollowedTheLineRoot;
+
+/// 401, not 404: mounted, and closed with no guard at its request.
+#[tokio::test]
+async fn an_mcp_host_registered_by_hand_beside_its_edge_is_served() {
+    let app = TestApp::for_module::<FollowedTheLineRoot>()
+        .await
+        .expect("the module boots");
+    app.http()
+        .post("/mcp")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn an_mcp_host_seeded_with_no_transport_is_told_its_edge_mounts_no_instance() {
+    let logs = LogCapture::install();
+    App::builder()
+        .provide(ReportsTool)
+        .build()
+        .await
+        .expect("the app boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let instance = logs.expect_one(target::APP, INSTANCE);
+    assert_eq!(instance.field("host").as_deref(), Some("ReportsTool"));
+    logs.expect_none(target::APP, UNSERVED);
+}
+
+#[module(imports = [McpModule])]
+struct EdgeAlone;
+
+/// Not there beside its edge either, which is why the line does not name it.
+#[tokio::test]
+async fn an_mcp_host_seeded_beside_its_edge_serves_nothing() {
+    let app = TestApp::builder()
+        .provide(ReportsTool)
+        .module::<EdgeAlone>()
+        .build()
+        .await
+        .expect("the module boots");
+    app.http()
+        .post("/mcp")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }

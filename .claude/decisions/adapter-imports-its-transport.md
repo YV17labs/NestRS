@@ -200,12 +200,27 @@ an import written out. Both are in the upgrading guide.
 
 The owner's mandate of 2026-11-05, closing what the 2026-10-31 entry's commit left
 unnamed. "The backstop is gone for edges" holds for a host a reached module lists.
-One seeded, or registered by a hand-written `impl Module`, brings nothing, and no
-line said so. `App::run` now files `host not served: its edge's transport is not
-attached` at `warn`, once per such host, naming it and the modules it runs on,
-unless the boot's register phase ran one of them. A hand-written module's import
-counts: the check reads what ran (`Composition::imports`), not what discovery's gate
-reaches, which stays as it was. One module of a gateway's two is enough: an app
-may well import `WsModule` alone, and which is missing is another line's.
+One registered by a hand-written `impl Module`, or seeded, brings nothing, and no
+line said so. `App::run` now files one line per such host, read off what the boot
+holds: the singleton map for a provider-hosted edge, the metadata `Discoverable::register`
+attached for a host the edge builds itself (`RegisteredHost` where `#[operations]` has
+nothing else to attach).
+
+- `host not served: its edge's transport is not attached`, naming the modules of each
+  of its edges the boot's register phase ran none of. A hand-written module's import
+  counts: the check reads what ran (`Composition::imports`), not what discovery's gate
+  reaches, which stays as it was. Each edge is judged alone: one module of a gateway's
+  two is enough, since an app may well import `WsModule` alone and which is missing is
+  another line's, while a host on two edges with one served is still named for the other.
+- `host not served: its edge does not mount an instance`, whatever is imported, for an
+  instance held on an edge mounting what a registration attaches (`HostMount::Attached`:
+  HTTP, WS, MCP). The import is not its fix: seen beside `HttpModule`, the route
+  answered 404. It says to list the host.
+
+The edges reading the link-time registry against what the app reaches
+(`HostMount::Linked`: GraphQL, queue, schedule) serve a seed beside their module, so
+the first line's fix holds. What a hand-written module registers on them is not
+reached, and once their module is imported their own line takes over, telling it to
+list the host.
 
 The public seam stays closed: an entry is tier 2, and no third party asks.

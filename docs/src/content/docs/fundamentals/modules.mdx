@@ -246,7 +246,10 @@ module listing no host, such as an adapter holding only an interceptor, imports
 its transport itself. So does a hand-written module registering a host, or a host
 you seed: no `#[module]` lists it, so it brings nothing, and the run names it at
 `warn` (`host not served: its edge's transport is not attached`) when nothing
-imports what it runs on.
+imports what its edge runs on. HTTP, WebSockets and MCP build their own instance
+from what the registration attaches, so a seed serves nothing there even beside
+the transport, and the run says that instead (`host not served: its edge does not
+mount an instance`): list the host in a `#[module]`'s `providers`.
 
 An app run with no transport at all says `app serves nothing: no transport is
 attached`, runs its init hooks and stops.

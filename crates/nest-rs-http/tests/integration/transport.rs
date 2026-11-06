@@ -9,16 +9,16 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{
-    App, AppLifecycle, ContainerBuilder, Interceptor, Layer, Module, Next, Outcome, Transport,
-    UnitContext, async_trait, interceptor, module, target,
+    App, AppLifecycle, Collecting, ContainerBuilder, Discoverable, Interceptor, Layer, Module,
+    Next, Outcome, Registering, Transport, UnitContext, async_trait, interceptor, module, target,
 };
 use nest_rs_http::__private::websocket::{WebSocketLimits, WebSocketUpgrade};
 use nest_rs_http::Body;
 use nest_rs_http::{
     DetachedWork, HttpConfig, HttpEndpointMeta, HttpModule, HttpTransport, Method, SseStream,
-    controller, routes,
+    StatusCode, controller, routes,
 };
-use nest_rs_testing::{HeadlessApp, LogCapture};
+use nest_rs_testing::{HeadlessApp, LogCapture, TestApp};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::Notify;
@@ -1490,6 +1490,145 @@ async fn serves_on_the_pin<M: Module>() {
 async fn a_pinned_transport_serves_a_listed_controller_on_either_side_of_it() {
     serves_on_the_pin::<PinBeforeReportsModule>().await;
     serves_on_the_pin::<PinAfterReportsModule>().await;
+}
+
+/// What `App::run` files for a host whose edge nothing in the boot imports.
+const UNSERVED: &str = "host not served: its edge's transport is not attached";
+
+/// What it files for an instance, which this edge does not mount.
+const INSTANCE: &str = "host not served: its edge does not mount an instance";
+
+/// Registered as `#[module]` registers a provider it lists, with nothing of the
+/// transport's beside it.
+struct HandRegistersReports;
+
+impl Module for HandRegistersReports {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <ReportsController as Discoverable>::register(builder)
+    }
+}
+
+#[tokio::test]
+async fn a_controller_registered_by_hand_with_no_transport_is_named_at_run() {
+    let logs = LogCapture::install();
+    App::builder()
+        .module::<HandRegistersReports>()
+        .build()
+        .await
+        .expect("the module boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(unserved.field("host").as_deref(), Some("ReportsController"));
+    assert_eq!(unserved.field("import").as_deref(), Some("HttpModule"));
+    logs.expect_none(target::APP, INSTANCE);
+}
+
+/// The same registration, beside what that line says to import.
+struct HandRegistersReportsBesideTheTransport;
+
+impl Module for HandRegistersReportsBesideTheTransport {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<HttpModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <ReportsController as Discoverable>::register(builder.import::<HttpModule>())
+    }
+}
+
+#[module(imports = [HandRegistersReportsBesideTheTransport])]
+struct FollowedTheLineRoot;
+
+#[module(imports = [HttpModule::for_root(loopback()), HandRegistersReportsBesideTheTransport])]
+struct FollowedTheLineOnThePin;
+
+#[tokio::test]
+async fn a_controller_registered_by_hand_beside_the_transport_is_served_and_not_named() {
+    let app = TestApp::for_module::<FollowedTheLineRoot>()
+        .await
+        .expect("the module boots");
+    app.http()
+        .get("/reports/")
+        .send()
+        .await
+        .assert_status_is_ok();
+
+    let logs = LogCapture::install();
+    let app = App::builder()
+        .module::<FollowedTheLineOnThePin>()
+        .build()
+        .await
+        .expect("the module boots");
+    let lifecycle = app
+        .container()
+        .get::<AppLifecycle>()
+        .expect("every app is seeded its lifecycle");
+    let running = tokio::spawn(app.run());
+    assert!(lifecycle.ready().await, "the app serves");
+    running.abort();
+
+    logs.expect_none(target::APP, UNSERVED);
+    logs.expect_none(target::APP, INSTANCE);
+}
+
+#[tokio::test]
+async fn a_controller_seeded_with_no_transport_is_told_its_edge_mounts_no_instance() {
+    let logs = LogCapture::install();
+    App::builder()
+        .provide(ReportsController)
+        .build()
+        .await
+        .expect("the app boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let instance = logs.expect_one(target::APP, INSTANCE);
+    assert_eq!(instance.field("host").as_deref(), Some("ReportsController"));
+    logs.expect_none(target::APP, UNSERVED);
+}
+
+#[module(imports = [HttpModule])]
+struct TransportAlone;
+
+#[module(imports = [HttpModule::for_root(loopback())])]
+struct TransportAloneOnThePin;
+
+/// The route is not there beside the transport either, which is why the line
+/// does not name the import.
+#[tokio::test]
+async fn a_controller_seeded_beside_the_transport_serves_nothing_and_is_told_so() {
+    let app = TestApp::builder()
+        .provide(ReportsController)
+        .module::<TransportAlone>()
+        .build()
+        .await
+        .expect("the module boots");
+    app.http()
+        .get("/reports/")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    let logs = LogCapture::install();
+    let app = App::builder()
+        .provide(ReportsController)
+        .module::<TransportAloneOnThePin>()
+        .build()
+        .await
+        .expect("the module boots");
+    let lifecycle = app
+        .container()
+        .get::<AppLifecycle>()
+        .expect("every app is seeded its lifecycle");
+    let running = tokio::spawn(app.run());
+    assert!(lifecycle.ready().await, "the app serves");
+    running.abort();
+
+    logs.expect_one(target::APP, INSTANCE);
 }
 
 /// A surface mounted by hand, declared gated, carrying no unit.

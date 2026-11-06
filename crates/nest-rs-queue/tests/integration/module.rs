@@ -178,3 +178,56 @@ async fn a_process_method_the_worker_serves_is_mounted_naming_its_host_and_metho
         assert_eq!(line.field("processor"), None, "{:?}", line.fields);
     }
 }
+
+#[tokio::test]
+async fn a_process_host_seeded_with_no_worker_is_named_at_run() {
+    let logs = LogCapture::install();
+    App::builder()
+        .provide(ReindexProcessor)
+        .build()
+        .await
+        .expect("the app boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let unserved = logs.expect_one(
+        target::APP,
+        "host not served: its edge's transport is not attached",
+    );
+    assert_eq!(unserved.field("host").as_deref(), Some("ReindexProcessor"));
+    assert_eq!(unserved.field("import").as_deref(), Some("QueueModule"));
+}
+
+#[module(imports = [QueueModule])]
+struct WorkerAlone;
+
+/// Following that line serves the seed: the worker reads what the app reaches,
+/// and a seed is reached.
+#[tokio::test]
+async fn a_process_host_seeded_beside_the_worker_is_served() {
+    let logs = LogCapture::install();
+    let memory = Memory::new(&PLAIN, Duration::from_secs(30));
+    let app = App::builder()
+        .provide(ReindexProcessor)
+        .provide(BoundConsumer::new(memory.consumer()))
+        .provide(Jobs::new(Arc::new(memory.clone())))
+        .module::<WorkerAlone>()
+        .build()
+        .await
+        .expect("the module boots over the in-memory backend");
+    let lifecycle = app
+        .container()
+        .get::<AppLifecycle>()
+        .expect("every app is seeded its lifecycle");
+    let running = tokio::spawn(app.run());
+    assert!(lifecycle.ready().await, "the app serves");
+    running.abort();
+
+    let mounted = logs.expect_one(nest_rs_queue::TARGET, "mounted");
+    assert_eq!(mounted.field("host").as_deref(), Some("ReindexProcessor"));
+    logs.expect_none(
+        target::APP,
+        "host not served: its edge's transport is not attached",
+    );
+}

@@ -3,10 +3,12 @@
 //! brings it, even beside the transport alone, and a container no app sealed
 //! mounts no schema.
 
-use nest_rs_core::{Discovery, module};
+use nest_rs_core::{
+    App, ContainerBuilder, Discoverable, Discovery, Module, Registering, module, target,
+};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::{HttpConfig, HttpEndpointMeta, HttpModule};
-use nest_rs_testing::{HeadlessApp, TestApp};
+use nest_rs_testing::{HeadlessApp, LogCapture, TestApp};
 
 #[resolver]
 struct PingResolver;
@@ -249,4 +251,74 @@ fn in_profile<F: std::future::Future>(profile: &str, boot: impl FnOnce() -> F) -
         Ok(())
     });
     out.expect("the jailed boot ran")
+}
+
+/// What `App::run` files for a host whose edge nothing in the boot imports.
+const UNSERVED: &str = "host not served: its edge's transport is not attached";
+
+/// Registered as `#[module]` registers a provider it lists, with nothing of the
+/// edge's beside it.
+struct HandRegistersPing;
+
+impl Module for HandRegistersPing {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <PingResolver as Discoverable>::register(builder)
+    }
+}
+
+#[tokio::test]
+async fn a_resolver_registered_by_hand_with_no_transport_is_named_at_run() {
+    let logs = LogCapture::install();
+    App::builder()
+        .module::<HandRegistersPing>()
+        .build()
+        .await
+        .expect("the app boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(unserved.field("host").as_deref(), Some("PingResolver"));
+    assert_eq!(unserved.field("import").as_deref(), Some("GraphqlModule"));
+}
+
+#[tokio::test]
+async fn a_resolver_seeded_with_no_transport_is_named_at_run() {
+    let logs = LogCapture::install();
+    App::builder()
+        .provide(PingResolver)
+        .build()
+        .await
+        .expect("the app boots")
+        .run()
+        .await
+        .expect("an app serving nothing stops cleanly");
+
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(unserved.field("import").as_deref(), Some("GraphqlModule"));
+}
+
+#[module(imports = [GraphqlModule])]
+struct GraphqlAlone;
+
+/// Following that line serves the seed: the edge reads what the app reaches, and
+/// a seed is reached.
+#[tokio::test]
+async fn a_resolver_seeded_beside_its_module_is_served() {
+    let app = TestApp::builder()
+        .provide(PingResolver)
+        .module::<GraphqlAlone>()
+        .build()
+        .await
+        .expect("the module boots");
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ ping }" }))
+        .send()
+        .await;
+    resp.assert_json(serde_json::json!({ "data": { "ping": "pong" } }))
+        .await;
 }

@@ -363,7 +363,9 @@ declares, and the `#[module]` listing the host imports them bare, in both phases
 after its `imports`, the access graph walking them as imports (held by a test
 per edge; `.claude/decisions/adapter-imports-its-transport.md`); one no
 `#[module]` lists — seeded, or registered by hand — brings nothing, and `App::run`
-names it at `warn` when nothing in the boot imported what it runs on. **Being buildable is not discovery**: a discovered
+names it at `warn`: the modules of each of its edges nothing in the boot imported,
+or, for an instance on an edge that mounts what a registration attaches, that no
+import serves it (held by a real host per edge). **Being buildable is not discovery**: a discovered
 entry's own config decides its fate — complete is active, absent is inert with
 a boot `warn`, partial or invalid fails the boot naming it. **A registry the
 app's code reads is filled by `provide_wiring`, before any hook — never by a

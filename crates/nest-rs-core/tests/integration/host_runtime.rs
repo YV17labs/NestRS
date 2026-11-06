@@ -5,10 +5,10 @@
 use std::any::TypeId;
 use std::sync::{Arc, Mutex};
 
-use nest_rs_core::__private::{HostRuntime, RuntimeModule};
+use nest_rs_core::__private::{HostMount, HostRuntime, RuntimeModule};
 use nest_rs_core::{
-    App, Collecting, Composition, Container, ContainerBuilder, ContainerError, Module,
-    ReachableProviders, Registering, UnbuiltCause, UnbuiltProviderError, hooks, injectable,
+    App, Collecting, Composition, Container, ContainerBuilder, ContainerError, Discoverable,
+    Module, ReachableProviders, Registering, UnbuiltCause, UnbuiltProviderError, hooks, injectable,
     inventory, module, target,
 };
 use nest_rs_testing::LogCapture;
@@ -58,6 +58,7 @@ inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<Host>(),
         name: std::any::type_name::<Host>,
+        mount: HostMount::Linked,
         modules: RUNTIME,
     }
 }
@@ -195,6 +196,7 @@ inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<TwoEdges>(),
         name: std::any::type_name::<TwoEdges>,
+        mount: HostMount::Linked,
         modules: FIRST_EDGE,
     }
 }
@@ -203,6 +205,7 @@ inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<TwoEdges>(),
         name: std::any::type_name::<TwoEdges>,
+        mount: HostMount::Linked,
         modules: SECOND_EDGE,
     }
 }
@@ -245,6 +248,7 @@ inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<RefusedHost>(),
         name: std::any::type_name::<RefusedHost>,
+        mount: HostMount::Linked,
         modules: REFUSING,
     }
 }
@@ -313,6 +317,7 @@ inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<Listing>(),
         name: std::any::type_name::<Listing>,
+        mount: HostMount::Linked,
         modules: BROUGHT,
     }
 }
@@ -362,6 +367,7 @@ inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<CycleHost>(),
         name: std::any::type_name::<CycleHost>,
+        mount: HostMount::Linked,
         modules: CYCLE,
     }
 }
@@ -404,6 +410,7 @@ inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<HandRegisteredHost>(),
         name: std::any::type_name::<HandRegisteredHost>,
+        mount: HostMount::Linked,
         modules: EDGE_RUNTIME,
     }
 }
@@ -460,6 +467,7 @@ inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<TwoRuntimesHost>(),
         name: std::any::type_name::<TwoRuntimesHost>,
+        mount: HostMount::Linked,
         modules: TWO_RUNTIMES,
     }
 }
@@ -470,6 +478,7 @@ inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<TwoRuntimesHost>(),
         name: std::any::type_name::<TwoRuntimesHost>,
+        mount: HostMount::Linked,
         modules: TWO_RUNTIMES,
     }
 }
@@ -544,6 +553,7 @@ inventory::submit! {
     HostRuntime {
         host: || TypeId::of::<ListedHost>(),
         name: std::any::type_name::<ListedHost>,
+        mount: HostMount::Linked,
         modules: EDGE_RUNTIME,
     }
 }
@@ -561,4 +571,189 @@ async fn a_host_a_module_lists_brings_its_runtime_and_is_not_named() {
 async fn a_host_the_app_does_not_hold_is_not_named() {
     let logs = logs_of_a_run(App::builder().module::<ElsewhereModule>()).await;
     logs.expect_none(target::APP, UNSERVED);
+}
+
+#[module]
+struct FirstEdgeModule;
+
+#[module]
+struct SecondEdgeRuntimeModule;
+
+const ONLY_THE_FIRST_EDGE: &[RuntimeModule] = &[RuntimeModule::of::<FirstEdgeModule>()];
+const ONLY_THE_SECOND_EDGE: &[RuntimeModule] = &[RuntimeModule::of::<SecondEdgeRuntimeModule>()];
+
+#[injectable]
+#[derive(Default)]
+struct OnTwoEdges;
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<OnTwoEdges>(),
+        name: std::any::type_name::<OnTwoEdges>,
+        mount: HostMount::Linked,
+        modules: ONLY_THE_FIRST_EDGE,
+    }
+}
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<OnTwoEdges>(),
+        name: std::any::type_name::<OnTwoEdges>,
+        mount: HostMount::Linked,
+        modules: ONLY_THE_SECOND_EDGE,
+    }
+}
+
+#[tokio::test]
+async fn a_host_on_two_edges_with_neither_imported_names_both() {
+    let logs = logs_of_a_run(App::builder().provide(OnTwoEdges)).await;
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(
+        unserved.field("import").as_deref(),
+        Some("FirstEdgeModule, SecondEdgeRuntimeModule")
+    );
+}
+
+/// One edge runs, and following the line above ends here: the other is still
+/// unserved.
+struct ImportsTheFirstEdgeModule;
+
+impl Module for ImportsTheFirstEdgeModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<FirstEdgeModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<FirstEdgeModule>()
+    }
+}
+
+#[tokio::test]
+async fn a_host_on_two_edges_with_one_imported_names_the_other() {
+    let logs = logs_of_a_run(
+        App::builder()
+            .provide(OnTwoEdges)
+            .module::<ImportsTheFirstEdgeModule>(),
+    )
+    .await;
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(
+        unserved.field("import").as_deref(),
+        Some("SecondEdgeRuntimeModule")
+    );
+}
+
+/// What `App::run` files for an instance of a host its edge mounts from a
+/// registration.
+const INSTANCE: &str = "host not served: its edge does not mount an instance";
+
+/// A host as a controller is one: its registration attaches what the edge mounts,
+/// and the container holds nothing under its type.
+#[derive(Default)]
+struct AttachingHost;
+
+struct WhatTheEdgeMounts;
+
+impl Discoverable for AttachingHost {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<AttachingHost, WhatTheEdgeMounts>(WhatTheEdgeMounts)
+    }
+}
+
+inventory::submit! {
+    HostRuntime {
+        host: || TypeId::of::<AttachingHost>(),
+        name: std::any::type_name::<AttachingHost>,
+        mount: HostMount::Attached,
+        modules: EDGE_RUNTIME,
+    }
+}
+
+struct RegistersTheAttachingHost;
+
+impl Module for RegistersTheAttachingHost {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <AttachingHost as Discoverable>::register(builder)
+    }
+}
+
+struct RegistersItBesideItsRuntime;
+
+impl Module for RegistersItBesideItsRuntime {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<EdgeRuntimeModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <AttachingHost as Discoverable>::register(builder.import::<EdgeRuntimeModule>())
+    }
+}
+
+struct ImportsTheRuntimeAlone;
+
+impl Module for ImportsTheRuntimeAlone {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<EdgeRuntimeModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<EdgeRuntimeModule>()
+    }
+}
+
+#[tokio::test]
+async fn a_host_whose_registration_attached_what_its_edge_mounts_is_named_at_run() {
+    let logs = logs_of_a_run(App::builder().module::<RegistersTheAttachingHost>()).await;
+    let unserved = logs.expect_one(target::APP, UNSERVED);
+    assert_eq!(unserved.field("host").as_deref(), Some("AttachingHost"));
+    assert_eq!(
+        unserved.field("import").as_deref(),
+        Some("EdgeRuntimeModule")
+    );
+    logs.expect_none(target::APP, INSTANCE);
+}
+
+#[tokio::test]
+async fn a_host_registered_beside_its_edge_is_not_named() {
+    let logs = logs_of_a_run(App::builder().module::<RegistersItBesideItsRuntime>()).await;
+    logs.expect_none(target::APP, UNSERVED);
+    logs.expect_none(target::APP, INSTANCE);
+}
+
+/// An instance on such an edge serves nothing even with the runtime imported,
+/// so the import is not what the line tells.
+#[tokio::test]
+async fn an_instance_on_an_edge_mounting_none_is_told_so_whatever_is_imported() {
+    for app in [
+        App::builder().provide(AttachingHost),
+        App::builder()
+            .provide(AttachingHost)
+            .module::<ImportsTheRuntimeAlone>(),
+    ] {
+        let logs = logs_of_a_run(app).await;
+        let instance = logs.expect_one(target::APP, INSTANCE);
+        assert_eq!(instance.level, "warn");
+        assert_eq!(instance.field("host").as_deref(), Some("AttachingHost"));
+        assert!(
+            instance
+                .field("hint")
+                .is_some_and(|hint| hint.contains("`providers`")),
+            "{instance:?}"
+        );
+        logs.expect_none(target::APP, UNSERVED);
+    }
+}
+
+/// Registered too, so what the edge mounts is there, and the instance is beside
+/// the point.
+#[tokio::test]
+async fn an_instance_beside_a_registration_is_judged_as_the_registration() {
+    let logs = logs_of_a_run(
+        App::builder()
+            .provide(AttachingHost)
+            .module::<RegistersTheAttachingHost>(),
+    )
+    .await;
+    logs.expect_one(target::APP, UNSERVED);
+    logs.expect_none(target::APP, INSTANCE);
 }

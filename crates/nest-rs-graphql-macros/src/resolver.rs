@@ -16,17 +16,17 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, InjectableBody, SitePosture, TailParam, VersionedEdge,
-    answer_span, authorized_entity, await_if_async, build_injectable_body, camel_case, cfg_attrs,
-    concrete_signature, delegated_attrs, exception_filter_specs, force_guard_typeids,
-    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
-    handler_const, handler_ref, host_meta_fn, host_runtime_entry, impl_self_ident,
-    injected_keys_with_layers, injected_methods_with_layers, injected_names_with_layers,
-    injected_optional_fns, injected_per_request_method, injects_impls, interceptor_specs,
-    key_as_written, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
-    piped_input, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
-    site_fn_ident, site_ref, spelled, tail_param, take_posture, takes_value, type_label,
-    unit_of_work_required, unknown_argument, validate_argument, withheld,
+    HandlerSite, HostBorrow, HostMeta, HostMount, InjectableBody, SitePosture, TailParam,
+    VersionedEdge, answer_span, authorized_entity, await_if_async, build_injectable_body,
+    camel_case, cfg_attrs, concrete_signature, delegated_attrs, exception_filter_specs,
+    force_guard_typeids, forwarded_arg_idents, forwarded_idents, from_container_method,
+    guard_capability_bounds, handler_const, handler_ref, host_meta_fn, host_runtime_entry,
+    impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
+    injected_names_with_layers, injected_optional_fns, injected_per_request_method, injects_impls,
+    interceptor_specs, key_as_written, layer_deps, normalize_forwarded_args, nth_generic_type,
+    one_role_per_method, piped_input, reject_meta_on_operations, scoped_specs, shared_receiver,
+    site_const_ident, site_fn_ident, site_ref, spelled, tail_param, take_posture, takes_value,
+    type_label, unit_of_work_required, unknown_argument, validate_argument, withheld,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -1581,6 +1581,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let host_runtime = host_runtime_entry(
         &self_ty,
         &quote!(::nest_rs_graphql::__private::RUNTIME),
+        HostMount::Linked,
         &[],
     );
 
@@ -1631,7 +1632,9 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
-                builder
+                builder.attach_meta::<#self_ty, ::nest_rs_core::__private::RegisteredHost>(
+                    ::nest_rs_core::__private::RegisteredHost,
+                )
             }
         }
     })

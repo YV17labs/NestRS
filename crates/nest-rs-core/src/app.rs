@@ -418,9 +418,10 @@ impl App {
     ///
     /// Transports come only from imported modules, an edge's host bringing the
     /// one it runs on to the module listing it; a host seeded or registered by
-    /// hand brings nothing, and is named at `warn` when nothing imports what it
-    /// runs on. A run with no transport at all says so at `warn`, runs its init
-    /// hooks and stops for [`StopCause::NoTransport`], never turning `Ready`.
+    /// hand brings nothing, and is named at `warn` when nothing imports what its
+    /// edge runs on or that edge mounts no instance. A run with no transport at all
+    /// says so at `warn`, runs its init hooks and stops for
+    /// [`StopCause::NoTransport`], never turning `Ready`.
     pub async fn run(self) -> Result<()> {
         let served = self.boot_and_serve().await;
         if served.is_err() {

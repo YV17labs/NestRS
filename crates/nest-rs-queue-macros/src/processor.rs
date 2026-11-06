@@ -7,12 +7,12 @@
 use nest_rs_codegen::__private::layers::{LayerScope, take_layers};
 use nest_rs_codegen::__private::pair;
 use nest_rs_codegen::__private::{
-    HandlerSite, HostMeta, JobDecorator, JobKey, ProviderSite, SitePosture, VersionedEdge,
-    await_if_async, cfg_attrs, concrete_signature, generic_args, handler_const, host_layers_entry,
-    host_runtime_entry, impl_self_ident, job_key, job_returns_a_result, job_timeout,
-    job_transaction, missing_argument, one_role_per_method, payload_arg_type, piped_input,
-    returns_unit, site_const, site_ref, takes_value, timeout_value, transactional_value,
-    ungrouped_expr, unread_job_key, validate_argument,
+    HandlerSite, HostMeta, HostMount, JobDecorator, JobKey, ProviderSite, SitePosture,
+    VersionedEdge, await_if_async, cfg_attrs, concrete_signature, generic_args, handler_const,
+    host_layers_entry, host_runtime_entry, impl_self_ident, job_key, job_returns_a_result,
+    job_timeout, job_transaction, missing_argument, one_role_per_method, payload_arg_type,
+    piped_input, returns_unit, site_const, site_ref, takes_value, timeout_value,
+    transactional_value, ungrouped_expr, unread_job_key, validate_argument,
 };
 use nest_rs_codegen::{Grammar, Refusals, duration_millis, snake_case};
 use proc_macro::TokenStream;
@@ -145,6 +145,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         emissions.push(host_runtime_entry(
             &self_ty,
             &quote!(::nest_rs_queue::__private::RUNTIME),
+            HostMount::Linked,
             &cfgs,
         ));
 

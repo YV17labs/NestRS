@@ -4,8 +4,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{App, Module, injectable, module};
-use nest_rs_schedule::scheduled;
+use nest_rs_core::{App, Collecting, ContainerBuilder, Module, Registering, injectable, module};
+use nest_rs_schedule::{ScheduleModule, scheduled};
 use nest_rs_testing::HeadlessApp;
 use tokio::time::{Duration, sleep};
 
@@ -55,6 +55,89 @@ async fn a_scheduled_host_registered_by_hand_with_no_scheduler_is_named_at_run()
     );
     assert_eq!(unserved.field("host").as_deref(), Some("Tasks"));
     assert_eq!(unserved.field("import").as_deref(), Some("ScheduleModule"));
+}
+
+#[module(imports = [ScheduleModule])]
+struct SchedulerAlone;
+
+/// Following that line serves the seed: the scheduler reads what the app reaches,
+/// and a seed is reached.
+#[tokio::test(start_paused = true)]
+async fn a_scheduled_host_seeded_beside_the_scheduler_ticks_the_method() {
+    let counter = Arc::new(Counter(AtomicUsize::new(0)));
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = App::builder()
+        .provide(Tasks {
+            counter: counter.clone(),
+        })
+        .module::<SchedulerAlone>()
+        .build()
+        .await
+        .expect("the app boots");
+    let lifecycle = app
+        .container()
+        .get::<nest_rs_core::AppLifecycle>()
+        .expect("every app is seeded its lifecycle");
+    let running = tokio::spawn(app.run());
+    assert!(lifecycle.ready().await, "the scheduler runs");
+    sleep(Duration::from_millis(250)).await;
+    running.abort();
+
+    assert!(counter.0.load(Ordering::SeqCst) >= 2, "the method ticks");
+    logs.expect_none(
+        nest_rs_core::target::APP,
+        "host not served: its edge's transport is not attached",
+    );
+}
+
+/// Registers the host itself beside the scheduler, which reads what a `#[module]`
+/// lists: what the line above says to import is here, and this one takes over.
+struct HandRegistersTasksBesideTheScheduler;
+
+impl Module for HandRegistersTasksBesideTheScheduler {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<ScheduleModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<ScheduleModule>().provide(Tasks {
+            counter: Arc::new(Counter(AtomicUsize::new(0))),
+        })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_scheduled_host_registered_by_hand_beside_the_scheduler_is_told_to_list_it() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = App::builder()
+        .module::<HandRegistersTasksBesideTheScheduler>()
+        .build()
+        .await
+        .expect("the app boots");
+    let lifecycle = app
+        .container()
+        .get::<nest_rs_core::AppLifecycle>()
+        .expect("every app is seeded its lifecycle");
+    let running = tokio::spawn(app.run());
+    assert!(lifecycle.ready().await, "the scheduler runs");
+    running.abort();
+
+    let skipped = logs.find(
+        nest_rs_schedule::TARGET,
+        "skipped scheduled method: no instance of the provider in this app's container",
+    );
+    let tasks = skipped
+        .iter()
+        .find(|line| line.field("host").as_deref() == Some("Tasks"))
+        .unwrap_or_else(|| panic!("the host is not said: {skipped:?}"));
+    assert_eq!(
+        tasks.field("cause").as_deref(),
+        Some("registered_outside_modules")
+    );
+    logs.expect_none(
+        nest_rs_core::target::APP,
+        "host not served: its edge's transport is not attached",
+    );
 }
 
 #[tokio::test(start_paused = true)]

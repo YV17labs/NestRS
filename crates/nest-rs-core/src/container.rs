@@ -349,6 +349,15 @@ impl Container {
         self.metadata.get(&key)
     }
 
+    /// Every provider some metadata was attached to.
+    pub(crate) fn attached_hosts(&self) -> HashSet<TypeId> {
+        self.metadata
+            .values()
+            .flatten()
+            .filter_map(|entry| entry.provider_type_id)
+            .collect()
+    }
+
     pub(crate) fn scoped_factory(&self, id: TypeId) -> Option<ScopedFactory> {
         self.scoped.get(&id).cloned()
     }

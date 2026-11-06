@@ -13,13 +13,13 @@ use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
-    Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta, PostureGate,
-    PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs, concrete_signature,
-    declared_handler, exception_filter_specs, force_guard_typeids, guard_capability_bounds,
-    handler_const, handler_ref, host_runtime_entry, impl_self_ident, injected_methods_with_layers,
-    injected_per_request_method, interceptor_specs, layer_deps, one_role_per_method, piped_input,
-    reject_meta_on_operations, returns_unit, scoped_specs, shared_receiver, tail_param,
-    takes_value, ungrouped_expr, validate_argument,
+    Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta, HostMount,
+    PostureGate, PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs,
+    concrete_signature, declared_handler, exception_filter_specs, force_guard_typeids,
+    guard_capability_bounds, handler_const, handler_ref, host_runtime_entry, impl_self_ident,
+    injected_methods_with_layers, injected_per_request_method, interceptor_specs, layer_deps,
+    one_role_per_method, piped_input, reject_meta_on_operations, returns_unit, scoped_specs,
+    shared_receiver, tail_param, takes_value, ungrouped_expr, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -519,7 +519,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
     };
-    let host_runtime = host_runtime_entry(&self_ty, &quote!(::nest_rs_ws::__private::RUNTIME), &[]);
+    let host_runtime = host_runtime_entry(
+        &self_ty,
+        &quote!(::nest_rs_ws::__private::RUNTIME),
+        HostMount::Attached,
+        &[],
+    );
 
     quote! {
         #item

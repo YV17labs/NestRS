@@ -15,10 +15,10 @@ use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath, SitePosture,
-    authorized_entity, await_if_async, cfg_attrs, concrete_signature, deprecation_header,
-    exception_filter_specs, force_guard_typeids, guard_capability_bounds, handler_const,
-    handler_ref, host_runtime_entry, impl_self_ident, injected_methods_with_layers,
+    HandlerSite, HostBorrow, HostMeta, HostMount, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath,
+    SitePosture, authorized_entity, await_if_async, cfg_attrs, concrete_signature,
+    deprecation_header, exception_filter_specs, force_guard_typeids, guard_capability_bounds,
+    handler_const, handler_ref, host_runtime_entry, impl_self_ident, injected_methods_with_layers,
     injected_per_request_method, interceptor_specs, layer_deps, mixed_site_ident,
     normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
     refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
@@ -965,8 +965,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     let crossings = routes_declared.crossings();
-    let host_runtime =
-        host_runtime_entry(&self_ty, &quote!(::nest_rs_http::__private::RUNTIME), &[]);
+    let host_runtime = host_runtime_entry(
+        &self_ty,
+        &quote!(::nest_rs_http::__private::RUNTIME),
+        HostMount::Attached,
+        &[],
+    );
 
     quote! {
         #item

@@ -54,7 +54,9 @@ async fn postgres_signed_by(
                 let mut startup = [0_u8; 8];
                 if tls.read_exact(&mut startup).await.is_ok() {
                     seen.store(true, Ordering::SeqCst);
-                    let _ = tls.write_all(&error_response(LOGIN_REFUSED)).await;
+                    let _ = tls
+                        .write_all(&error_response(LOGIN_REFUSED, "the double refuses"))
+                        .await;
                     let _ = tls.shutdown().await;
                 }
             });
@@ -66,26 +68,31 @@ async fn postgres_signed_by(
     )
 }
 
-/// The `ErrorResponse` a Postgres answers with: its fields, each a kind and a
-/// value, under its tag and length.
-fn error_response(code: &str) -> Vec<u8> {
+/// One Postgres message: its tag, then its length, which counts itself.
+fn postgres_message(tag: u8, body: &[u8]) -> Vec<u8> {
+    let length = u32::try_from(body.len() + 4).expect("a short message");
+    let mut message = vec![tag];
+    message.extend_from_slice(&length.to_be_bytes());
+    message.extend_from_slice(body);
+    message
+}
+
+/// The `ErrorResponse` a Postgres answers with: `code` in the words `message`
+/// gives, each field a kind and a value.
+fn error_response(code: &str, message: &str) -> Vec<u8> {
     let mut fields = Vec::new();
     for (kind, value) in [
         (b'S', "FATAL"),
         (b'V', "FATAL"),
         (b'C', code),
-        (b'M', "the double refuses"),
+        (b'M', message),
     ] {
         fields.push(kind);
         fields.extend_from_slice(value.as_bytes());
         fields.push(0);
     }
     fields.push(0);
-    let length = u32::try_from(fields.len() + 4).expect("a short message");
-    let mut answer = vec![b'E'];
-    answer.extend_from_slice(&length.to_be_bytes());
-    answer.extend_from_slice(&fields);
-    answer
+    postgres_message(b'E', &fields)
 }
 
 /// The SQLSTATE of a login Postgres refuses, which the boot refuses at once.
@@ -326,13 +333,14 @@ async fn a_host_whose_name_does_not_resolve_is_retried_within_the_budget_then_re
     }
 }
 
-/// A Postgres double answering every startup message with the error a server
-/// starting up (`57P03`) or full (`53300`) sends, on a URL without TLS.
-async fn postgres_answering(code: &'static str) -> String {
+/// A Postgres double speaking no TLS and answering every startup message with
+/// `answer`, on a port this returns.
+async fn postgres_answering_with(answer: Vec<u8>) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
     let port = listener.local_addr().expect("its address").port();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
+            let answer = answer.clone();
             tokio::spawn(async move {
                 let mut length = [0_u8; 4];
                 if socket.read_exact(&mut length).await.is_err() {
@@ -342,14 +350,36 @@ async fn postgres_answering(code: &'static str) -> String {
                     .unwrap_or(0)
                     .saturating_sub(4);
                 let mut startup = vec![0_u8; rest];
-                if socket.read_exact(&mut startup).await.is_err() {
+                if socket.read_exact(&mut startup).await.is_err()
+                    || socket.write_all(&answer).await.is_err()
+                {
                     return;
                 }
-                let _ = socket.write_all(&error_response(code)).await;
+                // Held until the client's goodbye, as a server's connection is.
+                let _ = socket.read_to_end(&mut Vec::new()).await;
             });
         }
     });
-    format!("postgres://nestrs:s3cret@127.0.0.1:{port}/postgres?sslmode=disable")
+    port
+}
+
+/// A Postgres double refusing every startup message with `code` in the words
+/// `message` gives, on a port this returns.
+async fn postgres_refusing(code: &str, message: &str) -> u16 {
+    postgres_answering_with(error_response(code, message)).await
+}
+
+/// A Postgres double letting every connection in, as a server trusting its
+/// clients does: `AuthenticationOk`, then `ReadyForQuery`.
+async fn postgres_letting_in() -> u16 {
+    let mut answer = postgres_message(b'R', &0_u32.to_be_bytes());
+    answer.extend(postgres_message(b'Z', b"I"));
+    postgres_answering_with(answer).await
+}
+
+/// The URL logging in to a double on `port` with `password`.
+fn plaintext_url(password: &str, port: u16) -> String {
+    format!("postgres://nestrs:{password}@127.0.0.1:{port}/postgres?sslmode=disable")
 }
 
 /// Boots a pool on `url` with a 1 s connect budget, which must refuse it as
@@ -404,10 +434,7 @@ async fn a_refused_connection_is_retried_and_said_per_attempt_then_named_in_the_
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
         listener.local_addr().expect("its address").port()
     };
-    let (rendered, errors) = unreachable_after_retrying(format!(
-        "postgres://nestrs:s3cret@127.0.0.1:{port}/postgres?sslmode=disable"
-    ))
-    .await;
+    let (rendered, errors) = unreachable_after_retrying(plaintext_url("s3cret", port)).await;
 
     assert!(
         rendered.to_lowercase().contains("connection refused"),
@@ -426,7 +453,9 @@ async fn a_refused_connection_is_retried_and_said_per_attempt_then_named_in_the_
 #[tokio::test]
 async fn a_starting_or_full_server_is_retried_and_said_per_attempt() {
     for code in ["57P03", "53300"] {
-        let (rendered, errors) = unreachable_after_retrying(postgres_answering(code).await).await;
+        let port =
+            postgres_refusing(code, "the database system cannot accept connections yet").await;
+        let (rendered, errors) = unreachable_after_retrying(plaintext_url("s3cret", port)).await;
 
         assert!(rendered.contains(code), "{code}: {rendered}");
         for error in errors {
@@ -468,74 +497,6 @@ async fn a_provider_injecting_a_pool_no_module_opens_is_refused_naming_the_modul
 /// What marks the URL's password in anything that prints.
 const PASSWORD: &str = "zzqx-password";
 
-/// One Postgres message: its tag, then its length, which counts itself.
-fn postgres_message(tag: u8, body: &[u8]) -> Vec<u8> {
-    let length = u32::try_from(body.len() + 4).expect("a short message");
-    let mut message = vec![tag];
-    message.extend_from_slice(&length.to_be_bytes());
-    message.extend_from_slice(body);
-    message
-}
-
-/// A Postgres double on `listener` answering every startup message with `answer`.
-fn postgres_answering_with(listener: TcpListener, answer: Vec<u8>) {
-    tokio::spawn(async move {
-        while let Ok((mut socket, _)) = listener.accept().await {
-            let answer = answer.clone();
-            tokio::spawn(async move {
-                let mut length = [0_u8; 4];
-                if socket.read_exact(&mut length).await.is_err() {
-                    return;
-                }
-                let rest = usize::try_from(u32::from_be_bytes(length))
-                    .unwrap_or(0)
-                    .saturating_sub(4);
-                let mut startup = vec![0_u8; rest];
-                if socket.read_exact(&mut startup).await.is_err()
-                    || socket.write_all(&answer).await.is_err()
-                {
-                    return;
-                }
-                // Held until the client's goodbye, as a server's connection is.
-                let mut rest = Vec::new();
-                let _ = socket.read_to_end(&mut rest).await;
-            });
-        }
-    });
-}
-
-/// A Postgres double refusing every startup message with `code` in the words
-/// `message` gives, on a port this returns.
-async fn postgres_refusing(code: &str, message: &str) -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
-    let port = listener.local_addr().expect("its address").port();
-    let mut fields = Vec::new();
-    for (kind, value) in [
-        (b'S', "FATAL"),
-        (b'V', "FATAL"),
-        (b'C', code),
-        (b'M', message),
-    ] {
-        fields.push(kind);
-        fields.extend_from_slice(value.as_bytes());
-        fields.push(0);
-    }
-    fields.push(0);
-    postgres_answering_with(listener, postgres_message(b'E', &fields));
-    port
-}
-
-/// A Postgres double letting every connection in, as a server trusting its
-/// clients does: `AuthenticationOk`, then `ReadyForQuery`.
-async fn postgres_letting_in() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
-    let port = listener.local_addr().expect("its address").port();
-    let mut answer = postgres_message(b'R', &0_u32.to_be_bytes());
-    answer.extend(postgres_message(b'Z', b"I"));
-    postgres_answering_with(listener, answer);
-    port
-}
-
 /// The boot on `url`, which must be refused within a 1 s budget, as everything
 /// it prints and every line it files; neither may quote [`PASSWORD`].
 async fn refused_quoting_no_password(case: &str, url: String) -> String {
@@ -557,9 +518,7 @@ async fn refused_quoting_no_password(case: &str, url: String) -> String {
     };
     let printed = nest_rs_testing::printed(&*refused);
     assert!(!printed.contains(PASSWORD), "{case}: {printed}");
-    for event in logs.events() {
-        assert!(!event.quotes(PASSWORD), "{case}: {event:#?}");
-    }
+    assert!(!logs.quotes(PASSWORD), "{case}: {:#?}", logs.events());
     printed
 }
 
@@ -581,30 +540,17 @@ async fn no_refused_boot_prints_the_urls_password() {
     let starting = postgres_refusing("57P03", "the database system is starting up").await;
     let (untrusted, _) = postgres_signed_by(&TestAuthority::new(), None).await;
     let cases = [
-        (
-            "nothing listens",
-            format!("postgres://nestrs:{PASSWORD}@127.0.0.1:{closed}/postgres?sslmode=disable"),
-        ),
+        ("nothing listens", plaintext_url(PASSWORD, closed)),
         (
             "no such host",
             format!("postgres://nestrs:{PASSWORD}@no-such-host.invalid/postgres?sslmode=disable"),
         ),
         (
             "a wrong password",
-            format!(
-                "postgres://nestrs:{PASSWORD}@127.0.0.1:{refused_password}/postgres?sslmode=disable"
-            ),
+            plaintext_url(PASSWORD, refused_password),
         ),
-        (
-            "no such database",
-            format!(
-                "postgres://nestrs:{PASSWORD}@127.0.0.1:{no_database}/postgres?sslmode=disable"
-            ),
-        ),
-        (
-            "a server starting up",
-            format!("postgres://nestrs:{PASSWORD}@127.0.0.1:{starting}/postgres?sslmode=disable"),
-        ),
+        ("no such database", plaintext_url(PASSWORD, no_database)),
+        ("a server starting up", plaintext_url(PASSWORD, starting)),
         (
             "a certificate no authority signed",
             untrusted.replace("s3cret", PASSWORD),

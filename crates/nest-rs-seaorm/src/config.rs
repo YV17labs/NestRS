@@ -185,15 +185,15 @@ impl SeaOrmConfig {
     /// driver by it, quoting the whole URL when it knows none.
     fn parsed(&self) -> Result<PgConnectOptions> {
         let url = self.url.expose_secret();
+        let refused = || Self::refuse_url("is not a Postgres URL");
         #[expect(
             clippy::map_err_ignore,
             reason = "sqlx's parse error can quote the URL, which carries the password"
         )]
-        let parsed = PgConnectOptions::from_str(url)
-            .map_err(|_| Self::refuse_url("is not a Postgres URL"))?;
+        let parsed = PgConnectOptions::from_str(url).map_err(|_| refused())?;
         // After the parse: `is_prefix_of` panics on a URL that does not read.
         if !sea_orm::DbBackend::Postgres.is_prefix_of(url) {
-            return Err(Self::refuse_url("is not a Postgres URL"));
+            return Err(refused());
         }
         Ok(parsed)
     }

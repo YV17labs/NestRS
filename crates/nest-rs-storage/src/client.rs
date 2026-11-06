@@ -733,9 +733,11 @@ mod tests {
         )
     }
 
-    /// A store an upload's lines can name, holding nothing.
-    fn in_memory() -> Arc<Store> {
-        Arc::new(Store::over(Arc::new(object_store::memory::InMemory::new())))
+    /// An address nothing listens on.
+    fn closed_address() -> std::net::SocketAddr {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("a port nothing listens on once its listener is dropped")
     }
 
     /// A multipart upload that talks to nothing but records whether it was
@@ -767,7 +769,7 @@ mod tests {
             let aborted = Arc::new(AtomicBool::new(false));
             drop(UploadGuard::new(
                 Box::new(NeverUploaded(Arc::clone(&aborted))),
-                in_memory(),
+                Arc::new(Store::over(Arc::new(object_store::memory::InMemory::new()))),
                 Duration::from_secs(1),
             ));
             assert!(
@@ -804,7 +806,7 @@ mod tests {
         let aborted = Arc::new(AtomicBool::new(false));
         drop(UploadGuard::new(
             Box::new(NeverUploaded(Arc::clone(&aborted))),
-            in_memory(),
+            Arc::new(Store::over(Arc::new(object_store::memory::InMemory::new()))),
             Duration::from_secs(1),
         ));
         // The abort is spawned: yield, bounded, until it lands.
@@ -1185,10 +1187,25 @@ mod tests {
         format!("http://{addr}")
     }
 
+    /// Whether `socket` gave a whole request's head before its client hung up.
+    async fn read_request(socket: &mut (impl tokio::io::AsyncRead + Unpin)) -> bool {
+        use tokio::io::AsyncReadExt;
+
+        let mut request = Vec::new();
+        let mut buf = [0u8; 1024];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            match socket.read(&mut buf).await {
+                Ok(read) if read > 0 => request.extend_from_slice(&buf[..read]),
+                _ => return false,
+            }
+        }
+        true
+    }
+
     /// A store that answers its first request with a `503`, then stops the
     /// clock and answers nothing more, so the budget cuts the retry.
     async fn store_answering_once() -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncWriteExt;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1197,13 +1214,10 @@ mod tests {
         tokio::spawn(async move {
             let mut held = Vec::new();
             let (mut socket, _) = listener.accept().await.expect("accept");
-            let mut request = Vec::new();
-            let mut buf = [0u8; 1024];
-            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                let read = socket.read(&mut buf).await.expect("read the request");
-                assert!(read > 0, "the client hung up before its request ended");
-                request.extend_from_slice(&buf[..read]);
-            }
+            assert!(
+                read_request(&mut socket).await,
+                "the client hung up before its request ended"
+            );
             socket
                 .write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n")
                 .await
@@ -1237,7 +1251,7 @@ mod tests {
     /// short of the length it announced, then stopping the clock and holding the
     /// connection, so the budget cuts the read.
     async fn store_stalling_its_refusal(authority: &nest_rs_testing::TestAuthority) -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncWriteExt;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1247,13 +1261,10 @@ mod tests {
         tokio::spawn(async move {
             let (socket, _) = listener.accept().await.expect("accept");
             let mut tls = acceptor.accept(socket).await.expect("the handshake");
-            let mut request = Vec::new();
-            let mut buf = [0u8; 1024];
-            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                let read = tls.read(&mut buf).await.expect("read the request");
-                assert!(read > 0, "the client hung up before its request ended");
-                request.extend_from_slice(&buf[..read]);
-            }
+            assert!(
+                read_request(&mut tls).await,
+                "the client hung up before its request ended"
+            );
             tls.write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 5000\r\n\r\n<Error>")
                 .await
                 .expect("answer the first request");
@@ -1295,9 +1306,7 @@ mod tests {
     /// and never what it names.
     #[tokio::test]
     async fn a_refused_connection_names_its_cause_however_the_call_ends() {
-        let closed = std::net::TcpListener::bind("127.0.0.1:0")
-            .and_then(|listener| listener.local_addr())
-            .expect("a port nothing listens on once its listener is dropped");
+        let closed = closed_address();
         let storage = Storage::unproved(StorageConfig {
             operation_timeout: Duration::from_secs(1),
             ..s3_at(&format!("http://{closed}"), Surface::Open)
@@ -1321,10 +1330,6 @@ mod tests {
         use futures_util::StreamExt as _;
 
         let source = futures_util::stream::once(async { Ok(Bytes::from_static(b"body")) });
-        let listed = {
-            let mut listing = std::pin::pin!(storage.list(MARKED_KEY));
-            listing.next().await
-        };
         vec![
             storage.head(MARKED_KEY).await.expect_err("head"),
             storage.get_bytes(MARKED_KEY).await.expect_err("get_bytes"),
@@ -1337,7 +1342,11 @@ mod tests {
                 .await
                 .expect_err("put_stream"),
             storage.delete(MARKED_KEY).await.expect_err("delete"),
-            listed.expect("an answer").expect_err("list"),
+            std::pin::pin!(storage.list(MARKED_KEY))
+                .next()
+                .await
+                .expect("an answer")
+                .expect_err("list"),
         ]
     }
 
@@ -1345,9 +1354,7 @@ mod tests {
     /// URI, the key among it.
     #[tokio::test]
     async fn no_call_a_store_never_answered_prints_the_key_or_the_uri() {
-        let closed = std::net::TcpListener::bind("127.0.0.1:0")
-            .and_then(|listener| listener.local_addr())
-            .expect("a port nothing listens on once its listener is dropped");
+        let closed = closed_address();
         let logs = nest_rs_testing::LogCapture::install();
         let storage = Storage::unproved(StorageConfig {
             operation_timeout: Duration::from_millis(200),
@@ -1358,21 +1365,13 @@ mod tests {
             assert!(printed.contains("could not connect"), "{printed}");
             assert!(!printed.contains(MARK), "{printed}");
         }
-        assert_no_line_quotes(&logs, MARK);
-    }
-
-    /// No line of any target, object_store's and reqwest's among them, quotes
-    /// `text`.
-    fn assert_no_line_quotes(logs: &nest_rs_testing::LogCapture, text: &str) {
-        for event in logs.events() {
-            assert!(!event.quotes(text), "{event:#?}");
-        }
+        assert!(!logs.quotes(MARK), "{:#?}", logs.events());
     }
 
     /// A store answering every request with `status` and a document naming the
     /// key it was asked for, as S3's do, over plain HTTP.
     async fn store_answering_with_the_key(status: &'static str) -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncWriteExt;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1381,13 +1380,8 @@ mod tests {
         tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
                 tokio::spawn(async move {
-                    let mut request = Vec::new();
-                    let mut buf = [0u8; 1024];
-                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
-                        match socket.read(&mut buf).await {
-                            Ok(read) if read > 0 => request.extend_from_slice(&buf[..read]),
-                            _ => return,
-                        }
+                    if !read_request(&mut socket).await {
+                        return;
                     }
                     let document = format!("<Error><Key>{MARKED_KEY}</Key></Error>");
                     let answer = format!(
@@ -1420,7 +1414,7 @@ mod tests {
                 }
             }
         }
-        assert_no_line_quotes(&logs, MARK);
+        assert!(!logs.quotes(MARK), "{:#?}", logs.events());
     }
 
     /// A boot refusing what a deployment wrote quotes none of it: a credential in
@@ -1430,9 +1424,7 @@ mod tests {
     async fn no_refused_config_prints_what_it_holds() {
         use nest_rs_config::{ClientTls, Material, TlsIdentity};
 
-        let closed = std::net::TcpListener::bind("127.0.0.1:0")
-            .and_then(|listener| listener.local_addr())
-            .expect("a port nothing listens on once its listener is dropped");
+        let closed = closed_address();
         let open_at = || s3_at(&format!("https://{closed}"), Surface::Closed);
         let garbled = format!("-----BEGIN PRIVATE KEY-----\n{MARK}\n-----END PRIVATE KEY-----\n");
         let configs = [

@@ -123,14 +123,13 @@ impl AudioService {
         Option<impl Stream<Item = std::io::Result<Bytes>> + Send + 'static + use<>>,
         AudioError,
     > {
-        let stream = match self.storage.get_stream(&Self::derived_key(file)).await {
-            Ok(stream) => stream,
-            Err(StorageError::NotFound { .. }) => return Ok(None),
-            Err(failed) => return Err(failed.into()),
-        };
-        Ok(Some(
-            stream.map(|chunk| chunk.map_err(std::io::Error::other)),
-        ))
+        match self.storage.get_stream(&Self::derived_key(file)).await {
+            Ok(stream) => Ok(Some(
+                stream.map(|chunk| chunk.map_err(std::io::Error::other)),
+            )),
+            Err(StorageError::NotFound { .. }) => Ok(None),
+            Err(failed) => Err(failed.into()),
+        }
     }
 
     pub async fn result_ready(&self, file: Uuid) -> Result<bool, AudioError> {

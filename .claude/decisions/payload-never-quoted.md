@@ -317,4 +317,3 @@ keeps serde's error the same way. Each is by design so far: a raw link stays in 
 chain for `error_message` to say (`DecodeError::of`, `SafeLink`). Closing it moves what
 `source()` hands every reader of the one type every service names, and of each such
 error across the crates: a sweep of its own, not this entry's.
-

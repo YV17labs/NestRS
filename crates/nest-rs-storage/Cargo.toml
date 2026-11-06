@@ -73,12 +73,8 @@ tokio = { workspace = true, features = ["test-util"] }
 reqwest.workspace = true
 # Whether an interrupted multipart upload's parts were discarded is not
 # observable through the store (`ListMultipartUploads` is not on
-# `object_store`'s surface), so the test suite asserts on the event the client
-# emits — which means collecting events with a `Layer` of its own.
-tracing-subscriber.workspace = true
-# `LogCapture`, for the unit half of the same problem: what the abort-on-drop
-# guard says when it is dropped with no runtime to abort on; `http` drives the
-# probes the store's indicator gates.
+# `object_store`'s surface), so the suite reads the event the client emits with
+# `LogCapture`; `http` drives the probes the store's indicator gates.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls"] }
 # The suite's proxy names the store it dials over TLS, to stop an answer where
 # its body starts.

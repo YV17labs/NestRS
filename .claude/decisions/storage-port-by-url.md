@@ -149,4 +149,3 @@ The lines follow: `key` leaves the abandoned upload's and the resumed download's
 which name the `store` and carry the trace. The operator who must reconcile a
 dangling upload lists the bucket's incomplete uploads (S3's `ListMultipartUploads`)
 or leaves them to its lifecycle rule; object_store could never list them anyway.
-

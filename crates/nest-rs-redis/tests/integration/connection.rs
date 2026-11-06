@@ -99,9 +99,7 @@ async fn refused_quoting_no_password(case: &str, config: RedisConfig) {
     };
     let printed = nest_rs_testing::printed(&error);
     assert!(!printed.contains(PASSWORD), "{case}: {printed}");
-    for event in logs.events() {
-        assert!(!event.quotes(PASSWORD), "{case}: {event:#?}");
-    }
+    assert!(!logs.quotes(PASSWORD), "{case}: {:#?}", logs.events());
 }
 
 /// What a `main` returning the boot's refusal prints is every link as it is, the

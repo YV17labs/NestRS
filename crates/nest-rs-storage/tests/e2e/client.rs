@@ -1,65 +1,20 @@
 //! Presign, list and streamed-upload round-trips through [`Storage`]
 //! (`src/client.rs`) against the live S3-compatible server.
 
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
 use futures_util::StreamExt;
 use nest_rs_storage::__private::MULTIPART_PART_SIZE;
 use nest_rs_storage::{PresignedRequest, SignedPut, StorageConfig, StorageError, TARGET};
-use tracing::field::{Field, Visit};
-use tracing_subscriber::layer::{Context, SubscriberExt};
-use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::{Carry, config, proxied, proxy, storage, unique};
 
 /// What the client logs about an interrupted upload's parts, copied: exported,
-/// a wording change would break the API.
+/// a wording change would break the API. The abort's only witness, since
+/// `object_store` cannot list multipart uploads.
 const DISCARDED: &str = "discarded the parts of an interrupted multipart upload";
 const DANGLING: &str = "multipart upload left dangling parts";
 const CANCELLED: &str = "multipart upload was cancelled mid-flight; discarding its parts";
-
-/// The messages of the `nest_rs::storage` events a call emitted — the abort's
-/// only witness, since `object_store` cannot list multipart uploads.
-#[derive(Clone, Default)]
-struct Events(Arc<Mutex<Vec<String>>>);
-
-impl Events {
-    /// How many times `message` was emitted.
-    fn count_of(&self, message: &str) -> usize {
-        self.0
-            .lock()
-            .expect("events")
-            .iter()
-            .filter(|emitted| *emitted == message)
-            .count()
-    }
-}
-
-#[derive(Default)]
-struct Captured {
-    message: String,
-}
-
-impl Visit for Captured {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        // `message` is a `fmt::Arguments`, whose `Debug` is its `Display`.
-        if field.name() == "message" {
-            self.message = format!("{value:?}");
-        }
-    }
-}
-
-impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Events {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-        if event.metadata().target() != TARGET {
-            return;
-        }
-        let mut captured = Captured::default();
-        event.record(&mut captured);
-        self.0.lock().expect("events").push(captured.message);
-    }
-}
 
 /// `request` as the uploader sends it: its method, URL and headers, verbatim.
 fn sent(http: &reqwest::Client, request: &PresignedRequest) -> reqwest::RequestBuilder {
@@ -320,15 +275,11 @@ async fn a_failing_source_surfaces_its_own_error_and_leaves_no_object_or_parts_b
         ))
     }));
 
-    let events = Events::default();
-    let failed = {
-        let _capture = tracing_subscriber::registry()
-            .with(events.clone())
-            .set_default();
-        s.put_stream(&key, "audio/mpeg", source).await
-    };
-
-    let err = failed.expect_err("a source that fails mid-upload cannot report success");
+    let logs = nest_rs_testing::LogCapture::install();
+    let err = s
+        .put_stream(&key, "audio/mpeg", source)
+        .await
+        .expect_err("a source that fails mid-upload cannot report success");
     match &err {
         StorageError::PutSource(source) => {
             assert_eq!(source.kind(), std::io::ErrorKind::BrokenPipe);
@@ -350,12 +301,8 @@ async fn a_failing_source_surfaces_its_own_error_and_leaves_no_object_or_parts_b
         "and nothing is listed under {prefix}",
     );
 
-    assert_eq!(
-        events.count_of(DISCARDED),
-        1,
-        "the interrupted upload's parts were not aborted",
-    );
-    assert_eq!(events.count_of(DANGLING), 0, "the abort itself failed");
+    logs.expect_one(TARGET, DISCARDED);
+    logs.expect_none(TARGET, DANGLING);
     eprintln!("put_stream(failing source) {key} -> {err}, parts discarded");
 }
 
@@ -371,22 +318,15 @@ async fn a_successful_streamed_upload_discards_nothing() {
         (0..full_parts).map(move |_| Ok(bytes::Bytes::from(chunk.clone()))),
     );
 
-    let events = Events::default();
-    {
-        let _capture = tracing_subscriber::registry()
-            .with(events.clone())
-            .set_default();
-        s.put_stream(&key, "audio/mpeg", source)
-            .await
-            .expect("put_stream");
-    }
+    let logs = nest_rs_testing::LogCapture::install();
+    s.put_stream(&key, "audio/mpeg", source)
+        .await
+        .expect("put_stream");
 
     let info = s.head(&key).await.expect("head").expect("object present");
     assert_eq!(info.byte_size, expected as u64);
-    assert!(
-        events.count_of(DISCARDED) == 0 && events.count_of(DANGLING) == 0,
-        "a completed upload aborted nothing",
-    );
+    logs.expect_none(TARGET, DISCARDED);
+    logs.expect_none(TARGET, DANGLING);
 
     s.delete(&key).await.expect("delete");
 }
@@ -463,34 +403,25 @@ async fn a_cancelled_upload_discards_its_parts_instead_of_leaving_them_billed() 
         unreachable!("the stall is the point")
     }));
 
-    let events = Events::default();
-    {
-        let _capture = tracing_subscriber::registry()
-            .with(events.clone())
-            .set_default();
-        // Dropped where it stands, as a request timeout drops it.
-        let cancelled = tokio::time::timeout(
-            std::time::Duration::from_millis(1500),
-            s.put_stream(&key, "audio/mpeg", source),
-        )
-        .await;
-        assert!(cancelled.is_err(), "the upload is cancelled, not completed");
+    let logs = nest_rs_testing::LogCapture::install();
+    // Dropped where it stands, as a request timeout drops it.
+    let cancelled = tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        s.put_stream(&key, "audio/mpeg", source),
+    )
+    .await;
+    assert!(cancelled.is_err(), "the upload is cancelled, not completed");
 
-        // The abort runs on a detached task: wait for its outcome, within the
-        // budget that bounds it, before the capture guard is dropped.
-        nest_rs_testing::wait_until(config().operation_timeout + Duration::from_secs(1), || {
-            events.count_of(DISCARDED) > 0 || events.count_of(DANGLING) > 0
-        })
-        .await;
-    }
+    // The abort runs on a detached task: wait for its outcome, within the budget
+    // that bounds it.
+    nest_rs_testing::wait_until(config().operation_timeout + Duration::from_secs(1), || {
+        !logs.find(TARGET, DISCARDED).is_empty() || !logs.find(TARGET, DANGLING).is_empty()
+    })
+    .await;
 
-    assert_eq!(events.count_of(CANCELLED), 1, "a cancelled upload says so");
-    assert_eq!(
-        events.count_of(DISCARDED),
-        1,
-        "and its parts are discarded rather than left for a lifecycle rule",
-    );
-    assert_eq!(events.count_of(DANGLING), 0, "the abort itself failed");
+    logs.expect_one(TARGET, CANCELLED);
+    logs.expect_one(TARGET, DISCARDED);
+    logs.expect_none(TARGET, DANGLING);
 
     assert!(
         s.head(&key).await.expect("head").is_none(),

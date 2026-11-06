@@ -82,8 +82,7 @@ impl Transfer {
                 Err(_) => stalled(self.read_timeout, self.store.backend),
             };
             if let Err(error) = self.resume(stopped).await {
-                let failed = StorageError::download(&self.store.shown, &error);
-                return Some((Err(failed), None));
+                return Some((Err(StorageError::download(&self.store.shown, &error)), None));
             }
         }
     }
@@ -229,13 +228,14 @@ mod tests {
         }
     }
 
-    /// A body breaking under a key that holds a user's input: neither the line
-    /// saying the resume nor the download's failure quotes it, or the URI.
-    #[tokio::test]
-    async fn a_resumed_download_says_nothing_of_its_key() {
-        let logs = nest_rs_testing::LogCapture::install();
+    /// What a download of `key` ends on, its first answer's body yielding `body`
+    /// and a version written while it is read answering the resume.
+    async fn refused_by_a_version_written_since(
+        key: &str,
+        body: Vec<object_store::Result<Bytes>>,
+    ) -> StorageError {
         let store = Arc::new(FenceIgnoring(InMemory::new()));
-        let path = Path::from("users/zzqx-ada/avatar.png");
+        let path = Path::from(key);
         store
             .put(&path, PutPayload::from(vec![1_u8; 100]))
             .await
@@ -247,13 +247,8 @@ mod tests {
             extensions,
             ..
         } = store.get(&path).await.expect("the first answer");
-        let broken = futures_util::stream::iter([Err(object_store::Error::Generic {
-            store: "test",
-            source: format!("Error performing GET https://s3/bucket/{path}").into(),
-        })])
-        .boxed();
         let first = GetResult {
-            payload: GetResultPayload::Stream(broken),
+            payload: GetResultPayload::Stream(futures_util::stream::iter(body).boxed()),
             meta,
             range,
             attributes,
@@ -273,10 +268,25 @@ mod tests {
         )
         .collect()
         .await;
-        let refused = read
-            .into_iter()
+        read.into_iter()
             .find_map(std::result::Result::err)
-            .expect("the rest of another version is refused");
+            .expect("the rest of another version is refused")
+    }
+
+    /// A body breaking under a key that holds a user's input: neither the line
+    /// saying the resume nor the download's failure quotes it, or the URI.
+    #[tokio::test]
+    async fn a_resumed_download_says_nothing_of_its_key() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let key = "users/zzqx-ada/avatar.png";
+        let refused = refused_by_a_version_written_since(
+            key,
+            vec![Err(object_store::Error::Generic {
+                store: "test",
+                source: format!("Error performing GET https://s3/bucket/{key}").into(),
+            })],
+        )
+        .await;
         let printed = nest_rs_testing::printed(&refused);
         assert!(!printed.contains("zzqx"), "{printed}");
         let resumed = logs.expect_one(crate::TARGET, "download resumed where its body stopped");
@@ -286,52 +296,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_resume_answered_from_a_version_written_since_is_refused_not_spliced() {
-        let store = Arc::new(FenceIgnoring(InMemory::new()));
-        let path = Path::from("k");
-        store
-            .put(&path, PutPayload::from(vec![1_u8; 100]))
-            .await
-            .expect("the first version");
-        let GetResult {
-            meta,
-            range,
-            attributes,
-            extensions,
-            ..
-        } = store.get(&path).await.expect("the first answer");
-        let broken = futures_util::stream::iter([
-            Ok(Bytes::from(vec![1_u8; 10])),
-            Err(object_store::Error::Generic {
-                store: "test",
-                source: "the connection broke".into(),
-            }),
-        ])
-        .boxed();
-        let first = GetResult {
-            payload: GetResultPayload::Stream(broken),
-            meta,
-            range,
-            attributes,
-            extensions,
-        };
-        store
-            .put(&path, PutPayload::from(vec![2_u8; 100]))
-            .await
-            .expect("a version written while the first is read");
-
-        let read: Vec<Result<Bytes>> = download(
-            Arc::new(Store::over(store)),
-            path,
-            first,
-            Duration::from_secs(1),
-            Duration::from_secs(1),
+        let refused = refused_by_a_version_written_since(
+            "k",
+            vec![
+                Ok(Bytes::from(vec![1_u8; 10])),
+                Err(object_store::Error::Generic {
+                    store: "test",
+                    source: "the connection broke".into(),
+                }),
+            ],
         )
-        .collect()
         .await;
-        let refused = read
-            .into_iter()
-            .find_map(std::result::Result::err)
-            .expect("the rest of another version is refused");
         let chain = nest_rs_core::error_message(&refused);
         assert!(chain.contains("changed while it was read"), "{chain}");
     }

@@ -170,4 +170,3 @@ with `downcast_ref`. They no longer are: a call's error holds the sentence sayin
 them (`storage-port-by-url.md`, this date), so object_store is private with nothing
 of it reachable, and `Init`'s boxed source is what refused the configuration, not a
 contract to read.
-

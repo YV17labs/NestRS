@@ -197,6 +197,20 @@ impl LogCapture {
             .collect()
     }
 
+    /// Whether any event captured so far [`quotes`](CapturedEvent::quotes) `text`,
+    /// whatever its target: what a test asserts no line says.
+    ///
+    /// ```
+    /// # use nest_rs_testing::LogCapture;
+    /// let logs = LogCapture::install();
+    /// tracing::warn!(target: "features::users", reason = "unknown_email", "login failed");
+    /// assert!(logs.quotes("unknown_email"));
+    /// assert!(!logs.quotes("alice@example.com"));
+    /// ```
+    pub fn quotes(&self, text: &str) -> bool {
+        self.events().iter().any(|event| event.quotes(text))
+    }
+
     /// The single event on `target` with `message`, or a panic naming what was
     /// captured instead.
     #[track_caller]

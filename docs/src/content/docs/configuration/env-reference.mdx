@@ -225,7 +225,7 @@ names, unprefixed like `RUST_LOG`, over what `OpenTelemetryConfig` pins
 
 | Variable | Meaning |
 |---|---|
-| `OTEL_SERVICE_NAME` | service name; default the binary's package name. Empty reads as unset; blank fails the boot |
+| `OTEL_SERVICE_NAME` | service name; default the binary's package name, or `unknown_service:<executable>` in a binary `#[nest_rs::main]` did not start. Empty reads as unset; blank fails the boot |
 | `OTEL_RESOURCE_ATTRIBUTES` | resource attributes, `key=value` comma-separated, each key and value percent-decoded (`%2C` for a comma, `%3D` for `=`): `service.version` (default the binary's package version), `deployment.environment.name`, `service.instance.id` (default a fresh UUIDv7); a member with no `=`, an empty key, an escape that does not decode or an empty or blank `service.name` fails the boot |
 | `OTEL_SDK_DISABLED` | `true`, in any case, switches every signal off whatever the endpoints and selectors say; anything else leaves the SDK on, a value neither `true` nor `false` said at `warn` |
 | `OTEL_TRACES_EXPORTER` · `OTEL_METRICS_EXPORTER` · `OTEL_LOGS_EXPORTER` | `otlp` (default) or `none`, in any case, or a comma-separated list of `otlp`: `none` switches the signal off whatever endpoint names it. Any exporter this crate does not build (`console`, `zipkin`, `prometheus`), `none` beside `otlp`, or `otlp` named with no endpoint for the signal fails the boot |

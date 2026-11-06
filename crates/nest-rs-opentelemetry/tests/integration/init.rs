@@ -756,6 +756,22 @@ fn the_boot_line_names_the_service_the_specification_s_variables_name() {
     }
 }
 
+/// With nothing naming the service, a binary with the exporters or without them
+/// falls back as the specification and the SDK write: `unknown_service:` and the
+/// executable's name.
+#[test]
+fn the_boot_line_falls_back_on_the_executable_where_nothing_names_the_service() {
+    let binary = std::env::current_exe().expect("the test binary");
+    let binary = binary
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("its name");
+    assert_eq!(
+        service_named_under(&[("OTEL_SERVICE_NAME", ""), ("OTEL_RESOURCE_ATTRIBUTES", "")]),
+        format!("unknown_service:{binary}"),
+    );
+}
+
 /// A name in code stands under variables naming none, an empty one among them,
 /// which the specification reads as unset.
 #[test]

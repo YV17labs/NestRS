@@ -173,9 +173,10 @@ impl OpenTelemetry {
 
 /// The service a binary built without the `otlp` feature names on its boot
 /// line, as the exporters' resource would name it: `OTEL_SERVICE_NAME`, then
-/// `service.name` in `OTEL_RESOURCE_ATTRIBUTES`, then the pin, then the binary.
-/// What names none is refused as it is there. `read` is the environment as
-/// written: a blank `OTEL_SERVICE_NAME` is refused, never read as unset.
+/// `service.name` in `OTEL_RESOURCE_ATTRIBUTES`, then the pin, then the binary,
+/// then [`unknown_service`]. What names none is refused as it is there. `read`
+/// is the environment as written: a blank `OTEL_SERVICE_NAME` is refused, never
+/// read as unset.
 #[cfg(not(feature = "otlp"))]
 fn console_service(
     config: &OpenTelemetryConfig,
@@ -195,7 +196,20 @@ fn console_service(
         })
         .or_else(|| pinned.map(str::to_owned))
         .or_else(|| binary.map(|binary| binary.name.clone()))
-        .unwrap_or_default())
+        .unwrap_or_else(unknown_service))
+}
+
+/// The resource specification's name for a service nothing names, as the SDK's
+/// detector writes it where this build does not link one: `unknown_service:` and
+/// the executable's name, or `unknown_service` where that does not read.
+#[cfg(not(feature = "otlp"))]
+fn unknown_service() -> String {
+    use crate::config::UNKNOWN_SERVICE;
+
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| Some(format!("{UNKNOWN_SERVICE}:{}", path.file_name()?.to_str()?)))
+        .unwrap_or_else(|| UNKNOWN_SERVICE.to_owned())
 }
 
 /// What a binary built without the `otlp` feature cannot honour, refused

@@ -102,7 +102,7 @@ field by field; `OpenTelemetry::init()` starts from the defaults, and
 
 | Env var | Field | Default |
 |---|---|---|
-| `OTEL_SERVICE_NAME`, then `service.name` in `OTEL_RESOURCE_ATTRIBUTES` | `service_name` | the binary's package name |
+| `OTEL_SERVICE_NAME`, then `service.name` in `OTEL_RESOURCE_ATTRIBUTES` | `service_name` | the binary's package name, or the specification's `unknown_service:<executable>` in a binary `#[nest_rs::main]` did not start |
 | `service.version` in `OTEL_RESOURCE_ATTRIBUTES` | `service_version` | the binary's package version |
 | `deployment.environment.name` in `OTEL_RESOURCE_ATTRIBUTES` | `deployment_environment` | none |
 | `service.instance.id` in `OTEL_RESOURCE_ATTRIBUTES` | `service_instance_id` | fresh UUIDv7 per process |

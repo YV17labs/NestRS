@@ -71,7 +71,8 @@ use uuid::Uuid;
 
 use crate::config::{
     OpenTelemetryConfig, PINNED_ENDPOINT, PINNED_INTERVAL, PINNED_RATIO, PINNED_TLS, SERVICE_NAME,
-    blank_as_unset, percent_decoded, refuse_config_file, resource_attributes, service_name,
+    UNKNOWN_SERVICE, blank_as_unset, percent_decoded, refuse_config_file, resource_attributes,
+    service_name,
 };
 use crate::error::OpenTelemetryError;
 use crate::propagators::{global_propagator, read_propagators};
@@ -1566,7 +1567,7 @@ fn build_resource(
     // specification): a fallback, which a name the app or its binary gives
     // replaces.
     let fallback = |key: &Key, value: &opentelemetry::Value| {
-        key.as_str() == SERVICE_NAME && value.as_str().starts_with("unknown_service")
+        key.as_str() == SERVICE_NAME && value.as_str().starts_with(UNKNOWN_SERVICE)
     };
     let over: Vec<KeyValue> = detected
         .iter()

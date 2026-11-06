@@ -556,8 +556,9 @@ agreement to the identity audit's second pass ("Tout faire (Recommandé)",
   the specification writes.
 - **A binary built without `otlp` reads the service's name as the exporters'
   resource does**: `OTEL_SERVICE_NAME`, then `service.name` in
-  `OTEL_RESOURCE_ATTRIBUTES`, then the pin, then the binary, under the same
-  refusals, through one reading in `config.rs`. Its boot line said another name,
+  `OTEL_RESOURCE_ATTRIBUTES`, then the pin, then the binary, then the
+  specification's `unknown_service:<executable>`, under the same refusals, through
+  one reading in `config.rs`. Its boot line said another name,
   and a blank one booted, against the docs. A malformed `OTEL_RESOURCE_ATTRIBUTES`
   fails such a binary too: one variable, one reading, whichever binary a platform
   sets it for.

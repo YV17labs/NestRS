@@ -26,6 +26,10 @@ const CONFIG_FILES: [&str; 2] = ["OTEL_CONFIG_FILE", "OTEL_EXPERIMENTAL_CONFIG_F
 /// it; the crate exporting the constant is the `otlp` feature's.
 pub(crate) const SERVICE_NAME: &str = "service.name";
 
+/// What the resource specification names a service nothing else names, `:` and
+/// the executable's name after it where that reads.
+pub(crate) const UNKNOWN_SERVICE: &str = "unknown_service";
+
 /// The specification's variable naming the service.
 pub(crate) const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 /// The specification's variable listing the resource's attributes.
@@ -57,8 +61,9 @@ pub(crate) const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 pub struct OpenTelemetryConfig {
     /// `service.name` on every span, metric and log, and on the boot line;
     /// `None` is the binary's package name
-    /// ([`AppIdentity`](nest_rs_core::AppIdentity)). An empty or blank one names
-    /// no service, and fails `init_with`.
+    /// ([`AppIdentity`](nest_rs_core::AppIdentity)), or with none the
+    /// specification's `unknown_service:<executable>`. An empty or blank one
+    /// names no service, and fails `init_with`.
     /// `OTEL_SERVICE_NAME`, then `service.name` in `OTEL_RESOURCE_ATTRIBUTES`,
     /// override it.
     pub service_name: Option<String>,

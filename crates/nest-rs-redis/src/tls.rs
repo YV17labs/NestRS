@@ -13,12 +13,37 @@
 
 use std::time::Duration;
 
-use nest_rs_config::ClientTls;
+use nest_rs_config::{ClientTls, Environment};
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 
 use crate::RedisError;
 use crate::instance::RedisInstance;
 use crate::topology::Hello;
+use crate::url::RedisUrl;
+
+/// What the boot says when a deployment reaches Redis in plaintext.
+pub(crate) const PLAINTEXT_OPEN: &str = "Redis is reached in plaintext outside a dev profile: its \
+     credentials and its data travel unencrypted";
+
+/// One `warn` when a deployment reaches `instance` in plaintext off this
+/// machine: honoured, since its URL wrote it, and said by the one call every
+/// topology opens through, once per instance, where a client rebuilt or a link
+/// reopened never comes back.
+pub(crate) fn warn_when_open(instance: &RedisInstance, url: &RedisUrl) {
+    let Some(endpoint) = url.plaintext_off_this_machine() else {
+        return;
+    };
+    let environment = Environment::from_env();
+    if environment.is_deployed() {
+        tracing::warn!(
+            target: crate::TARGET,
+            instance = instance.name(),
+            environment = environment.as_str(),
+            endpoint = %endpoint,
+            "{PLAINTEXT_OPEN}",
+        );
+    }
+}
 
 /// The material every connection `instance`'s URL opens is built with: `None`
 /// over plaintext. Material beside a plaintext URL is refused, since it would
@@ -198,6 +223,104 @@ mod tests {
 
     use crate::testing::{AUTHORITY, mutual_tls_listener, trusting_the_authority, unnamed};
 
+    /// `url`, as the default instance reads it.
+    fn read(url: &str) -> RedisUrl {
+        RedisUrl::parse(url, &unnamed()).unwrap_or_else(|refused| panic!("{url}: {refused}"))
+    }
+
+    /// A deployment reaching Redis in plaintext says so, whichever URL wrote
+    /// it, naming the hosts and never what the URL carries. A URL's hosts
+    /// on this machine's loopback say nothing where the link reaches those
+    /// alone, which a Sentinel's primary and a Cluster's nodes may not.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_deployment_reaching_redis_in_plaintext_off_this_machine_is_said() {
+        figment::Jail::expect_with(|jail| {
+            for (profile, url, endpoint) in [
+                (
+                    "production",
+                    "redis://app:s3cret@cache.internal:6379/2",
+                    Some("cache.internal:6379"),
+                ),
+                ("staging", "redis://cache:6379/", Some("cache:6379")),
+                ("", "redis://cache:6379/", Some("cache:6379")),
+                ("development", "redis://cache:6379/", None),
+                ("test", "redis://cache:6379/", None),
+                ("production", "rediss://cache:6379/", None),
+                ("production", "redis://127.0.0.1:6379/", None),
+                ("production", "redis://localhost:6379/", None),
+                (
+                    "production",
+                    "redis://[2001:db8::1]:6379/",
+                    Some("[2001:db8::1]:6379"),
+                ),
+                ("production", "redis://[::1]:6379/", None),
+                ("production", "redis+unix:///run/valkey.sock", None),
+                (
+                    "production",
+                    "redis-sentinel://app:s3cret@a:26379/?node=b:26379&sentinelServiceName=main",
+                    Some("a:26379, b:26379"),
+                ),
+                (
+                    "production",
+                    "redis-sentinel://127.0.0.1:26379/?sentinelServiceName=main",
+                    Some("127.0.0.1:26379"),
+                ),
+                (
+                    "production",
+                    "rediss-sentinel://a:26379/?sentinelServiceName=main",
+                    None,
+                ),
+                (
+                    "development",
+                    "redis-sentinel://a:26379/?sentinelServiceName=main",
+                    None,
+                ),
+                (
+                    "production",
+                    "redis-cluster://app:s3cret@a:6379/?node=b:6379",
+                    Some("a:6379, b:6379"),
+                ),
+                (
+                    "production",
+                    "redis-cluster://127.0.0.1:6379/",
+                    Some("127.0.0.1:6379"),
+                ),
+                ("production", "rediss-cluster://a:6379/", None),
+                ("test", "redis-cluster://a:6379/", None),
+            ] {
+                jail.set_env(nest_rs_config::Environment::var_name(), profile);
+                let logs = nest_rs_testing::LogCapture::install();
+                warn_when_open(&unnamed(), &read(url));
+                let lines = logs.find(crate::TARGET, PLAINTEXT_OPEN);
+                assert_eq!(
+                    lines
+                        .iter()
+                        .filter_map(|line| line.field("endpoint"))
+                        .collect::<Vec<_>>(),
+                    endpoint.map(str::to_owned).into_iter().collect::<Vec<_>>(),
+                    "{profile:?} {url}",
+                );
+                for line in lines {
+                    assert_eq!(line.level, "warn");
+                    assert_eq!(
+                        line.field("environment").as_deref(),
+                        Some(if profile.is_empty() {
+                            "production"
+                        } else {
+                            profile
+                        }),
+                    );
+                    assert!(!format!("{line:?}").contains("s3cret"), "{line:?}");
+                }
+            }
+            Ok(())
+        });
+    }
+
     #[test]
     fn a_tls_clients_material_leaves_a_process_default_provider_installed() {
         assert!(rustls::crypto::CryptoProvider::get_default().is_none());
@@ -243,9 +366,7 @@ mod tests {
     async fn the_first_hello_hears_a_client_certificate_refused_before_it_was_sent() {
         let (addr, serving) = mutual_tls_listener().await;
         let url = format!("rediss://{addr}/");
-        let Ok(crate::url::RedisUrl::Standalone(info)) =
-            crate::url::RedisUrl::parse(&url, &unnamed())
-        else {
+        let Ok(RedisUrl::Standalone(info)) = RedisUrl::parse(&url, &unnamed()) else {
             panic!("{url} is a URL of one server");
         };
         let budget = Duration::from_secs(2);

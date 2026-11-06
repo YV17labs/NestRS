@@ -166,6 +166,9 @@ nest-rs-queue = { path = "../nest-rs-queue" }
 tokio = { workspace = true, features = ["test-util"] }
 # The outbox e2e migrates an ephemeral database with `OutboxMigration`.
 sea-orm-migration.workspace = true
+# `figment::Jail` declares each profile, so the tests show what a deployment
+# says of the URL it wrote.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

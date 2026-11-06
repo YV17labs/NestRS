@@ -15,7 +15,8 @@
 //! where it exports them, so a value is refused naming its variable, never
 //! quoted, and each is handed to the SDK rather than left for it to read
 //! again. A specification variable this build serves nowhere is said at
-//! `warn` unless its value names what the build does.
+//! `warn` unless its value names what the build does, and so, in a deployed
+//! profile, is a signal exporting over `http://` off this machine.
 //!
 //! **The collector is not proved at boot** (`nest_rs_core::prove`): telemetry
 //! must never stop the app it observes, so an unreachable collector costs
@@ -247,6 +248,9 @@ pub(crate) struct Summary {
     /// over, or a variable this build serves nowhere — said once a subscriber
     /// can hear it.
     pub passed_over: Vec<PassedOver>,
+    /// Each signal exporting over plain HTTP off this machine, and where, shown
+    /// without its credential.
+    pub in_plaintext: Vec<(Signal, String)>,
 }
 
 /// Where one signal goes, as the boot line says it: an operator reads there
@@ -350,6 +354,16 @@ fn build_reading(
     };
     passed_over.extend(unserved(&read, logs.is_some()));
     let exports = [traces, metrics, logs];
+    let in_plaintext = Signal::ALL
+        .into_iter()
+        .zip(&exports)
+        .filter_map(|(signal, export)| {
+            let export = export
+                .as_ref()
+                .filter(|export| export.plaintext && !export.loopback)?;
+            Some((signal, endpoint_shown(export.url.as_str())))
+        })
+        .collect();
     let [traces_client, metrics_client, logs_client] = exporter_clients(&exports)?;
     let [traces, metrics, logs] = exports;
 
@@ -423,6 +437,7 @@ fn build_reading(
             destinations: [to_traces, to_metrics, to_logs],
             sampler: sampler_choice,
             passed_over,
+            in_plaintext,
         },
     })
 }
@@ -2587,6 +2602,74 @@ mod tests {
             ]
         );
         shut(exporters);
+    }
+
+    /// What reaches a collector over plain HTTP off this machine, signal by
+    /// signal; a collector beside the app, by any name of the loopback, crosses
+    /// no network, and a signal switched off exports nothing to say.
+    #[test]
+    fn a_signal_exporting_in_plaintext_off_this_machine_is_summed_up_alone() {
+        let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let in_plaintext = |config: &OpenTelemetryConfig, set: &[(&str, &str)]| {
+            let exporters = build_reading(config, None, reading(set)).expect("builds");
+            let found: Vec<(&str, String)> = exporters
+                .summary
+                .in_plaintext
+                .iter()
+                .map(|(signal, endpoint)| (signal.name(), endpoint.clone()))
+                .collect();
+            shut(exporters);
+            found
+        };
+        let none = OpenTelemetryConfig::default();
+        assert!(in_plaintext(&none, &[]).is_empty());
+        for loopback in [
+            "http://localhost:4318",
+            "http://127.0.0.1:4318",
+            "http://[::1]:4318",
+        ] {
+            assert!(
+                in_plaintext(&pinned_endpoint(loopback), &[]).is_empty(),
+                "{loopback}"
+            );
+        }
+        assert!(in_plaintext(&pinned_endpoint("https://collector:4318"), &[]).is_empty());
+        assert_eq!(
+            in_plaintext(&pinned_endpoint("http://collector:4318"), &[]),
+            ["traces", "metrics", "logs"]
+                .map(|signal| (signal, format!("http://collector:4318/v1/{signal}"),)),
+        );
+        assert_eq!(
+            in_plaintext(
+                &none,
+                &[
+                    (
+                        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+                        "http://traces:4318/v1/traces"
+                    ),
+                    (OTEL_EXPORTER_OTLP_METRICS_ENDPOINT, "https://metrics:4318"),
+                    (OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, "http://127.0.0.1:4318"),
+                ],
+            ),
+            [("traces", "http://traces:4318/v1/traces".to_owned())],
+        );
+        assert_eq!(
+            in_plaintext(
+                &pinned_endpoint("http://collector:4318"),
+                &[
+                    ("OTEL_TRACES_EXPORTER", "none"),
+                    ("OTEL_METRICS_EXPORTER", "none"),
+                ],
+            ),
+            [("logs", "http://collector:4318/v1/logs".to_owned())],
+        );
+        assert!(
+            in_plaintext(
+                &pinned_endpoint("http://collector:4318"),
+                &[(OTEL_SDK_DISABLED, "true")],
+            )
+            .is_empty()
+        );
     }
 
     /// A sampler the SDK does not build, and a ratio that does not read as one

@@ -3261,6 +3261,7 @@ dependencies = [
  "async-graphql",
  "async-trait",
  "chrono",
+ "figment",
  "futures-util",
  "inventory",
  "nest-rs-authn",

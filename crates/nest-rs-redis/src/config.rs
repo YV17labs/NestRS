@@ -43,7 +43,9 @@ pub struct RedisConfig {
     /// the primary the sentinels name (`sentinelUsername` and
     /// `sentinelPassword` for sentinels holding users); and
     /// `redis-cluster://n1:6379/2?node=n2:6379` a Cluster. Each `rediss…://`
-    /// form connects over TLS. A [`Secret`], since it may carry a password.
+    /// form connects over TLS, and a plaintext one is said once at `warn` in a
+    /// deployed profile, but for one server on this machine's loopback. A
+    /// [`Secret`], since it may carry a password.
     #[config(with = url)]
     pub url: Secret<String>,
     /// How long boot may spend reaching Redis before failing with a named

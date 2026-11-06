@@ -573,6 +573,13 @@ length and while streaming (the JWK Set's `JWKS_MAX_BYTES`, OAuth's
 than its total, so no size is cut (storage's `read_timeout` beside its
 `operation_timeout`).
 
+**A plaintext opening a deployment wrote is honoured and said**: one `warn` on
+the crate's target where the resource opens, never per reopened connection,
+naming the endpoint without what its URL carries, and none for what crosses no
+network unless a setting of the deployment's own opted in, as storage's
+`ALLOW_HTTP` does (`.claude/decisions/plaintext-opening-is-said.md`; each driver's
+unit tests).
+
 A worker job — a queue attempt, a tick — and an event listener are the units
 no edge deadline bounds, so their decorator's `timeout` key is their deadline,
 defaulting to `nest_rs_core::JOB_TIMEOUT` and never off: past it an attempt's

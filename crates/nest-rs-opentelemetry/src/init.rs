@@ -10,6 +10,12 @@ use crate::error::OpenTelemetryError;
 
 const ALREADY_INSTALLED: &str = "a global subscriber is already installed, and is kept";
 
+/// What the boot says when a deployment exports a signal over plain HTTP off
+/// this machine: honoured, since its `http://` endpoint wrote it.
+#[cfg(feature = "otlp")]
+const PLAINTEXT_EXPORT: &str = "a signal is exported over plain HTTP outside a dev profile: its \
+     telemetry travels unencrypted";
+
 /// Drop synchronously flushes pending traces/metrics/logs. Keep the binding
 /// alive for the whole program: `let _otel = OpenTelemetry::init()?;`.
 #[must_use = "dropping the guard shuts the exporters down at once: bind it, \
@@ -50,7 +56,9 @@ impl OpenTelemetry {
     /// query in one, an endpoint in a binary built without the `otlp`
     /// feature — a metric interval or sample ratio outside its range, or a
     /// failed exporter build. A specification variable this build serves
-    /// nowhere is said once at `warn`, unless its value names what it does.
+    /// nowhere is said once at `warn`, unless its value names what it does, and
+    /// so, in a deployed profile, is each signal exporting over `http://` off
+    /// this machine.
     ///
     /// The framework propagates W3C Trace Context at every edge and carries a
     /// queue job's W3C Baggage onto the pushes it makes, whatever this crate
@@ -103,6 +111,18 @@ impl OpenTelemetry {
                     reason = over.reason,
                     "an OpenTelemetry variable is passed over",
                 );
+            }
+            let environment = nest_rs_config::Environment::from_env();
+            if environment.is_deployed() {
+                for (signal, endpoint) in summary.in_plaintext {
+                    tracing::warn!(
+                        target: crate::TARGET,
+                        environment = environment.as_str(),
+                        signal = signal.name(),
+                        endpoint = endpoint.as_str(),
+                        "{PLAINTEXT_EXPORT}",
+                    );
+                }
             }
             // Strings, which the console quotes, so a logfmt reader takes
             // `off (no endpoint)` whole.

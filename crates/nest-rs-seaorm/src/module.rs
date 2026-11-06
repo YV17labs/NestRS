@@ -265,6 +265,7 @@ async fn connect(
 ) -> anyhow::Result<DatabaseConnection> {
     let probe = config.probe_options()?;
     let endpoint = endpoint(&probe);
+    crate::config::warn_when_open(&probe, &endpoint);
     let budget = options
         .get_connect_timeout()
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT);
@@ -397,7 +398,7 @@ fn unproved(
 
 /// The host and port `options` dial — or their socket — never the URL, which
 /// carries the password.
-fn endpoint(options: &PgConnectOptions) -> String {
+pub(crate) fn endpoint(options: &PgConnectOptions) -> String {
     match options.get_socket() {
         Some(socket) => socket.display().to_string(),
         None => format!("{}:{}", options.get_host(), options.get_port()),
@@ -424,6 +425,45 @@ mod tests {
         ] {
             assert_eq!(statement_timeout_in(options), bound, "{options}");
         }
+    }
+
+    /// The tools' path opens as the app's does, so both say a plaintext URL,
+    /// once, before anything answers.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn opening_the_pool_says_its_plaintext_url_once() {
+        use nest_rs_config::{Config as _, Environment};
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(Environment::var_name(), "production");
+            jail.set_env(
+                nest_rs_config::var_name("seaorm", "URL"),
+                "postgres://app:s3cret@192.0.2.1/app?sslmode=disable",
+            );
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime");
+            let answer_never = Duration::from_millis(1);
+            let logs = nest_rs_testing::LogCapture::install();
+            let tools = runtime
+                .block_on(async { tokio::time::timeout(answer_never, connect_from_env()).await });
+            assert!(tools.is_err(), "nothing answers there");
+            logs.expect_one(crate::target::ORM, crate::config::PLAINTEXT_OPEN);
+            drop(logs);
+
+            let config = SeaOrmConfig::load().expect("the variable reads");
+            let options = config.app_connect_options().expect("the app's pool");
+            let logs = nest_rs_testing::LogCapture::install();
+            let app = runtime.block_on(async {
+                tokio::time::timeout(answer_never, connect(&config, options)).await
+            });
+            assert!(app.is_err(), "nothing answers there");
+            logs.expect_one(crate::target::ORM, crate::config::PLAINTEXT_OPEN);
+            Ok(())
+        });
     }
 
     #[tokio::test]

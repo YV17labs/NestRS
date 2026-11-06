@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use nest_rs_config::__private::is_loopback;
 use redis::{ConnectionAddr, ConnectionInfo, ErrorKind, IntoConnectionInfo, RedisConnectionInfo};
 
 use crate::RedisError;
@@ -129,6 +130,21 @@ impl RedisUrl {
             None => parse_standalone(raw),
         }
         .map_err(|refused| refused.named(raw, instance))
+    }
+
+    /// The hosts this URL names, as a line shows them, when it reaches Redis in
+    /// plaintext off this machine. One server on the loopback or a socket
+    /// crosses no network; a Sentinel's primary and a Cluster's nodes are hosts
+    /// the URL does not name, so its own on the loopback prove nothing.
+    pub(crate) fn plaintext_off_this_machine(&self) -> Option<String> {
+        match self {
+            Self::Standalone(info) => match info.addr() {
+                ConnectionAddr::Tcp(host, _) if !is_loopback(host) => Some(dialled(info)),
+                _ => None,
+            },
+            Self::Sentinel(url) => (!url.tls).then(|| listed(&url.sentinels)),
+            Self::Cluster(url) => (!url.tls).then(|| listed(&url.seeds)),
+        }
     }
 }
 
@@ -290,6 +306,19 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Ref
     }
 }
 
+/// The server `info` dials, as a diagnostic names it: an IPv6 host in the
+/// brackets [`NodeAddr`] writes, which upstream's `Display` leaves out.
+pub(crate) fn dialled(info: &ConnectionInfo) -> String {
+    match info.addr() {
+        ConnectionAddr::Tcp(host, port) | ConnectionAddr::TcpTls { host, port, .. } => NodeAddr {
+            host: host.clone(),
+            port: *port,
+        }
+        .to_string(),
+        addr => addr.to_string(),
+    }
+}
+
 /// The hosts a URL names, as a diagnostic lists them.
 pub(crate) fn listed(hosts: &[NodeAddr]) -> String {
     hosts
@@ -386,7 +415,7 @@ pub(crate) fn address(raw: &str) -> String {
         );
     }
     match raw.into_connection_info() {
-        Ok(info) => info.addr().to_string(),
+        Ok(info) => dialled(&info),
         Err(_) => match raw.split_once("://") {
             Some((scheme, _)) if is_scheme(scheme) => format!("{scheme}://<unparseable>"),
             _ => "<unparseable>".to_owned(),
@@ -713,6 +742,18 @@ mod tests {
             (
                 "rediss-cluster://app:s3cr3t@n1/0?node=n2:7001",
                 "n1:6379, n2:7001",
+            ),
+            (
+                "redis://app:s3cr3t@[2001:db8::1]:6379/0",
+                "[2001:db8::1]:6379",
+            ),
+            (
+                "rediss://app:s3cr3t@[2001:db8::1]:6379/0",
+                "[2001:db8::1]:6379",
+            ),
+            (
+                "redis-cluster://app:s3cr3t@[2001:db8::1]:6379/0",
+                "[2001:db8::1]:6379",
             ),
             (
                 "rediss-cluster://app:s3cr3t@n1?node=app:s3cr3t@n2",

@@ -21,6 +21,7 @@ use crate::connection::{
 };
 use crate::error::RedisError;
 use crate::instance::RedisInstance;
+use crate::url::dialled;
 use crate::{RedisTopology, tls};
 
 /// The link to one server, and what opening it again needs.
@@ -50,7 +51,7 @@ impl StandaloneLink {
         instance: RedisInstance,
         budget: Duration,
     ) -> Result<Arc<Self>, RedisError> {
-        let endpoint = info.addr().to_string();
+        let endpoint = dialled(&info);
         let client = client(&instance, info, tls, &endpoint, budget)?;
         let database = client.get_connection_info().redis_settings().db();
         let manager = proved(&instance, budget, &endpoint, process_seed(), |_| {

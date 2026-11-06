@@ -34,7 +34,7 @@ use crate::connection::{
 use crate::error::RedisError;
 use crate::instance::RedisInstance;
 use crate::script::RedisScript;
-use crate::url::{ClusterUrl, NodeAddr, listed};
+use crate::url::{ClusterUrl, NodeAddr, dialled, listed};
 use crate::{RedisTopology, tls};
 
 /// The link to a Cluster's nodes, for the instance `I`.
@@ -501,7 +501,7 @@ impl<I: Instance> Connect for ClusterNode<I> {
     {
         Box::pin(async move {
             let info = info.into_connection_info()?;
-            let endpoint = info.addr().to_string();
+            let endpoint = dialled(&info);
             let settings = info.redis_settings().clone().set_skip_set_lib_name();
             let client = redis::Client::open(info.set_redis_settings(settings))?;
             let opened = async {

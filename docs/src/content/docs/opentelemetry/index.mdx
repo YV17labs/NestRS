@@ -277,6 +277,11 @@ TLS alone. Any other scheme, and a value that does not parse as a URL, fail
 the boot naming the variable that set it, never its value, which may carry a
 collector's credential.
 
+Off this machine's loopback, a deployed profile says a plaintext export once per
+signal at `warn` on `nest_rs::opentelemetry` — `a signal is exported over plain
+HTTP outside a dev profile`, its `signal` and `endpoint` — and exports it all the
+same, since the deployment wrote it.
+
 An `https://` collector's certificate is verified against the system's
 authorities, or the ones in the file `OTEL_EXPORTER_OTLP_CERTIFICATE` names,
 which replace them; a collector requiring a client certificate gets the files

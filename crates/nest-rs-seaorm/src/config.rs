@@ -2,8 +2,9 @@ use std::time::Duration;
 
 use std::str::FromStr;
 
+use nest_rs_config::__private::is_loopback;
 use nest_rs_config::{
-    Bound, ConfigError, CountBounds, DurationBounds, Floor, Namespaced, Result, config,
+    Bound, ConfigError, CountBounds, DurationBounds, Environment, Floor, Namespaced, Result, config,
 };
 use nest_rs_core::Secret;
 use sea_orm::ConnectOptions;
@@ -90,6 +91,10 @@ const MIN_CONNECTIONS: CountBounds = CountBounds::new(
     ),
 );
 
+/// What the boot says when a deployment reaches Postgres in plaintext.
+pub(crate) const PLAINTEXT_OPEN: &str = "Postgres is reached in plaintext outside a dev profile: \
+     its queries and their results travel unencrypted";
+
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
 /// settable via a `<PREFIX>_SEAORM__*` env var, its name in SCREAMING_SNAKE,
 /// which the bare import reads, or pinned through
@@ -98,7 +103,8 @@ const MIN_CONNECTIONS: CountBounds = CountBounds::new(
 #[derive(Clone, Debug)]
 pub struct SeaOrmConfig {
     /// e.g. `postgres://user:pass@host/db`, a [`Secret`] since it may carry the
-    /// password. Empty aborts the build.
+    /// password. Empty aborts the build. `sslmode=disable` is plaintext, said
+    /// once at `warn` in a deployed profile when the server is off this machine.
     pub url: Secret<String>,
     /// Upper bound on pooled connections, from 1 to 262143, Postgres's own
     /// ceiling; defaults to 10, sqlx's.
@@ -302,6 +308,28 @@ impl SeaOrmConfig {
     }
 }
 
+/// One `warn` when a deployment opens `options`, what every connection of the
+/// pool opens with, in plaintext off this machine: honoured, since `sslmode=disable`
+/// or libpq's `PGSSLMODE` wrote it. A server on the loopback or a socket is
+/// reached over no network, a sidecar proxy's common shape.
+pub(crate) fn warn_when_open(options: &PgConnectOptions, endpoint: &str) {
+    if !matches!(options.get_ssl_mode(), PgSslMode::Disable)
+        || options.get_socket().is_some()
+        || is_loopback(options.get_host())
+    {
+        return;
+    }
+    let environment = Environment::from_env();
+    if environment.is_deployed() {
+        tracing::warn!(
+            target: crate::target::ORM,
+            environment = environment.as_str(),
+            endpoint = %endpoint,
+            "{PLAINTEXT_OPEN}",
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use nest_rs_config::{Config, ConfigService};
@@ -365,6 +393,108 @@ mod tests {
         ] {
             assert!(pinned(url).connect_options().is_ok(), "{url}");
         }
+    }
+
+    /// A deployment reaching Postgres in plaintext says so, by host and port and
+    /// never the URL, which carries the password. A server on this machine, by
+    /// its loopback or a socket, is reached over no network.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_deployment_reaching_postgres_in_plaintext_off_this_machine_is_said() {
+        const DISABLED: &str = "postgres://app:s3cret@db.internal:5433/app?sslmode=disable";
+        figment::Jail::expect_with(|jail| {
+            for (profile, url, endpoint) in [
+                ("production", DISABLED, Some("db.internal:5433")),
+                ("staging", DISABLED, Some("db.internal:5433")),
+                ("", DISABLED, Some("db.internal:5433")),
+                (
+                    "production",
+                    "postgres:///app?host=db&password=s3cret&sslmode=disable",
+                    Some("db:5432"),
+                ),
+                ("development", DISABLED, None),
+                ("test", DISABLED, None),
+                ("production", "postgres://app:s3cret@db/app", None),
+                (
+                    "production",
+                    "postgres://app:s3cret@db/app?sslmode=verify-full&sslrootcert=/ca.pem",
+                    None,
+                ),
+                (
+                    "production",
+                    "postgres://app:s3cret@127.0.0.1/app?sslmode=disable",
+                    None,
+                ),
+                (
+                    "production",
+                    "postgres://app:s3cret@localhost/app?sslmode=disable",
+                    None,
+                ),
+                (
+                    "production",
+                    "postgres://app:s3cret@[::1]/app?sslmode=disable",
+                    None,
+                ),
+                (
+                    "production",
+                    "postgres:///app?host=/run/postgresql&password=s3cret&sslmode=disable",
+                    None,
+                ),
+            ] {
+                jail.set_env(nest_rs_config::Environment::var_name(), profile);
+                let logs = nest_rs_testing::LogCapture::install();
+                let probe = pinned(url).probe_options().expect(url);
+                warn_when_open(&probe, &crate::module::endpoint(&probe));
+                let lines = logs.find(crate::target::ORM, PLAINTEXT_OPEN);
+                assert_eq!(
+                    lines
+                        .iter()
+                        .filter_map(|line| line.field("endpoint"))
+                        .collect::<Vec<_>>(),
+                    endpoint.map(str::to_owned).into_iter().collect::<Vec<_>>(),
+                    "{profile:?} {url}",
+                );
+                for line in lines {
+                    assert_eq!(line.level, "warn");
+                    assert_eq!(
+                        line.field("environment").as_deref(),
+                        Some(if profile.is_empty() {
+                            "production"
+                        } else {
+                            profile
+                        }),
+                    );
+                    assert!(!format!("{line:?}").contains("s3cret"), "{line:?}");
+                }
+            }
+            Ok(())
+        });
+    }
+
+    /// libpq's own variable turns TLS off beside a URL naming no mode, as the
+    /// URL's parameter does, and is said as one.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn pgsslmode_disabling_tls_beside_a_url_naming_no_mode_is_said() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::Environment::var_name(), "production");
+            jail.set_env("PGSSLMODE", "disable");
+            let logs = nest_rs_testing::LogCapture::install();
+            let probe = pinned("postgres://db.internal/app")
+                .probe_options()
+                .expect("a URL");
+            assert!(matches!(probe.get_ssl_mode(), PgSslMode::Disable));
+            warn_when_open(&probe, &crate::module::endpoint(&probe));
+            let line = logs.expect_one(crate::target::ORM, PLAINTEXT_OPEN);
+            assert_eq!(line.field("endpoint").as_deref(), Some("db.internal:5432"));
+            Ok(())
+        });
     }
 
     #[test]

@@ -138,7 +138,9 @@ impl RedisConnection {
     /// against the system's authorities, or those in [`RedisConfig::tls`],
     /// presenting the client certificate set there, if any. A certificate
     /// refused after the boot, when a connection reopens, is reported once at
-    /// `warn` on `nest_rs::redis`, with what to change.
+    /// `warn` on `nest_rs::redis`, with what to change. Any other scheme is
+    /// plaintext, said once at `warn` there in a deployed profile, but for one
+    /// server on this machine's loopback.
     ///
     /// What fails the same way on every attempt fails at once instead of
     /// spending the budget on retries that cannot succeed, saying what to
@@ -175,7 +177,9 @@ impl<I: Instance> RedisConnection<I> {
         let budget = RedisConfig::CONNECT_TIMEOUT
             .check(instance.namespace(), config.connect_timeout)
             .map_err(RedisError::Budget)?;
-        let link = match RedisUrl::parse(config.url.expose_secret(), &instance)? {
+        let url = RedisUrl::parse(config.url.expose_secret(), &instance)?;
+        tls::warn_when_open(&instance, &url);
+        let link = match url {
             RedisUrl::Standalone(info) => Link::Standalone(
                 StandaloneLink::connect(info, &config.tls, instance, budget).await?,
             ),
@@ -1403,6 +1407,93 @@ mod tests {
             Ok(_) => panic!("{config:?} must not connect"),
             Err(refused) => refused,
         }
+    }
+
+    /// Each topology's open says it once for its instance, before anything
+    /// answers: a client rebuilt or a link reopened afterwards never comes back
+    /// here.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn opening_an_instance_says_its_plaintext_url_once_on_every_topology() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::Environment::var_name(), "production");
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime");
+            for url in [
+                "redis://192.0.2.1:6379/",
+                "redis-sentinel://192.0.2.1:26379/?sentinelServiceName=main",
+                "redis-cluster://192.0.2.1:6379/",
+            ] {
+                let budget = Duration::from_millis(1);
+                let logs = nest_rs_testing::LogCapture::install();
+                assert!(
+                    runtime
+                        .block_on(RedisConnection::connect(&config(url, budget)))
+                        .is_err()
+                );
+                let default = logs.expect_one(crate::TARGET, tls::PLAINTEXT_OPEN);
+                assert_eq!(default.field("instance").as_deref(), Some(""), "{url}");
+                drop(logs);
+
+                let logs = nest_rs_testing::LogCapture::install();
+                runtime.block_on(refused_for_the_cache(config(url, budget)));
+                let cache = logs.expect_one(crate::TARGET, tls::PLAINTEXT_OPEN);
+                assert_eq!(cache.field("instance").as_deref(), Some("cache"), "{url}");
+            }
+            Ok(())
+        });
+    }
+
+    /// What repeats inside a budget, each attempt's proof, leaves the line alone:
+    /// each topology, refused at once, retries past its first attempt and says it
+    /// once. `::ffff:127.0.0.1` dials this machine, and reads as off it. The clock
+    /// runs: paused, it jumps a real socket's wait and spends the budget unevenly.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn an_instance_retrying_within_its_budget_says_its_plaintext_url_once() {
+        // Twice the first wait at its longest, so a loaded host still retries.
+        const ONE_RETRY: Duration = Duration::from_millis(600);
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::Environment::var_name(), "production");
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime");
+            let refused = |url| async move {
+                RedisConnection::connect(&config(url, ONE_RETRY))
+                    .await
+                    .is_err()
+            };
+            let logs = nest_rs_testing::LogCapture::install();
+            let opened = runtime.block_on(async {
+                tokio::join!(
+                    refused("redis://[::ffff:127.0.0.1]:1/"),
+                    refused("redis-sentinel://127.0.0.1:1/?sentinelServiceName=main"),
+                    refused("redis-cluster://127.0.0.1:2/"),
+                )
+            });
+            assert_eq!(opened, (true, true, true));
+            for endpoint in ["[::ffff:127.0.0.1]:1", "127.0.0.1:1", "127.0.0.1:2"] {
+                let of_it = |message| {
+                    logs.find(crate::TARGET, message)
+                        .into_iter()
+                        .filter(|line| line.field("endpoint").as_deref() == Some(endpoint))
+                        .count()
+                };
+                let retried = of_it("redis unreachable — retrying within the connect budget");
+                assert!(retried > 1, "{endpoint}: {:#?}", logs.events());
+                assert_eq!(of_it(tls::PLAINTEXT_OPEN), 1, "{endpoint}");
+            }
+            Ok(())
+        });
     }
 
     /// Every refusal names the variables of the instance that failed, never the

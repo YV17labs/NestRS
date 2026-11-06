@@ -23,6 +23,9 @@ changes — and Redis is not a supported server.
 | Sentinel | `redis-sentinel://` | `rediss-sentinel://` |
 | Cluster | `redis-cluster://` | `rediss-cluster://` |
 
+A deployed profile says a plaintext scheme once at `warn`
+([What the framework dials](/security/threat-model/#what-the-framework-dials)).
+
 The topology is declared, never guessed: a `rediss://` URL pointed at a Cluster
 node, or a `rediss-cluster://` URL pointed at a server of its own, is a
 deployment that says one thing and runs another. Each server the boot reaches

@@ -39,8 +39,8 @@ call site cannot open a door the configuration kept shut.
 
 | Client | Where its URL comes from | Plaintext |
 |--------|--------------------------|-----------|
-| Postgres pool and `EphemeralDatabase` | `<PREFIX>_SEAORM__URL` | only with `sslmode=disable` written in the URL; any other mode short of `verify-full` is refused |
-| Redis, all three topologies | `<PREFIX>_REDIS__URL` | only a `redis://` URL; a `#insecure` fragment is refused |
+| Postgres pool and `EphemeralDatabase` | `<PREFIX>_SEAORM__URL` | only with `sslmode=disable` written in the URL, or libpq's `PGSSLMODE=disable` beside a URL naming no mode; any other mode short of `verify-full` is refused |
+| Redis, all three topologies | `<PREFIX>_REDIS__URL` | only a URL whose scheme says it (`redis://`, `redis-sentinel://`, `redis-cluster://`); a `#insecure` fragment is refused |
 | Storage | `<PREFIX>_STORAGE__ENDPOINT` | only with `<PREFIX>_STORAGE__ALLOW_HTTP` open: a declared development or test profile opens it by default, and `true` in any other is honoured and said at `warn` |
 | JWK Set | `<PREFIX>_AUTHN__JWKS_URI` | refused when the module is built, and by the client on every fetch |
 | OAuth token and userinfo endpoints | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL`, `USERINFO_URL` | refused when the client is built (RFC 6749 §3.2), and by the client on every call |
@@ -52,6 +52,18 @@ call site cannot open a door the configuration kept shut.
 A provider package building a URL at run time inherits the same rule: the
 OAuth client speaks `https` alone, so a URL that slipped past every check
 still never leaves the process in plaintext with a token on it.
+
+A plaintext opening is a visible line. A deployed profile — staging, production,
+or none declared — files one `warn` for each, naming the endpoint and never what
+its URL carries: Postgres when the pool opens, Redis when each instance opens,
+OTLP for each signal it exports, storage when the store opens; a connection you
+open yourself from `SeaOrmConfig::connect_options` says nothing, the open being
+yours. What reaches this machine's loopback or a socket crosses no network, the
+common shape of a sidecar or an authenticating proxy, and says nothing; storage
+alone says it there too,
+since `ALLOW_HTTP` is a setting a deployment opts into anywhere, and a Sentinel or
+Cluster URL says it whatever its hosts, since its link reaches a primary and nodes
+the URL does not name.
 
 ## Every client the framework opens verifies TLS
 

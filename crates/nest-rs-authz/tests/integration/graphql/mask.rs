@@ -190,6 +190,44 @@ impl MaskResolver {
 
     #[query]
     #[authorize(Read, widget::Entity)]
+    async fn widgets_or_none(&self) -> GqlResult<Vec<Option<WidgetDto>>> {
+        Ok(vec![
+            Some(WidgetDto {
+                id: 1,
+                name: Some("ada".into()),
+            }),
+            None,
+        ])
+    }
+
+    /// A list the mask cuts no longer fitting its type, a `None` among its rows.
+    #[query]
+    #[authorize(Read, widget::Entity)]
+    async fn strict_widgets_or_none(&self) -> GqlResult<Vec<Option<StrictWidgetDto>>> {
+        Ok(vec![
+            Some(StrictWidgetDto {
+                id: 1,
+                name: "ada".into(),
+            }),
+            None,
+        ])
+    }
+
+    /// A map of rows: on a value, a key is no column and a row is no map.
+    #[query]
+    #[authorize(Read, widget::Entity)]
+    async fn widget_map(&self) -> GqlResult<std::collections::HashMap<String, WidgetDto>> {
+        Ok(std::collections::HashMap::from([(
+            "first".to_owned(),
+            WidgetDto {
+                id: 1,
+                name: Some("ada".into()),
+            },
+        )]))
+    }
+
+    #[query]
+    #[authorize(Read, widget::Entity)]
     async fn strict_widget(&self) -> GqlResult<StrictWidgetDto> {
         Ok(StrictWidgetDto {
             id: 1,
@@ -340,6 +378,47 @@ async fn every_row_of_a_vec_is_masked() {
     for row in rows {
         assert_eq!(row["name"], serde_json::Value::Null);
     }
+}
+
+/// A `None` holds no row: it stays beside what the mask cut, whichever arm cut it.
+#[tokio::test]
+async fn a_none_in_a_root_list_stays_null() {
+    let app = boot().await;
+
+    let json = query(&app, "viewer", "{ widgetsOrNone { id name } }").await;
+    assert!(json.get("errors").is_none(), "{json}");
+    assert_eq!(
+        json["data"]["widgetsOrNone"],
+        serde_json::json!([{ "id": 1, "name": null }, null]),
+    );
+
+    let json = query(&app, "viewer", "{ strictWidgetsOrNone { id } }").await;
+    assert!(json.get("errors").is_none(), "{json}");
+    assert_eq!(
+        json["data"]["strictWidgetsOrNone"],
+        serde_json::json!([{ "id": 1 }, null]),
+    );
+
+    let json = query(&app, "viewer", "{ strictWidgetsOrNone { id name } }").await;
+    assert_eq!(
+        json["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{json}"
+    );
+    assert!(!json.to_string().contains("ada"), "{json}");
+}
+
+/// Fail closed: on a value a map cannot be told from a row, so a root answers none.
+#[tokio::test]
+async fn a_root_answering_a_map_of_rows_answers_internal() {
+    let app = boot().await;
+
+    let json = query(&app, "viewer", "{ widgetMap }").await;
+
+    assert_eq!(
+        json["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{json}"
+    );
+    assert!(!json.to_string().contains("ada"), "{json}");
 }
 
 // `#[expose]` types a non-nullable column as a non-null GraphQL field, which the

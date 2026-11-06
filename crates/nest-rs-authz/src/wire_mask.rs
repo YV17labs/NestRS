@@ -82,6 +82,11 @@ pub(crate) fn mask_wire_json<S: WireModel>(
         Value::Array(items) => {
             let mut masked = Vec::with_capacity(items.len());
             for mut item in items {
+                // No row, so nothing to judge or to leak.
+                if item.is_null() {
+                    masked.push(item);
+                    continue;
+                }
                 let verdict = judged::<S>(ability, action, &item, provenance)?;
                 if verdict.allowed {
                     retain_granted::<S>(&mut item, &verdict.fields);
@@ -164,6 +169,10 @@ pub(crate) fn mask_wire_detail<S: WireModel>(
         Value::Array(items) => {
             let mut kept = Vec::with_capacity(items.len());
             for item in items {
+                if item.is_null() {
+                    kept.push(item);
+                    continue;
+                }
                 let verdict = judged::<S>(ability, action, &item, provenance)?;
                 // Same verdict `mask_many` applies — a refused row is dropped,
                 // never handed back for the caller to render.

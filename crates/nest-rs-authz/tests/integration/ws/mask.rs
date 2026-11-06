@@ -139,6 +139,18 @@ impl MaskGateway {
         Err(WsError::new("refused by the body"))
     }
 
+    #[subscribe_message("widgets_or_none")]
+    #[authorize(Read, widget::Entity)]
+    async fn widgets_or_none(&self) -> Result<Vec<Option<WidgetDto>>, WsError> {
+        Ok(vec![
+            Some(WidgetDto {
+                id: 1,
+                name: Some("first".to_owned()),
+            }),
+            None,
+        ])
+    }
+
     /// Nothing to reply: the gate alone holds.
     #[subscribe_message("nothing")]
     #[authorize(Read, widget::Entity)]
@@ -250,6 +262,13 @@ async fn a_stripped_required_field_is_omitted_from_the_frame_not_refused() {
         body.contains(r#""id":1"#),
         "…while the granted one still ships: {body}",
     );
+}
+
+/// A `null` holds no row: it stays beside what the mask cut.
+#[tokio::test]
+async fn a_null_item_of_a_list_stays_null() {
+    let body = reply("viewer", "widgets_or_none").await;
+    assert_eq!(body, r#"[{"id":1},null]"#);
 }
 
 // What is fail-closed: no ambient ability installed.

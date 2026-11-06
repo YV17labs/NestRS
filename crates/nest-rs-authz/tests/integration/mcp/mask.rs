@@ -177,6 +177,19 @@ impl MaskTool {
         Ok(Json(PostDto::new(1, 7)))
     }
 
+    /// A widget beside a slot holding no row.
+    #[tool]
+    #[authorize(Read, widget::Entity)]
+    async fn widgets_or_none(&self) -> Result<Json<Vec<Option<WidgetDto>>>, McpError> {
+        Ok(Json(vec![
+            Some(WidgetDto {
+                id: 1,
+                name: Some("first".to_owned()),
+            }),
+            None,
+        ]))
+    }
+
     /// One widget, read through its template; widget 1 alone exists.
     #[resource(template = "widget://{id}")]
     #[authorize(Read, widget::Entity)]
@@ -408,4 +421,11 @@ async fn a_relational_grant_names_the_one_field_it_withholds() {
         "{:?}",
         event.fields
     );
+}
+
+/// A `null` holds no row: it stays beside what the mask cut.
+#[tokio::test]
+async fn a_null_item_of_a_list_stays_null() {
+    let body = call("viewer", "widgets_or_none").await;
+    assert!(body.contains(r#"[{"id":1,"name":null},null]"#), "{body}");
 }

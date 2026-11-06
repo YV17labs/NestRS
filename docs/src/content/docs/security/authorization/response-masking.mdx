@@ -146,7 +146,10 @@ answer what they may read from a `#[field_resolver]`.
 - **Fail-closed.** A successful body that cannot be reconciled with the
   entity's `Model` yields 500 rather than shipping unmasked, on GraphQL `INTERNAL`,
   a row a body invented among them; a hidden column the mask could not rebuild
-  never gets that far, refused by `#[expose]` at compile time.
+  never gets that far, refused by `#[expose]` at compile time. A root answering a
+  map of rows answers `INTERNAL`, since on a value a map cannot be told from a row;
+  a `#[field_resolver]`'s map is masked per value. A `null` in a list holds no row,
+  and stays.
 
 A non-2xx, a body declaring a type other than JSON and a JSON scalar pass through
 untouched; a body declaring no type is refused like one that does not parse, and

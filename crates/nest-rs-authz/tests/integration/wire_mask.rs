@@ -40,6 +40,17 @@ async fn a_push_whose_grant_reads_a_hidden_column_is_dropped() {
     );
 }
 
+/// A `null` holds no row: it stays as it stands, beside the rows the mask cut.
+#[tokio::test]
+async fn a_null_item_of_a_list_stays_null() {
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Read, post::Entity).fields([post::Column::Id]);
+
+    let masked = push(b.build().unwrap(), json!([post::wire(1, 7), Value::Null])).await;
+
+    assert_eq!(masked, json!([{ "id": 1 }, Value::Null]), "{masked}");
+}
+
 #[tokio::test]
 async fn a_lone_push_the_ability_refuses_comes_back_null() {
     let mut b = AbilityBuilder::new();

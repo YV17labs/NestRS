@@ -163,6 +163,18 @@ impl WidgetController {
         ])
     }
 
+    #[get("/or-none")]
+    #[authorize(Read, widget::Entity)]
+    async fn or_none(&self) -> Json<Vec<Option<WidgetDto>>> {
+        Json(vec![
+            Some(WidgetDto {
+                id: 1,
+                name: "ada".into(),
+            }),
+            None,
+        ])
+    }
+
     // A body carrying the unexposed `secret`. The shaper must still strip it:
     // masking keys on the entity's static wire-key set, not on whatever the
     // body shipped.
@@ -665,4 +677,20 @@ async fn a_declared_non_json_body_still_passes_through() {
         .await;
     resp.assert_status_is_ok();
     resp.assert_text("id,name\n1,ada\n").await;
+}
+
+/// A `null` holds no row: it stays beside what the mask cut.
+#[tokio::test]
+async fn a_null_item_of_a_list_stays_null() {
+    let app = TestApp::builder()
+        .module::<AListMasksEachRowAndRetainsWireKeysApp>()
+        .build()
+        .await
+        .expect("list harness boots");
+
+    let resp = app.http().get("/widgets/or-none").send().await;
+
+    resp.assert_status_is_ok();
+    let body = resp.0.into_body().into_string().await.expect("body");
+    assert_eq!(body, r#"[{"id":1,"name":"ada"},null]"#);
 }

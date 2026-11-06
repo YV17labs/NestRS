@@ -299,7 +299,7 @@ The mask is `nest-rs-authz`'s `wire_mask`, value-level and **fail-closed**:
 each wire row is read back into a `Model`, judged by the ability, and cut to
 the exposed keys its verdict grants, so an unrestricted field grant cannot
 leak an unexposed column. An irreconcilable body or a missing ambient ability
-fails closed on every transport.
+fails closed on every transport; a `null` in a list holds no row, and stays.
 
 Rebuilding needs a value for every unexposed column. The macro defaults the
 safe scalars and a `Secret` of one (a secret column is never exposed, held by

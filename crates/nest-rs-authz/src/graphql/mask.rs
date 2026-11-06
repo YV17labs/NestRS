@@ -12,7 +12,7 @@ use std::any::TypeId;
 use std::collections::BTreeSet;
 
 use nest_rs_core::Edge;
-use nest_rs_graphql::async_graphql::{Context, Error};
+use nest_rs_graphql::async_graphql::{Context, Error, SelectionField};
 use nest_rs_guards::Denial;
 use sea_orm::{Iterable, PrimaryKeyToColumn};
 use serde::Serialize;
@@ -20,7 +20,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::ability;
-use super::context::forbidden_fields;
+use super::context::{forbidden_fields, unreached};
 use crate::ability::{Provenance, mask_reason};
 use crate::gate::{Refusal, reason};
 use crate::subject::{NoRows, Rows, SubjectMask};
@@ -193,23 +193,21 @@ where
 }
 
 /// What a `#[field_resolver]` answering a wire type answers, masked by a root's
-/// rule, its action a read. An app attaching no ability has no grant to apply, and
-/// its own reads through `Repo` refuse.
+/// rule, its action a read. Where no ability is attached nothing decided what the
+/// caller reads, so it fails closed, as a root and a relation do.
 pub fn graphql_masked_answer<E, O>(ctx: &Context<'_>, answer: O) -> Result<O, Error>
 where
     E: WireModel,
     O: Serialize + DeserializeOwned,
 {
-    match crate::context::installed() {
-        Some(ability) => masked_value_with::<E, O>(
-            ctx,
-            &ability,
-            Action::Read,
-            answer,
-            answer_provenance(&ability),
-        ),
-        None => Ok(answer),
-    }
+    let ability = crate::context::installed().ok_or_else(unreached)?;
+    masked_value_with::<E, O>(
+        ctx,
+        &ability,
+        Action::Read,
+        answer,
+        answer_provenance(&ability),
+    )
 }
 
 /// [`graphql_masked_answer`] over the rows of a connection a body built, each masked
@@ -223,9 +221,7 @@ where
     E: WireModel,
     O: Serialize + DeserializeOwned,
 {
-    let Some(ability) = crate::context::installed() else {
-        return Ok(vec![true; nodes.len()]);
-    };
+    let ability = crate::context::installed().ok_or_else(unreached)?;
     let provenance = answer_provenance(&ability);
     let selected = page_selection::<E>(ctx);
     nodes
@@ -454,18 +450,26 @@ fn refused_field<E>(
 }
 
 /// What a selection reads of each row of a connection: the fields its `nodes` and
-/// its edges' `node` select, and the primary key when it asks a cursor, whose text
-/// is the row's key on a list relation's page.
+/// its edges' `node` select, every exposed column where those select nothing, a
+/// scalar, which serializes whole, and the primary key when it asks a cursor, whose
+/// text is the row's key on a list relation's page.
 fn page_selection<'c, E: WireModel>(ctx: &'c Context<'_>) -> Vec<&'c str> {
     let mut selected = Vec::new();
     let mut cursor = false;
+    let node_selection = |node: SelectionField<'c>, selected: &mut Vec<&'c str>| {
+        let before = selected.len();
+        selected.extend(node.selection_set().map(|f| f.name()));
+        if selected.len() == before {
+            selected.extend(E::WIRE_KEYS);
+        }
+    };
     for field in ctx.field().selection_set() {
         match field.name() {
-            "nodes" => selected.extend(field.selection_set().map(|f| f.name())),
+            "nodes" => node_selection(field, &mut selected),
             "edges" => {
                 for edge in field.selection_set() {
                     match edge.name() {
-                        "node" => selected.extend(edge.selection_set().map(|f| f.name())),
+                        "node" => node_selection(edge, &mut selected),
                         "cursor" => cursor = true,
                         _ => {}
                     }
@@ -506,13 +510,16 @@ fn refused_selection<E>(
     // A tracing field must be a scalar, so the log keeps the joined form; the
     // wire keeps the list.
     let joined = refused.join(",");
-    crate::gate::warn_denied(Refusal {
-        subject: Some(std::any::type_name::<E>()),
-        action: Some(action),
-        fields: Some(&joined),
-        reason: Some(reason::FIELD_NOT_GRANTED),
-        ..Refusal::on(Edge::Graphql.as_str())
-    });
+    let subject = std::any::type_name::<E>();
+    if crate::context::first_refusal(subject, action, &joined) {
+        crate::gate::warn_denied(Refusal {
+            subject: Some(subject),
+            action: Some(action),
+            fields: Some(&joined),
+            reason: Some(reason::FIELD_NOT_GRANTED),
+            ..Refusal::on(Edge::Graphql.as_str())
+        });
+    }
     let refused: Vec<String> = refused.into_iter().map(str::to_owned).collect();
     Some(forbidden_fields(&refused))
 }

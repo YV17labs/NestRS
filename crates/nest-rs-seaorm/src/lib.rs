@@ -148,7 +148,8 @@ pub mod __private {
     pub use chrono;
     #[cfg(feature = "graphql")]
     pub use nest_rs_graphql::__private::{
-        FieldFailure, GraphqlRelationRegistration, LoaderOwner, WireAnswer, WireRow, seeded_loader,
+        FieldFailure, GraphqlRelationRegistration, GraphqlWireType, LoaderOwner, WireAnswer,
+        WireRow, seeded_loader,
     };
     #[cfg(feature = "graphql")]
     pub use nest_rs_graphql::{async_graphql, dataloader};

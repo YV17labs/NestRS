@@ -1092,7 +1092,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 loaders,
             } = field_method(&self_ty, &deleg_attrs, &sig)?;
             field_dep_types.extend(injected.into_iter().map(|dep| (cfgs.clone(), dep)));
-            field_needs.push(field_served(&self_ty, &parent_ty, &field, &cfgs));
+            let answer = returned(&sig).value();
+            field_needs.push(field_served(&self_ty, &parent_ty, &field, &answer, &cfgs));
             field_needs.extend(
                 loaders
                     .iter()
@@ -1654,7 +1655,13 @@ struct FieldMethod {
 /// The need every `#[field_resolver]` declares: `#[ComplexObject]` serves it with
 /// its parent, so the schema build refuses it when the app does not reach its
 /// resolver.
-fn field_served(self_ty: &Type, parent: &Type, field: &str, cfgs: &[TokenStream2]) -> TokenStream2 {
+fn field_served(
+    self_ty: &Type,
+    parent: &Type,
+    field: &str,
+    answer: &Type,
+    cfgs: &[TokenStream2],
+) -> TokenStream2 {
     quote! {
         #(#cfgs)*
         ::nest_rs_graphql::__private::inventory::submit! {
@@ -1666,6 +1673,12 @@ fn field_served(self_ty: &Type, parent: &Type, field: &str, cfgs: &[TokenStream2
                     ::core::any::type_name::<#self_ty>(),
                 ),
                 origin: ::core::module_path!(),
+                // A static's initializer, so a shape the mask cannot read refuses
+                // under `cargo check` too.
+                unmasked: {
+                    use ::nest_rs_graphql::__private::FieldAnswerFallback as _;
+                    <::nest_rs_graphql::__private::FieldAnswer<'_, #answer>>::UNMASKED
+                },
             }
         }
     }

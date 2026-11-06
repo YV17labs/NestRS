@@ -85,7 +85,9 @@ pub mod __private {
     };
     pub use crate::scope::{scoped_parameter, unprovided};
     pub use crate::subscription::{compose_schema, keep_masked_item};
-    pub use crate::wire_answer::{FieldAnswer, FieldAnswerFallback, WireAnswer, WireRow};
+    pub use crate::wire_answer::{
+        FieldAnswer, FieldAnswerFallback, GraphqlWireType, WireAnswer, WireRow,
+    };
 
     pub use inventory;
     // Every operation's tail validates its arguments, with no dependency of the

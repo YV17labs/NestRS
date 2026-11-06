@@ -135,6 +135,7 @@ fn mount(
     }
     let served = ServedObjects::of(container)?;
     crate::resolver::check_served_fields(container, &served)?;
+    crate::wire_answer::check_field_answers(&served)?;
     crate::loader::check_served_relations(container, &served)?;
     let binding = container.get_dyn::<dyn nest_rs_database::UnitOfWork>();
     let sdl = schema.sdl();

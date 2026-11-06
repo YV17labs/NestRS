@@ -1810,6 +1810,19 @@ lists what the boot, a log or the wire shows when one is missed.
   answer to a visitor on a rule only a read could decide reads `null` or is refused. Answer
   a DTO of your own.
 - **A `Json<Wire>` scalar, at a root or as a subscription item,** answers `FORBIDDEN`
+- **A `#[field_resolver]` answering a wire type where no ability is attached** answers
+  `INTERNAL` with one `no_ambient_ability` line, as a root and a relation do, where it
+  served every column. Attach the ability at `/graphql`'s request, or answer a DTO of your
+  own.
+- **An object of your own holding a wire type's row, answered by a `#[field_resolver]`,**
+  fails the boot naming the field and where it holds the row, where it shipped what a grant
+  withholds to any caller: a column of the wire type, a `#[graphql(flatten)]` or a
+  `MergedObject` of it, a union or an interface with it among its members, an `Edge`
+  answered alone, an `Arc` around a `Connection`, a `Connection` of any of those. Give the
+  column `#[graphql(skip)]` and serve it from a `#[field_resolver]` of the object.
+- **A `#[field_resolver]` answering `&'static Wire`, `&'static [Wire]` or `Weak<Wire>`,**
+  however deep it sits, does not compile, naming the shape, where it shipped what a grant
+  withholds. Answer the row by value, or behind an `Arc`.
   naming every column the grant takes, or drops the item, where it shipped whole: it has
   no selection to acquit them. **A subscription item that is a list** is masked row by
   row, where it passed unmasked. Grant the columns, or answer the object type.

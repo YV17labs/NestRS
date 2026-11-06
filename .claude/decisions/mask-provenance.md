@@ -301,3 +301,57 @@ or the blanket takes a bound of the app's own. Named as a break in the guide's t
   (compiled): the project's hard "no" on exposure outside `#[expose]` is review there.
   Closing it takes a probe per edge refusing a payload that is a `ModelTrait`, a branch of
   its own.
+
+## 2026-11-06 — a shape the mask cannot read refuses, and an object holding a row is one
+
+The owner's mandate of 2026-11-05 ("on ne veut pas d'angle mort"), narrowed the same day: easy
+for the developer, secure with nothing to think about, best performance, and no work on a bug
+before a run shows it. Run first, under a grant withholding `email`: a `#[field_resolver]`
+answering an object holding the row, a `#[graphql(flatten)]`, a `MergedObject`, a union, an
+interface, an `Edge`, `&'static Wire`, `&'static [Wire]`, `Weak<Wire>`, `Arc<Connection>`, a
+tokio lock and a `Connection` of `Option`, `Box`, `Arc` or `Json` rows each answered
+`"email":"withheld@example.test"`. The entry above called an object holding a wire type the
+body's own line. It is not: it names the entity, and reads as no line a reviewer finds.
+
+**Decided, by security, then elegance:** the walk masks what it can reach, and what it cannot
+refuses at the first rung that can say so.
+
+- **What can hold a cut row is masked**: a tokio lock through `into_inner`, a `Connection` of
+  `Option`, `Box`, `Arc` or `Json` rows through `WireRow`. A node selecting nothing is a
+  scalar serializing whole, so a `Json` node reads every exposed column as selected.
+- **What has no place for one does not compile**: `&'static A`, `&'static [A]`, `Weak<A>`,
+  by `WireAnswer::READABLE`, which every wrapper forwards and the field's registration
+  evaluates in a `static`'s initializer. Refused: `const { panic!() }` inside `masked`, as
+  the gap asked: it fires only once monomorphized, so `cargo check` and trybuild, which runs
+  `check`, stay silent.
+- **What only the schema can say refuses the boot**: the fallback probe hands the boot the
+  answer's `create_type_info`, and a walk over that registry follows every column but one a
+  `#[field_resolver]` serves, down to a type `#[expose(…, graphql)]` declared. A flattened and
+  a merged object copy the columns and leave no link, so a wire type nothing links is one of
+  those. `Arc<Connection>` lands here: an impl of its own overlaps `Arc<A: Clone>`, since
+  upstream could make a `Connection` `Clone`. The check runs at boot and reads nothing per
+  request; a resolver that answers no such shape pays nothing.
+
+**Refused:**
+
+- **A mask at the wire type's own resolution** (a `guard` on `SimpleObject`, or a hand-written
+  `OutputType`), which would close every shape in one place: it runs per column of every row,
+  cannot know the root's action (a reply under `Update` would be judged at `Read`), and would
+  refuse what `unmasked` opens. That is the cell at the row, the second pass.
+- **A key on `#[field_resolver]` opening the object** (`unmasked`): a public addition for a
+  shape with a four-line remedy that keeps the mask.
+- **A warn in place of the refusal**: a line a deployment reads later, while the column ships.
+
+**A refused selection files one line per request**, held in `AmbientAbility`, which one request
+holds, where an `Ability` may serve every request of a role; the set is built by the first
+refusal, so a request refusing nothing pays nothing. A field's own guard attaching the ability
+per parent files per parent: it holds a holder per row. **A field resolver with no ability
+fails closed** where the entry above let it pass: the answer can tell, since nothing decided
+what the caller reads, and reads there already refuse. **A `null` in a list passes the mask**:
+it holds no row; a root's map stays refused, a key being no column and a map no row on a value.
+
+**The limit named:** a scalar the body builds (`Json<Holder>`, `serde_json::Value`, a
+`hashbrown` map) names nothing a type or a schema can read; a `Connection`'s or an `Edge`'s
+additional-fields object is the body's, the walk reading its nodes; a flattened row beside a
+masked field answering the same wire type leaves a link, so the boot reads no orphan. All of it
+closes with the cell.

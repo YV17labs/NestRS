@@ -103,13 +103,16 @@ page with it, as one reads `null` on a `belongs_to`, and a selected `cursor`,
 narrow no column pays one rule lookup per field and no round trip.
 
 **A `#[field_resolver]` answering a wire type**, whatever read its rows and whatever
-holds them: `Option`, `Vec` or another list, `Box`, `Arc`, `Cow`, a `Json` scalar, a
-map's values, a `Connection`. A root's rule, by the entity the type names and the field's
-selection: it answers a selected column the grant withholds with the same refusal, a
-scalar every column the grant withholds, and a caller a grant does not reach on that
-entity reads none of its columns. A `Connection` keeps its flags and each kept edge's
-cursor, a row the ability refuses leaves with its edge, and a selected cursor reads as
-the primary key, as on a list relation.
+holds them: `Option`, `Vec` or another list, `Box`, `Arc`, `Cow`, a tokio lock, a `Json`
+scalar, a map's values, a `Connection` whose nodes are the wire type or hold it in an
+`Option`, a `Box`, an `Arc` or a `Json` scalar. A root's rule, by the entity the type names
+and the field's selection: it answers a selected column the grant withholds with the same
+refusal, a scalar every column the grant withholds, and a caller a grant does not reach on
+that entity reads none of its columns. A `Connection` keeps its flags and each kept edge's
+cursor, a row the ability refuses leaves with its edge, a `None` node stays, and a selected
+cursor reads as the primary key, as on a list relation. Where no ability is attached nothing
+decided what the caller reads, so the field answers `INTERNAL`, as a root's and a relation's
+do.
 
 A caller a token backs reads through `Repo`, so its answer is judged as a reply, trusted
 on a rule the row cannot decide ([what the mask cannot see](#what-the-mask-cannot-see)),
@@ -117,12 +120,33 @@ and a row a body did not read that way keeps that trust: the limit. A visitor's 
 withheld there, so its answer is judged as a push: a grant only a read could decide
 grants nothing, and the row reads `null`, leaves its list or refuses its selection.
 
-What a body makes of a row stays its own. A scalar derived from one, a DTO of its own and
-an object holding a wire type name no entity, so no mask reaches them, and a row out of a
-loader holds every exposed column, as a row out of `Repo` does. Keep a withheld column out
-of such an answer, or answer the wire type. No mask reaches a `&'static` row, a `Weak`, an
-`Arc` holding a `Connection` or a `Connection` of anything but the wire type itself either,
-since it cannot put the row it cut back into them.
+What a body makes of a row stays its own. A scalar derived from one and a DTO of its own
+name no entity, so no mask reaches them, and a row out of a loader holds every exposed
+column, as a row out of `Repo` does. Keep a withheld column out of such an answer, or answer
+the wire type.
+
+A row the mask cannot read never passes in silence. A `&'static` borrow or slice and a
+`Weak` have no place for the row it cuts, so they do not compile. An object of your own
+holding the row fails the boot whoever would have asked: a column of the wire type, a
+`#[graphql(flatten)]` or a `MergedObject` of it, a union or an interface with it among its
+members, an `Edge` answered alone, an `Arc` around a `Connection`, a `Connection` of any of
+those. The refusal names the field and where it holds the row. Serve that column from a
+`#[field_resolver]` of the object, which masks what it answers:
+
+```rust title="crates/features/src/writers/graphql/resolver.rs"
+#[derive(SimpleObject, Clone)]
+#[graphql(complex)]
+pub struct Casting {
+    role: String,
+    #[graphql(skip)]
+    star: Writer,
+}
+
+#[field_resolver]
+async fn star(&self, parent: &Casting) -> Writer {
+    parent.star.clone()
+}
+```
 
 <Aside type="caution">
 A grant cuts a row's columns, never the link a relation follows. `posts { author { id } }`

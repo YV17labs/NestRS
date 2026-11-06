@@ -189,6 +189,9 @@ pub struct GraphqlFieldRegistration {
     /// Where the resolver is declared (`module_path!()`), which tells the app's
     /// own declaration from a dependency's.
     pub origin: &'static str,
+    /// How the boot reads what the answer's type holds, where no mask walks it
+    /// (`FieldAnswer::UNMASKED`).
+    pub unmasked: Option<fn(&mut Registry) -> String>,
 }
 
 inventory::collect!(GraphqlFieldRegistration);

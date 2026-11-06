@@ -346,10 +346,15 @@ mask, decided by the subject's type:
   reading `null` or leaving its page; and a `#[field_resolver]` whose answer holds a
   wire type's rows, read off the hidden impl `#[expose(…, graphql)]` emits on the
   type and a walk down what async-graphql serves around it (every list, `Option`,
-  `Box`, `Arc`, `Cow`, `Json`, a map's values, a `Connection`), which a DTO, an object
-  holding a wire type and a scalar a body derives do not have, so what those ship is
-  the body's. Its rows are judged as a reply's for a caller a token backs, and as a
-  push's for a visitor, whose reads are withheld there. **A relation's batch filters
+  `Box`, `Arc`, `Cow`, a tokio lock, `Json`, a map's values, a `Connection`), which a
+  DTO and a scalar a body derives do not have, so what those ship is the body's. **A
+  row the walk cannot read never passes in silence**: a shape with no place for the
+  row it cuts is a compile error, and an answer holding one where only the schema can
+  say so, an object's column among them, refuses the boot; a `#[field_resolver]` of
+  that object serves the column. Its rows are judged as a reply's for a caller a token
+  backs, and as a push's for a visitor, whose reads are withheld there; where no
+  ability is attached it fails closed. A selection refused under every parent files one
+  `warn` per request and one error per path. **A relation's batch filters
   rows and masks nothing**: it is shared by every alias asking, so a
   selection-dependent value could not be cached in it, and each field masks by its
   own. A caller whose grants narrow no column pays one rule lookup per field for a

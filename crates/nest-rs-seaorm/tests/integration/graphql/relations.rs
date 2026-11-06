@@ -12,9 +12,14 @@ use std::sync::Arc;
 
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, injectable, module};
-use nest_rs_graphql::async_graphql::connection::Connection;
+use nest_rs_graphql::async_graphql::connection::{
+    Connection, ConnectionNameType, Edge, EdgeNameType, EmptyFields,
+};
 use nest_rs_graphql::async_graphql::dataloader::DataLoader;
-use nest_rs_graphql::async_graphql::{Error as GqlError, Json, Result as GqlResult, SimpleObject};
+use nest_rs_graphql::async_graphql::{
+    Error as GqlError, Interface, Json, MergedObject, Object, OutputType, Result as GqlResult,
+    SimpleObject, Union,
+};
 use nest_rs_graphql::{GraphqlModule, GraphqlView, dataloader, operations, resolver};
 use nest_rs_http::EndpointGuards;
 use nest_rs_seaorm::graphql::{PkLoadable, RelatedTo, RelationKey, RelationPage};
@@ -374,13 +379,15 @@ struct Reading {
 type Answered<T> = Result<T, ServiceError>;
 
 /// Every shape of an answer holding a wire type's rows that a client selects into.
-const WIRE_ANSWERS: [&str; 17] = [
+const WIRE_ANSWERS: [&str; 19] = [
     "lead",
     "bareLead",
     "renamedLead",
     "boxedLead",
     "sharedLead",
     "borrowedLead",
+    "lockedLead",
+    "readWriteLockedLead",
     "editors",
     "optionalEditors",
     "editorsOrNone",
@@ -400,6 +407,81 @@ const WIRE_SCALARS: [&str; 4] = ["jsonLead", "jsonEditors", "roster", "sortedRos
 
 /// Every shape of a connection a body builds of a wire type's rows.
 const HAND_CONNECTIONS: [&str; 3] = ["handNovels", "optionalHandNovels", "boxedHandNovels"];
+
+/// Every connection whose nodes hold a row behind a wrapper, a client selecting into it.
+const WRAPPED_NODES: [&str; 3] = ["optionalNodes", "boxedNodes", "sharedNodes"];
+
+/// A connection's own names, so each wrapper's page is a type of its own: a wrapper
+/// keeps its row's GraphQL name, and one name serves one Rust type.
+macro_rules! page_named {
+    ($connection:ident, $edge:ident, $name:literal) => {
+        struct $connection;
+
+        impl ConnectionNameType for $connection {
+            fn type_name<T: OutputType>() -> String {
+                concat!($name, "Connection").to_owned()
+            }
+        }
+
+        struct $edge;
+
+        impl EdgeNameType for $edge {
+            fn type_name<T: OutputType>() -> String {
+                concat!($name, "Edge").to_owned()
+            }
+        }
+    };
+}
+
+page_named!(OptionalPage, OptionalEdge, "Optional");
+page_named!(BoxedPage, BoxedEdge, "Boxed");
+page_named!(SharedPage, SharedEdge, "Shared");
+page_named!(JsonPage, JsonEdge, "Json");
+
+/// A page whose nodes are the first novel, each as `wrap` holds it.
+type WrappedPage<Node, Name, EdgeName> =
+    Connection<String, Node, EmptyFields, EmptyFields, Name, EdgeName>;
+
+fn wrapped_page<Node, Name, EdgeName>(
+    wrap: impl Fn(novel::Novel) -> Node,
+) -> WrappedPage<Node, Name, EdgeName>
+where
+    Node: OutputType,
+    Name: ConnectionNameType,
+    EdgeName: EdgeNameType,
+{
+    let mut page = Connection::new(false, false);
+    let first = &novel_rows()[0];
+    page.edges.push(Edge::new(
+        novel_ids()[0].to_string(),
+        wrap(novel::Novel::from(first)),
+    ));
+    page
+}
+
+/// What a body answers holding a wire type's row in a column of its own, served by a
+/// `#[field_resolver]` of that object, which masks what it answers.
+#[derive(Clone, SimpleObject)]
+#[graphql(complex, crate = "::nest_rs_graphql::async_graphql")]
+struct Casting {
+    role: String,
+    #[graphql(skip)]
+    star: writer::Writer,
+}
+
+/// An object of a body's own, holding no wire type.
+#[derive(Clone, SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct Blurb {
+    text: String,
+    footnote: Footnote,
+}
+
+#[derive(Clone, SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct Footnote {
+    text: String,
+}
 
 /// The first of two novels, a page behind it, as a body builds it from a loader.
 async fn hand_page(novels: &DataLoader<RowsNovels>) -> GqlResult<Connection<String, novel::Novel>> {
@@ -432,10 +514,40 @@ impl LibraryResolver {
         }])
     }
 
+    /// Three parents, each reaching one writer through its relation.
+    #[query]
+    #[authorize(Read, book::Entity)]
+    async fn three_books(&self) -> GqlResult<Vec<book::Book>> {
+        Ok((1..=3)
+            .map(|id| book::Book {
+                id: Uuid::from_u128(id).to_string(),
+                writer_id: writer_id().to_string(),
+            })
+            .collect())
+    }
+
+    /// Three parents, each listing one shelf's novels.
+    #[query]
+    #[authorize(Read, shelf::Entity)]
+    async fn three_shelves(&self) -> GqlResult<Vec<shelf::Shelf>> {
+        Ok((0..3)
+            .map(|_| shelf::Shelf {
+                id: shelf_id().to_string(),
+            })
+            .collect())
+    }
+
     #[query]
     #[public]
     async fn reading(&self) -> Reading {
         Reading { id: 1 }
+    }
+
+    /// Three parents, each answering a row through a hand-written field.
+    #[query]
+    #[public]
+    async fn three_readings(&self) -> Vec<Reading> {
+        (1..=3).map(|id| Reading { id }).collect()
     }
 
     #[field_resolver]
@@ -466,6 +578,19 @@ impl LibraryResolver {
     #[field_resolver]
     async fn borrowed_lead(&self, _parent: &Reading) -> Cow<'static, writer::Writer> {
         Cow::Owned(lead_row())
+    }
+
+    #[field_resolver]
+    async fn locked_lead(&self, _parent: &Reading) -> tokio::sync::Mutex<writer::Writer> {
+        tokio::sync::Mutex::new(lead_row())
+    }
+
+    #[field_resolver]
+    async fn read_write_locked_lead(
+        &self,
+        _parent: &Reading,
+    ) -> tokio::sync::RwLock<writer::Writer> {
+        tokio::sync::RwLock::new(lead_row())
     }
 
     #[field_resolver]
@@ -568,6 +693,77 @@ impl LibraryResolver {
         novels: &DataLoader<RowsNovels>,
     ) -> GqlResult<Box<Connection<String, novel::Novel>>> {
         hand_page(novels).await.map(Box::new)
+    }
+
+    #[field_resolver]
+    async fn optional_nodes(
+        &self,
+        _parent: &Reading,
+    ) -> WrappedPage<Option<novel::Novel>, OptionalPage, OptionalEdge> {
+        let mut page: WrappedPage<Option<novel::Novel>, OptionalPage, OptionalEdge> =
+            wrapped_page(Some);
+        page.edges.push(Edge::new(novel_ids()[1].to_string(), None));
+        page
+    }
+
+    #[field_resolver]
+    async fn boxed_nodes(
+        &self,
+        _parent: &Reading,
+    ) -> WrappedPage<Box<novel::Novel>, BoxedPage, BoxedEdge> {
+        wrapped_page(Box::new)
+    }
+
+    #[field_resolver]
+    async fn shared_nodes(
+        &self,
+        _parent: &Reading,
+    ) -> WrappedPage<Arc<novel::Novel>, SharedPage, SharedEdge> {
+        wrapped_page(Arc::new)
+    }
+
+    #[field_resolver]
+    async fn json_nodes(
+        &self,
+        _parent: &Reading,
+    ) -> WrappedPage<Json<novel::Novel>, JsonPage, JsonEdge> {
+        wrapped_page(Json)
+    }
+
+    #[field_resolver]
+    async fn casting(&self, _parent: &Reading) -> Casting {
+        Casting {
+            role: "lead".to_owned(),
+            star: lead_row(),
+        }
+    }
+
+    #[field_resolver]
+    async fn star(&self, parent: &Casting) -> writer::Writer {
+        parent.star.clone()
+    }
+
+    #[field_resolver]
+    async fn blurb(&self, _parent: &Reading) -> Blurb {
+        Blurb {
+            text: "a blurb".to_owned(),
+            footnote: Footnote {
+                text: "a footnote".to_owned(),
+            },
+        }
+    }
+
+    #[field_resolver]
+    async fn motto(&self, _parent: &Reading) -> &'static str {
+        "a motto"
+    }
+
+    #[field_resolver]
+    async fn shared_footnote(&self, _parent: &Reading) -> &'static Footnote {
+        static SHARED: Footnote = Footnote {
+            text: String::new(),
+        };
+        &SHARED
     }
 
     #[field_resolver]
@@ -1294,6 +1490,15 @@ impl UngrantedLibraryResolver {
     async fn lead(&self, _parent: &UngrantedReading) -> GqlResult<Option<writer::Writer>> {
         Ok(Some(lead_row()))
     }
+
+    #[field_resolver]
+    async fn hand_novels(
+        &self,
+        _parent: &UngrantedReading,
+        novels: &DataLoader<RowsNovels>,
+    ) -> GqlResult<Connection<String, novel::Novel>> {
+        hand_page(novels).await
+    }
 }
 
 #[module(
@@ -1302,20 +1507,512 @@ impl UngrantedLibraryResolver {
 )]
 struct UngrantedLibraryModule;
 
-/// An app attaching no ability has no grant to apply, and its own reads refuse.
+/// No ability is attached, so nothing decided what this caller reads: the answer
+/// fails closed as a root's and a relation's, an operator's line naming the wiring.
 #[tokio::test]
-async fn a_field_resolver_answers_as_it_did_where_no_ability_is_attached() {
+async fn a_field_resolver_refuses_where_no_ability_is_attached() {
+    let logs = LogCapture::install();
     let app = crate::over_an_unconnected_pool()
         .module::<UngrantedLibraryModule>()
         .build()
         .await
         .expect("boots");
 
-    let read = answer(&app, "", "{ ungrantedReading { lead { email } } }").await;
+    for selection in ["lead { email }", "handNovels { nodes { isbn } }"] {
+        let read = answer(
+            &app,
+            "",
+            &format!("{{ ungrantedReading {{ {selection} }} }}"),
+        )
+        .await;
+
+        let error = &read["errors"][0];
+        assert_eq!(error["extensions"]["code"], "INTERNAL", "{read}");
+        assert_eq!(error["message"], OPAQUE_CLIENT_MESSAGE, "{read}");
+        assert!(!read.to_string().contains(SECRET_EMAIL), "{read}");
+        assert!(!read.to_string().contains(SECRET_ISBN), "{read}");
+    }
+    let lines = logs.find("nest_rs::authz", "authorization denied");
+    assert_eq!(lines.len(), 2, "{lines:#?}");
+    assert_eq!(
+        lines[0].field("reason").as_deref(),
+        Some("no_ambient_ability")
+    );
+}
+
+/// One refused selection is one fact, however many parents repeat it: a line per
+/// request, an error per path, each carrying its own.
+#[tokio::test]
+async fn one_refused_selection_files_one_warn_and_one_error_per_parent() {
+    for (query, root, path) in [
+        (
+            "{ threeBooks { writer { email } } }",
+            "threeBooks",
+            "writer",
+        ),
+        (
+            "{ threeShelves { novels { nodes { isbn } } } }",
+            "threeShelves",
+            "novels",
+        ),
+        (
+            "{ threeReadings { lead { email } } }",
+            "threeReadings",
+            "lead",
+        ),
+    ] {
+        let logs = LogCapture::install();
+        let app = library().await;
+
+        let read = answer(&app, "member", query).await;
+
+        let errors = read["errors"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{read}"));
+        assert_eq!(errors.len(), 3, "an error per parent: {read}");
+        for (at, error) in errors.iter().enumerate() {
+            assert_eq!(error["extensions"]["code"], "FORBIDDEN", "{read}");
+            assert_eq!(error["path"], json!([root, at, path]), "{read}");
+        }
+        let event = logs.expect_one("nest_rs::authz", "authorization denied");
+        assert_eq!(event.field("reason").as_deref(), Some("field_not_granted"));
+    }
+}
+
+#[tokio::test]
+async fn each_refused_selection_of_a_request_files_its_own_line() {
+    let logs = LogCapture::install();
+    let app = library().await;
+
+    let read = answer(
+        &app,
+        "member",
+        "{ threeBooks { writer { email } } again: threeBooks { writer { circle } } }",
+    )
+    .await;
+
+    assert_eq!(read["errors"].as_array().map(Vec::len), Some(6), "{read}");
+    let lines = logs.find("nest_rs::authz", "authorization denied");
+    let mut fields: Vec<_> = lines
+        .iter()
+        .filter_map(|line| line.field("fields"))
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(fields, ["circle", "email"], "{lines:#?}");
+}
+
+#[tokio::test]
+async fn the_next_request_files_its_own_line() {
+    let logs = LogCapture::install();
+    let app = library().await;
+
+    for _ in 0..2 {
+        answer(&app, "member", "{ threeBooks { writer { email } } }").await;
+    }
+
+    let lines = logs.find("nest_rs::authz", "authorization denied");
+    assert_eq!(lines.len(), 2, "{lines:#?}");
+}
+
+#[tokio::test]
+async fn a_connection_whose_nodes_hold_a_row_masks_it() {
+    let logs = LogCapture::install();
+    let app = library().await;
+
+    for field in WRAPPED_NODES {
+        let read = answer(
+            &app,
+            "member",
+            &format!("{{ reading {{ {field} {{ nodes {{ id title }} edges {{ cursor }} }} }} }}"),
+        )
+        .await;
+        assert!(read.get("errors").is_none(), "{field}: {read}");
+        assert_eq!(
+            read["data"]["reading"][field]["nodes"][0]["title"], "Sketches",
+            "{field}: {read}",
+        );
+
+        for selection in ["nodes { id isbn }", "edges { node { title isbn } }"] {
+            let read = answer(
+                &app,
+                "member",
+                &format!("{{ reading {{ {field} {{ {selection} }} }} }}"),
+            )
+            .await;
+            assert_forbidden(&read, &["isbn"]);
+            assert!(!read.to_string().contains(SECRET_ISBN), "{field}: {read}");
+        }
+    }
+    assert_no_error_line(&logs);
+}
+
+/// A `None` node holds no row: it stays beside the rows the mask cut.
+#[tokio::test]
+async fn a_none_node_stays_in_its_connection() {
+    let app = library().await;
+
+    let read = answer(
+        &app,
+        "member",
+        "{ reading { optionalNodes { edges { node { title } } } } }",
+    )
+    .await;
 
     assert!(read.get("errors").is_none(), "{read}");
     assert_eq!(
-        read["data"]["ungrantedReading"]["lead"]["email"],
-        SECRET_EMAIL
+        read["data"]["reading"]["optionalNodes"]["edges"],
+        json!([{ "node": { "title": "Sketches" } }, { "node": Value::Null }]),
     );
+}
+
+#[tokio::test]
+async fn a_row_the_ability_refuses_leaves_a_wrapped_connection_with_its_edge() {
+    let app = library().await;
+
+    for field in WRAPPED_NODES {
+        let read = answer(
+            &app,
+            "outsider",
+            &format!("{{ reading {{ {field} {{ edges {{ cursor node {{ id }} }} }} }} }}"),
+        )
+        .await;
+
+        assert!(read.get("errors").is_none(), "{field}: {read}");
+        let kept = read["data"]["reading"][field]["edges"]
+            .as_array()
+            .map(Vec::len);
+        let none_node = usize::from(field == "optionalNodes");
+        assert_eq!(kept, Some(none_node), "{field}: {read}");
+    }
+}
+
+/// A scalar node serializes whole, so what the mask took refuses it wherever it stands.
+#[tokio::test]
+async fn a_connection_of_a_scalar_of_a_wire_type_refuses_every_column_cut() {
+    let logs = LogCapture::install();
+    let app = library().await;
+
+    for selection in ["nodes", "edges { node }"] {
+        let read = answer(
+            &app,
+            "member",
+            &format!("{{ reading {{ jsonNodes {{ {selection} }} }} }}"),
+        )
+        .await;
+
+        assert_forbidden(&read, &["isbn", "shelf_id"]);
+        assert!(!read.to_string().contains(SECRET_ISBN), "{read}");
+    }
+    assert_no_error_line(&logs);
+
+    let read = answer(&app, "reader", "{ reading { jsonNodes { nodes } } }").await;
+    assert!(read.get("errors").is_none(), "{read}");
+    assert!(read.to_string().contains(SECRET_ISBN), "{read}");
+}
+
+/// The remedy a refusal below names: the object keeps its column and a field resolver
+/// of that object serves it, masked.
+#[tokio::test]
+async fn an_object_serving_its_row_from_a_field_resolver_masks_it() {
+    let logs = LogCapture::install();
+    let app = library().await;
+
+    let read = answer(
+        &app,
+        "member",
+        "{ reading { casting { role star { name } } } }",
+    )
+    .await;
+    assert!(read.get("errors").is_none(), "{read}");
+    assert_eq!(
+        read["data"]["reading"]["casting"],
+        json!({ "role": "lead", "star": { "name": "Ada" } }),
+    );
+
+    let read = answer(&app, "member", "{ reading { casting { star { email } } } }").await;
+    assert_forbidden(&read, &["email"]);
+    assert!(!read.to_string().contains(SECRET_EMAIL), "{read}");
+    assert_no_error_line(&logs);
+}
+
+/// What refuses a `&'static` row leaves every other `&'static` answer as it is.
+#[tokio::test]
+async fn a_static_borrow_holding_no_wire_type_runs_no_mask() {
+    let app = library().await;
+
+    let read = answer(
+        &app,
+        "stranger",
+        "{ reading { motto sharedFootnote { text } } }",
+    )
+    .await;
+
+    assert!(read.get("errors").is_none(), "{read}");
+    assert_eq!(read["data"]["reading"]["motto"], "a motto");
+}
+
+#[tokio::test]
+async fn an_object_holding_no_wire_type_runs_no_mask() {
+    let app = library().await;
+
+    let read = answer(
+        &app,
+        "stranger",
+        "{ reading { blurb { text footnote { text } } } }",
+    )
+    .await;
+
+    assert!(read.get("errors").is_none(), "{read}");
+    assert_eq!(
+        read["data"]["reading"]["blurb"]["footnote"]["text"],
+        "a footnote"
+    );
+}
+
+/// An object of a body's own holding the wire type's row in a column.
+#[derive(Clone, SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct Holder {
+    role: String,
+    lead: writer::Writer,
+}
+
+fn holder() -> Holder {
+    Holder {
+        role: "lead".to_owned(),
+        lead: lead_row(),
+    }
+}
+
+/// An object holding a [`Holder`], which holds the row one level down.
+#[derive(Clone, SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct OuterHolder {
+    inner: Holder,
+}
+
+/// An object taking the row's columns as its own.
+#[derive(Clone, SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct FlatHolder {
+    role: String,
+    #[graphql(flatten)]
+    lead: writer::Writer,
+}
+
+/// An object merging the row's columns with another's.
+#[derive(MergedObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct MergedHolder(writer::Writer, Footnote);
+
+/// A union one of whose members is the wire type.
+#[derive(Union)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+enum HeldUnion {
+    Writer(writer::Writer),
+    Footnote(Footnote),
+}
+
+/// An interface one of whose implementors is the wire type.
+#[derive(Interface)]
+#[graphql(
+    crate = "::nest_rs_graphql::async_graphql",
+    field(name = "email", ty = "&String")
+)]
+enum HeldInterface {
+    Writer(writer::Writer),
+}
+
+/// An object writing the method that answers the row by hand.
+struct WrittenHolder;
+
+#[Object(crate = "::nest_rs_graphql::async_graphql")]
+impl WrittenHolder {
+    async fn lead(&self) -> writer::Writer {
+        lead_row()
+    }
+}
+
+/// One app whose one field resolver answers the shape under test.
+macro_rules! answering {
+    ($app:ident, [$($answer:tt)*], $value:expr) => {
+        mod $app {
+            use super::*;
+
+            #[derive(Clone, SimpleObject)]
+            #[graphql(complex, crate = "::nest_rs_graphql::async_graphql")]
+            pub(super) struct Parent {
+                id: i32,
+            }
+
+            #[resolver]
+            pub(super) struct AnsweringResolver;
+
+            #[operations]
+            impl AnsweringResolver {
+                #[query]
+                #[public]
+                async fn parent(&self) -> Parent {
+                    Parent { id: 1 }
+                }
+
+                #[field_resolver]
+                async fn answer(&self, _parent: &Parent) -> $($answer)* {
+                    $value
+                }
+            }
+
+            #[module(
+                imports = [GraphqlModule, SeaOrmDatabaseModule],
+                providers = [RoleGuard, EndpointGuards<GraphqlView, (RoleGuard,)>, AnsweringResolver],
+            )]
+            pub(super) struct AnsweringModule;
+        }
+    };
+}
+
+answering!(holding, [Holder], holder());
+answering!(holding_in_a_list, [Vec<Holder>], vec![holder()]);
+answering!(
+    holding_deeper,
+    [OuterHolder],
+    OuterHolder { inner: holder() }
+);
+answering!(
+    holding_flat,
+    [FlatHolder],
+    FlatHolder {
+        role: "lead".to_owned(),
+        lead: lead_row(),
+    }
+);
+answering!(
+    holding_merged,
+    [MergedHolder],
+    MergedHolder(
+        lead_row(),
+        Footnote {
+            text: "a footnote".to_owned()
+        }
+    )
+);
+answering!(
+    holding_in_a_union,
+    [HeldUnion],
+    HeldUnion::Writer(lead_row())
+);
+answering!(
+    holding_in_an_interface,
+    [HeldInterface],
+    HeldInterface::Writer(lead_row())
+);
+answering!(holding_by_hand, [WrittenHolder], WrittenHolder);
+answering!(
+    an_edge,
+    [Edge<String, writer::Writer, EmptyFields>],
+    Edge::new("first".to_owned(), lead_row())
+);
+answering!(
+    a_shared_connection,
+    [Arc<Connection<String, writer::Writer>>],
+    {
+        let mut page = Connection::new(false, false);
+        page.edges.push(Edge::new("first".to_owned(), lead_row()));
+        Arc::new(page)
+    }
+);
+answering!(a_connection_of_holders, [Connection<String, Holder>], {
+    let mut page = Connection::new(false, false);
+    page.edges.push(Edge::new("first".to_owned(), holder()));
+    page
+});
+page_named!(ListsPage, ListsEdge, "Lists");
+
+answering!(
+    a_connection_of_lists,
+    [WrappedPage<Vec<writer::Writer>, ListsPage, ListsEdge>],
+    {
+        let mut page = Connection::new(false, false);
+        page.edges
+            .push(Edge::new("first".to_owned(), vec![lead_row()]));
+        page
+    }
+);
+
+/// What `module`'s boot says, or, where it boots, what its answer ships to a member
+/// whose grant withholds the column `query` selects.
+async fn assert_refused_at_boot<M>(query: &str, holds: &[&str])
+where
+    M: nest_rs_core::Module + 'static,
+{
+    let built = crate::over_an_unconnected_pool()
+        .module::<M>()
+        .build()
+        .await;
+    let refusal = match built {
+        Err(refusal) => format!("{refusal:#}"),
+        Ok(app) => panic!(
+            "boots, and answers {query} with {}",
+            answer(&app, "member", query).await
+        ),
+    };
+    assert!(refusal.contains("`Parent.answer`"), "{refusal}");
+    for held in holds {
+        assert!(refusal.contains(held), "{held}: {refusal}");
+    }
+    assert!(refusal.contains("#[field_resolver]"), "{refusal}");
+}
+
+/// No mask reads a row an object holds: it names no entity, so a field's answer can
+/// neither be walked nor cut. The boot says so, whatever role would have asked.
+#[tokio::test]
+async fn an_object_holding_a_wire_type_ships_no_withheld_column() {
+    let lead = "{ parent { answer { lead { email } } } }";
+    assert_refused_at_boot::<holding::AnsweringModule>(lead, &["`Holder.lead`", "`Writer`"]).await;
+    assert_refused_at_boot::<holding_in_a_list::AnsweringModule>(lead, &["`Holder.lead`"]).await;
+    assert_refused_at_boot::<holding_by_hand::AnsweringModule>(lead, &["`WrittenHolder.lead`"])
+        .await;
+    assert_refused_at_boot::<holding_deeper::AnsweringModule>(
+        "{ parent { answer { inner { lead { email } } } } }",
+        &["`Holder.lead`"],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn an_object_taking_a_wire_types_columns_as_its_own_ships_no_withheld_column() {
+    let email = "{ parent { answer { email } } }";
+    assert_refused_at_boot::<holding_flat::AnsweringModule>(email, &["`Writer`"]).await;
+    assert_refused_at_boot::<holding_merged::AnsweringModule>(email, &["`Writer`"]).await;
+}
+
+#[tokio::test]
+async fn a_union_or_an_interface_holding_a_wire_type_ships_no_withheld_column() {
+    assert_refused_at_boot::<holding_in_a_union::AnsweringModule>(
+        "{ parent { answer { ... on Writer { email } } } }",
+        &["`HeldUnion`", "`Writer`"],
+    )
+    .await;
+    assert_refused_at_boot::<holding_in_an_interface::AnsweringModule>(
+        "{ parent { answer { email } } }",
+        &["`HeldInterface`", "`Writer`"],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_connection_the_mask_cannot_read_ships_no_withheld_column() {
+    assert_refused_at_boot::<an_edge::AnsweringModule>(
+        "{ parent { answer { node { email } } } }",
+        &["`WriterEdge.node`"],
+    )
+    .await;
+    let nodes = "{ parent { answer { nodes { email } } } }";
+    assert_refused_at_boot::<a_shared_connection::AnsweringModule>(nodes, &["`Writer`"]).await;
+    assert_refused_at_boot::<a_connection_of_lists::AnsweringModule>(nodes, &["`Writer`"]).await;
+    assert_refused_at_boot::<a_connection_of_holders::AnsweringModule>(
+        "{ parent { answer { nodes { lead { email } } } } }",
+        &["`Holder.lead`"],
+    )
+    .await;
 }

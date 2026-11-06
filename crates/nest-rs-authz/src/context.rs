@@ -14,17 +14,31 @@ use crate::Ability;
 /// The ability a unit runs under as the ambient context holds it — a type only
 /// this crate builds, so no `with_ambient` or `cx.attach` elsewhere puts a
 /// wider one there. `None` where [`with_ability`] had nothing to narrow.
-pub struct AmbientAbility(Option<Arc<Ability>>);
+pub struct AmbientAbility {
+    ability: Option<Arc<Ability>>,
+    /// What this holder's request already filed. One request holds one holder, where
+    /// an [`Ability`] may serve every request of a role.
+    #[cfg(feature = "graphql")]
+    filed: crate::graphql::FiledRefusals,
+}
 
 impl AmbientAbility {
+    fn holding(ability: Option<Arc<Ability>>) -> Self {
+        Self {
+            ability,
+            #[cfg(feature = "graphql")]
+            filed: crate::graphql::FiledRefusals::default(),
+        }
+    }
+
     /// `ability`, held as the ability guard attaches the caller's.
     pub fn new(ability: impl Into<Arc<Ability>>) -> Self {
-        Self(Some(ability.into()))
+        Self::holding(Some(ability.into()))
     }
 
     /// The ability held, or `None` where nothing was narrowed.
     pub fn ability(&self) -> Option<Arc<Ability>> {
-        self.0.clone()
+        self.ability.clone()
     }
 }
 
@@ -45,6 +59,14 @@ impl AmbientValue for AmbientAbility {
             None => (installed_scope(ExecutorScope::Job) == ExecutorScope::Job).then_some(self),
         }
     }
+}
+
+/// Whether the running request has yet to file this refusal. Where no ability is
+/// ambient, each files its own.
+#[cfg(feature = "graphql")]
+pub(crate) fn first_refusal(subject: &'static str, action: crate::Action, fields: &str) -> bool {
+    nest_rs_core::ambient::<AmbientAbility>()
+        .is_none_or(|held| held.filed.first(subject, action, fields))
 }
 
 /// The ability installed for the running unit, withheld from its reads or not.
@@ -112,7 +134,7 @@ impl AmbientValue for VisitorReadNamed {}
 /// ```
 pub fn with_ability<F: Future>(ability: Arc<Ability>, fut: F) -> impl Future<Output = F::Output> {
     nest_rs_core::__private::with_ambient_from(
-        move || Arc::new(AmbientAbility(narrowed(ability))),
+        move || Arc::new(AmbientAbility::holding(narrowed(ability))),
         fut,
     )
 }

@@ -109,6 +109,12 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
 fn wire_row_impl(output: &syn::Ident) -> TokenStream2 {
     let root = graphql_root();
     quote! {
+        ::nest_rs_seaorm::__private::inventory::submit! {
+            ::nest_rs_seaorm::__private::GraphqlWireType {
+                rust_type: ::core::any::type_name::<#output>,
+            }
+        }
+
         impl ::nest_rs_seaorm::__private::WireAnswer for #output {
             fn masked(
                 self,

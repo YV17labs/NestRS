@@ -696,7 +696,7 @@ fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2>
     // At the return type, so a value that is no resource's answer is refused there.
     let into = role.wire_answer();
     let (params, output, answered) = if *role == Role::Resource {
-        let masked = masked(*role, posture, sig)?;
+        let masked = masked(self_ty, op, *role, posture, sig)?;
         let read = quote_spanned! {answer_span(sig)=>
             #into::into_read(__nestrs_value, __nestrs_uri)
         };
@@ -801,7 +801,7 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         self_ty,
         op,
         quote!(#(#validate_prelude)* #(#pipe_prelude)*),
-        masked(*role, posture, sig)?,
+        masked(self_ty, op, *role, posture, sig)?,
     )?;
     Ok(quote! {
         #role_attr
@@ -971,7 +971,13 @@ fn parameters_args(sig: &Signature) -> Vec<&syn::Ident> {
 /// neither `Serialize` nor `DeserializeOwned`. A resource's `Option<Json<T>>`
 /// is masked inside the `Option`, `None` passing through. `take_operation`
 /// already refused a masked role whose every answer is opaque.
-fn masked(role: Role, posture: &Posture, sig: &Signature) -> syn::Result<TokenStream2> {
+fn masked(
+    self_ty: &Type,
+    op: &Operation,
+    role: Role,
+    posture: &Posture,
+    sig: &Signature,
+) -> syn::Result<TokenStream2> {
     let unmasked = quote!(::core::result::Result::Ok(__nestrs_value));
     let Some(PostureGate {
         action,
@@ -1006,13 +1012,17 @@ fn masked(role: Role, posture: &Posture, sig: &Signature) -> syn::Result<TokenSt
         ));
     }
 
+    let site = site_ref(self_ty, op.name());
+    let kind = role.kind();
     if let Some(inner) = nth_generic_type(ok_ty, "Option", 0)
         .and_then(|optional| nth_generic_type(optional, "Json", 0))
     {
         return Ok(quote! {
             __nestrs_value
                 .map(|::nest_rs_mcp::Json(__nestrs_out)| {
-                    ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, #inner>(__nestrs_out)
+                    ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, #inner>(
+                        #site, #kind, __nestrs_out,
+                    )
                         .map(::nest_rs_mcp::Json)
                 })
                 .transpose()
@@ -1023,15 +1033,19 @@ fn masked(role: Role, posture: &Posture, sig: &Signature) -> syn::Result<TokenSt
     if let Some(inner) = nth_generic_type(ok_ty, "Json", 0) {
         return Ok(quote! {{
             let ::nest_rs_mcp::Json(__nestrs_out) = __nestrs_value;
-            ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, #inner>(__nestrs_out)
+            ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, #inner>(
+                #site, #kind, __nestrs_out,
+            )
                 .map(::nest_rs_mcp::Json)
                 .map_err(::nest_rs_mcp::__private::OperationFailure::from)
         }});
     }
 
     Ok(quote! {
-        ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, _>(__nestrs_value)
-            .map_err(::nest_rs_mcp::__private::OperationFailure::from)
+        ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, _>(
+            #site, #kind, __nestrs_value,
+        )
+        .map_err(::nest_rs_mcp::__private::OperationFailure::from)
     })
 }
 

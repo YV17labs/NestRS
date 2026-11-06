@@ -9,7 +9,7 @@ error[E0277]: this posture cannot mask a reply of type `NoWireShape` on this sub
 note: required by a bound in `nest_rs::authz::__private::ws_masked_reply`
   --> $WORKSPACE/crates/nest-rs-authz/src/ws/mask.rs
    |
-   | pub fn ws_masked_reply<A, S, O>(event: &'static str, value: &O) -> WsReply
+   | pub fn ws_masked_reply<A, S, O>(site: &'static Site, value: &O) -> WsReply
    |        --------------- required by a bound in this function
 ...
    |     S::Mask: WsMask<A, O>,

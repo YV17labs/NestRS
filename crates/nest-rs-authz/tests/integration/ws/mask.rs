@@ -38,6 +38,12 @@ struct PostDto {
     title: String,
 }
 
+/// A wire shape whose `id` no widget's column can read back.
+#[input]
+struct InventedWidgetDto {
+    id: String,
+}
+
 /// The alias a macro reading the return's spelling cannot see through.
 type Replied<T> = Result<T, WsError>;
 
@@ -155,6 +161,15 @@ impl MaskGateway {
     #[subscribe_message("nothing")]
     #[authorize(Read, widget::Entity)]
     async fn nothing(&self) {}
+
+    /// A value the mask cannot read back into a row.
+    #[subscribe_message("invented_widget")]
+    #[authorize(Read, widget::Entity)]
+    async fn invented_widget(&self) -> Result<InventedWidgetDto, WsError> {
+        Ok(InventedWidgetDto {
+            id: "anonymous".to_owned(),
+        })
+    }
 
     /// No posture: no gate, no mask.
     #[subscribe_message("raw_widget")]
@@ -283,6 +298,25 @@ async fn no_ambient_ability_refuses_rather_than_shipping_the_rows() {
         "a missing ability is a wiring failure, never a pass: {body}",
     );
     assert!(!body.contains("first"), "{body}");
+}
+
+/// A failure the operator reads names the message it answered, as its `mounted`
+/// line does.
+#[tokio::test]
+async fn a_value_the_mask_cannot_read_back_names_its_message() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let body = reply("viewer", "invented_widget").await;
+    assert!(body.starts_with("error:"), "{body}");
+    assert!(!body.contains("anonymous"), "{body}");
+    let event = logs.expect_one("nest_rs::authz", "response masking failed");
+    for (field, named) in [
+        ("transport", "ws"),
+        ("host", "MaskGateway"),
+        ("method", "invented_widget"),
+        ("event", "invented_widget"),
+    ] {
+        assert_eq!(event.field(field).as_deref(), Some(named), "{field}");
+    }
 }
 
 #[tokio::test]

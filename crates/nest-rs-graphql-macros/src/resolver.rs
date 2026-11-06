@@ -1379,7 +1379,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                                             |__value| {
                                                 ::nest_rs_authz::__private::graphql_masked_value::<
                                                     #action, #entity, _,
-                                                >(#gctx, __value)
+                                                >(#gctx, #item_site, __value)
                                             },
                                         ),
                                         ::nest_rs_graphql::__private::FieldFailure::from,
@@ -1406,7 +1406,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                                                     #item_site,
                                                     ::nest_rs_authz::__private::graphql_masked_item::<
                                                         #action, #entity, _,
-                                                    >(#gctx, &__ability, __item),
+                                                    >(#gctx, #item_site, &__ability, __item),
                                                 ),
                                             ),
                                         ),
@@ -1863,7 +1863,7 @@ fn field_method(
                 ::core::result::Result::map_err(
                     ::nest_rs_core::__private::Answer(&__out).mapper()(__out, |__value| {
                         use ::nest_rs_graphql::__private::FieldAnswerFallback as _;
-                        ::nest_rs_graphql::__private::FieldAnswer(&__value).mask()(__ctx, __value)
+                        ::nest_rs_graphql::__private::FieldAnswer(&__value).mask()(__ctx, #site, __value)
                     }),
                     ::nest_rs_graphql::__private::FieldFailure::from,
                 )

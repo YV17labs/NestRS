@@ -721,6 +721,7 @@ mod tests {
             route: None,
             verb: None,
             arrival: Some(arrival),
+            handler: None,
         };
         let resp = ep
             .call(Request::from_raw(head, Body::empty(), facts))
@@ -740,6 +741,7 @@ mod tests {
             route: None,
             verb: None,
             arrival: Some(Instant::now()),
+            handler: None,
         };
         Request::from_raw(head, Body::empty(), facts)
     }

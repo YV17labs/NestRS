@@ -18,7 +18,7 @@ use nest_rs_core::__private::{
     report_unresolved, settled,
 };
 use nest_rs_core::{
-    Container, Failure, Handler, Outcome, Problem, UnitContext, UnresolvedLayerError,
+    Container, Failure, Handler, Outcome, Problem, ServedAddress, UnitContext, UnresolvedLayerError,
 };
 use nest_rs_core::{anyhow, code};
 use nest_rs_guards::__private::{
@@ -191,6 +191,16 @@ impl GuardStage for FieldGuardStage {
                 .map_err(|refused| Failure::from(refused.into_denial(self.denied, cx)))
         })
     }
+}
+
+/// Where the field `ctx` resolves is served, as its lines name it: under the
+/// operation it runs in, by the name `site` declares it under, or by the schema's
+/// where it names no site, as a relation `#[expose]` emits.
+pub fn served_field<'c>(ctx: &'c Context<'_>, site: Option<&'static Site>) -> ServedAddress<'c> {
+    ServedAddress::field(
+        operation_label(ctx.query_env.operation.node.ty),
+        site.map_or_else(|| field_name(ctx), |site| site.handler().address()),
+    )
 }
 
 /// The field `ctx` resolves, as the client wrote it in the document (`listUsers`,

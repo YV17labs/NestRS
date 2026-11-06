@@ -13,6 +13,7 @@ use http::request::Parts as RequestParts;
 use http::uri::Scheme;
 use http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, Uri, Version, header};
 use nest_rs_core::operation_log::OTHER;
+use nest_rs_core::{Handler, ServedAddress};
 
 use crate::body::Body;
 use crate::error::{BodyError, BoxError, Result};
@@ -51,6 +52,8 @@ pub(crate) struct RequestFacts {
     /// When the accept loop handed the request over, hyper having read its
     /// head; `None` for a request built in process.
     pub(crate) arrival: Option<tokio::time::Instant>,
+    /// The site it runs as, once the router handed it to one.
+    pub(crate) handler: Option<&'static Handler>,
 }
 
 impl RequestFacts {
@@ -64,6 +67,7 @@ impl RequestFacts {
             route: None,
             verb: None,
             arrival: None,
+            handler: None,
         }
     }
 }
@@ -79,6 +83,46 @@ impl Routed {
     /// `template`, matched with each parameter's decoded value by name.
     pub(crate) fn new(template: Arc<str>, params: Vec<(Arc<str>, String)>) -> Self {
         Self { template, params }
+    }
+}
+
+/// What a line names a request by, kept past the request: the site it runs as,
+/// its verb and the template it matched.
+#[derive(Clone, Debug)]
+pub struct ServedRoute {
+    handler: Option<&'static Handler>,
+    verb: Cow<'static, str>,
+    path: Option<Arc<str>>,
+}
+
+impl ServedRoute {
+    /// What `request` is named by. Cheap: a shaper takes it on every armed
+    /// request, for the failure it may never file.
+    pub fn of(request: &Request) -> Self {
+        Self {
+            handler: request.facts.handler,
+            verb: match &request.facts.verb {
+                Some(verb) => verb.clone(),
+                None => Cow::Borrowed(
+                    crate::trace_context::conventional(request.method()).unwrap_or(OTHER),
+                ),
+            },
+            path: request
+                .facts
+                .route
+                .as_ref()
+                .map(|routed| Arc::clone(&routed.template)),
+        }
+    }
+
+    /// The site it runs as, when it reached one.
+    pub fn handler(&self) -> Option<&'static Handler> {
+        self.handler
+    }
+
+    /// Where it is served, in the fields its `mounted` line names it by.
+    pub fn address(&self) -> ServedAddress<'_> {
+        ServedAddress::route(&self.verb, self.path.as_deref())
     }
 }
 
@@ -495,6 +539,11 @@ impl Request {
     /// Records the method as a line names it.
     pub(crate) fn set_verb(&mut self, verb: Cow<'static, str>) {
         self.facts.verb = Some(verb);
+    }
+
+    /// Records the site the request runs as.
+    pub(crate) fn set_handler(&mut self, handler: &'static Handler) {
+        self.facts.handler = Some(handler);
     }
 
     /// Records the route the router matched: its template, and each

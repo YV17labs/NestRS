@@ -103,13 +103,17 @@ impl UnitView for McpView {
         let Cow::Borrowed(name) = self.name.as_ref()? else {
             return None;
         };
-        Some(match self.kind? {
-            McpOperationKind::Tool => ServedAddress::tool(name),
-            McpOperationKind::Prompt => ServedAddress::prompt(name),
-            McpOperationKind::Resource | McpOperationKind::Resources => {
-                ServedAddress::resource(name)
-            }
-        })
+        Some(served_operation(self.kind?, name))
+    }
+}
+
+/// Where the operation `name` of `kind` is served, in the field its `mounted`
+/// line names it by.
+pub fn served_operation(kind: McpOperationKind, name: &str) -> ServedAddress<'_> {
+    match kind {
+        McpOperationKind::Tool => ServedAddress::tool(name),
+        McpOperationKind::Prompt => ServedAddress::prompt(name),
+        McpOperationKind::Resource | McpOperationKind::Resources => ServedAddress::resource(name),
     }
 }
 

@@ -351,6 +351,13 @@ async fn a_stripped_required_field_fails_the_operation_closed() {
     let event = logs.expect_one("nest_rs::authz", "authorization denied");
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("transport").as_deref(), Some("mcp"));
+    for (field, named) in [
+        ("host", "MaskTool"),
+        ("method", "strict_widget"),
+        ("tool", "strict_widget"),
+    ] {
+        assert_eq!(event.field(field).as_deref(), Some(named), "{field}");
+    }
     assert!(
         event.field("subject").is_some_and(|e| e.contains("widget")),
         "the event names the entity whose mask could not be represented, got {:?}",

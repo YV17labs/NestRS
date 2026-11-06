@@ -281,6 +281,7 @@ pub mod __private {
     pub use crate::origin::OriginScheme;
     pub use crate::pipe::piped;
     pub use crate::problem::{framework_sentence, method_not_allowed};
+    pub use crate::request::ServedRoute;
     pub use crate::response::{IntoResult, RouteReturn, RouteReturnFallback};
     pub use crate::route_site::{
         RouteGuards, RoutePipes, RouteWrapper, mount_controller, mount_route, route_guard_stage,

@@ -651,6 +651,14 @@ async fn a_body_with_no_declared_media_type_fails_closed() {
     // The 500 matches a panicking handler's; the event is what tells them apart.
     let event = logs.expect_one("nest_rs::authz", "response masking failed");
     assert_eq!(event.level, "warn");
+    for (field, named) in [
+        ("method", "untyped"),
+        ("verb", "GET"),
+        ("path", "/widgets/untyped"),
+    ] {
+        assert_eq!(event.field(field).as_deref(), Some(named), "{field}");
+    }
+    assert!(event.field("host").is_some(), "{:?}", event.fields);
     assert!(
         event.field("entity").is_some_and(|e| e.contains("widget")),
         "the event names the entity the shaper was armed for, got {:?}",

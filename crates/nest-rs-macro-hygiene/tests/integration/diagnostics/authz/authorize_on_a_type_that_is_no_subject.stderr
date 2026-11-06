@@ -40,7 +40,7 @@ error[E0277]: this posture cannot mask a reply of type `_` on this subject
 note: required by a bound in `nest_rs::authz::__private::mcp_masked_value`
   --> $WORKSPACE/crates/nest-rs-authz/src/mcp/mask.rs
    |
-   | pub fn mcp_masked_value<A, S, O>(value: O) -> Result<O, McpError>
+   | pub fn mcp_masked_value<A, S, O>(
    |        ---------------- required by a bound in this function
 ...
    |     S::Mask: McpMask<A, O>,

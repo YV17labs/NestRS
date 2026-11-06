@@ -146,6 +146,8 @@ pub mod __private {
     pub use async_trait::async_trait;
     pub use chrono;
     #[cfg(feature = "graphql")]
+    pub use nest_rs_core::__private::Site;
+    #[cfg(feature = "graphql")]
     pub use nest_rs_graphql::__private::{
         FieldFailure, GraphqlRelationRegistration, GraphqlWireType, LoaderOwner, WireAnswer,
         WireRow, seeded_loader,

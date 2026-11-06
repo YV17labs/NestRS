@@ -20,6 +20,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use nest_rs_core::Edge;
+use nest_rs_http::__private::ServedRoute;
 use nest_rs_http::{
     Request, Response, ResponseShaping, RouteFuture, RouteResponseShaper, StatusCode, header,
 };
@@ -27,7 +28,7 @@ use serde_json::Value;
 
 use super::authorize::Authorize;
 use crate::subject::{NoRows, Rows, SubjectMask};
-use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
+use crate::wire_mask::{MaskedUnit, MaskedWire, mask_wire_json, warn_mask_failure};
 use crate::wire_model::WireModel;
 use crate::{Ability, Action, ActionMarker};
 
@@ -40,11 +41,11 @@ where
     const GATE: Option<nest_rs_http::__private::GateFn> = Some(crate::class_gate::<A, S>);
     const SHAPES: bool = <S::Mask as RouteMask>::SHAPES;
 
-    fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
+    fn capture(req: &Request) -> Option<Box<dyn ResponseShaping>> {
         // A missing ability means the class gate already answered 500, so there
         // is nothing to shape.
         let ability = crate::context::installed()?;
-        <S::Mask as RouteMask>::shaping(ability, A::ACTION)
+        <S::Mask as RouteMask>::shaping(ability, A::ACTION, ServedRoute::of(req))
     }
 }
 
@@ -59,8 +60,13 @@ pub trait RouteMask {
     /// Whether the posture shapes the reply at all.
     const SHAPES: bool;
 
-    /// The shaping step for `action`, keyed on the ability the guard attached.
-    fn shaping(ability: Arc<Ability>, action: Action) -> Option<Box<dyn ResponseShaping>>;
+    /// The shaping step for `action` on the request `route` names, keyed on the
+    /// ability the guard attached.
+    fn shaping(
+        ability: Arc<Ability>,
+        action: Action,
+        route: ServedRoute,
+    ) -> Option<Box<dyn ResponseShaping>>;
 }
 
 #[diagnostic::do_not_recommend]
@@ -70,15 +76,19 @@ where
 {
     const SHAPES: bool = true;
 
-    fn shaping(ability: Arc<Ability>, action: Action) -> Option<Box<dyn ResponseShaping>> {
-        Some(Box::new(AbilityShaping::<E>::new(ability, action)))
+    fn shaping(
+        ability: Arc<Ability>,
+        action: Action,
+        route: ServedRoute,
+    ) -> Option<Box<dyn ResponseShaping>> {
+        Some(Box::new(AbilityShaping::<E>::new(ability, action, route)))
     }
 }
 
 impl RouteMask for NoRows {
     const SHAPES: bool = false;
 
-    fn shaping(_ability: Arc<Ability>, _action: Action) -> Option<Box<dyn ResponseShaping>> {
+    fn shaping(_: Arc<Ability>, _: Action, _: ServedRoute) -> Option<Box<dyn ResponseShaping>> {
         None
     }
 }
@@ -88,16 +98,18 @@ impl RouteMask for NoRows {
 struct AbilityShaping<S> {
     ability: Arc<Ability>,
     action: Action,
+    route: ServedRoute,
     subject: PhantomData<fn() -> S>,
 }
 
 impl<S> AbilityShaping<S> {
     /// The shaping step for `action` on entity `S`, keyed on the ability the
-    /// guard attached.
-    fn new(ability: Arc<Ability>, action: Action) -> Self {
+    /// guard attached, a failure naming the request `route` names.
+    fn new(ability: Arc<Ability>, action: Action, route: ServedRoute) -> Self {
         Self {
             ability,
             action,
+            route,
             subject: PhantomData,
         }
     }
@@ -110,7 +122,15 @@ where
     fn apply<'a>(self: Box<Self>, inner: RouteFuture<'a>) -> RouteFuture<'a> {
         Box::pin(async move {
             let resp = inner.await?;
-            Ok(mask_entity_response::<S>(&self.ability, self.action, resp).await)
+            let unit = MaskedUnit {
+                site: self
+                    .route
+                    .handler()
+                    .map(|handler| (handler.host_name(), handler.method())),
+                served: self.route.address(),
+                ..http_unit()
+            };
+            Ok(masked_response::<S>(unit, &self.ability, self.action, resp).await)
         })
     }
 }
@@ -158,13 +178,14 @@ fn body_kind(resp: &Response) -> BodyKind {
 ///
 /// Refused unless empty: an armed route's body carries the entity. Emptiness is
 /// read off the size hint, so a streamed body is refused without being buffered.
-fn refuse_unclassifiable<S>(mut resp: Response, action: Action) -> Response {
+fn refuse_unclassifiable<S>(unit: MaskedUnit<'_>, mut resp: Response, action: Action) -> Response {
     let body = resp.take_body();
     if body.is_empty() {
         resp.set_body(body);
         return resp;
     }
     mask_failure::<S>(
+        unit,
         action,
         mask_reason::UNCLASSIFIED_BODY,
         "response carried no content type, so it could not be classified; set a content type on \
@@ -179,7 +200,24 @@ fn refuse_unclassifiable<S>(mut resp: Response, action: Action) -> Response {
 /// non-success response, or one whose handler declared a non-JSON media type,
 /// passes through; a JSON object/array that does not match `S::Model`, and a
 /// body with no declared type at all, fail closed (see module docs).
-pub async fn mask_entity_response<S>(
+pub async fn mask_entity_response<S>(ability: &Ability, action: Action, resp: Response) -> Response
+where
+    S: WireModel,
+{
+    masked_response::<S>(http_unit(), ability, action, resp).await
+}
+
+/// The edge's own word, for a body masked off any site a request reached.
+fn http_unit() -> MaskedUnit<'static> {
+    MaskedUnit {
+        transport: Some(Edge::Http.as_str()),
+        ..MaskedUnit::default()
+    }
+}
+
+/// [`mask_entity_response`], what it refuses naming `unit`.
+async fn masked_response<S>(
+    unit: MaskedUnit<'_>,
     ability: &Ability,
     action: Action,
     mut resp: Response,
@@ -195,7 +233,7 @@ where
         // The handler declared a type, and it is not JSON: a file, a redirect
         // body, a rendered page. There is no entity in it to mask.
         BodyKind::Other => return resp,
-        BodyKind::Undeclared => return refuse_unclassifiable::<S>(resp, action),
+        BodyKind::Undeclared => return refuse_unclassifiable::<S>(unit, resp, action),
     }
 
     let bytes = match resp.take_body().into_bytes().await {
@@ -204,6 +242,7 @@ where
             // The body is already consumed; there is nothing left to ship, so
             // fail closed rather than return an empty 200.
             return mask_failure::<S>(
+                unit,
                 action,
                 mask_reason::NOT_SERIALIZABLE,
                 "response body could not be read",
@@ -217,6 +256,7 @@ where
         Ok(wire) => wire,
         Err(err) => {
             return mask_failure::<S>(
+                unit,
                 action,
                 mask_reason::NOT_SERIALIZABLE,
                 "response body was not valid JSON",
@@ -237,6 +277,7 @@ where
                 resp
             }
             Err(err) => mask_failure::<S>(
+                unit,
                 action,
                 mask_reason::NOT_SERIALIZABLE,
                 "masked body did not serialize",
@@ -245,6 +286,7 @@ where
             ),
         },
         Err(err) => mask_failure::<S>(
+            unit,
             action,
             mask_reason::IRRECONCILABLE,
             "response body did not match the authorized subject type",
@@ -262,6 +304,7 @@ const MASKING_FAILED_BODY: &str =
 /// One shape for every fail-closed masking exit: the queryable `warn` plus the
 /// 500 that ships instead of unmasked data.
 fn mask_failure<S>(
+    unit: MaskedUnit<'_>,
     action: Action,
     reason: &'static str,
     detail: &'static str,
@@ -273,8 +316,7 @@ fn mask_failure<S>(
         action,
         reason,
         detail,
-        Some(Edge::Http.as_str()),
-        None,
+        unit,
         err,
     );
     Response::builder()

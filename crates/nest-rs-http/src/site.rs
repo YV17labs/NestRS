@@ -144,13 +144,11 @@ fn unhonoured(_: Unhonoured) -> Answered {
 }
 
 impl<T: SiteTail> Endpoint for SiteEndpoint<T> {
-    async fn call(&self, req: Request) -> Result<Response> {
+    async fn call(&self, mut req: Request) -> Result<Response> {
+        req.set_handler(self.handler);
         match &self.unit {
             // Nothing bound and no unit of work: the tail alone, as it answers.
-            None if self.chains.shape() == Shape::Bare => {
-                let mut req = req;
-                self.tail.answer(&mut req).await
-            }
+            None if self.chains.shape() == Shape::Bare => self.tail.answer(&mut req).await,
             None => Ok(self.dispatched(req).await.response),
             Some((unit, policy)) => Ok(self.in_unit(unit, *policy, req).await),
         }

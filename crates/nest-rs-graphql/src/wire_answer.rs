@@ -21,6 +21,7 @@ use async_graphql::connection::{
 };
 use async_graphql::registry::{MetaType, MetaTypeName, Registry};
 use async_graphql::{Context, Error, Json, ObjectType, OutputType};
+use nest_rs_core::__private::Site;
 use nest_rs_core::anyhow;
 use nest_rs_guards::Denial;
 
@@ -45,7 +46,7 @@ pub trait WireAnswer: Sized {
     ///
     /// The refusal of a selected column the grant withholds, or of a value the
     /// mask cannot reconcile with the entity.
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error>;
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error>;
 
     /// An `Option` of this answer, masked: a wire type's whole, so a row it refuses
     /// can read `None`.
@@ -53,8 +54,12 @@ pub trait WireAnswer: Sized {
     /// # Errors
     ///
     /// As [`masked`](Self::masked).
-    fn masked_option(answer: Option<Self>, ctx: &Context<'_>) -> Result<Option<Self>, Error> {
-        answer.map(|inner| inner.masked(ctx)).transpose()
+    fn masked_option(
+        answer: Option<Self>,
+        ctx: &Context<'_>,
+        site: &'static Site,
+    ) -> Result<Option<Self>, Error> {
+        answer.map(|inner| inner.masked(ctx, site)).transpose()
     }
 
     /// A list of this answer, masked: a wire type's whole, so a row it refuses drops.
@@ -62,8 +67,15 @@ pub trait WireAnswer: Sized {
     /// # Errors
     ///
     /// As [`masked`](Self::masked).
-    fn masked_list(answer: Vec<Self>, ctx: &Context<'_>) -> Result<Vec<Self>, Error> {
-        answer.into_iter().map(|inner| inner.masked(ctx)).collect()
+    fn masked_list(
+        answer: Vec<Self>,
+        ctx: &Context<'_>,
+        site: &'static Site,
+    ) -> Result<Vec<Self>, Error> {
+        answer
+            .into_iter()
+            .map(|inner| inner.masked(ctx, site))
+            .collect()
     }
 }
 
@@ -77,16 +89,21 @@ pub trait WireRow: WireAnswer {
     /// # Errors
     ///
     /// As [`WireAnswer::masked`].
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error>;
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error>;
 }
 
 /// A node holding no row stays; the rest are the row's to judge.
 fn masked_held<A: WireRow>(
     ctx: &Context<'_>,
+    site: &'static Site,
     held: Vec<Option<&mut A>>,
 ) -> Result<Vec<bool>, Error> {
     let holds: Vec<bool> = held.iter().map(Option::is_some).collect();
-    let mut kept = A::masked_nodes(ctx, held.into_iter().flatten().collect())?.into_iter();
+    let mut kept = A::masked_nodes(ctx, site, held.into_iter().flatten().collect())?.into_iter();
     Ok(holds
         .into_iter()
         .map(|holds| !holds || kept.next().unwrap_or(false))
@@ -95,7 +112,11 @@ fn masked_held<A: WireRow>(
 
 /// What a list or a set holds inside each node: a row the mask refuses leaves the list,
 /// and the node stays, as a list answering a field does.
-fn masked_lists<N, A>(ctx: &Context<'_>, nodes: Vec<&mut N>) -> Result<Vec<bool>, Error>
+fn masked_lists<N, A>(
+    ctx: &Context<'_>,
+    site: &'static Site,
+    nodes: Vec<&mut N>,
+) -> Result<Vec<bool>, Error>
 where
     N: Default + IntoIterator<Item = A> + FromIterator<A>,
     A: WireRow,
@@ -103,7 +124,7 @@ where
     let stays = vec![true; nodes.len()];
     for node in nodes {
         let mut rows: Vec<A> = std::mem::take(node).into_iter().collect();
-        let mut kept = A::masked_nodes(ctx, rows.iter_mut().collect())?.into_iter();
+        let mut kept = A::masked_nodes(ctx, site, rows.iter_mut().collect())?.into_iter();
         rows.retain(|_| kept.next().unwrap_or(false));
         *node = rows.into_iter().collect();
     }
@@ -112,7 +133,11 @@ where
 
 /// What a map holds inside each node: a row the mask refuses leaves with its key, and
 /// the node stays.
-fn masked_maps<N, K, A>(ctx: &Context<'_>, nodes: Vec<&mut N>) -> Result<Vec<bool>, Error>
+fn masked_maps<N, K, A>(
+    ctx: &Context<'_>,
+    site: &'static Site,
+    nodes: Vec<&mut N>,
+) -> Result<Vec<bool>, Error>
 where
     N: Default + IntoIterator<Item = (K, A)> + FromIterator<(K, A)>,
     A: WireRow,
@@ -120,7 +145,7 @@ where
     let stays = vec![true; nodes.len()];
     for node in nodes {
         let (keys, mut rows): (Vec<K>, Vec<A>) = std::mem::take(node).into_iter().unzip();
-        let kept = A::masked_nodes(ctx, rows.iter_mut().collect())?;
+        let kept = A::masked_nodes(ctx, site, rows.iter_mut().collect())?;
         *node = keys
             .into_iter()
             .zip(rows)
@@ -132,58 +157,94 @@ where
 }
 
 impl<A: WireRow> WireRow for Option<A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        masked_held(ctx, nodes.into_iter().map(Option::as_mut).collect())
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        masked_held(ctx, site, nodes.into_iter().map(Option::as_mut).collect())
     }
 }
 
 impl<A: WireRow, E> WireRow for Result<A, E> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
         let held = nodes.into_iter().map(|node| node.as_mut().ok()).collect();
-        masked_held(ctx, held)
+        masked_held(ctx, site, held)
     }
 }
 
 impl<A: WireRow> WireRow for Vec<A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        masked_lists(ctx, nodes)
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, site, nodes)
     }
 }
 
 impl<A: WireRow> WireRow for VecDeque<A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        masked_lists(ctx, nodes)
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, site, nodes)
     }
 }
 
 impl<A: WireRow> WireRow for LinkedList<A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        masked_lists(ctx, nodes)
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, site, nodes)
     }
 }
 
 impl<A: WireRow + Ord> WireRow for BTreeSet<A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        masked_lists(ctx, nodes)
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, site, nodes)
     }
 }
 
 impl<A: WireRow + Eq + Hash, S: BuildHasher + Default> WireRow for HashSet<A, S> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        masked_lists(ctx, nodes)
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, site, nodes)
     }
 }
 
 impl<A: WireRow> WireRow for Box<[A]> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        masked_lists(ctx, nodes)
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, site, nodes)
     }
 }
 
 impl<A: WireRow + Clone> WireRow for Arc<[A]> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
         let mut lists: Vec<Vec<A>> = nodes.iter().map(|node| node.to_vec()).collect();
-        let stays = masked_lists(ctx, lists.iter_mut().collect())?;
+        let stays = masked_lists(ctx, site, lists.iter_mut().collect())?;
         for (node, list) in nodes.into_iter().zip(lists) {
             *node = list.into();
         }
@@ -193,11 +254,15 @@ impl<A: WireRow + Clone> WireRow for Arc<[A]> {
 
 /// An array has no place for a row a list would drop, so its node leaves with its edge.
 impl<A: WireRow, const N: usize> WireRow for [A; N] {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
         nodes
             .into_iter()
             .map(|node| {
-                let kept = A::masked_nodes(ctx, node.iter_mut().collect())?;
+                let kept = A::masked_nodes(ctx, site, node.iter_mut().collect())?;
                 Ok(kept.into_iter().all(|kept| kept))
             })
             .collect()
@@ -205,8 +270,12 @@ impl<A: WireRow, const N: usize> WireRow for [A; N] {
 }
 
 impl<K: Ord, A: WireRow> WireRow for BTreeMap<K, A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        masked_maps(ctx, nodes)
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        masked_maps(ctx, site, nodes)
     }
 }
 
@@ -216,76 +285,112 @@ where
     A: WireRow,
     S: BuildHasher + Default,
 {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        masked_maps(ctx, nodes)
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        masked_maps(ctx, site, nodes)
     }
 }
 
 impl<A: WireRow> WireRow for Box<A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        A::masked_nodes(ctx, nodes.into_iter().map(|node| &mut **node).collect())
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        A::masked_nodes(
+            ctx,
+            site,
+            nodes.into_iter().map(|node| &mut **node).collect(),
+        )
     }
 }
 
 impl<A: WireRow + Clone> WireRow for Arc<A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        A::masked_nodes(ctx, nodes.into_iter().map(Arc::make_mut).collect())
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        A::masked_nodes(ctx, site, nodes.into_iter().map(Arc::make_mut).collect())
     }
 }
 
 impl<A: WireRow + Clone> WireRow for Cow<'static, A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        A::masked_nodes(ctx, nodes.into_iter().map(Cow::to_mut).collect())
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        A::masked_nodes(ctx, site, nodes.into_iter().map(Cow::to_mut).collect())
     }
 }
 
 impl<A: WireRow> WireRow for Json<A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        A::masked_nodes(ctx, nodes.into_iter().map(|node| &mut node.0).collect())
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        A::masked_nodes(
+            ctx,
+            site,
+            nodes.into_iter().map(|node| &mut node.0).collect(),
+        )
     }
 }
 
 impl<A: WireRow> WireRow for tokio::sync::Mutex<A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        A::masked_nodes(ctx, nodes.into_iter().map(Self::get_mut).collect())
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        A::masked_nodes(ctx, site, nodes.into_iter().map(Self::get_mut).collect())
     }
 }
 
 impl<A: WireRow> WireRow for tokio::sync::RwLock<A> {
-    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        A::masked_nodes(ctx, nodes.into_iter().map(Self::get_mut).collect())
+    fn masked_nodes(
+        ctx: &Context<'_>,
+        site: &'static Site,
+        nodes: Vec<&mut Self>,
+    ) -> Result<Vec<bool>, Error> {
+        A::masked_nodes(ctx, site, nodes.into_iter().map(Self::get_mut).collect())
     }
 }
 
 impl<A: WireAnswer> WireAnswer for Option<A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        A::masked_option(self, ctx)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        A::masked_option(self, ctx, site)
     }
 }
 
 impl<A: WireAnswer> WireAnswer for Vec<A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        A::masked_list(self, ctx)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        A::masked_list(self, ctx, site)
     }
 }
 
 impl<A: WireAnswer> WireAnswer for VecDeque<A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        A::masked_list(self.into(), ctx).map(Into::into)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        A::masked_list(self.into(), ctx, site).map(Into::into)
     }
 }
 
 impl<A: WireAnswer> WireAnswer for LinkedList<A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        let rows = A::masked_list(self.into_iter().collect(), ctx)?;
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        let rows = A::masked_list(self.into_iter().collect(), ctx, site)?;
         Ok(rows.into_iter().collect())
     }
 }
@@ -293,8 +398,8 @@ impl<A: WireAnswer> WireAnswer for LinkedList<A> {
 impl<A: WireAnswer + Ord> WireAnswer for BTreeSet<A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        let rows = A::masked_list(self.into_iter().collect(), ctx)?;
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        let rows = A::masked_list(self.into_iter().collect(), ctx, site)?;
         Ok(rows.into_iter().collect())
     }
 }
@@ -302,8 +407,8 @@ impl<A: WireAnswer + Ord> WireAnswer for BTreeSet<A> {
 impl<A: WireAnswer + Eq + Hash, S: BuildHasher + Default> WireAnswer for HashSet<A, S> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        let rows = A::masked_list(self.into_iter().collect(), ctx)?;
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        let rows = A::masked_list(self.into_iter().collect(), ctx, site)?;
         Ok(rows.into_iter().collect())
     }
 }
@@ -311,16 +416,16 @@ impl<A: WireAnswer + Eq + Hash, S: BuildHasher + Default> WireAnswer for HashSet
 impl<A: WireAnswer> WireAnswer for Box<[A]> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        A::masked_list(self.into_vec(), ctx).map(Vec::into_boxed_slice)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        A::masked_list(self.into_vec(), ctx, site).map(Vec::into_boxed_slice)
     }
 }
 
 impl<A: WireAnswer + Clone> WireAnswer for Arc<[A]> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        A::masked_list(self.to_vec(), ctx).map(Into::into)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        A::masked_list(self.to_vec(), ctx, site).map(Into::into)
     }
 }
 
@@ -329,10 +434,10 @@ impl<A: WireAnswer + Clone> WireAnswer for Arc<[A]> {
 impl<A: WireAnswer, const N: usize> WireAnswer for [A; N] {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
         let rows = self
             .into_iter()
-            .map(|row| row.masked(ctx))
+            .map(|row| row.masked(ctx, site))
             .collect::<Result<Vec<A>, Error>>()?;
         match rows.try_into() {
             Ok(rows) => Ok(rows),
@@ -347,9 +452,9 @@ impl<A: WireAnswer, const N: usize> WireAnswer for [A; N] {
 impl<K: Ord, A: WireAnswer> WireAnswer for BTreeMap<K, A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
         self.into_iter()
-            .map(|(key, row)| Ok((key, row.masked(ctx)?)))
+            .map(|(key, row)| Ok((key, row.masked(ctx, site)?)))
             .collect()
     }
 }
@@ -363,9 +468,9 @@ where
 {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
         self.into_iter()
-            .map(|(key, row)| Ok((key, row.masked(ctx)?)))
+            .map(|(key, row)| Ok((key, row.masked(ctx, site)?)))
             .collect()
     }
 }
@@ -373,41 +478,41 @@ where
 impl<A: WireAnswer> WireAnswer for Box<A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        (*self).masked(ctx).map(Box::new)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        (*self).masked(ctx, site).map(Box::new)
     }
 }
 
 impl<A: WireAnswer + Clone> WireAnswer for Arc<A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        Self::unwrap_or_clone(self).masked(ctx).map(Self::new)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        Self::unwrap_or_clone(self).masked(ctx, site).map(Self::new)
     }
 }
 
 impl<A: WireAnswer + Clone> WireAnswer for Cow<'static, A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        self.into_owned().masked(ctx).map(Cow::Owned)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        self.into_owned().masked(ctx, site).map(Cow::Owned)
     }
 }
 
 impl<A: WireAnswer> WireAnswer for Json<A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        self.0.masked(ctx).map(Json)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        self.0.masked(ctx, site).map(Json)
     }
 }
 
 impl<A: WireAnswer, E> WireAnswer for Result<A, E> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
         match self {
-            Ok(answer) => answer.masked(ctx).map(Ok),
+            Ok(answer) => answer.masked(ctx, site).map(Ok),
             Err(err) => Ok(Err(err)),
         }
     }
@@ -417,8 +522,8 @@ impl<A: WireAnswer, E> WireAnswer for Result<A, E> {
 impl<A: WireAnswer> WireAnswer for tokio::sync::Mutex<A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        self.into_inner().masked(ctx).map(Self::new)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        self.into_inner().masked(ctx, site).map(Self::new)
     }
 }
 
@@ -426,8 +531,8 @@ impl<A: WireAnswer> WireAnswer for tokio::sync::Mutex<A> {
 impl<A: WireAnswer> WireAnswer for tokio::sync::RwLock<A> {
     const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
-    fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
-        self.into_inner().masked(ctx).map(Self::new)
+    fn masked(self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
+        self.into_inner().masked(ctx, site).map(Self::new)
     }
 }
 
@@ -439,7 +544,7 @@ impl<A: WireAnswer> WireAnswer for &'static A {
          row by value, or behind an `Arc`"
     );
 
-    fn masked(self, _ctx: &Context<'_>) -> Result<Self, Error> {
+    fn masked(self, _: &Context<'_>, _: &'static Site) -> Result<Self, Error> {
         let _ = Self::UNMASKED;
         Ok(self)
     }
@@ -453,7 +558,7 @@ impl<A: WireAnswer> WireAnswer for &'static [A] {
          in a `Vec`, or behind an `Arc<[_]>`"
     );
 
-    fn masked(self, _ctx: &Context<'_>) -> Result<Self, Error> {
+    fn masked(self, _: &Context<'_>, _: &'static Site) -> Result<Self, Error> {
         let _ = Self::UNMASKED;
         Ok(self)
     }
@@ -467,7 +572,7 @@ impl<A: WireAnswer> WireAnswer for Weak<A> {
          by value, or behind an `Arc`"
     );
 
-    fn masked(self, _ctx: &Context<'_>) -> Result<Self, Error> {
+    fn masked(self, _: &Context<'_>, _: &'static Site) -> Result<Self, Error> {
         let _ = Self::UNMASKED;
         Ok(self)
     }
@@ -492,9 +597,9 @@ where
         Some(additional_fields::<Fields, EdgeFields>)
     };
 
-    fn masked(mut self, ctx: &Context<'_>) -> Result<Self, Error> {
+    fn masked(mut self, ctx: &Context<'_>, site: &'static Site) -> Result<Self, Error> {
         let nodes = self.edges.iter_mut().map(|edge| &mut edge.node).collect();
-        let mut kept = R::masked_nodes(ctx, nodes)?.into_iter();
+        let mut kept = R::masked_nodes(ctx, site, nodes)?.into_iter();
         self.edges.retain(|_| kept.next().unwrap_or(false));
         Ok(self)
     }
@@ -511,6 +616,9 @@ fn additional_fields<Fields: ObjectType, EdgeFields: ObjectType>(
     ]
 }
 
+/// What masks a field resolver's answer of a `T`, as the site declaring it names it.
+pub type FieldMask<T> = fn(&Context<'_>, &'static Site, T) -> Result<T, Error>;
+
 /// A field resolver's answer, borrowed so the compiler can be asked what it holds.
 pub struct FieldAnswer<'a, T>(pub &'a T);
 
@@ -520,8 +628,8 @@ impl<T: WireAnswer> FieldAnswer<'_, T> {
     pub const UNMASKED: UnmaskedObjects = T::UNMASKED;
 
     /// The entity's mask.
-    pub fn mask(&self) -> fn(&Context<'_>, T) -> Result<T, Error> {
-        |ctx, answer| answer.masked(ctx)
+    pub fn mask(&self) -> FieldMask<T> {
+        |ctx, site, answer| answer.masked(ctx, site)
     }
 }
 
@@ -534,7 +642,7 @@ pub trait FieldAnswerFallback {
     const UNMASKED: UnmaskedObjects;
 
     /// The answer as it is: a body's scalar or its own DTO names no entity.
-    fn mask(&self) -> fn(&Context<'_>, Self::Value) -> Result<Self::Value, Error>;
+    fn mask(&self) -> FieldMask<Self::Value>;
 }
 
 impl<T: OutputType> FieldAnswerFallback for FieldAnswer<'_, T> {
@@ -542,8 +650,8 @@ impl<T: OutputType> FieldAnswerFallback for FieldAnswer<'_, T> {
 
     const UNMASKED: UnmaskedObjects = Some(|registry| vec![T::create_type_info(registry)]);
 
-    fn mask(&self) -> fn(&Context<'_>, T) -> Result<T, Error> {
-        |_, answer| Ok(answer)
+    fn mask(&self) -> FieldMask<T> {
+        |_, _, answer| Ok(answer)
     }
 }
 

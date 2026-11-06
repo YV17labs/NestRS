@@ -135,6 +135,7 @@ pub mod __private {
     };
     pub use crate::scope::scoped_parameter;
     pub use crate::uri_template::{TemplateMatch, TemplatePart, UriTemplate};
+    pub use crate::view::served_operation;
     pub use nest_rs_pipes::__private::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
     pub use rmcp::handler::server::prompt::IntoGetPromptResult;
     pub use rmcp::handler::server::tool::IntoCallToolResult;

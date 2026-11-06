@@ -906,6 +906,11 @@ async fn a_has_one_refuses_a_withheld_selection_naming_the_field_with_no_error_l
         .collect();
     assert_eq!(denied.len(), 1, "one line for one refusal: {denied:?}");
     assert!(!denied[0].quotes(SECRET_EMAIL));
+    // A relation `#[expose]` emits has no host of its own.
+    assert_eq!(denied[0].field("transport").as_deref(), Some("graphql"));
+    assert_eq!(denied[0].field("kind").as_deref(), Some("query"));
+    assert_eq!(denied[0].field("field").as_deref(), Some("writer"));
+    assert_eq!(denied[0].field("host"), None);
 }
 
 #[tokio::test]
@@ -1220,6 +1225,18 @@ async fn a_field_resolver_answering_a_wire_type_refuses_what_the_grant_withholds
         assert!(!read.to_string().contains(SECRET_EMAIL), "{field}: {read}");
     }
     assert_no_error_line(&logs);
+    let denied: Vec<_> = logs
+        .events_at(tracing::Level::WARN)
+        .into_iter()
+        .filter(|event| event.field("reason").as_deref() == Some("field_not_granted"))
+        .collect();
+    assert_eq!(denied.len(), WIRE_ANSWERS.len(), "{denied:?}");
+    for (line, field) in denied.iter().zip(WIRE_ANSWERS) {
+        assert_eq!(line.field("host").as_deref(), Some("LibraryResolver"));
+        assert!(line.field("method").is_some(), "{:?}", line.fields);
+        assert_eq!(line.field("kind").as_deref(), Some("query"));
+        assert_eq!(line.field("field").as_deref(), Some(field));
+    }
 }
 
 #[tokio::test]
@@ -1427,7 +1444,11 @@ async fn a_value_the_mask_cannot_read_back_answers_internal() {
     assert_eq!(error["extensions"]["code"], "INTERNAL", "{read}");
     assert_eq!(error["message"], OPAQUE_CLIENT_MESSAGE, "{read}");
     assert!(!read.to_string().contains("Anonymous"), "{read}");
-    logs.expect_one("nest_rs::authz", "response masking failed");
+    let event = logs.expect_one("nest_rs::authz", "response masking failed");
+    assert_eq!(event.field("kind").as_deref(), Some("query"));
+    assert_eq!(event.field("field").as_deref(), Some("inventedLead"));
+    assert_eq!(event.field("host").as_deref(), Some("LibraryResolver"));
+    assert_eq!(event.field("method").as_deref(), Some("invented_lead"));
     assert_no_error_line(&logs);
 }
 

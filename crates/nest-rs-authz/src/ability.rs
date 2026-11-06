@@ -5,12 +5,39 @@ use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
+use nest_rs_core::ServedAddress;
+#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
+use nest_rs_core::{Edge, Handler};
 use sea_orm::sea_query::Condition;
 use sea_orm::{EntityTrait, IdenStatic, Value};
 
 use crate::action::Action;
 use crate::predicate::{Predicate, Truth, no_row, nothing_invented};
 use crate::wire_model::WireModel;
+
+/// The unit a mask answers for, as a line names it: nothing on the ambient
+/// [`Ability::mask`] and a value masked by hand, which run in no unit they know.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct MaskedUnit<'a> {
+    /// The edge dispatching it, by its [`Edge`] word.
+    pub(crate) transport: Option<&'static str>,
+    /// Its host and method, where a site declared them.
+    pub(crate) site: Option<(&'static str, &'static str)>,
+    /// Where it is served, in the fields its `mounted` line names it by.
+    pub(crate) served: ServedAddress<'a>,
+}
+
+impl<'a> MaskedUnit<'a> {
+    /// The unit `handler` declares on `edge`, served at `served`.
+    #[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
+    pub(crate) fn declared(edge: Edge, handler: &Handler, served: ServedAddress<'a>) -> Self {
+        Self {
+            transport: Some(edge.as_str()),
+            site: Some((handler.host_name(), handler.method())),
+            served,
+        }
+    }
+}
 
 /// The one fail-closed masking warn, for every edge and the ambient
 /// [`Ability::mask`]; here, always compiled, so a feature-less build reaches it.
@@ -19,36 +46,35 @@ pub(crate) fn warn_mask_failure(
     action: Action,
     reason: &'static str,
     detail: &'static str,
-    // The edge's own context, on this one event; `tracing` drops a `None`.
-    transport: Option<&'static str>,
-    event: Option<&str>,
+    unit: MaskedUnit<'_>,
     // Rendered by `error_message`, which never quotes the value serde refused.
     err: Option<&(dyn std::error::Error + 'static)>,
 ) {
-    // Two arms: `tracing` fixes an event's fields at the macro.
-    match err {
-        Some(err) => tracing::warn!(
-            target: crate::TARGET,
-            entity,
-            action = ?action,
-            reason,
-            detail,
-            transport,
-            event,
-            error = %nest_rs_core::error_message(err),
-            "response masking failed",
-        ),
-        None => tracing::warn!(
-            target: crate::TARGET,
-            entity,
-            action = ?action,
-            reason,
-            detail,
-            transport,
-            event,
-            "response masking failed",
-        ),
-    }
+    let MaskedUnit {
+        transport,
+        site,
+        served,
+    } = unit;
+    tracing::warn!(
+        target: crate::TARGET,
+        entity,
+        action = ?action,
+        reason,
+        detail,
+        transport,
+        host = site.map(|(host, _)| host),
+        method = site.map(|(_, method)| method),
+        verb = served.verb,
+        path = served.path,
+        kind = served.kind,
+        field = served.field,
+        event = served.event,
+        tool = served.tool,
+        prompt = served.prompt,
+        resource = served.resource,
+        error = err.map(nest_rs_core::error_message).as_deref(),
+        "response masking failed",
+    );
 }
 
 /// The `(entity, action)` pairs whose pushed rows an undecidable rule already
@@ -729,8 +755,7 @@ impl Ability {
                     action,
                     mask_reason::NOT_SERIALIZABLE,
                     "model did not serialize",
-                    None,
-                    None,
+                    MaskedUnit::default(),
                     Some(&err),
                 );
                 return serde_json::Value::Null;
@@ -1203,8 +1228,7 @@ mod tests {
             Action::Read,
             mask_reason::IRRECONCILABLE,
             "wire value could not be reconciled with the entity model",
-            None,
-            None,
+            MaskedUnit::default(),
             Some(&refused),
         );
         let event = logs.expect_one(crate::TARGET, "response masking failed");

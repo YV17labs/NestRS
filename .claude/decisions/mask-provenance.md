@@ -353,7 +353,9 @@ refuses at the first rung that can say so.
 
 **What the mask files repeating under every parent is one line per operation**, a refused
 selection, a field no ability reached, a row it cannot read back: each is one fact, and its
-count must not be the caller's to choose. The record sits in the operation's own data, built
+count must not be the caller's to choose. A refusal and a row it cannot read back name their
+field (2026-11-06), so two fields each file theirs, a filter on either finding its own; a
+field no ability reached names none. The record sits in the operation's own data, built
 by the first line, so an operation refusing nothing pays one empty value. Refused: holding it
 in `AmbientAbility`, as this entry first did, or in the `Ability`: a graphql-ws socket holds
 one holder for its whole life, so its second probe of a column filed nothing, and a guard on a

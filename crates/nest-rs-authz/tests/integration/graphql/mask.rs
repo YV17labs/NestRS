@@ -11,12 +11,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use nest_rs_authz::__private::install_ability;
+use nest_rs_authz::graphql::masked_item_for;
 use nest_rs_authz::{AbilityBuilder, Action, MaskReplyError, Read, masked_reply};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_events::{EventBus, EventsModule};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamExt};
 use nest_rs_graphql::async_graphql::{
-    Error as GqlError, Executor, Json, Request as GqlRequest, Result as GqlResult, SimpleObject,
+    Context, Error as GqlError, Executor, Json, Request as GqlRequest, Result as GqlResult,
+    SimpleObject,
 };
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
@@ -144,6 +146,15 @@ impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
 impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 
+/// A grant of a widget's `id` alone.
+fn ids_only() -> nest_rs_authz::Ability {
+    let mut ability = AbilityBuilder::new();
+    ability
+        .can(Action::Read, widget::Entity)
+        .fields([widget::Column::Id]);
+    ability.build().expect("a valid ability")
+}
+
 #[resolver]
 struct MaskResolver {
     #[inject]
@@ -186,6 +197,53 @@ impl MaskResolver {
             id: 1,
             name: Some("ada".into()),
         }
+    }
+
+    /// A body masking an item it built, by the public call, under a grant cutting
+    /// `name`.
+    #[query]
+    #[public]
+    async fn hand_masked_widget(&self, ctx: &Context<'_>) -> GqlResult<Option<WidgetDto>> {
+        masked_item_for::<Read, widget::Entity, _>(
+            ctx,
+            &ids_only(),
+            WidgetDto {
+                id: 2,
+                name: Some("grace".into()),
+            },
+        )
+    }
+
+    /// The same under a grant that refuses the row.
+    #[query]
+    #[public]
+    async fn hand_refused_widget(&self, ctx: &Context<'_>) -> GqlResult<Option<WidgetDto>> {
+        let mut first_alone = AbilityBuilder::new();
+        first_alone
+            .can(Action::Read, widget::Entity)
+            .when(|p| p.eq(widget::Column::Id, 1));
+        masked_item_for::<Read, widget::Entity, _>(
+            ctx,
+            &first_alone.build().expect("a valid ability"),
+            WidgetDto {
+                id: 2,
+                name: Some("grace".into()),
+            },
+        )
+    }
+
+    /// The same on a wire shape requiring the `name` the grant cuts.
+    #[query]
+    #[public]
+    async fn hand_masked_strict(&self, ctx: &Context<'_>) -> GqlResult<Option<StrictWidgetDto>> {
+        masked_item_for::<Read, widget::Entity, _>(
+            ctx,
+            &ids_only(),
+            StrictWidgetDto {
+                id: 1,
+                name: "ada".into(),
+            },
+        )
     }
 
     #[query]
@@ -439,8 +497,18 @@ async fn a_root_answering_a_map_of_rows_answers_internal() {
 
 #[tokio::test]
 async fn selecting_a_field_the_grant_strips_is_refused() {
+    let logs = nest_rs_testing::LogCapture::install();
     let app = boot().await;
     let json = query(&app, "viewer", "{ strictWidget { id name } }").await;
+    let event = logs.expect_one("nest_rs::authz", "authorization denied");
+    for (field, named) in [
+        ("host", "MaskResolver"),
+        ("method", "strict_widget"),
+        ("kind", "query"),
+        ("field", "strictWidget"),
+    ] {
+        assert_eq!(event.field(field).as_deref(), Some(named), "{field}");
+    }
     assert_eq!(
         json["data"],
         serde_json::Value::Null,
@@ -456,6 +524,45 @@ async fn selecting_a_field_the_grant_strips_is_refused() {
         serde_json::json!(["name"]),
         "the denial names the field it refused, as a list: {json}",
     );
+}
+
+#[tokio::test]
+async fn a_body_masks_an_item_it_built_with_the_ability_it_holds() {
+    let app = boot().await;
+
+    let cut = query(&app, "", "{ handMaskedWidget { id name } }").await;
+    assert_eq!(
+        cut["data"]["handMaskedWidget"],
+        serde_json::json!({ "id": 2, "name": null }),
+        "{cut}"
+    );
+
+    let refused = query(&app, "", "{ handRefusedWidget { id } }").await;
+    assert!(refused.get("errors").is_none(), "{refused}");
+    assert_eq!(
+        refused["data"]["handRefusedWidget"],
+        serde_json::Value::Null,
+        "{refused}"
+    );
+}
+
+/// A body names no site, so its refusal says what the context holds, as a
+/// relation's does.
+#[tokio::test]
+async fn a_body_masking_by_hand_is_refused_under_its_field() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+
+    let json = query(&app, "", "{ handMaskedStrict { id name } }").await;
+
+    assert_eq!(
+        json["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{json}"
+    );
+    let event = logs.expect_one("nest_rs::authz", "authorization denied");
+    assert_eq!(event.field("kind").as_deref(), Some("query"));
+    assert_eq!(event.field("field").as_deref(), Some("handMaskedStrict"));
+    assert_eq!(event.field("host"), None, "{:?}", event.fields);
 }
 
 #[tokio::test]
@@ -514,7 +621,15 @@ async fn a_value_the_mask_cannot_read_back_answers_internal() {
         "{json}"
     );
     assert!(!json.to_string().contains("anonymous"), "{json}");
-    logs.expect_one("nest_rs::authz", "response masking failed");
+    let event = logs.expect_one("nest_rs::authz", "response masking failed");
+    for (field, named) in [
+        ("host", "MaskResolver"),
+        ("method", "invented_widget"),
+        ("kind", "query"),
+        ("field", "inventedWidget"),
+    ] {
+        assert_eq!(event.field(field).as_deref(), Some(named), "{field}");
+    }
 }
 
 #[tokio::test]
@@ -1380,6 +1495,30 @@ async fn one_operation_refusing_one_selection_twice_files_one_line() {
 
     assert_eq!(json["errors"].as_array().map(Vec::len), Some(2), "{json}");
     assert_eq!(refusal_lines(&logs), 1);
+}
+
+/// A line names its unit, so a filter on either field finds its own refusal of the
+/// same columns.
+#[tokio::test]
+async fn each_field_refusing_one_selection_files_its_own_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+
+    let json = query(
+        &app,
+        "viewer",
+        "{ strictWidget { id name } strictWidgets { id name } }",
+    )
+    .await;
+
+    assert_eq!(json["errors"].as_array().map(Vec::len), Some(2), "{json}");
+    let lines = logs.find("nest_rs::authz", "authorization denied");
+    let mut fields: Vec<_> = lines
+        .iter()
+        .filter_map(|line| line.field("field"))
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(fields, ["strictWidget", "strictWidgets"], "{lines:#?}");
 }
 
 #[tokio::test]

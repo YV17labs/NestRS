@@ -97,6 +97,16 @@ impl<'a> Refusal<'a> {
         }
     }
 
+    /// A refusal a mask makes on `unit`, whose edge states the transport.
+    #[cfg(any(feature = "graphql", feature = "mcp"))]
+    pub(crate) fn of_mask(unit: crate::wire_mask::MaskedUnit<'a>) -> Self {
+        Self {
+            served: unit.served,
+            site: unit.site,
+            ..Self::on(unit.transport.unwrap_or("unit"))
+        }
+    }
+
     /// The same refusal, naming what `#[authorize(A, S)]` declared.
     pub(crate) fn declaring<A: ActionMarker, S: Subject>(self) -> Self {
         Self {

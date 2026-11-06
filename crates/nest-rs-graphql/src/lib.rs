@@ -76,6 +76,7 @@ pub mod __private {
         LoaderOwner, batch_spawner, seeded_loader,
     };
     pub use crate::module::RUNTIME;
+    pub use crate::operation::served_field;
     pub use crate::operation::{
         FieldGuards, GraphqlSite, IsStreamReturn, ROOT_FIELD, answers_a_stream, field_guard_stage,
         field_name, run_field, run_nested,
@@ -88,7 +89,8 @@ pub mod __private {
     pub use crate::scope::{scoped_parameter, unprovided};
     pub use crate::subscription::{compose_schema, keep_masked_item};
     pub use crate::wire_answer::{
-        FieldAnswer, FieldAnswerFallback, GraphqlWireType, UnmaskedObjects, WireAnswer, WireRow,
+        FieldAnswer, FieldAnswerFallback, FieldMask, GraphqlWireType, UnmaskedObjects, WireAnswer,
+        WireRow,
     };
 
     pub use inventory;

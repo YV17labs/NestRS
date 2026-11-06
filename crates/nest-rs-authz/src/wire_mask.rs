@@ -14,7 +14,7 @@ use crate::error::MaskReplyError;
 use crate::wire_model::WireModel;
 use crate::{Ability, Action, FieldSet};
 
-pub(crate) use crate::ability::warn_mask_failure;
+pub(crate) use crate::ability::{MaskedUnit, warn_mask_failure};
 
 /// Mask a pushed wire value with the **ambient** ability — the manual analog of
 /// the masks `#[authorize]` arms, for a surface no decorator reaches (a
@@ -48,8 +48,7 @@ pub fn masked_reply<S: WireModel>(action: Action, wire: Value) -> Result<Value, 
                 action,
                 mask_reason::IRRECONCILABLE,
                 "wire value could not be reconciled with the entity model",
-                None,
-                None,
+                MaskedUnit::default(),
                 Some(&err),
             );
             Err(MaskReplyError::Irreconcilable(

@@ -429,7 +429,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }) => quote! {
                 ::core::result::Result::Ok(
                     ::nest_rs_authz::__private::ws_masked_reply::<#action, #entity, _>(
-                        #event, &__ret,
+                        #site_ref, &__ret,
                     ),
                 )
             },

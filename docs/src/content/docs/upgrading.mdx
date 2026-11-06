@@ -2006,6 +2006,10 @@ lists what the boot, a log or the wire shows when one is missed.
   `surface` where it said `kind`, adds `host`, and is filed once per template a surface
   registers, so a filter expecting one line per surface or a surface's bare path reads
   the template instead.
+- **A log filter on `response masking failed`'s `event`** still matches, on a WebSocket
+  message; the line now says `host`, `method` and the unit's coordinates on every edge, and
+  `authorization denied` does on a field grant's refusal, so a filter on `tool` or `method`
+  finds them.
 - **A log filter on a versioned route's `mounted` line** under `header` or `media_type`
   versioning reads where the route mounts: `path="/v2/users"` where it read `/users`, as
   a denial and the request's line do. `version` is on the line under the URI strategy too.

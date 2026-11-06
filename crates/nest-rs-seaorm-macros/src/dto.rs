@@ -119,38 +119,44 @@ fn wire_row_impl(output: &syn::Ident) -> TokenStream2 {
             fn masked(
                 self,
                 __ctx: &#root::Context<'_>,
+                __site: &'static ::nest_rs_seaorm::__private::Site,
             ) -> ::core::result::Result<Self, #root::Error> {
-                ::nest_rs_authz::__private::graphql_masked_answer::<Entity, Self>(__ctx, self)
+                ::nest_rs_authz::__private::graphql_masked_answer::<Entity, Self>(
+                    __ctx, __site, self,
+                )
             }
 
             fn masked_option(
                 __answer: ::core::option::Option<Self>,
                 __ctx: &#root::Context<'_>,
+                __site: &'static ::nest_rs_seaorm::__private::Site,
             ) -> ::core::result::Result<::core::option::Option<Self>, #root::Error> {
                 ::nest_rs_authz::__private::graphql_masked_answer::<
                     Entity,
                     ::core::option::Option<Self>,
-                >(__ctx, __answer)
+                >(__ctx, __site, __answer)
             }
 
             fn masked_list(
                 __answer: ::std::vec::Vec<Self>,
                 __ctx: &#root::Context<'_>,
+                __site: &'static ::nest_rs_seaorm::__private::Site,
             ) -> ::core::result::Result<::std::vec::Vec<Self>, #root::Error> {
                 ::nest_rs_authz::__private::graphql_masked_answer::<
                     Entity,
                     ::std::vec::Vec<Self>,
-                >(__ctx, __answer)
+                >(__ctx, __site, __answer)
             }
         }
 
         impl ::nest_rs_seaorm::__private::WireRow for #output {
             fn masked_nodes(
                 __ctx: &#root::Context<'_>,
+                __site: &'static ::nest_rs_seaorm::__private::Site,
                 __nodes: ::std::vec::Vec<&mut Self>,
             ) -> ::core::result::Result<::std::vec::Vec<bool>, #root::Error> {
                 ::nest_rs_authz::__private::graphql_masked_answer_nodes::<Entity, Self>(
-                    __ctx, __nodes,
+                    __ctx, __site, __nodes,
                 )
             }
         }

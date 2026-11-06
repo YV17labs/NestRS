@@ -6,10 +6,11 @@
 //! host never calls it. [`crate::masked_reply`] remains the manual primitive for
 //! a hand-written `ServerHandler` surface, which no decorator reaches.
 
+use nest_rs_core::__private::Site;
 use nest_rs_core::Edge;
 use nest_rs_guards::Denial;
-use nest_rs_mcp::McpError;
 use nest_rs_mcp::denial_to_mcp_error;
+use nest_rs_mcp::{McpError, McpOperationKind};
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -17,7 +18,9 @@ use serde::de::DeserializeOwned;
 use crate::ability::{Provenance, mask_reason};
 use crate::gate::{Refusal, reason};
 use crate::subject::{NoRows, Rows, SubjectMask};
-use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
+use crate::wire_mask::{
+    MaskedUnit, MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure,
+};
 use crate::wire_model::WireModel;
 use crate::{Ability, Action, ActionMarker, current_ability};
 
@@ -36,7 +39,7 @@ const NULLABLE_REMEDY: &str = "make the column `Option` on the entity, so a fiel
 /// MCP has no selection set: a mask that takes a key the return type requires
 /// **refuses the operation**. A column an ability rule may mask should be
 /// `Option` on the entity.
-pub(crate) fn masked_value_for<A, E, O>(value: O) -> Result<O, McpError>
+pub(crate) fn masked_value_for<A, E, O>(unit: MaskedUnit<'_>, value: O) -> Result<O, McpError>
 where
     A: ActionMarker,
     E: WireModel,
@@ -46,6 +49,7 @@ where
     let Some(ability) = current_ability() else {
         // Fail closed: nothing decided what this caller may read.
         return Err(mask_failure::<E>(
+            unit,
             action,
             mask_reason::NO_AMBIENT_ABILITY,
             "no ambient ability — does an ability guard run at the /mcp request?",
@@ -56,6 +60,7 @@ where
         Ok(wire) => wire,
         Err(err) => {
             return Err(mask_failure::<E>(
+                unit,
                 action,
                 mask_reason::NOT_SERIALIZABLE,
                 "operation value did not serialize",
@@ -69,9 +74,10 @@ where
             Ok(masked) => Ok(masked),
             // The mask took a key the return type requires. Unlike GraphQL there
             // is no selection set to acquit it with, so this is the refusal.
-            Err(_) => Err(refused_fields::<E, O>(&ability, action, &value)),
+            Err(_) => Err(refused_fields::<E, O>(unit, &ability, action, &value)),
         },
         Err(err) => Err(mask_failure::<E>(
+            unit,
             action,
             mask_reason::IRRECONCILABLE,
             "value could not be reconciled with the subject model",
@@ -84,7 +90,12 @@ where
 ///
 /// Filed as a denial: the same event and `reason` GraphQL files for a selected
 /// stripped key.
-fn refused_fields<E, O>(ability: &Ability, action: Action, value: &O) -> McpError
+fn refused_fields<E, O>(
+    unit: MaskedUnit<'_>,
+    ability: &Ability,
+    action: Action,
+    value: &O,
+) -> McpError
 where
     E: WireModel,
     O: Serialize,
@@ -95,6 +106,7 @@ where
         Ok(wire) => wire,
         Err(err) => {
             return mask_failure::<E>(
+                unit,
                 action,
                 mask_reason::NOT_SERIALIZABLE,
                 "operation value did not serialize",
@@ -111,6 +123,7 @@ where
         // reported as the masking failure it then is.
         Err(err) => {
             return mask_failure::<E>(
+                unit,
                 action,
                 mask_reason::IRRECONCILABLE,
                 "value could not be reconciled with the subject model",
@@ -133,7 +146,7 @@ where
             reason::FIELD_NOT_GRANTED
         }),
         remedy: (!whole_subject).then_some(NULLABLE_REMEDY),
-        ..Refusal::on(Edge::Mcp.as_str())
+        ..Refusal::of_mask(unit)
     });
     // The gate's own vocabulary: a mask refusal tells no more than a gate's.
     denial_to_mcp_error(Denial::forbidden("forbidden"))
@@ -148,8 +161,9 @@ where
     note = "a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes and deserializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing"
 )]
 pub trait McpMask<A, O> {
-    /// The response mask's answer on an entity; the value itself otherwise.
-    fn masked_value(value: O) -> Result<O, McpError>;
+    /// The response mask's answer on an entity, for the operation `site`
+    /// declares; the value itself otherwise.
+    fn masked_value(site: &'static Site, kind: McpOperationKind, value: O) -> Result<O, McpError>;
 }
 
 #[diagnostic::do_not_recommend]
@@ -159,29 +173,38 @@ where
     E: WireModel,
     O: Serialize + DeserializeOwned,
 {
-    fn masked_value(value: O) -> Result<O, McpError> {
-        masked_value_for::<A, E, O>(value)
+    fn masked_value(site: &'static Site, kind: McpOperationKind, value: O) -> Result<O, McpError> {
+        let handler = site.handler();
+        let served = nest_rs_mcp::__private::served_operation(kind, handler.address());
+        let unit = MaskedUnit::declared(Edge::Mcp, handler, served);
+        masked_value_for::<A, E, O>(unit, value)
     }
 }
 
 impl<A, O> McpMask<A, O> for NoRows {
-    fn masked_value(value: O) -> Result<O, McpError> {
+    fn masked_value(_: &'static Site, _: McpOperationKind, value: O) -> Result<O, McpError> {
         Ok(value)
     }
 }
 
-/// The value an `#[authorize(A, S)]` operation answers, masked as `S` masks it.
-pub fn mcp_masked_value<A, S, O>(value: O) -> Result<O, McpError>
+/// The value the `#[authorize(A, S)]` operation `site` declares answers, masked
+/// as `S` masks it, what it refuses naming that operation.
+pub fn mcp_masked_value<A, S, O>(
+    site: &'static Site,
+    kind: McpOperationKind,
+    value: O,
+) -> Result<O, McpError>
 where
     S: SubjectMask,
     S::Mask: McpMask<A, O>,
 {
-    <S::Mask as McpMask<A, O>>::masked_value(value)
+    <S::Mask as McpMask<A, O>>::masked_value(site, kind, value)
 }
 
 /// One shape for every fail-closed masking exit: the queryable `warn` plus an
 /// error that names neither the column nor the reason — the reader is a model.
 fn mask_failure<E>(
+    unit: MaskedUnit<'_>,
     action: Action,
     reason: &'static str,
     detail: &'static str,
@@ -195,8 +218,7 @@ where
         action,
         reason,
         detail,
-        Some(Edge::Mcp.as_str()),
-        None,
+        unit,
         err.map(|e| e as &(dyn std::error::Error + 'static)),
     );
     denial_to_mcp_error(Denial::internal("response masking failed"))

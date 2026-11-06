@@ -78,7 +78,7 @@ before any request, login or credential crosses.
 
 | Client | Trusts | Private authority |
 |--------|--------|-------------------|
-| Postgres pool, `connect_from_env`, `EphemeralDatabase` | the system's store, `verify-full` by default | the file `sslrootcert` names in `<PREFIX>_SEAORM__URL` |
+| Postgres pool, `connect_from_env`, `EphemeralDatabase` | the system's store, `verify-full` by default | the file `sslrootcert` names in `<PREFIX>_SEAORM__URL`; libpq's `PGSSLROOTCERT` names none |
 | Redis, all three topologies | the system's store, for a `rediss://` URL | `<PREFIX>_REDIS__TLS_CA_CERT` |
 | Storage | the system's store, for an `https://` endpoint | `<PREFIX>_STORAGE__TLS_CA_CERT` |
 | JWK Set | the system's store | `<PREFIX>_AUTHN__TLS_CA_CERT` |

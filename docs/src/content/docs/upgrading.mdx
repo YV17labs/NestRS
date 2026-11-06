@@ -1293,7 +1293,9 @@ lists what the boot, a log or the wire shows when one is missed.
       URL, or libpq's `PGSSLMODE=disable` beside a URL naming no mode, turns it
       off: `allow`, `prefer`, `require` and `verify-ca` fail the boot, naming
       `PGSSLMODE` where it set one, and a server without TLS needs one of those two
-      written.
+      written. An authority named in libpq's `PGSSLROOTCERT`, which 6.x read, moves to
+      the URL's `sslrootcert`: the variable now stands behind the system's
+      authorities, and a server only it vouches for fails the boot.
     - **Shutdown** ends within bounds you can read. HTTP stops waiting for open
       connections once `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` runs out, 20
       seconds by default, where 6.x waited for every one: a request still running

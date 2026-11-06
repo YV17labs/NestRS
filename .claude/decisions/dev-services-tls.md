@@ -71,3 +71,5 @@ its Redis, the demo's over TLS, the scaffold's the plaintext server its
 `compose.yml` runs.
 
 **2026-11-05 — the compose file moved.** CI starts the services from `.devcontainer/compose/base.yml` (`one-server-per-backend.md`, 2026-10-08), the dev container's own, so the two still cannot drift.
+
+**2026-11-06 — `PGSSLROOTCERT` stands behind the system's authorities.** sqlx reads libpq's `PGSSLROOTCERT`, `PGSSLCERT` and `PGSSLKEY` into its options, and the pool writes the system's authorities over the first when the URL names no `sslrootcert`. Kept, and said on the database page: the URL stays the one place an authority is named, a server only the file vouches for fails the boot with a refusal naming `sslrootcert`, and no connection verifies less than it would without the variable. Its limit: it narrows nothing, so a deployment pinning a private authority there still trusts the whole system store, and no line says so. Honouring it would be additive and has no caller. `PGSSLCERT` and `PGSSLKEY` go through as sqlx read them: they add a credential and take no trust away. Held by `nest-rs-seaorm`'s integration suite.

@@ -1,7 +1,8 @@
 //! Covers `src/module.rs`: the pool an app opens verifies the server's
 //! certificate, and logs in to none it cannot verify; the boot's proof refuses
 //! what every attempt would meet at once and retries the rest within the
-//! connect budget.
+//! connect budget. Covers `src/config.rs` where libpq's own TLS variables meet
+//! that pool.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,18 +21,22 @@ struct PoolModule;
 /// 80877103.
 const SSL_REQUEST: [u8; 8] = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
 
-/// A Postgres double that accepts TLS with a certificate an authority of this
-/// test issued, which the system does not trust, recording whether a client
-/// went on to send its startup message — what it sends, credentials included,
-/// once it accepted the server.
-async fn untrusted_postgres() -> (String, Arc<AtomicBool>) {
+/// A Postgres double that accepts TLS with a certificate `authority` issued,
+/// asking one of `clients` for a client certificate when it names them,
+/// recording whether a client went on to send its startup message — what it
+/// sends, credentials included, once it accepted the server — and refusing that
+/// login at once.
+async fn postgres_signed_by(
+    authority: &TestAuthority,
+    clients: Option<&TestAuthority>,
+) -> (String, Arc<AtomicBool>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
     let port = listener.local_addr().expect("its address").port();
     let started = Arc::new(AtomicBool::new(false));
     let seen = Arc::clone(&started);
-    let acceptor = TestAuthority::new()
+    let acceptor = authority
         .server(&["127.0.0.1", "localhost"])
-        .acceptor(None);
+        .acceptor(clients);
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let (acceptor, seen) = (acceptor.clone(), Arc::clone(&seen));
@@ -49,6 +54,8 @@ async fn untrusted_postgres() -> (String, Arc<AtomicBool>) {
                 let mut startup = [0_u8; 8];
                 if tls.read_exact(&mut startup).await.is_ok() {
                     seen.store(true, Ordering::SeqCst);
+                    let _ = tls.write_all(&error_response(LOGIN_REFUSED)).await;
+                    let _ = tls.shutdown().await;
                 }
             });
         }
@@ -58,6 +65,31 @@ async fn untrusted_postgres() -> (String, Arc<AtomicBool>) {
         started,
     )
 }
+
+/// The `ErrorResponse` a Postgres answers with: its fields, each a kind and a
+/// value, under its tag and length.
+fn error_response(code: &str) -> Vec<u8> {
+    let mut fields = Vec::new();
+    for (kind, value) in [
+        (b'S', "FATAL"),
+        (b'V', "FATAL"),
+        (b'C', code),
+        (b'M', "the double refuses"),
+    ] {
+        fields.push(kind);
+        fields.extend_from_slice(value.as_bytes());
+        fields.push(0);
+    }
+    fields.push(0);
+    let length = u32::try_from(fields.len() + 4).expect("a short message");
+    let mut answer = vec![b'E'];
+    answer.extend_from_slice(&length.to_be_bytes());
+    answer.extend_from_slice(&fields);
+    answer
+}
+
+/// The SQLSTATE of a login Postgres refuses, which the boot refuses at once.
+const LOGIN_REFUSED: &str = "28P01";
 
 const RETRYING: &str = "database unreachable — retrying within the connect budget";
 
@@ -71,7 +103,7 @@ const HUNG: Duration = Duration::from_secs(60);
 #[tokio::test]
 async fn the_pool_never_logs_in_to_a_server_whose_certificate_no_trusted_authority_signed() {
     let logs = nest_rs_testing::LogCapture::install();
-    let (url, started) = untrusted_postgres().await;
+    let (url, started) = postgres_signed_by(&TestAuthority::new(), None).await;
     // A refusal retried ends with the budget, so one said before it was said
     // at once, however loaded the machine.
     let only_a_retry_spends = Duration::from_secs(60);
@@ -122,6 +154,124 @@ async fn the_pool_never_logs_in_to_a_server_whose_certificate_no_trusted_authori
         "one sentence, unpadded: {rendered}"
     );
     logs.expect_none(nest_rs_seaorm::target::ORM, RETRYING);
+}
+
+/// Runs `check` where each TLS variable names a file of its contents, for the
+/// closure alone, on a runtime opened inside it, in the folder holding them.
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn under_tls_variables(variables: &[(&str, &str)], check: impl AsyncFnOnce(&std::path::Path)) {
+    figment::Jail::expect_with(|jail| {
+        for (name, contents) in variables {
+            let file = jail.directory().join(format!("{name}.pem"));
+            std::fs::write(&file, contents).expect("the file");
+            jail.set_env(*name, file.display());
+        }
+        let directory = jail.directory().to_owned();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+            .block_on(check(&directory));
+        Ok(())
+    });
+}
+
+/// How a boot on `url` ends, which each double here ends at once: `HUNG` guards
+/// the wait, and only a retry could spend the budget.
+async fn refused_boot(url: String) -> String {
+    let Ok(Err(refused)) = tokio::time::timeout(
+        HUNG,
+        App::builder()
+            .provide(SeaOrmConfig {
+                url: url.into(),
+                connect_timeout: Duration::from_secs(60),
+                ..Default::default()
+            })
+            .module::<PoolModule>()
+            .build(),
+    )
+    .await
+    else {
+        panic!("a pool opened on a double that lets no one in, or no refusal ended its proof");
+    };
+    format!("{refused:#}")
+}
+
+/// libpq's `PGSSLROOTCERT` names no authority here: a server only that file
+/// vouches for is refused as any other, pointing at `sslrootcert`, which logs in
+/// to that server when the URL names the same file.
+#[test]
+fn pgsslrootcert_vouches_for_no_server_and_the_urls_sslrootcert_does() {
+    let authority = TestAuthority::new();
+    under_tls_variables(&[("PGSSLROOTCERT", authority.pem())], async |directory| {
+        let (url, started) = postgres_signed_by(&authority, None).await;
+        let refused = refused_boot(url).await;
+        assert!(
+            !started.load(Ordering::SeqCst),
+            "the pool logged in on the variable's word: {refused}"
+        );
+        assert!(
+            refused.contains("UnknownIssuer") && refused.contains("sslrootcert"),
+            "{refused}"
+        );
+
+        let (url, started) = postgres_signed_by(&authority, None).await;
+        let file = directory.join("PGSSLROOTCERT.pem");
+        let refused = refused_boot(format!("{url}?sslrootcert={}", file.display())).await;
+        assert!(
+            started.load(Ordering::SeqCst) && refused.contains(LOGIN_REFUSED),
+            "{refused}"
+        );
+    });
+}
+
+/// libpq's `PGSSLROOTCERT` narrows nothing either: a server the system's
+/// authorities vouch for is logged in to, whatever other authority the variable
+/// names. `SSL_CERT_FILE` is the system's store here, read once per process.
+#[test]
+fn pgsslrootcert_narrows_nothing_the_systems_authorities_vouch_for() {
+    let (system, other) = (TestAuthority::new(), TestAuthority::new());
+    under_tls_variables(
+        &[
+            ("SSL_CERT_FILE", system.pem()),
+            ("PGSSLROOTCERT", other.pem()),
+        ],
+        async |_| {
+            let (url, started) = postgres_signed_by(&system, None).await;
+            let refused = refused_boot(url).await;
+            assert!(
+                started.load(Ordering::SeqCst) && refused.contains(LOGIN_REFUSED),
+                "{refused}"
+            );
+        },
+    );
+}
+
+/// libpq's `PGSSLCERT` and `PGSSLKEY` name a client certificate beside a URL
+/// naming neither, read as its `sslcert` and `sslkey` are: the double asks for
+/// one, and no handshake ends without it.
+#[test]
+fn pgsslcert_and_pgsslkey_present_a_client_certificate() {
+    let (server, clients) = (TestAuthority::new(), TestAuthority::new());
+    let client = clients.client("nestrs");
+    under_tls_variables(
+        &[
+            ("SSL_CERT_FILE", server.pem()),
+            ("PGSSLCERT", &client.cert),
+            ("PGSSLKEY", &client.key),
+        ],
+        async |_| {
+            let (url, started) = postgres_signed_by(&server, Some(&clients)).await;
+            let refused = refused_boot(url).await;
+            assert!(
+                started.load(Ordering::SeqCst) && refused.contains(LOGIN_REFUSED),
+                "{refused}"
+            );
+        },
+    );
 }
 
 /// A host whose name does not resolve yet — a database started after the app,
@@ -195,23 +345,7 @@ async fn postgres_answering(code: &'static str) -> String {
                 if socket.read_exact(&mut startup).await.is_err() {
                     return;
                 }
-                let mut fields = Vec::new();
-                for (kind, value) in [
-                    (b'S', "FATAL"),
-                    (b'V', "FATAL"),
-                    (b'C', code),
-                    (b'M', "the database system cannot accept connections yet"),
-                ] {
-                    fields.push(kind);
-                    fields.extend_from_slice(value.as_bytes());
-                    fields.push(0);
-                }
-                fields.push(0);
-                let length = u32::try_from(fields.len() + 4).expect("a short message");
-                let mut answer = vec![b'E'];
-                answer.extend_from_slice(&length.to_be_bytes());
-                answer.extend_from_slice(&fields);
-                let _ = socket.write_all(&answer).await;
+                let _ = socket.write_all(&error_response(code)).await;
             });
         }
     });

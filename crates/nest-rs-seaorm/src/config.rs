@@ -187,7 +187,7 @@ impl SeaOrmConfig {
 
     /// What every connection this config opens does with TLS: the mode
     /// [`tls_mode`](Self::tls_mode) allows, and the system's authorities when
-    /// the URL names no `sslrootcert`.
+    /// the URL names no `sslrootcert`, over the `PGSSLROOTCERT` sqlx read first.
     fn tls(&self) -> Result<impl Fn(PgConnectOptions) -> PgConnectOptions + Send + Sync + 'static> {
         let mode = self.tls_mode()?;
         let system = self.trusts_the_system();

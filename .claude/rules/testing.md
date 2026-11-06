@@ -74,6 +74,8 @@ nextest prints each test's time: compare before and after.
   whose protocol is the socket.
 - **`LogCapture`** — the events a unit emits are half its contract: a denial
   that fails closed and logs nothing passes every response assertion.
+- **`printed`** — everything a failure prints, however it is read: a test holding
+  a marked value asserts it appears in nothing a `{:?}` or a `main` would write.
 - **`wait_until` / `wait_for`** — a condition the test cannot await, failing at
   the caller's line past its bound, never a loop of its own.
 - **`<subject>_kit!`** (the port's `<subject>` feature) — one test per case

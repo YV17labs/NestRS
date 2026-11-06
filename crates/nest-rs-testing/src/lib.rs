@@ -24,6 +24,9 @@
 //! it emits. A denial that fails closed but logs nothing passes every response
 //! assertion — and is exactly what nobody can debug at 3am.
 //!
+//! [`printed()`] is its twin for a failure: everything an error prints, however
+//! it is read, so a test can assert what it never quotes.
+//!
 //! [`url_on`], [`url_as`] and [`url_at`] put the suite's own URL on a test's
 //! own database, as its own user or at a proxy's address, keeping everything
 //! else the deployment set.
@@ -52,6 +55,7 @@ mod logs;
 #[cfg(feature = "http")]
 pub mod mcp;
 mod package;
+mod printed;
 #[cfg(feature = "http")]
 mod response;
 #[cfg(feature = "authn")]
@@ -92,6 +96,7 @@ pub use app::TestAppBuilder;
 pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};
 pub use logs::{CapturedEvent, CapturedSpan, LogCapture};
+pub use printed::printed;
 pub use url::{url_as, url_at, url_on};
 pub use wait::{wait_for, wait_until};
 

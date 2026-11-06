@@ -392,14 +392,6 @@ pub struct GraphqlWireType {
 
 inventory::collect!(GraphqlWireType);
 
-/// Where a field's answer holds a wire type's row no mask reads.
-struct UnreadRow {
-    /// The wire type's GraphQL name.
-    wire: String,
-    /// The object's field or the union holding it; `None` where nothing links it.
-    at: Option<String>,
-}
-
 /// Refuse every served `#[field_resolver]` whose answer holds a wire type's row where
 /// no mask reads it: an object's column, a union's member, a flattened object, a
 /// `Connection` of those. The mask walks a type to its rows, and an object of a body's
@@ -416,13 +408,7 @@ pub(crate) fn check_field_answers(served: &ServedObjects) -> anyhow::Result<()> 
         .filter_map(|field| {
             let parent = served.serving((field.parent)(), field.field)?;
             let unread = unread_row(field.unmasked?, &wire, &resolved)?;
-            let at = unread
-                .at
-                .map_or_else(String::new, |at| format!(" at `{at}`"));
-            Some(format!(
-                "`{parent}.{}` holds `{}`{at}",
-                field.field, unread.wire
-            ))
+            Some(format!("`{parent}.{}` holds {unread}", field.field))
         })
         .collect();
     if !refused.is_empty() {
@@ -437,33 +423,42 @@ pub(crate) fn check_field_answers(served: &ServedObjects) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// The first wire type's row `answer`'s type holds on a link no mask reads: every
-/// column of an object not a wire type itself, but one a `#[field_resolver]` serves,
-/// whose own answer the boot reads.
+/// The first wire type's row `answer`'s type holds on a link no mask reads, as a refusal
+/// says it: every column of an object not a wire type itself, but one a
+/// `#[field_resolver]` serves, whose own answer the boot reads.
 fn unread_row(
     answer: fn(&mut Registry) -> String,
     wire: &HashSet<&str>,
     resolved: &HashSet<(&str, &str)>,
-) -> Option<UnreadRow> {
+) -> Option<String> {
     let mut registry = Registry::default();
     let answered = answer(&mut registry);
     let is_wire = |ty: &MetaType| ty.rust_typename().is_some_and(|name| wire.contains(name));
 
     let mut seen = HashSet::new();
-    let mut pending = vec![(MetaTypeName::concrete_typename(&answered).to_owned(), None)];
+    let mut pending = vec![(MetaTypeName::concrete_typename(&answered), String::new())];
     while let Some((name, at)) = pending.pop() {
-        if !seen.insert(name.clone()) {
+        if !seen.insert(name) {
             continue;
         }
-        let Some(ty) = registry.types.get(&name) else {
+        let Some(ty) = registry.types.get(name) else {
             continue;
         };
         if is_wire(ty) {
-            return Some(UnreadRow { wire: name, at });
+            return Some(format!("`{name}`{at}"));
         }
-        for (held, column) in links_of(ty, resolved) {
-            let at = column.map_or_else(|| name.clone(), |column| format!("{name}.{column}"));
-            pending.push((held.to_owned(), Some(at)));
+        for (held, column) in links_of(ty) {
+            if column
+                .zip(ty.rust_typename())
+                .is_some_and(|(column, rust)| resolved.contains(&(rust, column)))
+            {
+                continue;
+            }
+            let at = column.map_or_else(
+                || format!(" at `{name}`"),
+                |column| format!(" at `{name}.{column}`"),
+            );
+            pending.push((held, at));
         }
     }
 
@@ -472,60 +467,29 @@ fn unread_row(
     let linked: HashSet<&str> = registry
         .types
         .values()
-        .flat_map(|ty| links_of(ty, &HashSet::new()))
+        .flat_map(links_of)
         .map(|(held, _)| held)
         .collect();
     registry
         .types
         .iter()
         .find(|(name, ty)| is_wire(ty) && !linked.contains(name.as_str()))
-        .map(|(name, _)| UnreadRow {
-            wire: name.clone(),
-            at: None,
-        })
+        .map(|(name, _)| format!("`{name}`"))
 }
 
-/// The types `ty` links to, each beside the column holding it: its fields' but those
-/// a `#[field_resolver]` serves, and a union's or an interface's members, which no
-/// column holds.
-fn links_of<'t>(
-    ty: &'t MetaType,
-    resolved: &HashSet<(&str, &str)>,
-) -> Vec<(&'t str, Option<&'t str>)> {
-    let (rust_type, fields, members) = match ty {
-        MetaType::Object {
-            rust_typename,
-            fields,
-            ..
-        } => (*rust_typename, Some(fields), None),
-        MetaType::Interface {
-            rust_typename,
-            fields,
-            possible_types,
-            ..
-        } => (*rust_typename, Some(fields), Some(possible_types)),
-        MetaType::Union {
-            rust_typename,
-            possible_types,
-            ..
-        } => (*rust_typename, None, Some(possible_types)),
-        _ => return Vec::new(),
-    };
-    let columns = fields
-        .into_iter()
-        .flatten()
-        .filter(|(column, _)| {
-            !rust_type.is_some_and(|rust| resolved.contains(&(rust, column.as_str())))
-        })
-        .map(|(column, field)| {
-            (
-                MetaTypeName::concrete_typename(&field.ty),
-                Some(column.as_str()),
-            )
-        });
-    let members = members
+/// The types `ty` links to, each beside the column holding it: its fields', and a
+/// union's or an interface's members, which no column holds.
+fn links_of(ty: &MetaType) -> impl Iterator<Item = (&str, Option<&str>)> {
+    let columns = ty.fields().into_iter().flatten().map(|(column, field)| {
+        (
+            MetaTypeName::concrete_typename(&field.ty),
+            Some(column.as_str()),
+        )
+    });
+    let members = ty
+        .possible_types()
         .into_iter()
         .flatten()
         .map(|member| (member.as_str(), None));
-    columns.chain(members).collect()
+    columns.chain(members)
 }

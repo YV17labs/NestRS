@@ -459,6 +459,18 @@ where
     page
 }
 
+/// A page of one edge holding `node`.
+fn first_edge<Node, Name, EdgeName>(node: Node) -> WrappedPage<Node, Name, EdgeName>
+where
+    Node: OutputType,
+    Name: ConnectionNameType,
+    EdgeName: EdgeNameType,
+{
+    let mut page = Connection::new(false, false);
+    page.edges.push(Edge::new("first".to_owned(), node));
+    page
+}
+
 /// What a body answers holding a wire type's row in a column of its own, served by a
 /// `#[field_resolver]` of that object, which masks what it answers.
 #[derive(Clone, SimpleObject)]
@@ -1915,28 +1927,19 @@ answering!(
 answering!(
     a_shared_connection,
     [Arc<Connection<String, writer::Writer>>],
-    {
-        let mut page = Connection::new(false, false);
-        page.edges.push(Edge::new("first".to_owned(), lead_row()));
-        Arc::new(page)
-    }
+    Arc::new(first_edge(lead_row()))
 );
-answering!(a_connection_of_holders, [Connection<String, Holder>], {
-    let mut page = Connection::new(false, false);
-    page.edges.push(Edge::new("first".to_owned(), holder()));
-    page
-});
+answering!(
+    a_connection_of_holders,
+    [Connection<String, Holder>],
+    first_edge(holder())
+);
 page_named!(ListsPage, ListsEdge, "Lists");
 
 answering!(
     a_connection_of_lists,
     [WrappedPage<Vec<writer::Writer>, ListsPage, ListsEdge>],
-    {
-        let mut page = Connection::new(false, false);
-        page.edges
-            .push(Edge::new("first".to_owned(), vec![lead_row()]));
-        page
-    }
+    first_edge(vec![lead_row()])
 );
 
 /// What `module`'s boot says, or, where it boots, what its answer ships to a member

@@ -180,11 +180,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             return err.to_compile_error().into();
         }
         if let Some(hook) = hook {
-            let posture = method
+            if let Some(posture) = method
                 .attrs
                 .iter()
-                .find(|attr| attr.path().is_ident("authorize") || attr.path().is_ident("public"));
-            if let Some(posture) = posture {
+                .find(|attr| attr.path().is_ident("authorize") || attr.path().is_ident("public"))
+            {
                 return syn::Error::new_spanned(
                     posture,
                     format!(

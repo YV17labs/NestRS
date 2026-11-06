@@ -110,6 +110,16 @@ reads the same `503` and the same `warn` on `nest_rs::mcp`. The wait for the
 `initialize` itself is 60 seconds, set in code so an rmcp release cannot
 move it.
 
+### A session on another instance
+
+nestrs ships no store, so a session lives in the instance that opened it:
+another instance, or this one once restarted, answers its next request `404`,
+and its client opens a new one. For sessions to survive across instances,
+register your own `dyn SessionStore`, rmcp's trait at
+`nest_rs::mcp::rmcp::transport::streamable_http_server::session::store::SessionStore`,
+over a backend the instances share: `providers = [YourStore as dyn SessionStore]`
+in a module the app imports.
+
 ### A session belongs to the principal that opened it
 
 Every request is authenticated by its own bearer, and the session is never the

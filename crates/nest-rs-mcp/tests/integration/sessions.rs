@@ -5,8 +5,8 @@
 //! A principal naming no subject opens none, and a task is reached only
 //! through the session that started it.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy, bearer_token};
 use nest_rs_core::{AmbientValue, code, injectable, module};
@@ -626,6 +626,73 @@ async fn a_restored_session_keeps_its_principal() {
     list(&elsewhere, &session, Some("bob"))
         .await
         .assert_status(StatusCode::NOT_FOUND);
+}
+
+/// The framework ships no store, so a session lives in the instance that opened
+/// it: another instance answers its next request as one it does not hold.
+#[tokio::test]
+async fn without_a_store_another_instance_does_not_hold_a_session() {
+    let opened_here = serving::<GatedModule>(None).await;
+    let session = open_session(opened_here.http(), PATH, Some(&bearer("alice"))).await;
+
+    let elsewhere = serving::<GatedModule>(None).await;
+    list(&elsewhere, &session, Some("alice"))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    assert!(
+        serves(&opened_here, &session, Some("alice")).await,
+        "the instance that opened it still does"
+    );
+}
+
+/// What every instance of a deployment shares: its store's backend.
+static BOUND_SESSIONS: LazyLock<MemoryStore> = LazyLock::new(MemoryStore::default);
+
+/// The store an app writes, over a backend its instances share.
+#[injectable]
+#[derive(Default)]
+struct BoundStore;
+
+#[nest_rs_core::async_trait]
+impl SessionStore for BoundStore {
+    async fn load(&self, session: &str) -> Result<Option<SessionState>, SessionStoreError> {
+        BOUND_SESSIONS.load(session).await
+    }
+
+    async fn store(&self, session: &str, state: &SessionState) -> Result<(), SessionStoreError> {
+        BOUND_SESSIONS.store(session, state).await
+    }
+
+    async fn delete(&self, session: &str) -> Result<(), SessionStoreError> {
+        BOUND_SESSIONS.delete(session).await
+    }
+}
+
+#[module(
+    providers = [
+        ByName,
+        ByNameAuthn,
+        OwnedTools,
+        GlobalGuards<(ByNameAuthn,)>,
+        BoundStore as dyn SessionStore,
+    ],
+)]
+struct StoreBoundModule;
+
+/// A module binds its store like any provider behind a trait, and a session
+/// outlives the instance that opened it.
+#[tokio::test]
+async fn a_store_a_module_binds_restores_a_session_on_another_instance() {
+    let opened_here = serving::<StoreBoundModule>(None).await;
+    let session = open_session(opened_here.http(), PATH, Some(&bearer("alice"))).await;
+    assert!(BOUND_SESSIONS.holds(&session), "it stores what it opens");
+    opened_here.close().await;
+
+    let elsewhere = serving::<StoreBoundModule>(None).await;
+    assert!(
+        serves(&elsewhere, &session, Some("alice")).await,
+        "its owner is served where it was restored"
+    );
 }
 
 /// The app's store, whose next load waits until the test lets it answer.

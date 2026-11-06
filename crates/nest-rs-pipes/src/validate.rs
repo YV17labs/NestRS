@@ -21,13 +21,14 @@ use crate::PipeError;
 /// A hand-written check answers like a decorated edge through it:
 ///
 /// ```
+/// use nest_rs_core::Secret;
 /// use nest_rs_pipes::PipeError;
 /// use validator::Validate;
 ///
 /// #[derive(Validate)]
 /// struct Signup {
 ///     #[validate(length(min = 8))]
-///     password: String,
+///     password: Secret<String>,
 /// }
 ///
 /// let refused = Signup { password: "hunter2".into() }

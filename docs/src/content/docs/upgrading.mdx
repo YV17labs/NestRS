@@ -371,6 +371,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | a `String` or a `format!` given to `SeaOrmConfig::url`, `RedisConfig::url`, `StorageConfig::access_key` / `secret_key`, `ThrottlerConfig::pseudonym_key`, `AuthnConfig::secret` / `private_key`, or `client_secret` on `OAuthClientConfig`, `GithubSocialConfig`, `GoogleSocialConfig` | the same with `.into()`: each is a `nest_rs::core::Secret<String>` (in an `Option` where it was one); a literal `"…".into()` compiles as it was |
    | `config.url`, `config.secret`, `config.client_secret` read as a string | `config.url.expose_secret()`: `Debug` prints `<redacted>` in its place |
    | a secret field of your own config, kept out of logs by a hand-written `Debug` or by no `Debug` | `pub api_key: Secret<String>` and `#[derive(Debug)]`, read with `expose_secret()`; a `custom(function = …)` rule on it takes `&Secret<String>` |
+   | a password held as a `String` in an `#[input]` DTO | `#[schemars(with = "String")] pub password: Secret<String>`, read with `expose_secret()`: its `#[validate(length(…))]` still judges the value, and what serializes the DTO writes `"<redacted>"` |
 
    **Two values of one type are two types.** String-keyed injection is gone: a
    second Redis, or a second value your app builds, is a named instance — a

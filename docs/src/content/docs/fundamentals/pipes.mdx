@@ -93,14 +93,15 @@ on the DTO are the whole declaration:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::http::{Created, Json, Result};
-use nest_rs::core::input;
+use nest_rs::core::{Secret, input};
 
 #[input]
 pub struct CreateUser {
     #[validate(email)]
     email: String,
     #[validate(length(min = 8))]
-    password: String,
+    #[schemars(with = "String")]
+    password: Secret<String>,
 }
 
 #[post("/")]
@@ -109,6 +110,10 @@ async fn create(&self, Json(input): Json<CreateUser>) -> Result<Created<Json<Use
     Ok(Created::at(user.id, Json(User::from(&user))))
 }
 ```
+
+A password is a `Secret` from the moment it is decoded: its rules judge the
+value, and whatever serializes the DTO writes `<redacted>`. A `Secret` has no
+schema of its own, so `#[schemars(with = "String")]` names what the wire carries.
 
 A rule of your own is a function `custom(function = "…")` names, returning
 `nest_rs::pipes::validator::ValidationError`, the error of the release the

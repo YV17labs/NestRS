@@ -1,4 +1,4 @@
-use nest_rs::core::input;
+use nest_rs::core::{Secret, input};
 
 #[input]
 pub struct LoginDto {
@@ -9,7 +9,8 @@ pub struct LoginDto {
         max = 1024,
         message = "password must be between 8 and 1024 characters"
     ))]
-    pub password: String,
+    #[schemars(with = "String")]
+    pub password: Secret<String>,
     pub resource: Option<String>,
 }
 
@@ -48,6 +49,30 @@ mod tests {
             pw.iter().any(|e| e.code == "length"),
             "expected length error, got {pw:?}",
         );
+    }
+
+    #[test]
+    fn a_login_decodes_the_password_it_was_sent() {
+        let login: LoginDto =
+            serde_json::from_str(r#"{"email":"alice@example.com","password":"longenough"}"#)
+                .expect("the login decodes");
+        assert_eq!(login.password.expose_secret(), "longenough");
+    }
+
+    #[test]
+    fn a_serialized_login_holds_no_password() {
+        let written = serde_json::to_string(&input("alice@example.com", "longenough"))
+            .expect("the login serializes");
+        assert!(!written.contains("longenough"), "{written}");
+    }
+
+    #[test]
+    fn a_refused_password_is_not_named_by_its_refusal() {
+        let err = input("alice@example.com", "hunter2")
+            .validate()
+            .unwrap_err();
+        let refusal = serde_json::to_string(&err).expect("the refusal serializes");
+        assert!(!refusal.contains("hunter2"), "{refusal}");
     }
 
     #[test]

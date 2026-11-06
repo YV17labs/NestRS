@@ -76,7 +76,11 @@ impl SignInController {
     async fn login(&self, Json(input): Json<LoginDto>) -> Result<AccessTokenResponse> {
         Ok(self
             .svc
-            .grant_password(&input.email, &input.password, input.resource.as_deref())
+            .grant_password(
+                &input.email,
+                input.password.expose_secret(),
+                input.resource.as_deref(),
+            )
             .await?)
     }
 }

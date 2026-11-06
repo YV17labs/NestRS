@@ -63,10 +63,19 @@ service and returns the token:
 async fn login(&self, Json(input): Json<LoginDto>) -> Result<AccessTokenResponse> {
     Ok(self
         .svc
-        .grant_password(&input.email, &input.password, input.resource.as_deref())
+        .grant_password(
+            &input.email,
+            input.password.expose_secret(),
+            input.resource.as_deref(),
+        )
         .await?)
 }
 ```
+
+`LoginDto` holds the password in a `Secret` from the moment it is decoded, as
+[validation at the edge](/fundamentals/pipes/#validation-at-the-edge) shows, so
+nothing that serializes or prints the body can write it. The one read is that
+`expose_secret()`.
 
 The token goes back bare, not in a `Json`: `AccessTokenResponse` renders its
 own JSON with the `Cache-Control: no-store` and `Pragma: no-cache` RFC 6749

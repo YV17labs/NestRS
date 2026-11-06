@@ -17,7 +17,9 @@ const REDACTED: &str = "<redacted>";
 /// the call that needs the value. Deserializing reads the value itself, so a
 /// configuration or a row decodes into one, and `==` between two byte-like
 /// secrets runs in constant time. With `nest-rs-seaorm`, it is a column type
-/// over its value's own, and `#[expose]` refuses it on the wire.
+/// over its value's own, and `#[expose]` refuses it on the wire. In an
+/// `#[input]`, `#[schemars(with = "String")]` names what the wire carries, since a
+/// `Secret` has no schema of its own, and `#[validate(length(…))]` judges the value.
 ///
 /// ```
 /// use nest_rs_core::Secret;

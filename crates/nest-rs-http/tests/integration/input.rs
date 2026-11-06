@@ -1,6 +1,6 @@
 //! `#[input]` carries every derive an HTTP wire DTO needs.
 
-use nest_rs_core::input;
+use nest_rs_core::{Secret, input};
 use nest_rs_http::{IntoResponse, Json};
 use schemars::JsonSchema;
 use validator::Validate;
@@ -57,4 +57,32 @@ fn input_validation_rules_still_apply() {
         parsed.validate().is_err(),
         "`#[validate(length(min = 1))]` is live on an `#[input]` DTO",
     );
+}
+
+#[input]
+struct SignIn {
+    #[validate(length(min = 8))]
+    #[schemars(with = "String")]
+    password: Secret<String>,
+}
+
+#[test]
+fn input_holds_a_secret_its_rules_judge_its_schema_names_and_no_output_prints() {
+    let signed_in: SignIn = serde_json::from_str(r#"{"password":"longenough"}"#).expect("parses");
+    assert_eq!(signed_in.password.expose_secret(), "longenough");
+    assert!(signed_in.validate().is_ok());
+    let written = serde_json::to_string(&signed_in).expect("serializes");
+    assert!(!written.contains("longenough"), "{written}");
+
+    let schema = serde_json::to_value(schemars::schema_for!(SignIn)).expect("schema");
+    assert_eq!(
+        schema["properties"]["password"],
+        serde_json::json!({ "type": "string", "minLength": 8 }),
+        "the document reads as a `String` under the same rule would",
+    );
+
+    let too_short: SignIn = serde_json::from_str(r#"{"password":"hunter2"}"#).expect("parses");
+    let refusal = too_short.validate().expect_err("seven characters");
+    let refusal = serde_json::to_string(&refusal).expect("serializes");
+    assert!(!refusal.contains("hunter2"), "{refusal}");
 }

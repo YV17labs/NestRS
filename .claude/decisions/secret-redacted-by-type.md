@@ -99,3 +99,24 @@ the refusal of failing serialization because the mask serialized the whole
 row — no longer bind; the rule stands for every other path a `Secret` is
 written through: a stored document, a `validator` refusal, a type that derives
 `Serialize` of its own.
+
+## 2026-11-06 — a secret a DTO holds is a `Secret` too
+
+The demo's login password was a `String` in an `#[input]`, whose bundled
+`Serialize` wrote it raw and whose refused length carried it in `validator`'s
+`value` parameter, on the hard "no" this type holds. It is a `Secret<String>` now,
+as the exemplar a copy starts from: the rules judge the value through the
+`ValidateLength` impl, the refusal's parameter is the placeholder, and the one read
+is the call handing it to the service. `grant_password` keeps its `&str`, by the
+limit above.
+
+**`#[schemars(with = "String")]` is the visible line**, the attribute a framework
+DTO already writes for a field whose wire form its type does not derive, and
+`JsonSchema` for `Secret` stays refused for the reason above. A forgotten attribute
+is a compile error on the DTO, so it fails safe.
+
+**Not taken: `#[input]` reading `Secret<T>` by spelling** and writing the attribute
+itself, which would spare that line. It is additive, so it can land in a minor if the
+line proves a cost; it also has to read `Option<Secret<T>>` and whatever else a field
+wraps it in, where the attribute already works on any shape.
+

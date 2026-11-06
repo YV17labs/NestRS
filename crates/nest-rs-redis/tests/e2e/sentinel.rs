@@ -10,6 +10,7 @@ use nest_rs_redis::{RedisConfig, RedisConnection, RedisError};
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_sentinels_own_users_are_dialled_as_the_page_prescribes() {
     let user = crate::acl_user("nestrs-e2e-sentinels");
+    let _forgetting_user = crate::forgetting_user_among(crate::sentinels(), &user);
     let rule = crate::documented_acl(crate::CONNECTION_PAGE, "sentinels");
     let _: Vec<()> = crate::on_each(&crate::sentinels(), &crate::creating(&rule, &user)).await;
     let mut url = crate::parsed_url();
@@ -28,7 +29,6 @@ async fn the_sentinels_own_users_are_dialled_as_the_page_prescribes() {
         .expect("the primary answers");
 
     crate::assert_denied_nothing_among(&crate::sentinels(), &user, &[]).await;
-    crate::forget_user_among(&crate::sentinels(), &user).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -70,11 +70,14 @@ mod failover {
     /// The primary freezes, the sentinels promote its replica, and the app —
     /// its worker and its producer — follows the primary they name then:
     /// every job pushed before, during and after runs, at least once, and a
-    /// push after it lands on the new primary.
+    /// push after it lands on the new primary. Readiness says `redis` is down
+    /// while the primary is frozen and up once the sentinels named another, and
+    /// liveness never waits on it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_queue_runs_on_across_a_failover() {
         let logs = nest_rs_testing::LogCapture::install_global();
         let replica = crate::replica_on::<FailoverModule>(crate::redis_config()).await;
+        let probed = crate::health::probing().await;
         let run = crate::this_run();
         for offset in 0..5 {
             replica
@@ -90,6 +93,7 @@ mod failover {
 
         let before = crate::sentinel_primary().await;
         let frozen = crate::freeze(&before).await;
+        crate::health::assert_down_naming_redis_and_alive(&probed).await;
         // Forced, the failover skips the sentinels' election, which three
         // sentinels sharing one timing split often enough to stall a test; the
         // primary stays frozen through it, as a crashed one would.
@@ -104,6 +108,7 @@ mod failover {
         })
         .await;
         let after = crate::sentinel_primary().await;
+        crate::health::assert_ready_again(&probed).await;
 
         for offset in 5..10 {
             crate::push_through_a_failover(&replica.producer, run + offset).await;

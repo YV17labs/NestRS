@@ -157,8 +157,8 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
 - **What a test files where nothing drains, it names uniquely and deletes**
   once its assertions are read — an object, a record, a job. A failing test
   leaves no such name either: no later run would reach it, so what removes it
-  runs however the test ends (`nest-rs-redis`'s `forgetting`), or the key
-  expires.
+  runs however the test ends (`nest-rs-redis`'s `forgetting`, and
+  `forgetting_user` for an ACL user named for its run), or the key expires.
 - **`nest-rs-redis`'s e2e runs on the Valkey topology its URL declares**: the
   dev container's one server by default, which CI runs too. With the
   `valkey-sentinel` or `valkey-cluster` dev container open, uncommenting its
@@ -170,6 +170,10 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   other test runs on, and a node asked for a client certificate refuses every
   other test's connection, so each sits in a module of its own (`failover`,
   `mutual_tls`), run last and alone, and gives back what it changed.
+  A test counting a job's runs and about no lapse boots on the queue's default
+  lease and the connection's default budget (`patient_replica_on`): on the suite's
+  one-second lease a stalled runner sees the job run again, which at-least-once
+  allows, and a `== 1` there promises more than the contract.
   An administration command reaches every node it concerns — `CLIENT KILL` ids
   and `ACL` users are per server — never one the client picks.
 

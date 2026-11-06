@@ -1055,6 +1055,30 @@ async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Re
 async fn replica_of<M: nest_rs_core::Module + 'static>(
     builder: nest_rs_testing::TestAppBuilder,
 ) -> Replica {
+    started::<M>(brisk(builder)).await
+}
+
+/// [`replica_on`] on the queue's default lease and the connection's default
+/// budget, for a test counting a job's runs and lapsing none: a runner stalled
+/// past [`LEASE`] between a delivery and its settle sees it run again, as
+/// at-least-once allows, and one stalled past [`BUDGET`] sees a push refused, the
+/// behaviour right both times. Only a test about a lapse runs on [`LEASE`].
+async fn patient_replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
+    started::<M>(
+        HeadlessApp::builder()
+            .provide(at_default_budget(redis))
+            .provide(RedisQueueConfig::default())
+            .provide(QueueConfig {
+                shutdown_timeout: WINDOW,
+            }),
+    )
+    .await
+}
+
+/// The worker app `M` booted from `builder` as it stands, its worker started.
+async fn started<M: nest_rs_core::Module + 'static>(
+    builder: nest_rs_testing::TestAppBuilder,
+) -> Replica {
     let (app, producer) = booted::<M>(builder).await;
     let shared = RedisConnection::clone(
         &app.container()
@@ -1078,7 +1102,7 @@ async fn replica_of<M: nest_rs_core::Module + 'static>(
 async fn booted<M: nest_rs_core::Module + 'static>(
     builder: nest_rs_testing::TestAppBuilder,
 ) -> (HeadlessApp, Jobs) {
-    let app = brisk(builder)
+    let app = builder
         .module::<M>()
         .build_headless()
         .await
@@ -1111,7 +1135,7 @@ impl Mortal {
 /// Boot the worker app `M` like [`replica`], and run its worker on a task a
 /// test can abort.
 async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
-    let (app, producer) = booted::<M>(HeadlessApp::builder()).await;
+    let (app, producer) = booted::<M>(brisk(HeadlessApp::builder())).await;
     let mut worker = QueueWorker::new();
     worker
         .configure(app.container())
@@ -1495,6 +1519,57 @@ async fn forget_user(user: &str) {
 /// Remove `user` from `nodes`, where it is there.
 async fn forget_user_among(nodes: &[redis::Client], user: &str) {
     let _: Vec<i64> = on_each(nodes, redis::cmd("ACL").arg("DELUSER").arg(user)).await;
+}
+
+/// What [`forgetting_user`] and [`forgetting_user_among`] answer.
+#[must_use = "the user is forgotten when this drops"]
+struct ForgettingUser {
+    user: String,
+    /// The nodes holding it, every data node when `None`.
+    nodes: Option<Vec<redis::Client>>,
+}
+
+/// [`forget_user`] when the answer drops, however the test ends: a user named for
+/// its run is one no later run reaches.
+fn forgetting_user(user: &str) -> ForgettingUser {
+    ForgettingUser {
+        user: user.to_owned(),
+        nodes: None,
+    }
+}
+
+/// [`forget_user_among`] `nodes` when the answer drops, however the test ends.
+fn forgetting_user_among(nodes: Vec<redis::Client>, user: &str) -> ForgettingUser {
+    ForgettingUser {
+        user: user.to_owned(),
+        nodes: Some(nodes),
+    }
+}
+
+impl Drop for ForgettingUser {
+    fn drop(&mut self) {
+        let user = std::mem::take(&mut self.user);
+        let nodes = self.nodes.take();
+        // On a thread of its own: a panic unwinds through the test's runtime,
+        // which cannot be blocked on.
+        let forgot = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime of its own")
+                .block_on(async {
+                    match nodes {
+                        Some(nodes) => forget_user_among(&nodes, &user).await,
+                        None => forget_user(&user).await,
+                    }
+                });
+        })
+        .join();
+        assert!(
+            forgot.is_ok() || std::thread::panicking(),
+            "the test's user is forgotten"
+        );
+    }
 }
 
 /// Whether `event` carries Redis's refusal of a command or a key — the answer

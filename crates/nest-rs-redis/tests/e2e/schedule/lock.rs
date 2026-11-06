@@ -795,13 +795,13 @@ async fn a_scheduler_runs_through_exactly_the_acl_its_page_prescribes() {
     let logs = LogCapture::install_global();
     let conn = schedule_connection().await;
     let user = crate::acl_user(CONFINED_USER);
+    let _forgetting_user = crate::forgetting_user(&user);
     let config =
         crate::documented_user("schedule/index.mdx", "schedule", &user, crate::DB_SCHEDULE).await;
     let started_ms = now_ms();
     let scheduler = schedule_replica::<ConfinedModule>(config).await;
     await_claims(&conn, &job("ConfinedTasks:sweep"), started_ms, 3).await;
     scheduler.shutdown().await.expect("clean shutdown");
-    crate::forget_user(&user).await;
 
     let claims = claims_since(&conn, &job("ConfinedTasks:sweep"), started_ms).await;
     assert!(

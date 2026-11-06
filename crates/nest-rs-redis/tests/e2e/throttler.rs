@@ -176,15 +176,14 @@ mod module {
         })
     }
 
-    #[module(imports = [
-        RedisThrottlerModule,
-        pinned_policy(),
-        RedisModule::for_root(redis_config()),
-    ])]
+    /// The binding alone, as an app composes it: it imports the connection it runs
+    /// on, whose config the suite seeds for the Valkey it runs on.
+    #[module(imports = [RedisThrottlerModule, pinned_policy()])]
     struct RedisThrottlerHost;
 
     async fn boot() -> App {
         App::builder()
+            .provide(redis_config())
             .module::<RedisThrottlerHost>()
             .build()
             .await
@@ -340,6 +339,7 @@ const CONFINED_USER: &str = "nestrs-e2e-throttler";
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_user_created_as_the_rate_limiting_page_says_counts_and_denies() {
     let user = crate::acl_user(CONFINED_USER);
+    let _forgetting_user = crate::forgetting_user(&user);
     let config = crate::documented_user(
         "rate-limiting/index.mdx",
         "rate limiter",
@@ -361,7 +361,6 @@ async fn a_user_created_as_the_rate_limiting_page_says_counts_and_denies() {
         store.hit(&subject, limit).await,
     ]
     .map(|decision| decision.expect("the page's rule lets the store count"));
-    crate::forget_user(&user).await;
 
     let allowed = decisions.each_ref().map(|decision| decision.allowed);
     assert_eq!(

@@ -217,6 +217,10 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
         .expect("XGROUP CREATE");
     let producer_user = crate::acl_user("nestrs-e2e-producer");
     let worker_user = crate::acl_user("nestrs-e2e-worker");
+    let _forgetting_users = (
+        crate::forgetting_user(&producer_user),
+        crate::forgetting_user(&worker_user),
+    );
     let as_producer =
         crate::documented_user(PAGE, "producer", &producer_user, DB_CONFINED_TO_THE_PREFIX).await;
     let as_worker =
@@ -273,8 +277,8 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
     crate::wait_until(Duration::from_secs(30), || {
         [0, 1, 3, 4, 5]
             .iter()
-            .all(|at| CONFINED.finished(run + at) == 1)
-            && CONFINED.of(run + 2).len() == 2
+            .all(|at| CONFINED.finished(run + at) >= 1)
+            && CONFINED.of(run + 2).len() >= 2
     })
     .await;
     worker.worker.shutdown().await.expect("clean shutdown");
@@ -293,8 +297,6 @@ async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
 
     crate::assert_redis_denied_nothing_but(&producer_user, &[]).await;
     crate::assert_redis_denied_nothing_but(&worker_user, &[]).await;
-    crate::forget_user(&producer_user).await;
-    crate::forget_user(&worker_user).await;
 
     assert_eq!(dead, 1, "the failing job dead-lettered");
     // Each role's rule is exact; what the topology's connection adds is
@@ -370,6 +372,7 @@ fn keda_sends_a_node(jobs: &str) -> Vec<redis::Cmd> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_queue_pages_keda_rule_takes_what_keda_sends_and_writes_nothing() {
     let user = crate::acl_user("nestrs-e2e-keda");
+    let _forgetting_user = crate::forgetting_user(&user);
     let mut rule = crate::documented_acl(PAGE, "KEDA");
     if crate::topology() == RedisTopology::Cluster {
         rule = format!(
@@ -416,6 +419,8 @@ async fn the_queue_pages_keda_rule_takes_what_keda_sends_and_writes_nothing() {
 
     if crate::topology() == RedisTopology::Sentinel {
         let sentinel_user = crate::acl_user("nestrs-e2e-keda-sentinels");
+        let _forgetting_sentinel_user =
+            crate::forgetting_user_among(crate::sentinels(), &sentinel_user);
         let sentinel_rule = crate::documented_acl(crate::CONNECTION_PAGE, "KEDA's sentinels");
         crate::forget_user_among(&crate::sentinels(), &sentinel_user).await;
         let _: Vec<()> = crate::on_each(
@@ -454,12 +459,36 @@ async fn the_queue_pages_keda_rule_takes_what_keda_sends_and_writes_nothing() {
                 .expect("KEDA's sentinel user listens for a failover");
         }
         crate::assert_denied_nothing_among(&crate::sentinels(), &sentinel_user, &[]).await;
-        crate::forget_user_among(&crate::sentinels(), &sentinel_user).await;
     }
 
     crate::assert_redis_denied_nothing_but(&user, &["xadd"]).await;
-    crate::forget_user(&user).await;
     assert_eq!(read, Some(0), "KEDA reads the queue's length");
+}
+
+/// A failing test leaves no user behind: its name is its run's, so no later run
+/// would reach it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_user_is_forgotten_however_its_test_ends() {
+    let user = crate::acl_user("nestrs-e2e-forgotten");
+    let created = user.clone();
+    let failing = tokio::spawn(async move {
+        let _forgetting_user = crate::forgetting_user(&created);
+        let _: Vec<()> =
+            crate::on_every_node(redis::cmd("ACL").arg("SETUSER").arg(&created).arg("on")).await;
+        panic!("the test fails holding its user");
+    });
+    assert!(
+        failing.await.is_err_and(|ended| ended.is_panic()),
+        "the test failed"
+    );
+
+    let listed: Vec<Vec<String>> = crate::on_every_node(redis::cmd("ACL").arg("LIST")).await;
+    let left: Vec<&String> = listed
+        .iter()
+        .flatten()
+        .filter(|rule| rule.contains(&user))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -473,6 +502,7 @@ async fn every_pages_rule_replaces_what_the_user_held_before() {
         ("schedule/index.mdx", "schedule"),
     ] {
         let user = crate::acl_user("nestrs-e2e-replaced");
+        let _forgetting_user = crate::forgetting_user(&user);
         let _: Vec<()> = crate::on_every_node(
             redis::cmd("ACL")
                 .arg("SETUSER")
@@ -492,7 +522,6 @@ async fn every_pages_rule_replaces_what_the_user_held_before() {
                 .flatten()
                 .filter_map(|value| redis::from_redis_value::<String>(value).ok())
                 .collect();
-        crate::forget_user(&user).await;
         assert!(
             !rules
                 .iter()

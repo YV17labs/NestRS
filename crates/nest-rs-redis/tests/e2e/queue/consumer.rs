@@ -147,7 +147,7 @@ async fn a_job_that_ended_leaves_no_record_but_its_dead_letter() {
     let queue = <EndQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::replica::<EndModule>().await;
+    let replica = crate::patient_replica_on::<EndModule>(crate::redis_config()).await;
     let unique = |key: &str| nest_rs_queue::PushOptions::default().with_unique(key);
     replica
         .producer
@@ -304,7 +304,7 @@ async fn a_checkpoint_survives_a_retry_and_a_dead_replica_and_is_cleared_at_the_
 
     doomed.kill().await;
     let heir = crate::replica::<ImportModule>().await;
-    crate::wait_until(Duration::from_secs(20), || IMPORTED.finished(run) == 1).await;
+    crate::wait_until(Duration::from_secs(20), || IMPORTED.finished(run) >= 1).await;
     // Its checkpoint went with it.
     crate::wait_for(Duration::from_secs(2), || async move {
         crate::field_of(queue, "checkpoints", job).await.is_none()
@@ -312,12 +312,14 @@ async fn a_checkpoint_survives_a_retry_and_a_dead_replica_and_is_cleared_at_the_
     .await;
     heir.worker.shutdown().await.expect("clean shutdown");
 
-    assert_eq!(
-        seen(run),
-        [None, Some(1), Some(2)],
-        "each attempt resumed from the last save: after a retry, and after a dead replica",
+    // On the suite's short lease, which this test is about: a runner stalled past it
+    // runs the job again, as at-least-once allows, so what it proves is the order.
+    let seen = seen(run);
+    assert!(
+        seen.starts_with(&[None, Some(1), Some(2)]),
+        "each attempt resumed from the last save, after a retry and after a dead replica: \
+         {seen:?}",
     );
-    assert_eq!(IMPORTED.finished(run), 1, "the job completed once");
     crate::forget(queue).await;
 }
 
@@ -507,7 +509,7 @@ async fn cancellation_while_an_attempt_runs_is_refused_and_the_job_runs_to_its_e
     let queue = <HeldQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::replica::<HeldModule>().await;
+    let replica = crate::patient_replica_on::<HeldModule>(crate::redis_config()).await;
     let receipt = replica
         .producer
         .push(HeldQueue, HeldCommand { run })
@@ -788,7 +790,7 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
     let queue = <RefiledQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::replica::<RefiledModule>().await;
+    let replica = crate::patient_replica_on::<RefiledModule>(crate::redis_config()).await;
     replica
         .producer
         .push(RefiledQueue, RefiledCommand { run })
@@ -832,6 +834,7 @@ async fn a_dead_letter_filed_back_takes_its_unique_key_again_or_names_its_holder
     let queue = format!("nestrs-e2e-refile-unique-{}", crate::this_run());
     let _forgetting = crate::forgetting(&queue);
     let user = crate::acl_user(OPERATOR_USER);
+    let _forgetting_user = crate::forgetting_user(&user);
     let config =
         crate::documented_user("queue/delivery.mdx", "operator", &user, crate::DB_SHARED).await;
     let mut operator = nest_rs_redis::RedisConnection::connect(&crate::at_default_budget(config))
@@ -889,7 +892,6 @@ async fn a_dead_letter_filed_back_takes_its_unique_key_again_or_names_its_holder
     let refused = refile(&mut operator, &queue, &entry)
         .await
         .expect_err("a dead letter whose key another job holds is refused");
-    crate::forget_user(&user).await;
     assert!(refused.to_string().contains(holder), "{refused}");
     assert_eq!(crate::field_of(&queue, "entries", taken).await, None);
     assert_eq!(crate::filed(&queue).await, 1, "nothing more was filed");
@@ -1006,7 +1008,7 @@ async fn a_held_back_job_whose_record_went_is_said_and_let_go() {
     let queue = <LostQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::replica::<LostModule>().await;
+    let replica = crate::patient_replica_on::<LostModule>(crate::redis_config()).await;
     let unique = || nest_rs_queue::PushOptions::default().with_unique("lost");
     let held = replica
         .producer
@@ -1173,7 +1175,7 @@ async fn a_queue_runs_on_after_its_scripts_are_flushed() {
     let queue = <FlushedQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::replica::<FlushedModule>().await;
+    let replica = crate::patient_replica_on::<FlushedModule>(crate::redis_config()).await;
     let _: () = redis::cmd("SCRIPT")
         .arg("FLUSH")
         .query_async(&mut crate::connect().await)

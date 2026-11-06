@@ -165,3 +165,16 @@ and its authority stay as issued — on a data volume of its own, and lets
 its `postgres` line names that environment. Refused: a second Postgres
 service under a new hostname, for the reissue named above; `ALTER SYSTEM` or a
 role created on the everyday volume, which is the developer's data.
+
+**2026-11-06, the atomic migration's two sentences above corrected:** "the lease
+is thirty seconds" is wrong: that test ran on the suite's seeded one-second
+`LEASE`, at the soak's commit too, so a runner stalled a second between a delivery
+and its settle lets the reclaim run the job again, which at-least-once allows, and
+the soak's double count never had that cause ruled out. "Closes the first of the
+two paths" is overstated: the push script's `held` reads `entries` and `delayed`,
+which a job's end clears, so a push sent again after its job ended is filed as a
+new job, as `JobProducer::enqueue` states and the queue kit holds. So the tests
+moving a slot, and every test of the suite counting a job's runs and about no
+lapse, now run on the default lease and the default budget
+(`patient_replica_on`), and only a test about a lapse runs on the second. A `== 1`
+is then a promise that holds: a second run left is a defect to find.

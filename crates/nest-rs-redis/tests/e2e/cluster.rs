@@ -127,9 +127,10 @@ async fn a_queue_runs_on_while_its_slot_moves_to_another_node() {
         .expect("the source migrates the slot");
 
     let user = crate::acl_user("nestrs-e2e-moved");
+    let _forgetting_user = crate::forgetting_user(&user);
     let as_worker =
         crate::documented_user("queue/delivery.mdx", "worker", &user, crate::DB_SHARED).await;
-    let replica = crate::replica_on::<MovedModule>(as_worker).await;
+    let replica = crate::patient_replica_on::<MovedModule>(as_worker).await;
     let mut asked_while_moving = 0;
     for _ in 0..100 {
         asked_while_moving = askings(&target.addr).await - asked;
@@ -158,7 +159,6 @@ async fn a_queue_runs_on_while_its_slot_moves_to_another_node() {
     crate::forget(queue).await;
     assign(slot, &source.id).await;
     crate::assert_redis_denied_nothing_but(&user, &[]).await;
-    crate::forget_user(&user).await;
 
     assert!(
         asked_while_moving > 0,
@@ -269,7 +269,7 @@ async fn a_blocked_read_follows_the_ask_of_a_slot_being_moved() {
         .await
         .expect("the queue's keys move to the target");
 
-    let replica = crate::replica_on::<AskedModule>(crate::redis_config()).await;
+    let replica = crate::patient_replica_on::<AskedModule>(crate::redis_config()).await;
     let mut started_while_moving = false;
     for _ in 0..100 {
         started_while_moving = !ASKED.of(run).is_empty();
@@ -362,9 +362,10 @@ async fn a_queue_runs_on_through_an_atomic_migration_of_its_slot() {
         .find(|node| node.primary && node.id != source.id)
         .expect("a second primary");
     let user = crate::acl_user("nestrs-e2e-atomic");
+    let _forgetting_user = crate::forgetting_user(&user);
     let as_worker =
         crate::documented_user("queue/delivery.mdx", "worker", &user, crate::DB_SHARED).await;
-    let replica = crate::replica_on::<AtomicModule>(as_worker).await;
+    let replica = crate::patient_replica_on::<AtomicModule>(as_worker).await;
     let run = crate::this_run();
 
     let moved = std::sync::atomic::AtomicBool::new(false);
@@ -403,7 +404,6 @@ async fn a_queue_runs_on_through_an_atomic_migration_of_its_slot() {
     crate::forget(queue).await;
     migrate_whole(slot, &target, &source).await;
     crate::assert_redis_denied_nothing_but(&user, &[]).await;
-    crate::forget_user(&user).await;
 
     assert!(
         before > 0,
@@ -430,10 +430,13 @@ mod failover {
     /// The primary serving a running queue's slot freezes, the Cluster promotes
     /// its replica, and the app — its worker and its producer — sends the
     /// slot's commands to the new primary: every job pushed before, during and
-    /// after runs, at least once.
+    /// after runs, at least once. `PING` reaches every primary, so readiness says
+    /// `redis` is down while one is frozen and up once its replica took over, and
+    /// liveness never waits on it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_queue_runs_on_across_a_failover_of_its_node() {
         let replica = crate::replica_on::<FailoverModule>(crate::redis_config()).await;
+        let probed = crate::health::probing().await;
         let run = crate::this_run();
         for offset in 0..5 {
             replica
@@ -450,6 +453,7 @@ mod failover {
         let slot = super::slot_of(FailoverQueue::NAME).await;
         let before = super::owner_of(slot).await;
         let frozen = crate::freeze(&before.addr).await;
+        crate::health::assert_down_naming_redis_and_alive(&probed).await;
         crate::wait_for(Duration::from_secs(30), || async {
             crate::cluster_nodes()
                 .await
@@ -457,6 +461,7 @@ mod failover {
                 .any(|node| node.id != before.id && node.serves(slot))
         })
         .await;
+        crate::health::assert_ready_again(&probed).await;
 
         for offset in 5..10 {
             crate::push_through_a_failover(&replica.producer, run + offset).await;

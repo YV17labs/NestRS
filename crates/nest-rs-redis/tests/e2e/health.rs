@@ -2,12 +2,16 @@
 //! against the suite's Valkey: on every topology the default instance answers
 //! the readiness and startup probes as `redis`; on one server, an instance
 //! whose server is cut drops readiness and startup to `503` naming it, while
-//! its sibling reads up and liveness waits on neither.
+//! its sibling reads up and liveness waits on neither; and on Sentinel and on a
+//! Cluster, each `failover` module asks them while its primary is frozen.
+
+use std::time::Duration;
 
 use nest_rs_core::module;
 use nest_rs_health::HealthModule;
+use nest_rs_http::StatusCode;
 use nest_rs_redis::RedisModule;
-use nest_rs_testing::TestApp;
+use nest_rs_testing::{TestApp, wait_for};
 
 use crate::{at_default_budget, redis_config};
 
@@ -37,15 +41,59 @@ async fn the_default_instance_answers_the_readiness_and_startup_probes_as_redis(
     }
 }
 
+#[module(imports = [HealthModule, RedisModule::for_root(redis_config())])]
+struct ProbedWithinTheBudget;
+
+/// An app reading its readiness off the suite's Valkey within the suite's budget,
+/// so a `failover` test reads it down while the node it froze still sleeps.
+pub(crate) async fn probing() -> TestApp {
+    TestApp::for_module::<ProbedWithinTheBudget>()
+        .await
+        .unwrap_or_else(|refused| panic!("boots: {refused:#}"))
+}
+
+/// While a node of the instance is frozen, its readiness answers `503` naming
+/// `redis`, within what is left of the freeze, and liveness waits on nothing.
+pub(crate) async fn assert_down_naming_redis_and_alive(app: &TestApp) {
+    wait_for(Duration::from_secs(5), || async {
+        let answer = app.http().get("/health/ready").send().await;
+        if answer.0.status() != StatusCode::SERVICE_UNAVAILABLE {
+            return false;
+        }
+        let body = answer.json().await;
+        body.value()
+            .object()
+            .get("error")
+            .object()
+            .get("redis")
+            .object()
+            .get("status")
+            .assert_string("down");
+        true
+    })
+    .await;
+    app.http()
+        .get("/health/live")
+        .send()
+        .await
+        .assert_status_is_ok();
+}
+
+/// Readiness comes back once the failover ended, within the wait the test gave
+/// the failover itself.
+pub(crate) async fn assert_ready_again(app: &TestApp) {
+    wait_for(Duration::from_secs(30), || async {
+        app.http().get("/health/ready").send().await.0.status() == StatusCode::OK
+    })
+    .await;
+}
+
 /// What holds on one server alone: the proxy the test severs fronts that
 /// server.
 mod standalone {
     use std::sync::OnceLock;
-    use std::time::Duration;
 
-    use nest_rs_http::StatusCode;
     use nest_rs_redis::RedisConfig;
-    use nest_rs_testing::wait_for;
 
     use super::*;
     use crate::module::Cache;

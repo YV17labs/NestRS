@@ -10,7 +10,9 @@
 //! Redis's clock says it is due — and claims its key, so a push lands whole or
 //! not at all, and a push whose answer never came either filed every job or
 //! none. It skips a job its queue still holds, so a push sent again — by the
-//! client after a lost answer — files nothing twice. **A cancel is one script
+//! client after a lost answer — files nothing twice while that job lasts; once it
+//! ended, the same id is filed as a new job ([`JobProducer::enqueue`]), which
+//! at-least-once allows. **A cancel is one script
 //! too**: it removes a job still waiting and everything it held, and refuses
 //! one a delivery runs.
 

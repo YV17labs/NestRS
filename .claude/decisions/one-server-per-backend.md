@@ -185,3 +185,8 @@ with the handler held 5 ms past its count, one reclaimed under the same `backend
 and one handed back after its attempt was cut, and ran none twice at the default
 lease under the same stalls, so a lapsed lease is a cause of that count, though the
 soak's own log is gone and the handler as committed did not double in 22 such runs.
+
+**2026-11-06, where the demo's topology URLs sit:** the entry of 2026-10-08 says
+`demo/.env`, and that file holds no Redis, since every profile reads it, production
+included. Each topology's URL sits commented in `demo/.env.development`, under the
+one server's `NESTRS_REDIS__URL` and `NESTRS_REDIS__TRANSCODES__URL`.

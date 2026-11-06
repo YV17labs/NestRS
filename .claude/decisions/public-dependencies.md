@@ -156,3 +156,9 @@ select's eight narrowing methods re-implement nothing, each one line over the
 `Select<E>` it holds, in sea-orm's own vocabulary (`IntoCondition`, `Order`,
 `NullOrdering`), and sea-orm stays public, its next major a nestrs major. The cost
 is sea-orm's documentation on those methods, each carrying its own sentence.
+
+## 2026-11-06 — figment holds parking_lot 0.12 too
+
+The entry of 2026-10-27 names tokio, object_store and sqlx's futures-intrusive as
+what still requires parking_lot 0.12. figment 0.10 does as well (`Cargo.lock`), so
+all four must move before the duplicate leaves the tree.

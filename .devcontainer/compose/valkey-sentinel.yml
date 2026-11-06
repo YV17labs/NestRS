@@ -3,8 +3,8 @@
 # each a host of the compose network announcing its name, which the
 # certificate names. Layered on `base.yml` by the `valkey-sentinel` dev
 # container, which opens once the sentinels agree on the primary.
-# Its URL sits commented in `test.just` and `demo/.env`: uncomment it to run on
-# Sentinel.
+# Its URL sits commented in `test.just` and `demo/.env.development`: uncomment
+# it to run on Sentinel.
 
 x-node: &node
   extends: {file: valkey.yml, service: valkey}

@@ -119,7 +119,6 @@ fn emit_update(model: &ResourceModel) -> TokenStream2 {
         return quote! {};
     }
     let field_for = emit_field_for(&carried);
-    let reads_back = emit_reads_back(&carried);
 
     let update = &model.update_ident;
     quote! {
@@ -131,19 +130,10 @@ fn emit_update(model: &ResourceModel) -> TokenStream2 {
 
             #field_for
 
-            #reads_back
-        }
-    }
-}
-
-/// `reads_back`, over the fields an update sets, by each one's column as the table
-/// spells it: `#[expose]` shows a field whatever else it says, `input(update)` among it.
-fn emit_reads_back(fields: &[&ResourceField]) -> TokenStream2 {
-    let shown = fields.iter().filter_map(|f| f.column.as_ref());
-    quote! {
-        fn reads_back(column: &str) -> bool {
-            [#(<Column as ::nest_rs_seaorm::sea_orm::IdenStatic>::as_str(&Column::#shown)),*]
-                .contains(&column)
+            // `#[expose]` shows a field whatever else it says, `input(update)` among it.
+            fn reads_back(column: &str) -> bool {
+                <Self as ::nest_rs_seaorm::UpdateModel<Entity>>::field_for(column).is_some()
+            }
         }
     }
 }

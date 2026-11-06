@@ -4,7 +4,6 @@
 //! cursor read as the first page would answer the pool's failure instead.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::{injectable, module};
@@ -12,7 +11,6 @@ use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, operations, res
 use nest_rs_http::{EndpointGuards, HttpModule, StatusCode, controller, header};
 use nest_rs_seaorm::{CrudService, SeaOrmDatabaseModule, expose};
 use nest_rs_testing::TestApp;
-use sea_orm::{ConnectOptions, Database};
 use serde_json::{Value, json};
 
 use crate::always_authenticated::AlwaysAuthenticated;
@@ -144,18 +142,9 @@ impl ShelfResolver {
 )]
 struct AlbumsModule;
 
-/// The app over a pool whose every acquire is refused within a fifth of a
-/// second: nothing listens on port 1.
 async fn boot() -> TestApp {
-    let mut options = ConnectOptions::new("postgres://nestrs@127.0.0.1:1/nowhere");
-    options
-        .connect_lazy(true)
-        .acquire_timeout(Duration::from_millis(200));
-    let db = Database::connect(options)
+    crate::over_a_pool_refusing_every_acquire()
         .await
-        .expect("a lazy pool opens nothing");
-    TestApp::builder()
-        .provide(db)
         .module::<AlbumsModule>()
         .build()
         .await

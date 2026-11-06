@@ -6,7 +6,6 @@
 use nest_rs_graphql::GraphqlView;
 use nest_rs_http::EndpointGuards;
 use std::sync::Arc;
-use std::time::Duration;
 
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, code, injectable, module};
@@ -15,7 +14,7 @@ use nest_rs_http::{HttpModule, StatusCode, controller, routes};
 use nest_rs_seaorm::{Creatable, CrudService, SeaOrmDatabaseModule, ServiceError, expose};
 use nest_rs_testing::{LogCapture, TestApp};
 use sea_orm::sqlx::error::{DatabaseError, ErrorKind};
-use sea_orm::{ConnectOptions, Database, DbErr, RuntimeErr, SqlxError};
+use sea_orm::{DbErr, RuntimeErr, SqlxError};
 use serde_json::{Value, json};
 
 use crate::always_authenticated::AlwaysAuthenticated;
@@ -114,18 +113,9 @@ impl LedgerResolver {
 )]
 struct WidgetsModule;
 
-/// The app over a pool whose every acquire is refused within a fifth of a
-/// second: nothing listens on port 1.
 async fn boot() -> TestApp {
-    let mut options = ConnectOptions::new("postgres://nestrs@127.0.0.1:1/nowhere");
-    options
-        .connect_lazy(true)
-        .acquire_timeout(Duration::from_millis(200));
-    let db = Database::connect(options)
+    crate::over_a_pool_refusing_every_acquire()
         .await
-        .expect("a lazy pool opens nothing");
-    TestApp::builder()
-        .provide(db)
         .module::<WidgetsModule>()
         .build()
         .await

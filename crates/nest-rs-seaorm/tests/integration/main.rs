@@ -43,3 +43,15 @@ pub(crate) fn over_an_unconnected_pool() -> nest_rs_testing::TestAppBuilder {
         .provide(sea_orm::DatabaseConnection::default())
         .provide(nest_rs_seaorm::SeaOrmConfig::default())
 }
+
+/// A test app over a pool whose every acquire is refused: nothing listens on port 1.
+pub(crate) async fn over_a_pool_refusing_every_acquire() -> nest_rs_testing::TestAppBuilder {
+    let mut options = sea_orm::ConnectOptions::new("postgres://nestrs@127.0.0.1:1/nowhere");
+    options
+        .connect_lazy(true)
+        .acquire_timeout(std::time::Duration::from_millis(50));
+    let db = sea_orm::Database::connect(options)
+        .await
+        .expect("a lazy pool opens nothing");
+    nest_rs_testing::TestApp::builder().provide(db)
+}

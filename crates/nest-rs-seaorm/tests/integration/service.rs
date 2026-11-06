@@ -4,7 +4,6 @@
 //! would answer its `500`; and a service's `?` on the same refusal.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::{code, injectable, module};
@@ -12,7 +11,7 @@ use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, resolver};
 use nest_rs_http::{EndpointGuards, StatusCode, controller};
 use nest_rs_seaorm::{Creatable, CrudService, SeaOrmDatabaseModule, ServiceError, expose};
 use nest_rs_testing::{LogCapture, TestApp};
-use sea_orm::{ConnectOptions, Database, Set};
+use sea_orm::Set;
 use serde_json::{Value, json};
 
 use crate::always_authenticated::AlwaysAuthenticated;
@@ -134,17 +133,9 @@ impl NotesResolver {}
 )]
 struct NotesModule;
 
-/// The app over a pool whose every acquire is refused: nothing listens on port 1.
 async fn boot() -> TestApp {
-    let mut options = ConnectOptions::new("postgres://nestrs@127.0.0.1:1/nowhere");
-    options
-        .connect_lazy(true)
-        .acquire_timeout(Duration::from_millis(50));
-    let db = Database::connect(options)
+    crate::over_a_pool_refusing_every_acquire()
         .await
-        .expect("a lazy pool opens nothing");
-    TestApp::builder()
-        .provide(db)
         .module::<NotesModule>()
         .build()
         .await

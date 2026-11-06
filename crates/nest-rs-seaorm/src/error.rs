@@ -171,10 +171,7 @@ impl From<DbErr> for ServiceError {
             }
             DbOutcome::NotFound => Self::NotFound("not found".into()),
             DbOutcome::Forbidden => Self::Forbidden(match refused_columns(&err) {
-                Some(columns) => format!(
-                    "the caller may not write {}",
-                    columns.collect::<Vec<_>>().join(", "),
-                ),
+                Some(columns) => format!("the caller may not write {columns}"),
                 None => "forbidden".into(),
             }),
             DbOutcome::Unavailable | DbOutcome::Internal => Self::Db(err),
@@ -285,24 +282,19 @@ impl DbOutcome {
 /// The refusal of a write setting what a field grant withholds, as `Repo` speaks:
 /// a `DbErr` is what its every caller reads, and this one says what `GRANT UPDATE
 /// (title) ON posts` would.
-pub(crate) fn write_refused(
-    statement: &'static str,
-    table: &str,
-    columns: &[&'static str],
-) -> DbErr {
+pub(crate) fn write_refused(statement: &str, table: &str, columns: &[&str]) -> DbErr {
     DbErr::AccessDenied {
         permission: statement.to_owned(),
         resource: format!("{table}({})", columns.join(", ")),
     }
 }
 
-/// The columns [`write_refused`] named.
-fn refused_columns(err: &DbErr) -> Option<impl Iterator<Item = &str>> {
+/// The columns [`write_refused`] named, as it joined them.
+fn refused_columns(err: &DbErr) -> Option<&str> {
     let DbErr::AccessDenied { resource, .. } = err else {
         return None;
     };
-    let (_, columns) = resource.split_once('(')?;
-    Some(columns.strip_suffix(')')?.split(", "))
+    resource.split_once('(')?.1.strip_suffix(')')
 }
 
 /// SQLSTATE `query_canceled`: a statement Postgres cancelled, at its
@@ -447,10 +439,18 @@ impl nest_rs_core::ToProblem for ServiceError {
             Self::Db(_) | Self::Internal { .. } => return None,
         };
         let problem = problem.with_detail(self.to_string());
-        Some(match self.field_errors() {
-            Some(fields) => problem.with_errors(fields),
-            None => problem,
-        })
+        Some(with_field_errors(problem, self.field_errors()))
+    }
+}
+
+/// `problem`, with `fields` as its `errors` when there are any.
+fn with_field_errors(
+    problem: nest_rs_core::Problem,
+    fields: Option<serde_json::Value>,
+) -> nest_rs_core::Problem {
+    match fields {
+        Some(fields) => problem.with_errors(fields),
+        None => problem,
     }
 }
 
@@ -495,23 +495,15 @@ fn crud_problem(err: &DbErr, written: Option<Written>) -> nest_rs_core::Problem 
     use nest_rs_core::{Problem, code};
 
     match DbOutcome::of(err) {
-        DbOutcome::Conflict => {
-            let problem = Problem::new(409, code::CONFLICT);
-            let taken = written
-                .and_then(|written| taken_fields(err, written, &*crate::unique_key::current()?));
-            match taken {
-                Some(fields) => problem.with_errors(fields),
-                None => problem,
-            }
-        }
+        DbOutcome::Conflict => with_field_errors(
+            Problem::new(409, code::CONFLICT),
+            written.and_then(|written| taken_fields(err, written, &*crate::unique_key::current()?)),
+        ),
         DbOutcome::NotFound => Problem::new(404, code::NOT_FOUND),
-        DbOutcome::Forbidden => {
-            let problem = Problem::new(403, code::FORBIDDEN);
-            match written.and_then(|written| withheld_fields(err, written)) {
-                Some(fields) => problem.with_errors(fields),
-                None => problem,
-            }
-        }
+        DbOutcome::Forbidden => with_field_errors(
+            Problem::new(403, code::FORBIDDEN),
+            written.and_then(|written| withheld_fields(err, written)),
+        ),
         DbOutcome::Unavailable => {
             tracing::warn!(
                 target: crate::target::ORM,
@@ -592,7 +584,8 @@ const WITHHELD: &str = "forbidden";
 #[cfg(any(feature = "http", feature = "graphql"))]
 fn withheld_fields(err: &DbErr, written: Written) -> Option<serde_json::Value> {
     let fields: serde_json::Map<String, serde_json::Value> = refused_columns(err)?
-        .filter_map(|column| (written.field_for)(column))
+        .split(", ")
+        .filter_map(written.field_for)
         .map(|field| (field.to_owned(), serde_json::json!([{ "code": WITHHELD }])))
         .collect();
     (!fields.is_empty()).then_some(serde_json::Value::Object(fields))

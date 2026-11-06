@@ -56,11 +56,10 @@ pub trait WireModel: EntityTrait {
 /// Whether a key ships: an exposed column the field grant permits, which it names
 /// as the database does, whatever key the wire carries that column under.
 pub(crate) fn kept_key<S: WireModel>(fields: &FieldSet, key: &str) -> bool {
-    S::WIRE_KEYS.contains(&key)
-        && match fields {
-            FieldSet::All => true,
-            FieldSet::Only(granted) => S::key_column(key).is_some_and(|c| granted.contains(c)),
-        }
+    match fields {
+        FieldSet::All => S::WIRE_KEYS.contains(&key),
+        FieldSet::Only(granted) => S::key_column(key).is_some_and(|c| granted.contains(c)),
+    }
 }
 
 /// The exposed column `key` of a wire object, read through its own

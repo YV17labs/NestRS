@@ -1311,13 +1311,6 @@ mod tests {
     /// statement, which meets a pool whose every acquire is refused.
     #[tokio::test]
     async fn a_save_in_a_job_runs_its_hook_and_sends_its_statement() {
-        let mut options = sea_orm::ConnectOptions::new("postgres://nestrs@127.0.0.1:1/nowhere");
-        options
-            .connect_lazy(true)
-            .acquire_timeout(std::time::Duration::from_millis(50));
-        let unreachable = sea_orm::Database::connect(options)
-            .await
-            .expect("a lazy pool opens nothing");
         let mut renamed = hooked::Model {
             id: 1,
             name: "ada".to_owned(),
@@ -1327,7 +1320,7 @@ mod tests {
         renamed.name = Set("grace".to_owned());
 
         let updated = with_job_executor(
-            SeaOrmExecutor::Pool(unreachable).into(),
+            a_pool_refusing_every_statement().await,
             Repo::<hooked::Entity>::update(renamed),
         )
         .await;

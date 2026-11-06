@@ -174,7 +174,7 @@ the bare import:
   gate on — the variable advertising scopes replaces what is advertised, never
   the vocabulary): that declaration `D` alone, the config alone, or the
   declarations before the config as a tuple, `(D, C)`, as a marker precedes its
-  config. A tier-2 trait rather than `Into`, whose `From` impls were a public
+  config. A tier-2 trait rather than `Into`, whose `From` impls would be a public
   `MSetup::from(x)` beside `for_root(x)`; the call site writes the same values,
   and a value it does not take is refused by the trait's one sentence.
 

@@ -14,7 +14,7 @@ use nest_rs_http::futures_util::stream;
 use nest_rs_http::{HttpView, Json, SseEvent, SseStream, StatusCode, controller, header, routes};
 use nest_rs_mcp::{McpError, mcp, tools};
 use nest_rs_testing::TestApp;
-use nest_rs_testing::mcp::call_tool_as;
+use nest_rs_testing::mcp::{call_method_with, call_tool_as, open_session_with};
 use nest_rs_ws::{WsError, WsModule, gateway, messages};
 
 /// May run the org's exports.
@@ -154,6 +154,13 @@ impl ExportsTool {
     #[authorize(Manage, Exporting)]
     async fn run_export(&self) -> Result<String, McpError> {
         Ok("export started".to_owned())
+    }
+
+    /// Read one export.
+    #[resource(template = "export://{id}", description = "Read one export.")]
+    #[authorize(Manage, Exporting)]
+    async fn exported(&self, id: u32) -> Result<Option<String>, McpError> {
+        Ok(Some(format!("export {id}")))
     }
 }
 
@@ -406,4 +413,31 @@ async fn a_public_route_naming_the_capability_admits_a_grant_and_shapes_nothing(
     assert_eq!(granted.status(), StatusCode::OK);
     assert_eq!(body(granted).await, "catalog");
     assert_eq!(read("none").await.0.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_resource_naming_the_capability_reads_by_its_grant() {
+    let app = app().await;
+    let read = async |grant: &str| {
+        let headers = [(GRANT, grant)];
+        let session =
+            open_session_with(app.http(), "/mcp", None, &headers, serde_json::json!({})).await;
+        call_method_with(
+            app.http(),
+            "/mcp",
+            &session,
+            None,
+            &headers,
+            "resources/read",
+            serde_json::json!({ "uri": "export://7" }),
+        )
+        .await
+    };
+
+    let granted = read("full").await;
+    assert!(granted.contains("export 7"), "{granted}");
+
+    let refused = read("none").await;
+    assert!(refused.contains("\"code\":\"FORBIDDEN\""), "{refused}");
+    assert!(!refused.contains("export 7"), "{refused}");
 }

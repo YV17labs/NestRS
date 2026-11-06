@@ -23,6 +23,7 @@ mod executor;
 #[cfg(feature = "graphql")]
 mod graphql;
 mod health;
+mod http;
 mod lazy;
 mod lifecycle_hooks;
 mod mcp;

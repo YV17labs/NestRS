@@ -731,7 +731,7 @@ mod request_decided {
         }
 
         let denials = logs.find("nest_rs::layers", "guard denied the operation");
-        assert!(!denials.is_empty(), "each refused operation is filed");
+        assert_eq!(denials.len(), 2, "each refused operation is filed once");
         for denial in denials {
             assert_eq!(denial.level, "error");
             assert_eq!(denial.field("guard").as_deref(), Some("KeyAtTheUnit"));

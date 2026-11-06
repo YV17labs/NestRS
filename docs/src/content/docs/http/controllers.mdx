@@ -117,8 +117,9 @@ name, so the pattern stays where you wrote it. A pattern binding two
 the way out: bind the whole extractor and destructure in the body.
 
 A handler reading another number of path parameters than its route declares
-answers `500` and files the mismatch (`PathError::Arity`); bind every parameter,
-or read them through a struct.
+answers `500` and files `a handler reads path parameters its route cannot bind`,
+its `error` field counting both; bind every parameter, or read them through a
+struct.
 
 ```bash frame="terminal"
 $ curl http://localhost:3000/Ada

@@ -83,6 +83,28 @@ async fn a_handler_reading_a_parameter_its_route_does_not_declare_answers_an_opa
 }
 
 #[tokio::test]
+async fn a_handler_reading_another_number_of_parameters_files_the_same_line() {
+    let logs = LogCapture::install();
+    let client = crate::vocabulary_route(Method::GET, "/posts/{id}", |req, mut body| async move {
+        Path::<(u64, u64)>::from_request(&req, &mut body).await?;
+        Ok("unreachable".into_response())
+    })
+    .await;
+    client
+        .get("/posts/7")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+    let filed = logs.expect_one(nest_rs_http::target::HTTP, UNBOUND);
+    assert_eq!(filed.level, "error");
+    assert_eq!(
+        filed.field("error").as_deref(),
+        Some("the handler reads 2 path parameters where its route declares 1")
+    );
+}
+
+#[tokio::test]
 async fn a_malformed_parameter_is_the_client_s_and_files_no_error() {
     let logs = LogCapture::install();
     let client = members().await;

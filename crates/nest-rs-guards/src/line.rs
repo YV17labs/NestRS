@@ -34,7 +34,7 @@ const FIELDS: [&str; 19] = [
     "conn_id",
     "status",
     "reason",
-    "retry_after",
+    "retry_after_ms",
     "error",
 ];
 
@@ -112,8 +112,8 @@ fn line(target: &'static str, message: &'static str, level: Level) -> &'static L
 /// served, by the fields the unit's `mounted` line names it by
 /// ([`ServedAddress`](nest_rs_core::ServedAddress)) or the handler's `address`
 /// on a view stating none, the connection it arrived on (`conn_id`, as every
-/// WebSocket line names it), the status, the denial's reason and `Retry-After`,
-/// and the chain behind a denial keeping a cause — never a denial's own text
+/// WebSocket line names it), the status, the denial's reason, the wait its
+/// `Retry-After` says (`retry_after_ms`), and the chain behind a denial keeping a cause — never a denial's own text
 /// otherwise, which may name what no line carries.
 pub(crate) fn file_denial(
     message: &'static str,
@@ -151,7 +151,7 @@ pub(crate) fn file_denial(
             Some(conn_id),
             Some(status),
             Some(reason),
-            Some(retry_after),
+            Some(retry_after_ms),
             Some(error),
         ],
     ) = line.fields.get()
@@ -180,7 +180,7 @@ pub(crate) fn file_denial(
         let arrived_on = cx.peer().and_then(|peer| peer.connection);
         let code = denial.http_status();
         let why = denial.reason();
-        let wait = denial.retry_after_secs();
+        let wait = denial.retry_after_secs().map(|secs| u64::from(secs) * 1000);
         let chain = failure_chain(denial);
         // An absent value is a `None`, which records nothing, as the macros' do.
         let values: [(&Field, Option<&dyn Value>); FIELDS.len()] = [
@@ -201,7 +201,7 @@ pub(crate) fn file_denial(
             (conn_id, Some(&arrived_on)),
             (status, Some(&code)),
             (reason, Some(&why)),
-            (retry_after, Some(&wait)),
+            (retry_after_ms, Some(&wait)),
             (error, Some(&chain)),
         ];
         dispatch.event(&Event::new(metadata, &metadata.fields().value_set(&values)));
@@ -277,6 +277,26 @@ mod tests {
 
         let written = written.0.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!(*written, ["acme::heard"]);
+    }
+
+    /// A line says a wait as it says every duration; the client's `Retry-After` stays
+    /// in the seconds its standard names.
+    #[test]
+    fn a_denials_wait_reads_in_whole_milliseconds() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut view = Socket;
+        let cx = new_unit_context(&MESSAGE, &mut view, None, None);
+
+        file_denial(
+            "guard denied the message",
+            "Door",
+            "acme::door",
+            &cx,
+            &Denial::rate_limited(42, "slow down"),
+        );
+
+        let line = logs.expect_one("acme::door", "guard denied the message");
+        assert_eq!(line.field("retry_after_ms").as_deref(), Some("42000"));
     }
 
     /// A view stating no address has the handler's said: a package's unit is

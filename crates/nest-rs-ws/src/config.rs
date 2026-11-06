@@ -93,8 +93,8 @@ impl WsConfig {
                 target: crate::TARGET,
                 path,
                 unit = unit.name(),
-                timeout_secs = timeout.map_or(0, |timeout| timeout.as_secs()),
-                shutdown_timeout_secs = window.as_secs(),
+                timeout_ms = timeout.map_or(0, |timeout| timeout.as_millis()),
+                shutdown_timeout_ms = window.as_millis(),
                 "a websocket unit's deadline outlasts the shutdown window: one admitted just \
                  before a stop can be cut unanswered",
             );

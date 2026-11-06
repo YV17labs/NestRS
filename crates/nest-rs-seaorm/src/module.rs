@@ -320,7 +320,7 @@ fn said(endpoint: &str, budget: Duration) -> impl FnMut(Proving<'_, DbErr>) + '_
             target: crate::target::ORM,
             endpoint = %endpoint,
             attempt,
-            timeout_secs = budget.as_secs_f64(),
+            timeout_ms = budget.as_millis(),
             "database connect timed out",
         ),
         Proving::Proved { attempts } if attempts > 1 => tracing::info!(
@@ -418,6 +418,18 @@ pub(crate) fn socket(options: &PgConnectOptions) -> Option<&Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_budget_that_expires_is_said_in_milliseconds() {
+        let logs = nest_rs_testing::LogCapture::install();
+
+        said("postgres://db", Duration::from_millis(300))(Proving::TimedOut { attempt: 2 });
+
+        let line = logs.expect_one(crate::target::ORM, "database connect timed out");
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("attempt").as_deref(), Some("2"));
+        assert_eq!(line.field("timeout_ms").as_deref(), Some("300"));
+    }
 
     #[test]
     fn the_statement_bound_is_read_as_postgres_reads_it() {

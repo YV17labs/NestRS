@@ -400,7 +400,7 @@ time answers its own status however long its commit takes, and `500` without
 
 A budget longer than the window, or none at all, files one `warn` on
 `nest_rs::http` at boot — `the request timeout outlasts the shutdown window`,
-with `request_timeout_secs` (`0` when off) and `shutdown_timeout_secs` — and the
+with `request_timeout_ms` (`0` when off) and `shutdown_timeout_ms` — and the
 app still boots: a deployment may accept it knowingly. One with handlers longer
 than the default raises the timeout, the window and the pod's grace period
 together. The framework's own nets under a request — the authentication guard's,
@@ -489,7 +489,7 @@ idle timeout for its connections to this server. A balancer that keeps one open
 longer reuses it as the server closes it, and answers that request `502`. The
 default clears the 60 seconds of AWS's Application Load Balancer and of nginx's
 upstream keep-alive; Google Cloud's load balancer keeps 600, so set `620` behind
-it. The `debug` boot line `transport listening` carries `idle_timeout_secs`
+it. The `debug` boot line `transport listening` carries `idle_timeout_ms`
 beside the address the transport bound, for the day intermittent `502`s send
 you looking.
 

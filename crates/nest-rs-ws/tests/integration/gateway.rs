@@ -1360,7 +1360,7 @@ async fn a_message_past_its_deadline_is_answered_a_timeout_and_the_socket_goes_o
     assert_eq!(cut.level, "warn");
     assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
     assert_eq!(cut.field("event").as_deref(), Some("stall"));
-    assert_eq!(cut.field("timeout_secs").as_deref(), Some("1"));
+    assert_eq!(cut.field("timeout_ms").as_deref(), Some("1000"));
 
     app.shutdown().await.expect("the transport stops cleanly");
 
@@ -2074,10 +2074,10 @@ async fn each_unit_deadline_past_the_shutdown_window_is_said_at_boot() {
     for line in &said {
         assert_eq!(line.level, "warn");
         assert_eq!(line.field("path").as_deref(), Some("/leaving"));
-        assert_eq!(line.field("timeout_secs").as_deref(), Some("20"));
+        assert_eq!(line.field("timeout_ms").as_deref(), Some("20000"));
         assert_eq!(
-            line.field("shutdown_timeout_secs").as_deref(),
-            Some(WINDOW.as_secs().to_string().as_str()),
+            line.field("shutdown_timeout_ms").as_deref(),
+            Some(WINDOW.as_millis().to_string().as_str()),
         );
     }
     app.shutdown().await.expect("the transport stops cleanly");

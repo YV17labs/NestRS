@@ -155,8 +155,8 @@ async fn an_operation_deadline_past_the_shutdown_window_is_said_once_per_endpoin
     let said = logs.expect_one(nest_rs_mcp::TARGET, OUTLASTS_THE_WINDOW);
     assert_eq!(said.level, "warn");
     assert_eq!(said.field("path").as_deref(), Some(SHARED));
-    assert_eq!(said.field("operation_timeout_secs").as_deref(), Some("20"));
-    assert_eq!(said.field("shutdown_timeout_secs").as_deref(), Some("1"));
+    assert_eq!(said.field("operation_timeout_ms").as_deref(), Some("20000"));
+    assert_eq!(said.field("shutdown_timeout_ms").as_deref(), Some("1000"));
     drop(app);
 }
 

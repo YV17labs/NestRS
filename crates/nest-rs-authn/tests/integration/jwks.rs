@@ -627,6 +627,8 @@ async fn a_failed_refresh_keeps_the_last_good_set_until_its_stale_ceiling() {
     let jwt = verifier(&issuer);
     let valid = token(&ED25519.key, Algorithm::EdDSA, Some("ed"));
     jwt.verify::<Claims>(&valid).await.expect("fetched");
+    let fetched = logs.expect_one(nest_rs_authn::TARGET, "the issuer's key set was fetched");
+    assert_eq!(fetched.field("fresh_ms").as_deref(), Some("60000"));
 
     issuer.answer(Answer::status(500));
     elapse(Duration::from_secs(61)).await;

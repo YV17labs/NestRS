@@ -303,7 +303,7 @@ impl SseSettings {
                     tokio::time::sleep(ttl).await;
                     tracing::info!(
                         target: crate::target::HTTP,
-                        max_connection_secs = ttl.as_secs(),
+                        max_connection_ms = ttl.as_millis(),
                         "closing sse stream: max lifetime reached",
                     );
                 })

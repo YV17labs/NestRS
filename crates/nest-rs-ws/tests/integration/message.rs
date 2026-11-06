@@ -612,7 +612,7 @@ async fn a_connect_hook_past_its_deadline_is_cut_and_its_socket_closed_unserved(
     );
     assert_eq!(cut.level, "warn");
     assert_eq!(cut.field("unit").as_deref(), Some("ws.connect"));
-    assert_eq!(cut.field("timeout_secs").as_deref(), Some("1"));
+    assert_eq!(cut.field("timeout_ms").as_deref(), Some("1000"));
     app.shutdown().await.expect("the transport stops cleanly");
 }
 

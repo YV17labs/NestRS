@@ -608,6 +608,7 @@ struct CeilingApp;
 
 #[tokio::test]
 async fn the_lifetime_ceiling_completes_the_subscriptions_and_closes_going_away() {
+    let logs = LogCapture::install();
     let (app, state) = ticks_app::<CeilingApp>().await;
     let mut socket = graphql_ws(&app).connect().await;
     subscribe(&mut socket, "subscription { ticks { seq } }").await;
@@ -624,6 +625,11 @@ async fn the_lifetime_ceiling_completes_the_subscriptions_and_closes_going_away(
     assert_eq!(completed["id"], "1", "{completed}");
     assert_eq!(code, CloseCode::Away);
     assert!(reason.contains("re-upgrade"), "{reason}");
+    let closing = logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "closing subscription socket: max lifetime reached",
+    );
+    assert_eq!(closing.field("max_connection_ms").as_deref(), Some("1000"));
     app.shutdown().await.expect("the transport stops cleanly");
 }
 

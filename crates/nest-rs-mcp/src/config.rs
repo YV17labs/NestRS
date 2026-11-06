@@ -235,8 +235,8 @@ impl McpConfig {
         tracing::warn!(
             target: crate::TARGET,
             path,
-            operation_timeout_secs = self.operation_timeout.map_or(0, |timeout| timeout.as_secs()),
-            shutdown_timeout_secs = window.as_secs(),
+            operation_timeout_ms = self.operation_timeout.map_or(0, |timeout| timeout.as_millis()),
+            shutdown_timeout_ms = window.as_millis(),
             "the operation timeout outlasts the shutdown window: an operation admitted just \
              before a stop can be cut unanswered",
         );

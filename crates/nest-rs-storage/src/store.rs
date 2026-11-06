@@ -459,7 +459,7 @@ fn said(store: &str, budget: Duration) -> impl FnMut(Proving<'_, object_store::E
             target: crate::TARGET,
             store = %store,
             attempt,
-            timeout_secs = budget.as_secs_f64(),
+            timeout_ms = budget.as_millis(),
             "object store proof timed out",
         ),
         Proving::Proved { attempts } if attempts > 1 => tracing::info!(
@@ -581,6 +581,18 @@ mod tests {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     use super::*;
+
+    #[test]
+    fn a_budget_that_expires_is_said_in_milliseconds() {
+        let logs = nest_rs_testing::LogCapture::install();
+
+        said("s3://bucket", Duration::from_millis(300))(Proving::TimedOut { attempt: 2 });
+
+        let line = logs.expect_one(crate::TARGET, "object store proof timed out");
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("attempt").as_deref(), Some("2"));
+        assert_eq!(line.field("timeout_ms").as_deref(), Some("300"));
+    }
 
     /// What a store refusing its listing is said as, on this crate's target.
     const REFUSED_TO_LIST: &str = "the object store refused to list its bucket — a 403 naming no \

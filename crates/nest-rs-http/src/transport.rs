@@ -856,7 +856,7 @@ impl Transport for HttpTransport {
             target: crate::target::HTTP,
             addr = %local,
             tls = tls.is_some(),
-            idle_timeout_secs = self.deadlines.idle.as_secs(),
+            idle_timeout_ms = self.deadlines.idle.as_millis(),
             "transport listening",
         );
         self.listening = Some(Listened { listener, tls });

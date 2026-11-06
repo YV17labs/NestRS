@@ -1825,7 +1825,7 @@ async fn assert_cut_at_the_operation_deadline(
     assert_eq!(cut.level, "warn");
     assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
     assert_eq!(cut.field("tool").as_deref(), Some("stalled"));
-    assert_eq!(cut.field("operation_timeout_secs").as_deref(), Some("20"));
+    assert_eq!(cut.field("timeout_ms").as_deref(), Some("20000"));
 }
 
 #[tokio::test]

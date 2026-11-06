@@ -2496,8 +2496,8 @@ async fn the_line_reporting_a_failure_says_the_wait_it_chose_and_the_one_asked()
     );
     assert_eq!(line.field("retry_after_ms").as_deref(), Some("3600000"));
     assert_eq!(
-        line.field("retry_after_asked_secs").as_deref(),
-        Some("4294967295"),
+        line.field("retry_after_asked_ms").as_deref(),
+        Some("4294967295000"),
     );
 }
 

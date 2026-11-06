@@ -925,7 +925,9 @@ async fn run(
                 target: TARGET,
                 error = %nest_rs_core::error_message(&error),
                 retry_after_ms = millis(retry_after),
-                retry_after_asked_secs = error.retry_after_secs,
+                retry_after_asked_ms = error
+                    .retry_after_secs
+                    .map(|asked| millis(Duration::from_secs(asked.into()))),
                 "job failed; will retry within the budget",
             );
             (

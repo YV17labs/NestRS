@@ -553,7 +553,7 @@ fn timed_out(mcp_method: &str, address: &LineAddress<'_>, timeout: Duration) -> 
         prompt = named.prompt,
         resource = named.resource,
         reason = TIMEOUT_REASON,
-        operation_timeout_secs = timeout.as_secs(),
+        timeout_ms = timeout.as_millis(),
         "mcp operation not answered within its deadline; it is cut",
     );
     McpError::internal_error(

@@ -379,7 +379,7 @@ pub(crate) fn said<'a, E: std::error::Error + 'static>(
             instance = instance.name(),
             endpoint = %endpoint,
             attempt,
-            timeout_secs = budget.as_secs_f64(),
+            timeout_ms = budget.as_millis(),
             "redis connect timed out",
         ),
         Proving::Proved { attempts } if attempts > 1 => tracing::info!(
@@ -1364,9 +1364,9 @@ mod tests {
             .unwrap_or_else(|| panic!("the expiry is its own event: {:#?}", logs.events()));
         assert_eq!(expired.level, "warn");
         assert_eq!(
-            expired.field("timeout_secs").as_deref(),
-            Some("0.3"),
-            "the event names the budget that elapsed, unrounded: {:?}",
+            expired.field("timeout_ms").as_deref(),
+            Some("300"),
+            "the event names the budget that elapsed: {:?}",
             expired.fields,
         );
     }

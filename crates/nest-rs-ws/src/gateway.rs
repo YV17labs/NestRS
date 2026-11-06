@@ -711,7 +711,7 @@ async fn under_connection<F: Future<Output = ()> + Send>(
                 target: crate::TARGET,
                 conn_id,
                 unit = unit.declared().name(),
-                timeout_secs = timeout.as_secs(),
+                timeout_ms = timeout.as_millis(),
                 "websocket connection hook not finished within its deadline; it is cut",
             );
             false
@@ -1069,7 +1069,7 @@ fn timed_out(conn_id: ConnId, event: &str, timeout: Duration) -> Answered {
         conn_id,
         event,
         reason = TIMEOUT_REASON,
-        timeout_secs = timeout.as_secs(),
+        timeout_ms = timeout.as_millis(),
         "websocket message not answered within its deadline; it is cut",
     );
     Answered::server_failed(WsReply::Error(

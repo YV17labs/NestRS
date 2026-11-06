@@ -723,19 +723,22 @@ fn built_from(vars: &[(&str, &str)]) -> HttpTransport {
 /// read; a warning, not a refusal.
 #[test]
 fn a_request_timeout_outlasting_the_shutdown_window_is_said_once_at_boot() {
-    let window = HttpConfig::default().shutdown_timeout.as_secs().to_string();
-    for (value, said) in [("30", "30"), ("0", "0")] {
+    let window = HttpConfig::default()
+        .shutdown_timeout
+        .as_millis()
+        .to_string();
+    for (value, said) in [("30", "30000"), ("0", "0")] {
         let logs = LogCapture::install();
         built_from(&[("REQUEST_TIMEOUT_SECS", value)]);
         let line = logs.expect_one(nest_rs_http::target::HTTP, OUTLASTS);
         assert_eq!(line.level, "warn", "{value}");
         assert_eq!(
-            line.field("request_timeout_secs").as_deref(),
+            line.field("request_timeout_ms").as_deref(),
             Some(said),
             "{value}"
         );
         assert_eq!(
-            line.field("shutdown_timeout_secs").as_deref(),
+            line.field("shutdown_timeout_ms").as_deref(),
             Some(window.as_str()),
             "{value}"
         );
@@ -769,8 +772,14 @@ fn a_body_read_gap_reaching_the_request_timeout_is_said_once_at_boot() {
         ]);
         let line = logs.expect_one(nest_rs_http::target::HTTP, GAP_REACHES_THE_BUDGET);
         assert_eq!(line.level, "warn", "{gap}");
-        assert_eq!(line.field("body_read_timeout_secs").as_deref(), Some(gap));
-        assert_eq!(line.field("request_timeout_secs").as_deref(), Some(budget));
+        assert_eq!(
+            line.field("body_read_timeout_ms").as_deref(),
+            Some(format!("{gap}000").as_str())
+        );
+        assert_eq!(
+            line.field("request_timeout_ms").as_deref(),
+            Some(format!("{budget}000").as_str())
+        );
     }
 }
 

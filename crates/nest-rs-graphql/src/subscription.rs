@@ -276,7 +276,7 @@ async fn ends_at(going_away: impl Future<Output = ()>, ttl: Option<Duration>) ->
         () = ceiling => {
             tracing::info!(
                 target: crate::TARGET,
-                max_connection_secs = ttl.map_or(0, |ttl| ttl.as_secs()),
+                max_connection_ms = ttl.map_or(0, |ttl| ttl.as_millis()),
                 close_code = u16::from(CloseCode::Away),
                 "closing subscription socket: max lifetime reached",
             );

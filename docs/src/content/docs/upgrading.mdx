@@ -2011,7 +2011,11 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A log filter or an alert on a line's value** reads the operator's word where it read a
   `Debug` or a type path. `phase="on_module_destroy"` for `OnModuleDestroy`, `action="read"`
   for `Read`, a probe's `kind="liveness"` for `Liveness`, `scope="request"` for
-  `Some(Request)`, `shape="bare"` for `Bare`; `timeout_ms=1000` for `timeout=1s`. `id` reads
+  `Some(Request)`, `shape="bare"` for `Bare`; `timeout_ms=1000` for `timeout=1s`, and every
+  other duration in `_ms` where it read `_secs` (`max_connection_ms`, `fresh_ms`,
+  `request_timeout_ms`, `shutdown_timeout_ms`, `body_read_timeout_ms`,
+  `operation_timeout_ms`, `idle_timeout_ms`), and a guard's denial `retry_after_ms` where
+  `retry_after` read seconds. `id` reads
   the key's bare value, and `allowed_hosts`, `columns` and `scopes` a joined string. `entity` is the table
   name on every line, `entity="posts"` where `no ambient Ability … denying all rows` said
   `my_app::posts::Entity`. `subject` is the table or a `#[subject]`'s ident, `event` the
@@ -2147,7 +2151,7 @@ lists what the boot, a log or the wire shows when one is missed.
   `connection cap reached; new connections wait in the listen backlog` once.
   Intermittent `502`s from a balancer are an idle deadline below its own: the
   `transport listening` line, at `debug` on `nest_rs::http`, names the value in
-  `idle_timeout_secs`.
+  `idle_timeout_ms`.
 - **An MCP `initialize` past `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS`** — 1 024
   live sessions per endpoint, where 6.x opened every one it was asked for — is
   refused `503` with `Retry-After: 5` and the `UNAVAILABLE` class, and
@@ -2305,7 +2309,7 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A log query on a renamed line or field** finds nothing: the 6.x line
   `shutdown signal received` is `app draining`, `transport listening` at `info`
   is `app ready`, `running lifecycle hook` is the `lifecycle.hook` line, a
-  WebSocket deadline's `message_timeout_secs` is `timeout_secs`, `cause="framework"`
+  WebSocket deadline's `message_timeout_secs` is `timeout_ms`, `cause="framework"`
   or `cause="another_app"` is `cause="dependency"`, and an authentication line's
   `detail` is `error`, the whole chain.
 - **A tool that scrapes stderr for `panicked at`** finds nothing under

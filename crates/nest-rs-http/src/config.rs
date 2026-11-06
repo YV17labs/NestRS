@@ -509,8 +509,8 @@ impl HttpConfig {
         }
         tracing::warn!(
             target: crate::target::HTTP,
-            request_timeout_secs = self.request_timeout.map_or(0, |budget| budget.as_secs()),
-            shutdown_timeout_secs = self.shutdown_timeout.as_secs(),
+            request_timeout_ms = self.request_timeout.map_or(0, |budget| budget.as_millis()),
+            shutdown_timeout_ms = self.shutdown_timeout.as_millis(),
             "the request timeout outlasts the shutdown window: a request admitted just before a \
              stop can be cut unanswered",
         );
@@ -530,8 +530,8 @@ impl HttpConfig {
         }
         tracing::warn!(
             target: crate::target::HTTP,
-            body_read_timeout_secs = self.body_read_timeout.as_secs(),
-            request_timeout_secs = budget.as_secs(),
+            body_read_timeout_ms = self.body_read_timeout.as_millis(),
+            request_timeout_ms = budget.as_millis(),
             "the body-read timeout reaches the request timeout: a body that stops arriving is \
              answered the request timeout's 503, never 408",
         );

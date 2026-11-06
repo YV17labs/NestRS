@@ -138,7 +138,7 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
         event.fields,
     );
     assert!(
-        event.field("retry_after").is_some(),
+        event.field("retry_after_ms").is_some(),
         "the event carries the wait it told the client about, got {:?}",
         event.fields,
     );
@@ -677,7 +677,7 @@ mod graphql {
             event.fields,
         );
         assert!(
-            event.field("retry_after").is_some(),
+            event.field("retry_after_ms").is_some(),
             "the event carries the wait, got {:?}",
             event.fields,
         );
@@ -818,7 +818,7 @@ mod mcp {
             "the bucket is the operation's, got {:?}",
             event.fields,
         );
-        assert!(event.field("retry_after").is_some());
+        assert!(event.field("retry_after_ms").is_some());
 
         let degraded = logs.expect_one(
             nest_rs_throttler::TARGET,
@@ -965,7 +965,7 @@ mod ws {
             event.fields,
         );
         assert_eq!(event.field("client"), None, "got {:?}", event.fields);
-        assert!(event.field("retry_after").is_some());
+        assert!(event.field("retry_after_ms").is_some());
 
         app.shutdown().await.expect("the transport stops cleanly");
     }

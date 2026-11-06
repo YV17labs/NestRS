@@ -134,7 +134,7 @@ impl Heartbeat {
                     () = stopping.cancelled() => return,
                     () = tokio::time::sleep(Duration::from_secs(10)) => {}
                 }
-                tracing::debug!(target: crate::blog::TARGET, interval_secs = 10, "heartbeat");
+                tracing::debug!(target: crate::blog::TARGET, interval_ms = 10_000, "heartbeat");
             }
         });
         *self.beating.lock().await = Some(beating);

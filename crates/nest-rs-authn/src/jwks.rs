@@ -393,7 +393,7 @@ impl Inner {
                     jwks = %self.endpoint,
                     keys,
                     skipped,
-                    fresh_secs = fresh_for.as_secs(),
+                    fresh_ms = fresh_for.as_millis(),
                     "the issuer's key set was fetched",
                 );
             }

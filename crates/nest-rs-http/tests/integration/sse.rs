@@ -119,6 +119,7 @@ async fn the_events_reach_the_client_with_their_type_and_id() {
 
 #[tokio::test(start_paused = true)]
 async fn the_connection_ceiling_closes_a_stream_that_never_ends() {
+    let logs = LogCapture::install();
     let client = boot::<FeedModule>().await;
     // The assertion is that this returns at all: only the ceiling ends the stream.
     let served = tokio::time::timeout(Duration::from_secs(20), async {
@@ -138,6 +139,11 @@ async fn the_connection_ceiling_closes_a_stream_that_never_ends() {
         served.is_empty(),
         "a pending stream emits nothing before the ceiling closes it, got {served:?}",
     );
+    let closing = logs.expect_one(
+        nest_rs_http::target::HTTP,
+        "closing sse stream: max lifetime reached",
+    );
+    assert_eq!(closing.field("max_connection_ms").as_deref(), Some("1000"));
 }
 
 /// The ceiling the streaming route below is mounted with.

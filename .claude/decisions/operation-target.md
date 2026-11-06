@@ -51,6 +51,11 @@ the type's last segment rather than the path for the same reason, and two events
 one name in two modules read alike there: their `host` and `method` still tell them
 apart, and `EventsView::event` keeps the path for code comparing it.
 
+A duration on a line is `_ms`, whole milliseconds, on every line: the cut of a unit, a
+stop's bound, a boot line echoing a `*_SECS` variable. Refused: the boot lines keeping
+their variable's word, `request_timeout_secs` beside the `shutdown_timeout_ms` a stop
+files, which is two names for one setting in one log, and one rule with an exception.
+
 A `resource` is what a `#[resource]`'s unit says it matched, carried back through an
 ambient slot on `resources/read` alone, because the URI is the client's and the line
 is filed outside that unit. A hand-written `ServerHandler`'s resource reads `_OTHER`:

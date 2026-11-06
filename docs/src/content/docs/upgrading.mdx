@@ -610,6 +610,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `ServiceError::internal(format!("password hashing failed: {e}"))` | `ServiceError::internal_because("password hashing failed", e)` |
    | `ServiceError::internal(&reason)`, `reason` a local `String` or a borrowed `&str` | `ServiceError::internal(reason.clone())` or `.to_owned()`: the detail is `'static`; a `String` or a `&'static str` passes unchanged |
    | `ServiceError::Internal(msg)` built or matched | `ServiceError::internal(msg)`; match `ServiceError::Internal { .. }`, the detail read as `err.source()`'s `Display` |
+   | `err.source()` of a `ServiceError::Validation` or a `ServiceError::Db`, downcast to `ValidationErrors` or `DbErr` | the variant's own field, `ServiceError::Db(db)`: `source()` says the failure as `error_message` does, and holds neither |
    | `ServiceError::Masking(msg)` built or matched | nothing: the variant is gone, as no path built it. A mask's failure is the edge's opaque answer, and a failure of your own is `ServiceError::internal(msg)` |
    | `AuthError::Failed(format!("…: {e}"))`, `AuthError::Failed(msg)` | `AuthError::failed_because("…", e)`, `AuthError::failed(msg)` |
    | `AuthError::Unavailable(detail)` or `AuthError::Unavailable { detail, retry_after }` built | `AuthError::unavailable(detail, retry_after)`, or `AuthError::unavailable_because(detail, retry_after, e)` |

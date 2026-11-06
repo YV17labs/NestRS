@@ -173,7 +173,10 @@ at the level below which the library quotes nothing — read off its source,
 never chosen for usefulness — and every subscriber the framework ships narrows
 the filter it is given by the clamps, so a clamp never opens what the filter
 closes and only a directive naming the library opens it. What a clamped line
-reported that an operator needs, a framework line says instead, described.
+reported that an operator needs, a framework line says instead, described. A
+span's fields count as an event's do: an exporter ships them whatever the console
+prints, and `LogCapture` holds no span, so a span's clamp is tested by `span_enabled!`
+under `filter_dispatch`.
 Held by each wiring crate's unit test and `nest-rs-core`'s `LogFilter` tests.
 
 **A port error's internal-failure variant carries its cause**: a detail and an

@@ -58,6 +58,7 @@ writes at all.
 | `h2` | `error` | a PING's opaque data (`warn`); a GOAWAY's debug data (`debug`) |
 | `rustls` | `error` | a client's SNI (`warn`); its whole ClientHello (`trace`) |
 | `sqlx_postgres` | `error` | a malformed `.pgpass` line, password included, and an unknown connection parameter's value (`warn`) |
+| `sea_orm` | `debug` | its `connect` span's whole connection options, the URL's password included (`trace`): a span's fields reach your exporter whatever the console prints |
 | `tungstenite` | `info` | a close frame's reason (`debug`); every message (`trace`) |
 | `opentelemetry-otlp` | `info` | the export URL, whose userinfo or query may carry a collector's credential, and the collector's error body (`debug`) |
 

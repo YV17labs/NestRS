@@ -291,13 +291,24 @@ the cache (`every-refusal-carries-its-class.md`, this date).
 it prints with a marked value in hand, never by what was read of it:
 `nest_rs_testing::printed` is every reader at once, and a test holds the failure to it.
 
-Run on 2026-11-06, a URL's password marked: seaorm's boot quoted it once (a scheme
-sea-orm has no driver for, which sqlx lets through, in sea-orm's own sentence), and
-redis's never, on any topology or server answer, though its client repeated a
-`protocol=` value. Each is closed at the input, so the refusals that hold keep their
-driver's error as their source, `redis::RedisError` a public field among them. A storage
+Run on 2026-11-06, a URL's password marked: seaorm's boot refusals quoted it once (a
+scheme sea-orm has no driver for, which sqlx lets through, in sea-orm's own sentence),
+and redis's never, on any topology, though its client repeated a `protocol=` value.
+Each is closed at the input, so the refusals that hold keep their driver's error as
+their source, `redis::RedisError` a public field among them. That holds for the answers
+a server gives, which hold no password: a double answering `28P01` with the password in
+its message has it printed. A storage
 key held in object_store's errors is the opposite case: every such error quotes it, so
 none is kept (`storage-port-by-url.md`, this date).
+
+**A span is a reader too.** Every boot opened sea-orm's `connect` span, whose field is
+the whole `ConnectOptions`, the URL's password included, at `trace`. The console prints
+no span's fields and `LogCapture` reads events, so no suite saw it; under `RUST_LOG=trace`
+an OTLP exporter ships it as an attribute. `sea_orm` is clamped at `debug` (read against
+sea-orm 2.0.4: every span it opens is at `trace`, and its one event, at `warn`, names a
+schema). **The limit:** a directive naming `sea_orm`, and an app's own subscriber, which
+no clamp reaches, still read the span. Closing that takes a `ConnectOptions` whose URL
+holds no password, the password set through `map_sqlx_postgres_opts`.
 
 **Refused:** a sentence for every boot refusal of seaorm and redis, on the suspicion
 alone. It takes the code and the server's words from an operator, moves a public field,
@@ -306,14 +317,28 @@ marked key, no line of object_store, reqwest or hyper_util quotes it at any leve
 refused connection or a failing status, so object_store takes no clamp (read against
 object_store 0.14.2, reqwest 0.13.5).
 
-**The limit, seen the same day: `ServiceError` is this family, and stays open.** In a
-scratch run, a `{:?}` of `ServiceError::Validation` wrote `params: {"value":
-String("…")}`, and an `anyhow` report of it `password: Validation error: length
-[{"value": String("…")}]`, the rejected value both times; a `{:?}` of `ServiceError::Db`
-wrote the server's `detail`, `Key (email)=(…) already exists.`, and its report the
-server's message. `error_message` says both without them, so no framework line or reply
-quotes one: an app's own `?err`, `.unwrap()` or `main` does. `QueueError::Serialize`
-keeps serde's error the same way. Each is by design so far: a raw link stays in the
-chain for `error_message` to say (`DecodeError::of`, `SafeLink`). Closing it moves what
-`source()` hands every reader of the one type every service names, and of each such
-error across the crates: a sweep of its own, not this entry's.
+**`ServiceError` and `ConfigError` are this family, and closed the same day.** A `{:?}`
+of `ServiceError::Validation` wrote `params: {"value": String("…")}`, and an `anyhow`
+report of it `password: Validation error: length [{"value": String("…")}]`, the rejected
+value both times; a `{:?}` of `ServiceError::Db` wrote the server's `detail`, `Key
+(email)=(…) already exists.`, and its report the server's message; a `{:?}` of
+`ConfigError::Validation` wrote the rule's parameters. `error_message` said each without
+them, so no framework line or reply quoted one: an app's own `?err`, `.unwrap()` or `main`
+did. Each variant keeps its field, which `match` and `field_errors` read, and
+`ServiceError`'s `Debug` and `source()` hand out a `#[repr(transparent)]` view of it whose
+`Display` and `Debug` are what `error_message` says; a `ConfigError` prints its sentence.
+
+**Refused:** no `source()` on those two variants, with a `SafeLink` claiming them.
+`#[error(transparent)]` hands out the inner error's `source()`, skipping the error, so a
+wrapper, the demo's `PostError::Service` among them, said `validation failed` alone in a
+run, and an operator lost the cause. A view of the field costs `ref-cast`, already in the
+tree through schemars, and asks nothing of a developer.
+
+**The limit, each seen the same day.** `OpaqueCause`, beneath `ServiceError::Internal` and
+`AuthError`'s failures, hands every reader but `error_message` the cause as it was given,
+and `AtomicError::Database` the `DbErr` it boxes, the server's message in both its `Display`
+and its `Debug`; a `DbErr` an app holds from `Repo` prints the same, being sea-orm's type.
+None is a framework line or a reply. `QueueError::Serialize` keeps serde's error, and no
+marked value was reproduced there. Closing the first two means holding `error_message`'s
+sentence where the type-erased error sits, which moves what `source()` hands a reader of
+every port error: a change of `nest-rs-core`'s own, and not this entry's.

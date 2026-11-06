@@ -374,3 +374,13 @@ everyday shape. A column renamed onto its field resolver's name
 hidden from the registry by the resolver's field, so no registry reading can see it; left under
 its own name it stops at E0592, and the refusal names `#[graphql(skip)]`. All of it closes with
 the cell.
+
+## 2026-11-06 — a field grant names a column by identity
+
+`.fields` kept `Column::as_str()`, the table's name, while the mask compared it with the
+wire's key, so `.fields([Headline])` on `column_name = "display_title"` stripped `headline`
+(run, then fixed). `FieldSet::Only` stays the table's names, the identity `same_column`
+already reads and the one a write's check needs; `WireModel::key_column`, emitted beside
+`wire_key`, reads a key back, so every edge's `kept_key` and `Ability::mask` judge a column.
+The other way, wire keys in the set, would have left a hidden column with no name to be
+granted by. What the mask reads is otherwise unchanged; `Masked<T>` stays the second pass.

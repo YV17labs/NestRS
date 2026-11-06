@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use super::query;
+use crate::story;
 
 /// A throwaway SeaORM entity with a server-only column (`secret`) the wire
 /// DTOs never carry — `#[expose]` rebuilds it from its placeholder for policy,
@@ -70,6 +71,14 @@ struct StrictWidgetDto {
     name: String,
 }
 
+/// A story as a query returns it, every field required.
+#[derive(SimpleObject, Serialize, Deserialize)]
+struct StoryDto {
+    id: i32,
+    headline: String,
+    body: String,
+}
+
 /// A wire shape whose `id` no widget's column can read back.
 #[derive(SimpleObject, Serialize, Deserialize)]
 struct InventedWidgetDto {
@@ -96,7 +105,8 @@ impl Guard for PassGuard {
 
 /// Builds the caller's ability from an `x-role` header: `admin` reads widgets
 /// unrestricted; `viewer` reads widgets but only the `id` field; `auditor`
-/// reads only widget 1 and only its `id`; anyone else gets nothing.
+/// reads only widget 1 and only its `id`; `headlines` reads a story's `id` and
+/// renamed column; anyone else gets nothing.
 #[injectable]
 #[derive(Default)]
 struct AbilityInjector;
@@ -128,6 +138,10 @@ impl Guard for AbilityInjector {
                 b.can(Action::Read, widget::Entity)
                     .when(|p| p.eq(widget::Column::Id, 1))
                     .fields([widget::Column::Id]);
+            }
+            "headlines" => {
+                b.can(Action::Read, story::Entity)
+                    .fields([story::Column::Id, story::Column::Headline]);
             }
             _ => {}
         }
@@ -306,6 +320,17 @@ impl MaskResolver {
                 name: "grace".into(),
             },
         ])
+    }
+
+    /// A story whose `headline` the table names otherwise.
+    #[query]
+    #[authorize(Read, story::Entity)]
+    async fn story(&self) -> GqlResult<StoryDto> {
+        Ok(StoryDto {
+            id: 1,
+            headline: "first".into(),
+            body: "withheld".into(),
+        })
     }
 
     /// A scalar: it serializes whole, and a client selects nothing into it.
@@ -574,6 +599,25 @@ async fn selecting_only_granted_fields_still_serves_the_entity() {
         "a query asking only for granted columns must succeed: {json}",
     );
     assert_eq!(json["data"]["strictWidget"]["id"], 1);
+}
+
+/// `.fields` names a column and the wire keys it by its field, so `column_name`, which
+/// moves the table's name alone, moves neither: a mask stripping this key would refuse
+/// the selection naming it.
+#[tokio::test]
+async fn a_field_grant_on_a_renamed_column_keeps_its_wire_key() {
+    let app = boot().await;
+
+    let json = query(&app, "headlines", "{ story { id headline } }").await;
+    assert!(json.get("errors").is_none(), "{json}");
+    assert_eq!(json["data"]["story"]["headline"], "first", "{json}");
+
+    let json = query(&app, "headlines", "{ story { id body } }").await;
+    assert_eq!(
+        json["errors"][0]["extensions"]["fields"],
+        serde_json::json!(["body"]),
+        "{json}",
+    );
 }
 
 #[tokio::test]

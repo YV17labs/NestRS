@@ -9,6 +9,8 @@ use nest_rs_http::{controller, routes};
 use nest_rs_testing::TestApp;
 use serde::Serialize;
 
+use crate::story;
+
 mod widget {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
@@ -38,6 +40,14 @@ struct WidgetDto {
     name: String,
 }
 
+/// A story as a route replies with it.
+#[derive(Serialize, schemars::JsonSchema)]
+struct StoryDto {
+    id: i32,
+    headline: String,
+    body: String,
+}
+
 /// Every column of a widget row, the unexposed `secret` included: a body the
 /// mask must strain to `id` and `name`, the columns `#[expose]` declares.
 #[derive(Serialize, schemars::JsonSchema)]
@@ -64,19 +74,26 @@ impl Guard for AbilityInjector {
     }
 
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        let admin = nest_rs_http::HttpView::of(cx)?
+        let role = nest_rs_http::HttpView::of(cx)?
             .request()
             .header("x-role")
-            .map(|role| role == "admin")
-            .unwrap_or(false);
+            .unwrap_or_default()
+            .to_owned();
         let mut b = AbilityBuilder::new();
-        if admin {
-            b.can(Action::Read, widget::Entity)
-                .when(|p| p.eq(widget::Column::Id, 1));
-        } else {
-            b.can(Action::Read, widget::Entity)
-                .when(|p| p.eq(widget::Column::Id, 1))
-                .fields([widget::Column::Name]);
+        match role.as_str() {
+            "admin" => {
+                b.can(Action::Read, widget::Entity)
+                    .when(|p| p.eq(widget::Column::Id, 1));
+            }
+            "headlines" => {
+                b.can(Action::Read, story::Entity)
+                    .fields([story::Column::Id, story::Column::Headline]);
+            }
+            _ => {
+                b.can(Action::Read, widget::Entity)
+                    .when(|p| p.eq(widget::Column::Id, 1))
+                    .fields([widget::Column::Name]);
+            }
         }
         cx.attach(nest_rs_authz::__private::AmbientAbility::new(
             b.build().expect("valid test ability"),
@@ -249,6 +266,22 @@ impl WidgetController {
     }
 }
 
+#[controller(path = "/stories")]
+struct StoryController;
+
+#[routes]
+impl StoryController {
+    #[get("/{id}")]
+    #[authorize(Read, story::Entity)]
+    async fn one(&self) -> Json<StoryDto> {
+        Json(StoryDto {
+            id: 1,
+            headline: "first".into(),
+            body: "withheld".into(),
+        })
+    }
+}
+
 /// A hand-built response carrying the unexposed `secret`, under whichever
 /// `Content-Type` spelling the caller asks for — or none at all.
 fn raw_widget_response(content_type: Option<&'static str>) -> nest_rs_http::Response {
@@ -260,7 +293,7 @@ fn raw_widget_response(content_type: Option<&'static str>) -> nest_rs_http::Resp
     builder.body(body)
 }
 
-#[module(providers = [AbilityInjector, ListAbilityInjector, WidgetController])]
+#[module(providers = [AbilityInjector, ListAbilityInjector, WidgetController, StoryController])]
 struct ShapeModule;
 
 #[module(imports = [ShapeModule], providers = [GlobalGuards<(AbilityInjector,)>])]
@@ -296,6 +329,22 @@ async fn a_restricted_grant_masks_to_permitted_fields() {
         !body.contains("secret"),
         "secret must be stripped from the wire body: {body}",
     );
+}
+
+/// `.fields` names a column and the wire keys it by its field, so `column_name`, which
+/// moves the table's name alone, moves neither.
+#[tokio::test]
+async fn a_field_grant_on_a_renamed_column_keeps_its_wire_key() {
+    let app = boot().await;
+    let resp = app
+        .http()
+        .get("/stories/1")
+        .header("x-role", "headlines")
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+    assert_eq!(body, serde_json::json!({ "id": 1, "headline": "first" }));
 }
 
 #[tokio::test]

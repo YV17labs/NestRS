@@ -108,6 +108,33 @@ pub(crate) mod post {
     }
 }
 
+/// A story whose `headline` the table calls `display_title`: a field grant names the
+/// column, and the wire carries it under the field's own key.
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+pub(crate) mod story {
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Story")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "stories")]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key)]
+        #[expose]
+        pub id: i32,
+        #[sea_orm(column_name = "display_title")]
+        #[expose]
+        pub headline: String,
+        #[expose]
+        pub body: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(crate) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 /// A parent/child pair whose one job is to be the *wrong* relation: `child`
 /// belongs_to `parent`, so a `related` call naming any other entity is the
 /// mismatch that trips the fail-closed `Deny` sentinel.

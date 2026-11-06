@@ -4,6 +4,7 @@
 //! hidden one from its placeholder — the `Model` itself derives no serde.
 
 use nest_rs_authz::__private::WireModel;
+use nest_rs_authz::{AbilityBuilder, Action};
 use nest_rs_seaorm::{Creatable, CrudService, Deletable, Updatable, expose};
 use sea_orm::entity::prelude::*;
 use serde_json::{Map, Value, json};
@@ -397,6 +398,57 @@ fn an_exposed_column_is_keyed_by_its_field_and_a_hidden_one_is_not() {
     for hidden in [Column::Note, Column::Kind, Column::Ref, Column::OwnerId] {
         assert_eq!(Entity::wire_key(hidden), None, "{hidden:?}");
     }
+}
+
+/// `.fields` names a column, not a spelling of it: `column_name` moves the
+/// database's name, and the grant still keeps what the wire calls that column.
+#[test]
+fn a_field_grant_on_a_renamed_column_keeps_its_wire_key() {
+    let mut grants = AbilityBuilder::new();
+    grants
+        .can(Action::Read, ledger::Entity)
+        .fields([ledger::Column::Id, ledger::Column::Headline]);
+    let ability = grants.build().expect("a valid ability");
+    let row = ledger::Model {
+        id: Uuid::nil(),
+        name: "ledger".to_owned(),
+        r#type: "cash".to_owned(),
+        headline: Some("Q3".to_owned()),
+        note: String::new(),
+        archived_at: None,
+        locked: false,
+        revision: 0,
+        tier: ledger::Tier::Free,
+        owner_id: Uuid::nil(),
+        category: String::new(),
+        r#ref: String::new(),
+    };
+
+    assert_eq!(
+        ability.mask::<ledger::Entity>(Action::Read, &row),
+        json!({ "id": Uuid::nil(), "headline": "Q3" }),
+    );
+    assert_eq!(
+        ability.mask_many::<ledger::Entity>(Action::Read, [&row]),
+        [json!({ "id": Uuid::nil(), "headline": "Q3" })],
+    );
+}
+
+/// The way back from a key to the column a field grant names, for each exposed
+/// column and no hidden one.
+#[test]
+fn a_wire_key_reads_back_to_the_column_as_the_table_names_it() {
+    use ledger::Entity;
+
+    assert_eq!(Entity::key_column("id"), Some("id"));
+    assert_eq!(Entity::key_column("headline"), Some("display_title"));
+    assert_eq!(Entity::key_column("type"), Some("type"));
+    assert_eq!(
+        Entity::key_column("display_title"),
+        None,
+        "the database's name is no key"
+    );
+    assert_eq!(Entity::key_column("note"), None, "a hidden column");
 }
 
 /// A raw identifier serializes without its `r#`, so its key does too.

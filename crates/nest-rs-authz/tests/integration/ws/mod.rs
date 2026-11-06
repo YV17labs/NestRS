@@ -104,8 +104,8 @@ pub(crate) fn body(reply: WsReply) -> String {
     }
 }
 
-/// The three grants every suite here needs: unrestricted, `id`-only, and
-/// `id`-only on widget 1.
+/// The grants every suite here needs: unrestricted, `id`-only, `id`-only on widget
+/// 1, and a story's key and its renamed column.
 pub(crate) fn ability_for(role: &str) -> Arc<Ability> {
     Arc::new(ability_of(role))
 }
@@ -137,6 +137,11 @@ pub(crate) fn ability_of(role: &str) -> Ability {
                 .can(Action::Read, widget::Entity)
                 .when(|p| p.eq(widget::Column::Id, 1))
                 .fields([widget::Column::Id]);
+        }
+        "headlines" => {
+            builder
+                .can(Action::Read, crate::story::Entity)
+                .fields([crate::story::Column::Id, crate::story::Column::Headline]);
         }
         // `nobody`: an ability that grants nothing, so the class gate refuses.
         _ => {}

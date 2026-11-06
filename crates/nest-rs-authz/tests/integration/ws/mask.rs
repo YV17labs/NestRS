@@ -10,7 +10,7 @@ use nest_rs_core::input;
 use nest_rs_ws::{Gateway, WsClient, WsError, gateway, messages};
 
 use super::{ability_for, body, dispatch_with, widget};
-use crate::post;
+use crate::{post, story};
 
 /// The wire shape: `name` optional so a field-restricted mask yields `null`
 /// rather than an irreconcilable value.
@@ -42,6 +42,14 @@ struct PostDto {
 #[input]
 struct InventedWidgetDto {
     id: String,
+}
+
+/// A story as a message replies with it.
+#[input]
+struct StoryDto {
+    id: i32,
+    headline: String,
+    body: String,
 }
 
 /// The alias a macro reading the return's spelling cannot see through.
@@ -110,6 +118,17 @@ impl MaskGateway {
                 title: format!("post {id}"),
             })
             .collect())
+    }
+
+    /// A story whose `headline` the table names otherwise.
+    #[subscribe_message("story")]
+    #[authorize(Read, story::Entity)]
+    async fn story(&self) -> Result<StoryDto, WsError> {
+        Ok(StoryDto {
+            id: 1,
+            headline: "first".to_owned(),
+            body: "withheld".to_owned(),
+        })
     }
 
     /// A value with no `Result` around it masks as one inside it does.
@@ -205,6 +224,17 @@ async fn a_field_grant_strips_the_column_it_withholds() {
     assert!(
         body.contains(r#""id":1"#),
         "…while the granted column still ships: {body}",
+    );
+}
+
+/// `.fields` names a column and the wire keys it by its field, so `column_name`, which
+/// moves the table's name alone, moves neither.
+#[tokio::test]
+async fn a_field_grant_on_a_renamed_column_keeps_its_wire_key() {
+    let frame = reply("headlines", "story").await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&frame).expect("a reply is JSON"),
+        serde_json::json!({ "id": 1, "headline": "first" }),
     );
 }
 

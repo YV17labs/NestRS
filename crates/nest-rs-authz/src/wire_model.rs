@@ -5,6 +5,8 @@ use sea_orm::EntityTrait;
 use serde::de::{DeserializeOwned, Error as _};
 use serde_json::{Map, Value};
 
+use crate::ability::FieldSet;
+
 /// How a reply mask reads an `#[expose]`d entity's row off the wire and writes
 /// it back, emitted by `#[expose]` and never written by hand.
 ///
@@ -44,6 +46,21 @@ pub trait WireModel: EntityTrait {
     /// column, so a rule reading it is not decided on the value the rebuild
     /// gave it.
     fn wire_key(column: Self::Column) -> Option<&'static str>;
+
+    /// The name [`wire_key`](Self::wire_key)'s column goes by in the database,
+    /// `Column::as_str()`, for the column the wire carries under `key`: what a
+    /// field grant names.
+    fn key_column(key: &str) -> Option<&'static str>;
+}
+
+/// Whether a key ships: an exposed column the field grant permits, which it names
+/// as the database does, whatever key the wire carries that column under.
+pub(crate) fn kept_key<S: WireModel>(fields: &FieldSet, key: &str) -> bool {
+    S::WIRE_KEYS.contains(&key)
+        && match fields {
+            FieldSet::All => true,
+            FieldSet::Only(granted) => S::key_column(key).is_some_and(|c| granted.contains(c)),
+        }
 }
 
 /// The exposed column `key` of a wire object, read through its own

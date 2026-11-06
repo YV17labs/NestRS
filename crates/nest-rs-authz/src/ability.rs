@@ -13,7 +13,7 @@ use sea_orm::{EntityTrait, IdenStatic, Value};
 
 use crate::action::Action;
 use crate::predicate::{Predicate, Truth, no_row, nothing_invented};
-use crate::wire_model::WireModel;
+use crate::wire_model::{WireModel, kept_key};
 
 /// The unit a mask answers for, as a line names it: nothing on the ambient
 /// [`Ability::mask`] and a value masked by hand, which run in no unit they know.
@@ -141,14 +141,15 @@ pub(crate) mod mask_reason {
     // `field_not_granted` is a gate verdict, owned by `gate::reason::FIELD_NOT_GRANTED`.
 }
 
-/// Which fields of a subject may be read back in the response.
+/// Which columns of a subject a grant permits.
 #[derive(Default)]
 #[non_exhaustive]
 pub enum FieldSet {
-    /// No restriction — every field is permitted.
+    /// No restriction — every column is permitted.
     #[default]
     All,
-    /// Only these columns (named as they serialize) are permitted.
+    /// Only these columns, each as its `Column::as_str()` names it: the
+    /// database's name, which a reply's mask reads through the column's wire key.
     Only(HashSet<&'static str>),
 }
 
@@ -762,8 +763,8 @@ impl Ability {
                 return serde_json::Value::Null;
             }
         };
-        if let FieldSet::Only(allowed) = fields {
-            wire.retain(|key, _| allowed.contains(key.as_str()));
+        if matches!(fields, FieldSet::Only(_)) {
+            wire.retain(|key, _| kept_key::<E>(&fields, key));
         }
         serde_json::Value::Object(wire)
     }

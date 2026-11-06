@@ -17,7 +17,7 @@ use nest_rs_mcp::{Json, McpError, mcp, tools};
 use nest_rs_testing::mcp::{call_method_with, open_session_with};
 
 use super::{PassGuard, widget};
-use crate::post;
+use crate::{post, story};
 
 /// The wire shape: `name` optional so a field-restricted mask yields `null`
 /// rather than an irreconcilable value.
@@ -43,6 +43,15 @@ struct PostDto {
     title: String,
 }
 
+/// A story as a tool returns it: `headline` is required, and `body` optional for the
+/// mask to strip it and serve the rest.
+#[input]
+struct StoryDto {
+    id: i32,
+    headline: String,
+    body: Option<String>,
+}
+
 impl PostDto {
     fn new(id: i32, org_id: i32) -> Self {
         Self {
@@ -56,7 +65,7 @@ impl PostDto {
 /// `admin` reads widgets unrestricted; `viewer` reads them but only the `id`
 /// field; `auditor` reads only widget 1, and only its `id`. `member` reads every
 /// post but those a relation denies; `org_member` reads the `id` and `org_id`
-/// of posts a relation grants.
+/// of posts a relation grants; `headlines` reads a story's `id` and renamed column.
 #[injectable]
 #[derive(Default)]
 struct AbilityInjector;
@@ -106,6 +115,11 @@ impl Guard for AbilityInjector {
                     .can(Action::Read, post::Entity)
                     .when(|p| post::in_org(&p, 7))
                     .fields([post::Column::Id, post::Column::OrgId]);
+            }
+            "headlines" => {
+                builder
+                    .can(Action::Read, story::Entity)
+                    .fields([story::Column::Id, story::Column::Headline]);
             }
             _ => {}
         }
@@ -188,6 +202,17 @@ impl MaskTool {
             }),
             None,
         ]))
+    }
+
+    /// A story whose `headline` the table names otherwise.
+    #[tool]
+    #[authorize(Read, story::Entity)]
+    async fn story(&self) -> Result<Json<StoryDto>, McpError> {
+        Ok(Json(StoryDto {
+            id: 1,
+            headline: "first".to_owned(),
+            body: Some("withheld".to_owned()),
+        }))
     }
 
     /// One widget, read through its template; widget 1 alone exists.
@@ -301,6 +326,16 @@ async fn a_field_grant_strips_the_column_it_withholds() {
         body.contains(r#""id":1"#),
         "…while the granted column still ships: {body}",
     );
+}
+
+/// `.fields` names a column and the wire keys it by its field, so `column_name`, which
+/// moves the table's name alone, moves neither: a mask stripping this required key
+/// would refuse the operation.
+#[tokio::test]
+async fn a_field_grant_on_a_renamed_column_keeps_its_wire_key() {
+    let body = call("headlines", "story").await;
+    assert!(body.contains(r#""headline":"first""#), "{body}");
+    assert!(!body.contains("withheld"), "{body}");
 }
 
 #[tokio::test]

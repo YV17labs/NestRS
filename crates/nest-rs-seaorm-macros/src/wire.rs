@@ -9,7 +9,7 @@
 //! its field. Every column the rebuild invents is named by `is_placeholdered`,
 //! from the same walk, so the mask never decides a rule on a placeholder; every
 //! exposed column is keyed by `wire_key`, so the mask knows one an object left
-//! out.
+//! out, and `key_column` reads a key back to the column a field grant names.
 
 use nest_rs_codegen::__private::{site, type_label};
 use nest_rs_codegen::Refusals;
@@ -153,6 +153,8 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream {
     // An `if` chain, not a `match`: a `_` arm would be unreachable when every
     // column is exposed.
     let keyed_param = param("column", !keyed.is_empty());
+    let column_iden = quote!(<Column as ::nest_rs_seaorm::sea_orm::IdenStatic>::as_str);
+    let key_param = param("key", !keyed.is_empty());
     quote! {
         #refused
 
@@ -179,6 +181,15 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream {
                 #(
                     if ::core::matches!(column, Column::#keyed) {
                         return ::core::option::Option::Some(#keys);
+                    }
+                )*
+                ::core::option::Option::None
+            }
+
+            fn key_column(#key_param: &str) -> ::core::option::Option<&'static str> {
+                #(
+                    if key == #keys {
+                        return ::core::option::Option::Some(#column_iden(&Column::#keyed));
                     }
                 )*
                 ::core::option::Option::None

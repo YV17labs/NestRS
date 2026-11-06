@@ -11,7 +11,7 @@ use serde::de::{Error as _, Unexpected};
 use serde_json::{Map, Value};
 
 use crate::error::MaskReplyError;
-use crate::wire_model::WireModel;
+use crate::wire_model::{WireModel, kept_key};
 use crate::{Ability, Action, FieldSet};
 
 pub(crate) use crate::ability::{MaskedUnit, warn_mask_failure};
@@ -269,13 +269,4 @@ fn retain_granted<S: WireModel>(row: &mut Value, fields: &FieldSet) {
     if let Value::Object(row) = row {
         row.retain(|key, _| kept_key::<S>(fields, key));
     }
-}
-
-/// Whether a key ships: an exposed column the field grant permits.
-fn kept_key<S: WireModel>(fields: &FieldSet, key: &str) -> bool {
-    S::WIRE_KEYS.contains(&key)
-        && match fields {
-            FieldSet::All => true,
-            FieldSet::Only(granted) => granted.contains(key),
-        }
 }

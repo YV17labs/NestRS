@@ -11,8 +11,10 @@ tests, 11 skipped), the demo gate (lint, 111 unit, 152 e2e), the docs build,
 the rustdoc sweep of every feature alone with warnings denied (144 of 144),
 the five demo apps run and `curl`ed, the framework's Valkey Sentinel and
 Cluster e2e suites, the demo's five binaries on Sentinel and on Cluster, the
-demo image build and the Helm chart (`helm lint`, `helm template`). Nothing
-is pushed, tagged or published.
+demo image build and the Helm chart (`helm lint`, `helm template`), and on
+`3d95a42cf` CI's lint jobs on x86_64 (clippy, `cargo hack`, both rustdoc
+passes, the demo's clippy, in an amd64 container). Nothing is pushed, tagged
+or published.
 
 ## How to pick this up
 
@@ -49,11 +51,6 @@ environments of their own (`CLAUDE.md`, *Testing*).
 
 ## 1. Before publishing 7.0
 
-- **The x86_64 lint has not run since 2026-10-29** (`5655dc34`). CI's lint
-  jobs build on x86_64, where type sizes differ from aarch64 (one red was
-  invisible on aarch64 once). Close: run CI's lint (clippy with warnings
-  denied, `cargo hack`, both rustdoc passes, the demo's clippy) on x86_64, in
-  an amd64 container or on the first CI run.
 - **The performance guard has not run in full since 2026-10-23** (`3290e995`;
   per-branch measures stopped on 2026-10-30), though much has moved on the hot
   path since. Close: the harness in `bench/` on a quiet machine, the tip

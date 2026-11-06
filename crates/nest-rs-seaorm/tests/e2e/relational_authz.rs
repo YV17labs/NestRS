@@ -89,6 +89,10 @@ impl UpdateModel<item::Entity> for UpdateItem {
         model.label = Set(self.label);
         model
     }
+
+    fn reads_back(column: &str) -> bool {
+        column == "label"
+    }
 }
 
 impl Updatable for ItemsService {
@@ -704,4 +708,56 @@ async fn a_relational_grant_limits_what_it_writes_in_the_statement() {
         .expect("read")
         .expect("the row stands");
     assert_eq!(untouched.label, "in B");
+}
+
+/// A replacement carrying back all it read sets nothing, so sea-orm sends no `UPDATE`
+/// for the grant's scope to sit on: a row outside it answers as with a change.
+#[tokio::test]
+async fn a_replacement_changing_nothing_on_a_row_outside_its_grant_is_out_of_scope() {
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
+    let TwoOrgs {
+        org_a,
+        item_a,
+        item_b,
+        ..
+    } = seed_two_orgs(&conn).await;
+    let reading_all_writing_labels_in_org_a = || {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Read, item::Entity);
+        b.can(Action::Update, item::Entity)
+            .when(move |p| {
+                p.related::<container::Entity, _>(item::Relation::Container, move |c| {
+                    c.eq(container::Column::OrgId, org_a)
+                })
+            })
+            .fields([item::Column::Label]);
+        Arc::new(b.build().expect("valid test ability"))
+    };
+    let unchanged = |id: Uuid| {
+        let conn = conn.clone();
+        async move {
+            let model = item::Entity::find_by_id(id)
+                .one(&conn)
+                .await
+                .expect("read")
+                .expect("the row stands");
+            let input = UpdateItem {
+                label: model.label.clone(),
+            };
+            with_request_executor(
+                SeaOrmExecutor::Pool(conn).into(),
+                install_ability(
+                    reading_all_writing_labels_in_org_a(),
+                    ItemsService.update(model, input),
+                ),
+            )
+            .await
+        }
+    };
+
+    let own = unchanged(item_a).await.expect("its grant admits the row");
+    assert_eq!(own.id, item_a);
+    let other = unchanged(item_b).await;
+    assert!(matches!(other, Err(DbErr::RecordNotUpdated)), "{other:?}");
 }

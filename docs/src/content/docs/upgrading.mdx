@@ -2287,6 +2287,10 @@ lists what the boot, a log or the wire shows when one is missed.
   answers `404`, as any row outside the scope.
 - **`.fields([Headline])` on a `#[sea_orm(column_name = …)]` column** keeps `headline` in the
   reply, where the mask stripped it: a client reading its absence reads the value.
+- **`Repo::update` of an active model setting nothing** answers `DbErr::RecordNotUpdated`, a
+  `404`, for a row outside the caller's `Update` scope or a tombstone, where it handed the row
+  back, and for a key no row holds, where it said `RecordNotFound`. A service using it to read
+  reads with `Repo::find_by_id`.
 - **`cannot(..).requires_scope(..)` or `cannot(..).fields(..)`** no longer
   compiles (`E0599`, `no method named requires_scope found for struct
   RuleSpec<'_, E, Cannot>`), nor does a `RuleSpec<'_, E>` written for what

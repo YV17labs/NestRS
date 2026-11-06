@@ -86,3 +86,18 @@ wrote it.
 - A tool or a message answering `DbErr` itself answers opaquely, its error filed, as it does
   every `DbErr`; `ServiceError` is what classes one. Nothing fails open.
 - `Repo::insert_unscoped` is ability-less by its bar, and reads no grant.
+
+## 2026-11-06 — a write setting nothing holds its scope
+
+Keeping a carried-back column out of the statement can leave a statement with nothing to
+set, and sea-orm then sends none and reads the row back by its key alone, the scope sitting
+on the `WHERE` it did not send. Proved against Postgres: `Repo::update` handed over a row
+outside its scope, a tombstone, and through `Updatable::update` a row outside a narrowed grant.
+The hole predates this decision on `Repo::update`; this decision added the path through a
+`PUT`. `Repo::scoped_save` now reads the row itself in that case, under the same scope, which
+keeps "no extra round trip": sea-orm's read was there already, and a write that sends an
+`UPDATE` reads nothing.
+
+Refused: sending the no-op anyway (`SET id = id`), which answers correctly but writes a row
+version and fires a trigger for a write that changes nothing; and `Repo::update` refusing an
+empty write, since a `PUT` changing nothing is a success.

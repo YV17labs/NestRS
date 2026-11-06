@@ -4,11 +4,11 @@ use std::marker::PhantomData;
 use nest_rs_authz::__private::visitors_read_unnamed;
 use nest_rs_authz::{Action, Predicate, current_ability};
 use nest_rs_database::{ExecutorScope, atomic, current_executor_scope};
-use sea_orm::sea_query::{Condition, Expr, ExprTrait, OnConflict};
+use sea_orm::sea_query::{Condition, Expr, ExprTrait, FromValueTuple, OnConflict};
 use sea_orm::{
     ActiveModelBehavior, ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, Delete, DeleteResult,
     EntityName, EntityTrait, IdenStatic, Insert, IntoActiveModel, Iterable, ModelTrait,
-    PrimaryKeyToColumn, PrimaryKeyTrait, QueryFilter, Select, Update, Value,
+    PrimaryKeyToColumn, PrimaryKeyTrait, QueryFilter, QueryTrait, Select, Update, Value,
 };
 
 use crate::column_default::fill_column_defaults;
@@ -440,7 +440,8 @@ impl<E: EntityTrait> Repo<E> {
     /// Update a row, gated by `condition_for(Update)` ANDed with the primary
     /// key: a row outside the caller's scope, or soft-deleted, is never touched
     /// and surfaces as [`DbErr::RecordNotUpdated`], so a caller cannot mutate by
-    /// id past its scope.
+    /// id past its scope. An `active` setting nothing sends no `UPDATE` and hands
+    /// back the row under that same scope, or the same error.
     ///
     /// Runs [`ActiveModelBehavior`] — see `scoped_save` — but for a caller no
     /// row could pass for (no grant, a denial no `when` narrows, or a request
@@ -479,11 +480,20 @@ impl<E: EntityTrait> Repo<E> {
             _ => scope_for::<E>(action),
         };
         let active = A::before_save(active, &conn, false).await?;
-        let model = Update::one(active)
-            .validate()?
-            .filter(scope)
-            .exec(&conn)
-            .await?;
+        let key = active.get_primary_key_value();
+        let update = Update::one(active).validate()?;
+        // Setting nothing, sea-orm sends no `UPDATE` and reads the row back by its key
+        // alone, so the scope, on a `WHERE` never sent, would hold nothing.
+        let model = if update.as_query().get_values().is_empty() {
+            let key = key.ok_or(DbErr::UpdateGetPrimaryKey)?;
+            E::find_by_id(<E::PrimaryKey as PrimaryKeyTrait>::ValueType::from_value_tuple(key))
+                .filter(scope)
+                .one(&conn)
+                .await?
+                .ok_or(DbErr::RecordNotUpdated)?
+        } else {
+            update.filter(scope).exec(&conn).await?
+        };
         A::after_save(model, &conn, false).await
     }
 

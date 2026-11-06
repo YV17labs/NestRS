@@ -48,7 +48,9 @@ A by-id write (`update`, `delete`) ANDs `condition_for(Update|Delete)` with
 the primary key, so a caller cannot mutate a row outside its scope even
 with a leaked id. An `update` under a grant whose `.fields` narrows it holds what it
 sets to that list, in the same statement
-([What a write may set](/security/authorization/policies/#what-a-write-may-set)). `can` asks the same question without writing: one
+([What a write may set](/security/authorization/policies/#what-a-write-may-set)). An `update`
+that sets nothing has no statement to carry that condition, so it reads its row back under it
+instead, and answers as any other. `can` asks the same question without writing: one
 query on the primary key under the action's condition, which decides a
 relational rule the model alone cannot show.
 `CrudService::access(action, id)` loads unscoped so a denied-but-existing

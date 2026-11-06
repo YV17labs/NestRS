@@ -3,9 +3,10 @@
 //! aborts the unit's transaction — the writes beside it commit, with no
 //! savepoint around it. A soft-deletable entity's partial index over its live
 //! rows is inferred, and a key only a tombstone holds meets its violation
-//! inside a savepoint. A grant's `.fields` on an update is decided in the statement's
-//! own `WHERE`: the columns it permits and the hook's stamp land, and a row whose
-//! grants do not permit each column stays as it was.
+//! inside a savepoint. An update setting nothing, for which sea-orm sends no
+//! `UPDATE`, hands back only what its scope admits. A grant's `.fields` on an update
+//! is decided in the statement's own `WHERE`: the columns it permits and the hook's
+//! stamp land, and a row whose grants do not permit each column stays as it was.
 
 use std::sync::Arc;
 
@@ -381,6 +382,70 @@ async fn a_key_only_a_tombstone_holds_meets_its_violation_and_aborts_nothing() {
         "{violation}"
     );
     assert_eq!(accounts_with(&conn, &after).await, 1);
+}
+
+#[tokio::test]
+async fn an_update_setting_nothing_hands_back_only_a_row_its_scope_admits() {
+    let conn = db().await;
+    let own = account(&address("own"))
+        .insert(&conn)
+        .await
+        .expect("the caller's row");
+    let other = account(&address("other"))
+        .insert(&conn)
+        .await
+        .expect("another caller's row");
+    let email = own.email.clone();
+    let mut grants = AbilityBuilder::new();
+    grants
+        .can(Action::Update, account::Entity)
+        .when(move |p| p.eq(account::Column::Email, email));
+    let ability = grants.build().expect("valid test ability");
+    let by_key = |id| account::ActiveModel {
+        id: Set(id),
+        ..Default::default()
+    };
+
+    let (admitted, outside, absent) = under(&conn, ability, async {
+        (
+            Repo::<account::Entity>::update(by_key(own.id)).await,
+            Repo::<account::Entity>::update(by_key(other.id)).await,
+            Repo::<account::Entity>::update(by_key(Uuid::now_v7())).await,
+        )
+    })
+    .await;
+
+    assert_eq!(admitted.expect("its scope admits the row"), own);
+    assert!(
+        matches!(outside, Err(DbErr::RecordNotUpdated)),
+        "{outside:?}"
+    );
+    assert!(matches!(absent, Err(DbErr::RecordNotUpdated)), "{absent:?}");
+}
+
+#[tokio::test]
+async fn an_update_setting_nothing_hides_a_tombstone_from_a_job_too() {
+    let conn = db().await;
+    let tombstone = member::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        email: Set(address("tombstone")),
+        deleted_at: Set(Some(nest_rs_seaorm::now())),
+    }
+    .insert(&conn)
+    .await
+    .expect("a tombstone");
+
+    let met = in_a_unit(&conn, async {
+        Ok(Repo::<member::Entity>::update(member::ActiveModel {
+            id: Set(tombstone.id),
+            ..Default::default()
+        })
+        .await)
+    })
+    .await
+    .expect("the unit commits");
+
+    assert!(matches!(met, Err(DbErr::RecordNotUpdated)), "{met:?}");
 }
 
 /// `work`, in a request unit on the pool under `ability`.

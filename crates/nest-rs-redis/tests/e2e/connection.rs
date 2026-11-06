@@ -101,9 +101,10 @@ async fn credentials_redis_refuses_fail_the_boot_at_once_naming_them() {
         "the source says what Redis answered: {}",
         answer(&error),
     );
+    let printed = nest_rs_testing::printed(&error);
     assert!(
-        !format!("{error} {}", answer(&error)).contains("nestrs-e2e-wrong-secret"),
-        "and neither shows the password: {error}",
+        !printed.contains("nestrs-e2e-wrong-secret"),
+        "and no reader sees the password: {printed}",
     );
 }
 

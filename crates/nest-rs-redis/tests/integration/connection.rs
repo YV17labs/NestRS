@@ -86,6 +86,187 @@ async fn a_server_that_serves_database_zero_alone_fails_the_boot_at_once_naming_
     );
 }
 
+/// What marks the URL's password, and whatever else it holds, in anything that
+/// prints.
+const PASSWORD: &str = "zzqx-password";
+
+/// Connect on `config`, which must be refused, and hold everything the refusal
+/// prints and every line it files to quoting no [`PASSWORD`].
+async fn refused_quoting_no_password(case: &str, config: RedisConfig) {
+    let logs = nest_rs_testing::LogCapture::install();
+    let Ok(Err(error)) = tokio::time::timeout(HUNG, RedisConnection::connect(&config)).await else {
+        panic!("{case}: must not connect, and must not hang");
+    };
+    let printed = nest_rs_testing::printed(&error);
+    assert!(!printed.contains(PASSWORD), "{case}: {printed}");
+    for event in logs.events() {
+        assert!(!event.quotes(PASSWORD), "{case}: {event:#?}");
+    }
+}
+
+/// What a `main` returning the boot's refusal prints is every link as it is, the
+/// client's own among them: no URL holding a password or a mistyped setting has
+/// it quoted, on any topology, before anything is dialled or after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_refusal_of_a_url_prints_what_the_url_holds() {
+    let closed = {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        listener.local_addr().expect("its address")
+    };
+    let budget = Duration::from_millis(300);
+    let urls = [
+        (
+            "nothing listens",
+            format!("rediss://app:{PASSWORD}@{closed}/0"),
+        ),
+        (
+            "no sentinel listens",
+            format!(
+                "rediss-sentinel://app:{PASSWORD}@{closed}/0?sentinelServiceName=main\
+                 &sentinelUsername=watch&sentinelPassword={PASSWORD}"
+            ),
+        ),
+        (
+            "no seed listens",
+            format!("rediss-cluster://app:{PASSWORD}@{closed}/0"),
+        ),
+        (
+            "no such host",
+            format!("rediss://app:{PASSWORD}@no-such-host.invalid:6379/0"),
+        ),
+        (
+            "a URL that does not parse",
+            format!("rediss://app:{PASSWORD}@[::bad-host/"),
+        ),
+        (
+            "a URL naming several hosts that does not parse",
+            format!("rediss-cluster://app:{PASSWORD}@[::bad-host/"),
+        ),
+        (
+            "another scheme",
+            format!("https://app:{PASSWORD}@{closed}/0"),
+        ),
+        (
+            "a database that is no number",
+            format!("rediss://app:{PASSWORD}@{closed}/{PASSWORD}"),
+        ),
+        (
+            "a cluster database that is no number",
+            format!("rediss-cluster://app:{PASSWORD}@{closed}/{PASSWORD}"),
+        ),
+        (
+            "a fragment",
+            format!("rediss://app:{PASSWORD}@{closed}/0#{PASSWORD}"),
+        ),
+        (
+            "a fragment on several hosts",
+            format!("rediss-cluster://app:{PASSWORD}@{closed}/0#{PASSWORD}"),
+        ),
+        (
+            "a skipped verification",
+            format!("rediss://app:{PASSWORD}@{closed}/0#insecure"),
+        ),
+        (
+            "RESP3",
+            format!("rediss://app:{PASSWORD}@{closed}/0?protocol=resp3"),
+        ),
+        (
+            "a protocol nobody speaks",
+            format!("rediss://app:{PASSWORD}@{closed}/0?protocol={PASSWORD}"),
+        ),
+        (
+            "a parameter several hosts take",
+            format!("rediss://app:{PASSWORD}@{closed}/0?sentinelPassword={PASSWORD}"),
+        ),
+        (
+            "a parameter nothing takes",
+            format!("rediss-cluster://app:{PASSWORD}@{closed}/0?{PASSWORD}={PASSWORD}"),
+        ),
+        (
+            "a node that is no host",
+            format!("rediss-cluster://app:{PASSWORD}@{closed}/0?node=x:{PASSWORD}"),
+        ),
+        (
+            "a host no certificate can name",
+            format!("rediss://app:{PASSWORD}@under_score.invalid:6379/0"),
+        ),
+        (
+            "a primary with no name",
+            format!("rediss-sentinel://app:{PASSWORD}@{closed}/0"),
+        ),
+    ];
+    for (case, url) in urls {
+        refused_quoting_no_password(
+            case,
+            RedisConfig {
+                url: url.into(),
+                connect_timeout: budget,
+                ..RedisConfig::default()
+            },
+        )
+        .await;
+    }
+}
+
+/// A server's own answer is what a refusal carries: none of the ones that end a
+/// boot repeats the password the client authenticated with, even the words a
+/// server not knowing `AUTH` answers with, which quote its arguments.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_refusal_a_server_answers_prints_the_password_it_was_sent() {
+    const ANSWERS: [&str; 5] = [
+        "WRONGPASS invalid username-password pair or user is disabled.",
+        "NOAUTH Authentication required.",
+        "NOPERM this user has no permissions to run the 'select' command",
+        "LOADING Redis is loading the dataset in memory",
+        "ERR unknown command 'AUTH', with args beginning with: 'app' 'zzqx-password' ",
+    ];
+    for answer in ANSWERS {
+        let proxy = ScriptedRedis::start(None, None).await;
+        proxy.answer_with(Some(answer));
+        let authority = proxy.url().replacen("rediss://", "", 1);
+        refused_quoting_no_password(
+            answer,
+            RedisConfig {
+                url: format!("rediss://app:{PASSWORD}@{authority}0").into(),
+                connect_timeout: Duration::from_millis(300),
+                tls: crate::harness::tls::trusting_the_test_authority(),
+                ..RedisConfig::default()
+            },
+        )
+        .await;
+    }
+}
+
+/// A private key holding the password's mark, pasted inline: nothing refusing it
+/// quotes the material.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_refusal_of_tls_material_prints_the_material() {
+    use nest_rs_config::{ClientTls, Material, TlsIdentity};
+
+    let garbled = format!("-----BEGIN PRIVATE KEY-----\n{PASSWORD}\n-----END PRIVATE KEY-----\n");
+    for tls in [
+        ClientTls::new(Some(Material::inline(garbled.clone())), None),
+        ClientTls::new(
+            None,
+            Some(TlsIdentity::new(
+                Material::inline(garbled.clone()),
+                Material::inline(garbled.clone()),
+            )),
+        ),
+    ] {
+        refused_quoting_no_password(
+            "garbled material",
+            RedisConfig {
+                url: "rediss://127.0.0.1:9/".to_owned().into(),
+                connect_timeout: Duration::from_millis(300),
+                tls,
+                ..RedisConfig::default()
+            },
+        )
+        .await;
+    }
+}
+
 /// The default budget sits below the net of every port a binding serves — the
 /// queue's, the throttler guard's and the scheduler's — read from the constants
 /// that set them rather than retyped. A deployment that raises it is held under

@@ -185,7 +185,9 @@ impl Refusal {
 /// speak: RESP3, a skipped verification, a host no certificate can name, and a
 /// parameter that names several hosts.
 fn parse_standalone(raw: &str) -> Result<RedisUrl, Refusal> {
-    let info = raw.into_connection_info().map_err(Refusal::Invalid)?;
+    let info = raw
+        .into_connection_info()
+        .map_err(|refused| Refusal::Invalid(without_detail(refused)))?;
     if ::url::Url::parse(raw).is_ok_and(|url| {
         url.query_pairs()
             .any(|(key, _)| SEVERAL_HOSTS.contains(&key.as_ref()))
@@ -207,6 +209,18 @@ fn parse_standalone(raw: &str) -> Result<RedisUrl, Refusal> {
     }
     let settings = info.redis_settings().clone().set_skip_set_lib_name();
     Ok(RedisUrl::Standalone(info.set_redis_settings(settings)))
+}
+
+/// The client's refusal of a URL, without the detail that quotes it: `protocol`'s
+/// value is the one it repeats.
+fn without_detail(refused: redis::RedisError) -> redis::RedisError {
+    if refused.detail().is_none() {
+        return refused;
+    }
+    redis::RedisError::from((
+        refused.kind(),
+        "a query parameter of the URL holds a value the client does not read",
+    ))
 }
 
 /// A URL naming several hosts, read as the scheme declares.

@@ -164,8 +164,9 @@ migrations, seeds its connection in place of the pool `SeaOrmModule` would
 open, and drops it after the app, closed or dropped — even on panic, and even
 after a crashed previous run, whose `nest_rs_e2e_*` databases older than five
 minutes the next boot reaps. The admin URL comes from `<PREFIX>_SEAORM__URL`,
-and every connection the fixture opens is the app's pool's: TLS verified or off
-as the URL says, an `sslmode` that encrypts without verifying refused.
+and every connection the fixture opens is the app's pool's: TLS verified, or off
+by `sslmode=disable` in the URL or libpq's `PGSSLMODE=disable` beside a URL naming
+no mode, an `sslmode` that encrypts without verifying refused.
 
 ```rust title="crates/features/tests/e2e/main.rs (from the demo)"
 pub(crate) async fn data_app() -> TestApp {

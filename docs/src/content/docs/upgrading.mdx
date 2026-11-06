@@ -1279,9 +1279,11 @@ lists what the boot, a log or the wire shows when one is missed.
       `TLS_CERT` and `TLS_KEY` name a client certificate, each with its `_FILE`
       form, and `#insecure` fails the boot — see the
       [Redis variables](/configuration/env-reference/#redis--prefix_redis__).
-      Postgres connects with `sslmode=verify-full` unless the URL says
-      otherwise: `allow`, `prefer`, `require` and `verify-ca` fail the boot, and
-      a server without TLS needs `sslmode=disable` written.
+      Postgres connects with `sslmode=verify-full` unless `sslmode=disable` in the
+      URL, or libpq's `PGSSLMODE=disable` beside a URL naming no mode, turns it
+      off: `allow`, `prefer`, `require` and `verify-ca` fail the boot, naming
+      `PGSSLMODE` where it set one, and a server without TLS needs one of those two
+      written.
     - **Shutdown** ends within bounds you can read. HTTP stops waiting for open
       connections once `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` runs out, 20
       seconds by default, where 6.x waited for every one: a request still running

@@ -72,8 +72,9 @@ pub(crate) async fn seeded(
 /// it holds with [`TestAppBuilder::ephemeral_database`].
 ///
 /// Every connection it opens is the app's pool's
-/// ([`SeaOrmConfig::connect_options`]): TLS verified or off, as the URL says,
-/// and a URL asking for TLS without verification refused.
+/// ([`SeaOrmConfig::connect_options`]): TLS verified, or off by `sslmode=disable`
+/// in the URL or libpq's `PGSSLMODE=disable` beside a URL naming no mode, and a
+/// mode asking for TLS without verification refused.
 ///
 /// Orphans from crashed runs are reaped on the next [`create`](Self::create).
 pub struct EphemeralDatabase {

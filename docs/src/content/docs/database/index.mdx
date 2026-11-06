@@ -27,7 +27,8 @@ cargo add nest-rs --features seaorm,http
 
 That is everything the entity below needs, in full. The database is
 PostgreSQL 18, the one engine the suites run, over verified TLS
-(`sslmode=verify-full` unless the URL says otherwise).
+(`sslmode=verify-full`, unless `sslmode=disable` in the URL, or libpq's
+`PGSSLMODE=disable` beside a URL naming no mode, turns it off).
 
 `#[expose]` generates the wire model, the create/update inputs and the
 ActiveModel plumbing — and carries their derives, each pointed back at the

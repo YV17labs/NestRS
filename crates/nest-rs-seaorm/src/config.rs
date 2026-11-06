@@ -91,6 +91,9 @@ const MIN_CONNECTIONS: CountBounds = CountBounds::new(
     ),
 );
 
+/// libpq's variable naming the mode a URL leaves out, which sqlx reads.
+const PGSSLMODE: &str = "PGSSLMODE";
+
 /// What the boot says when a deployment reaches Postgres in plaintext.
 pub(crate) const PLAINTEXT_OPEN: &str = "Postgres is reached in plaintext outside a dev profile: \
      its queries and their results travel unencrypted";
@@ -204,11 +207,12 @@ impl SeaOrmConfig {
 
     /// The TLS the pool's connections open with: `verify-full` — the server's
     /// certificate checked against the system's authorities, or `sslrootcert`,
-    /// and its name against the host — when the URL names no `sslmode`, and
-    /// `disable` when it says so.
+    /// and its name against the host — unless `sslmode=disable` in the URL, or
+    /// libpq's `PGSSLMODE=disable` beside a URL naming no mode, turns it off.
     /// A mode that encrypts without verifying, or may (`allow`, `prefer`,
-    /// `require`, `verify-ca`), is refused, naming the variable and never the
-    /// URL, which carries the password.
+    /// `require`, `verify-ca`), is refused, naming the variable that set it and
+    /// never the URL, which carries the password; `PGSSLMODE=prefer` reads as no
+    /// mode named, being sqlx's own default.
     fn tls_mode(&self) -> Result<PgSslMode> {
         let named = self.query(&["sslmode", "ssl-mode"]).is_some();
         #[expect(
@@ -220,17 +224,23 @@ impl SeaOrmConfig {
         match parsed.get_ssl_mode() {
             PgSslMode::Prefer if !named => Ok(PgSslMode::VerifyFull),
             mode @ (PgSslMode::Disable | PgSslMode::VerifyFull) => Ok(mode),
-            unverified => Err(Self::refuse_url(format!(
+            unverified if named => Err(Self::refuse_url(format!(
                 "asks Postgres for TLS without verifying its certificate (sslmode={}): write \
                  sslmode=verify-full, with sslrootcert naming the authority that signed the \
                  server's certificate, or sslmode=disable for a server without TLS",
-                match unverified {
-                    PgSslMode::Allow => "allow",
-                    PgSslMode::Prefer => "prefer",
-                    PgSslMode::Require => "require",
-                    _ => "verify-ca",
-                },
+                unverified_mode(unverified),
             ))),
+            unverified => Err(ConfigError::parse(
+                PGSSLMODE,
+                format!(
+                    "asks Postgres for TLS without verifying its certificate (sslmode={}) beside \
+                     {}, which names no mode: set it to verify-full, with sslrootcert in that URL \
+                     naming the authority that signed the server's certificate, to disable for a \
+                     server without TLS, or unset it",
+                    unverified_mode(unverified),
+                    Self::URL.var(Self::NAMESPACE),
+                ),
+            )),
         }
     }
 
@@ -259,7 +269,8 @@ impl SeaOrmConfig {
 
     /// What every connection this config opens shares: TLS verified
     /// (`verify-full`, against the system's authorities unless `sslrootcert`
-    /// names a file) or off (`sslmode=disable`), and the pool bounds.
+    /// names a file) or off (`sslmode=disable`, or libpq's `PGSSLMODE=disable`
+    /// beside a URL naming no mode), and the pool bounds.
     ///
     /// The one constructor every path reaches — the app's pool,
     /// [`connect_from_env`](crate::connect_from_env), a tool or a test
@@ -305,6 +316,16 @@ impl SeaOrmConfig {
             ));
         }
         Ok((most, least))
+    }
+}
+
+/// A mode short of verifying, in the word `sslmode` writes it.
+fn unverified_mode(mode: PgSslMode) -> &'static str {
+    match mode {
+        PgSslMode::Allow => "allow",
+        PgSslMode::Prefer => "prefer",
+        PgSslMode::Require => "require",
+        _ => "verify-ca",
     }
 }
 
@@ -517,6 +538,46 @@ mod tests {
                     "{host}",
                 );
             }
+            Ok(())
+        });
+    }
+
+    /// A mode libpq's variable set is refused naming that variable, the URL
+    /// holding no such word; the URL's own word stands over it, and is the one
+    /// named.
+    #[test]
+    fn a_pgsslmode_that_does_not_verify_is_refused_naming_it() {
+        figment::Jail::expect_with(|jail| {
+            let url = nest_rs_config::var_name("seaorm", "URL");
+            for mode in ["allow", "require", "verify-ca"] {
+                jail.set_env("PGSSLMODE", mode);
+                let refused = pinned("postgres://app:s3cret@db.internal/app")
+                    .connect_options()
+                    .expect_err(mode)
+                    .to_string();
+                assert!(
+                    refused.starts_with("invalid value for PGSSLMODE: ")
+                        && refused.contains(&format!("(sslmode={mode})"))
+                        && refused.contains(&format!("beside {url}, which names no mode"))
+                        && !refused.contains("s3cret"),
+                    "{refused}"
+                );
+                assert!(
+                    pinned("postgres://db.internal/app?sslmode=verify-full")
+                        .connect_options()
+                        .is_ok(),
+                    "{mode}",
+                );
+            }
+            jail.set_env("PGSSLMODE", "verify-full");
+            let refused = pinned("postgres://db.internal/app?sslmode=require")
+                .connect_options()
+                .expect_err("the URL's word")
+                .to_string();
+            assert!(
+                refused.starts_with(&format!("invalid value for {url}: ")),
+                "{refused}"
+            );
             Ok(())
         });
     }

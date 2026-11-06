@@ -377,12 +377,13 @@ every mode that encrypts without verifying:
 match parsed.get_ssl_mode() {
     PgSslMode::Prefer if !named => Ok(PgSslMode::VerifyFull),
     mode @ (PgSslMode::Disable | PgSslMode::VerifyFull) => Ok(mode),
-    unverified => Err(Self::refuse_url(format!(
+    unverified if named => Err(Self::refuse_url(format!(
         "asks Postgres for TLS without verifying its certificate (sslmode={}): write \
          sslmode=verify-full, with sslrootcert naming the authority that signed the \
          server's certificate, or sslmode=disable for a server without TLS",
         // …
     ))),
+    unverified => Err(ConfigError::parse(PGSSLMODE, /* … */)),
 }
 ```
 

@@ -22,13 +22,14 @@ use super::cargo::{
     graphql_port_deps,
 };
 use super::migration::{OUTBOX_MIGRATION, queue_framework_entry};
+use super::port::Port;
 use super::support::{Import, Wiring, data_layer, finish, wire_into_app, wiring_lines};
 use crate::commands::resolve_start;
-use crate::context::{Context, NestrsWorkspace};
-use crate::error::{CliError, CliResult, read_if_exists};
+use crate::context::Context;
+use crate::error::{CliError, CliResult};
 use crate::naming::{Names, Transport, command_file};
 use crate::scaffold::{
-    Renderer, Scaffold, Transform, ensure_expose_graphql, ensure_lines, ensure_module_imports,
+    Renderer, Scaffold, Transform, ensure_expose_graphql, ensure_lines, ensure_module_imports, rel,
 };
 use crate::templates::adapter;
 
@@ -65,16 +66,20 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
 
     let tmodule = names.module_for(transport);
     let is_graphql = transport == Transport::Graphql;
-    let crud_port = is_crud_port(&ws, &names.snake)?;
+    let port = Port::read(&feature_root, &names.snake, &names.service())?;
+    let crud_port = port.crud.is_some();
     // What an operation's posture names: the port's entity, or the capability
     // a port with none declares, written once by the first adapter gating on it.
     let gated_operation = matches!(transport, Transport::Graphql | Transport::Mcp);
-    let port_entity = crud_port || feature_root.join("entity.rs").is_file();
+    let port_entity = port.has_entity;
     // Named for its kind, never its type: a port named by its own singular would
     // hold `blog/blog.rs`, a module of its own name.
     let subject_file = feature_root.join("subject.rs");
     let writes_subject = gated_operation && !port_entity && !subject_file.exists();
-    let r = adapter_renderer(&names, transport, crud_port, port_entity);
+    let mut r = adapter_renderer(&names, transport, crud_port, port_entity);
+    if let Some(crud) = &port.crud {
+        r = r.with("service", crud.service.clone());
+    }
     let (handler_tmpl, module_tmpl) = templates_for(transport, crud_port);
     // A `#[crud]` handler runs every call in a unit of work, so the app gets the
     // data layer beside it, as `g resource` writes it: an app without is refused at
@@ -156,14 +161,17 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     if let Some(authz) = authz {
         deps.extend(authz.deps);
     }
-    // `#[expose(graphql)]` makes the port's entity a GraphQL object; a port
-    // without the generated `entity.rs` is left alone, since an `edit` on a missing
-    // path fails the whole transaction.
-    if is_graphql && crud_port {
+    // `#[expose(graphql)]` makes the entity the port's `CrudService` names a GraphQL
+    // object; one its source leads to no file for is the next step's, since an `edit`
+    // on a missing path fails the whole transaction.
+    let mut unflagged = None;
+    if is_graphql && let Some(crud) = &port.crud {
         deps.extend(graphql_port_deps());
-        let entity = feature_root.join("entity.rs");
-        if entity.is_file() {
-            s.edit(entity, ensure_expose_graphql());
+        match crud.entity.as_ref().filter(|entity| entity.is_file()) {
+            Some(entity) => {
+                s.edit(entity, ensure_expose_graphql());
+            }
+            None => unflagged = Some(crud.file.clone()),
         }
     }
     if scaffolded_auth {
@@ -247,6 +255,13 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         authz,
         grant,
     );
+    if let Some(service) = &unflagged {
+        println!(
+            "  {} names an entity this run could not follow to its file: add \
+             `#[expose(graphql)]` to it, which the `#[crud]` resolver needs.",
+            rel(service, &ws.root)
+        );
+    }
     if outbox {
         println!(
             "  The outbox's migration (`{}`) is registered in crates/migrations: its \
@@ -311,13 +326,6 @@ fn ensure_target_and_lines(target: Option<String>, lines: Vec<String>) -> Transf
         let base = targeted.as_deref().unwrap_or(current);
         lines(base).or(targeted)
     })
-}
-
-/// Whether the port's service implements `CrudService`, read from the source:
-/// the service's API is what decides which methods an adapter may call.
-fn is_crud_port(ws: &NestrsWorkspace, snake: &str) -> CliResult<bool> {
-    Ok(read_if_exists(&ws.feature_root(snake).join("service.rs"))?
-        .is_some_and(|src| src.contains("impl CrudService for")))
 }
 
 /// The handler skeleton, and the `module.rs` that serves it.

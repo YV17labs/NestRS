@@ -1219,3 +1219,145 @@ fn only_a_feature_that_logs_declares_its_target() {
     run_ok(dir.path(), &["g", "ws", "orders", "-p", path]);
     assert_eq!(declares("orders"), 1, "declared once, by the gateway's run");
 }
+
+/// A port keeping its entities in `entities/` has an entity, and `crate::blog::Entity`
+/// still names the first: the operation gates on it, and no `#[subject]` lands
+/// beside it, on either edge a posture gates.
+#[test]
+fn an_adapter_over_a_port_keeping_its_entities_in_a_folder_writes_no_subject() {
+    for edge in ["mcp", "graphql"] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let path = dir.path().to_str().unwrap();
+
+        run_ok(dir.path(), &["g", "feature", "blog", "-p", path]);
+        run_ok(dir.path(), &["g", "entity", "blog/article", "-p", path]);
+        run_ok(dir.path(), &["g", "entity", "blog/comment", "-p", path]);
+        let printed = run_ok(dir.path(), &["g", edge, "blog", "-p", path]);
+
+        let port = dir.path().join("crates/features/src/blog");
+        assert!(
+            !port.join("subject.rs").exists(),
+            "`g {edge}` wrote a subject beside `entities/`"
+        );
+        assert!(
+            printed.contains("crate::blog::Entity"),
+            "`g {edge}` prints the grant the entity takes: {printed}"
+        );
+    }
+}
+
+/// A folder re-exporting no entity flat leaves `crate::blog::Entity` unresolved, so
+/// the operation stays on the subject the generator writes: it compiles, and it
+/// is gated all the same.
+#[test]
+fn an_adapter_over_a_folder_re_exporting_no_entity_flat_keeps_the_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "blog", "-p", path]);
+    let port = dir.path().join("crates/features/src/blog");
+    fs::create_dir_all(port.join("entities")).unwrap();
+    fs::write(port.join("entities/mod.rs"), "pub mod article;\n").unwrap();
+    fs::write(port.join("entities/article.rs"), "\n").unwrap();
+    let index = fs::read_to_string(port.join("mod.rs")).unwrap();
+    fs::write(
+        port.join("mod.rs"),
+        format!("mod entities;\npub use entities::article;\n{index}"),
+    )
+    .unwrap();
+
+    run_ok(dir.path(), &["g", "mcp", "blog", "-p", path]);
+
+    assert!(port.join("subject.rs").is_file());
+}
+
+/// `g entity` moves a resource's `entity.rs` to `entities/`, and `g graphql` still
+/// flags the entity the port's `CrudService` names, and no other.
+#[test]
+fn generate_graphql_flags_the_entity_its_crud_service_names_inside_a_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "entity", "posts/comments", "-p", path]);
+
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    let port = dir.path().join("crates/features/src/posts");
+    let post = fs::read_to_string(port.join("entities/post.rs")).unwrap();
+    assert!(post.contains("graphql,"), "{post}");
+    let comment = fs::read_to_string(port.join("entities/comment.rs")).unwrap();
+    assert!(!comment.contains("graphql"), "{comment}");
+    assert!(!port.join("subject.rs").exists());
+}
+
+/// A `CrudService` whose entity the generator cannot follow to a file is not
+/// skipped in silence: the run says what the developer writes.
+#[test]
+fn generate_graphql_names_the_flag_it_could_not_write() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    let port = dir.path().join("crates/features/src/posts");
+    let service = fs::read_to_string(port.join("service.rs")).unwrap();
+    fs::write(
+        port.join("service.rs"),
+        service.replace("use super::entity::{", "use other::place::{"),
+    )
+    .unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    assert!(
+        printed.contains("#[expose(graphql)]") && printed.contains("service.rs"),
+        "the run names the flag and the file it read: {printed}"
+    );
+}
+
+/// `architecture.md` allows `services/`: a `CrudService` there reads as one, so
+/// the port takes the `#[crud]` template under the service's own name, and no
+/// `#[subject]`.
+#[test]
+fn an_adapter_reads_a_crud_service_in_the_services_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    let port = dir.path().join("crates/features/src/posts");
+    fs::create_dir_all(port.join("services")).unwrap();
+    let service = fs::read_to_string(port.join("service.rs"))
+        .unwrap()
+        .replace("super::entity::", "super::super::entity::")
+        .replace("PostsService", "ArticlesService");
+    fs::write(port.join("services/articles.rs"), service).unwrap();
+    fs::remove_file(port.join("service.rs")).unwrap();
+    fs::write(
+        port.join("services/mod.rs"),
+        "mod articles;\n\npub use articles::ArticlesService;\n",
+    )
+    .unwrap();
+    let index = fs::read_to_string(port.join("mod.rs"))
+        .unwrap()
+        .replace("mod service;", "mod services;")
+        .replace(
+            "pub use service::PostsService;",
+            "pub use services::ArticlesService;",
+        );
+    fs::write(port.join("mod.rs"), index).unwrap();
+
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+
+    let resolver = fs::read_to_string(port.join("graphql/resolver.rs")).unwrap();
+    assert!(
+        resolver.contains("#[crud(service = ArticlesService)]"),
+        "{resolver}"
+    );
+    assert!(!port.join("subject.rs").exists());
+    let entity = fs::read_to_string(port.join("entity.rs")).unwrap();
+    assert!(entity.contains("graphql,"), "{entity}");
+    let tool = fs::read_to_string(port.join("mcp/tool.rs")).unwrap();
+    assert!(tool.contains("ArticlesService"), "{tool}");
+}

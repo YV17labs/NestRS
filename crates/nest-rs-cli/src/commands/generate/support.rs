@@ -100,6 +100,19 @@ pub(super) fn wire_into_app(
     })
 }
 
+/// `dir`'s entries, sorted, so a run reads them in one order everywhere.
+pub(super) fn list_dir(dir: &Path) -> CliResult<Vec<PathBuf>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(CliError::file(FileAction::List, dir))? {
+        entries.push(entry.map_err(CliError::file(FileAction::List, dir))?.path());
+    }
+    entries.sort();
+    Ok(entries)
+}
+
 /// Whether `source` names `ident` outside its `use` lines: an import listed
 /// bare, pinned (`X::for_root(..)`) or of a named instance (`X::<I>`) alike.
 fn names(source: &str, ident: &str) -> bool {

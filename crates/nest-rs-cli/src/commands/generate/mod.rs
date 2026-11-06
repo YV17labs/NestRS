@@ -8,6 +8,7 @@ mod cargo;
 mod entity;
 mod feature;
 mod migration;
+mod port;
 mod promotion;
 mod resource;
 mod support;

@@ -408,6 +408,12 @@ link is yours to add, and the printed next steps spell the line. Reach for
 `g resource` instead when you want the entity, the service and the guarded
 controller together.
 
+An adapter generated afterwards reads the same shape. `g mcp` and `g graphql` gate
+on `crate::posts::Entity`, the first entity, and write no `#[subject]` beside it;
+`g graphql` adds the `graphql` flag to the entity your `CrudService` names, wherever
+it moved to. When the service's source leads to no file, the run says so in its next
+steps, and the flag is yours to add.
+
 ### `g graphql` over a resource carries the same guarantee
 
 The GraphQL adapter for a resource port is the `#[crud]` resolver behind the

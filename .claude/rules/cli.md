@@ -47,7 +47,11 @@ waits for, is the case. A generated route or gateway is guarded, and a
 generated GraphQL operation or MCP tool is gated on its port's entity or the
 `#[subject]` the generator writes beside a port with none (`subject.rs`, placed
 by `architecture.md`), so an opening is always the developer's line, never the
-generator's. A grant a next step prints names its subject by the path
+generator's. **What a port holds is read off its source, in every shape
+`architecture.md` allows**: its `CrudService` in `service.rs` or `services/`, the
+file its `type Entity` leads to (`entity.rs`, `entities/<stem>.rs`), a flat
+`Entity` from `mod.rs`; one the source leads nowhere is the run's next step, never
+a skip in silence. A grant a next step prints names its subject by the path
 `authz/ability.rs` resolves. `g entity` retires a subject holding the entity's
 name, which its re-export would shadow, while it is what the generator wrote —
 the operations gated on it re-gated on the entity, which fails closed, and
@@ -88,8 +92,12 @@ the result to the scaffold's own `clippy -D warnings`; `g auth`, `g graphql` and
 `migrations` and `seed` read it there. Its e2e half replays
 every tutorial page that edits `blog` from the workspace root — `--app` naming
 the app, as a reader with two apps types it — and runs the suite they leave
-against the live Postgres. The integration suite's text assertions are not
-that proof: they read a wrong import as readily as a right one.
+against the live Postgres, beside what booting alone proves: a call through a
+generated gateway and tool, a key in the store the environment names, and each
+shape of key a generated migration writes, applied and written to. A page's block
+either marks the lines the reader writes or reads a file a generator wrote, so a
+generator that stops writing one fails its page. The integration suite's text
+assertions are not that proof: they read a wrong import as readily as a right one.
 
 **A generator wires what it wrote into the app that serves it**, from
 anywhere in the workspace, writing in one edit every import its code needs

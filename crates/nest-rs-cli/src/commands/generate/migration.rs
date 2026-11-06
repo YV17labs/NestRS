@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use super::cargo::{Dep, OUTBOX, ensure_workspace_deps, migrations_deps};
-use super::support::finish;
+use super::support::{finish, list_dir};
 use crate::column::{ModelColumns, Table, read_model, table_name};
 use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace};
@@ -392,19 +392,6 @@ fn entity_declaring(ws: &NestrsWorkspace, table: &str) -> CliResult<Declared> {
         }
         _ => Declared::Several(found.into_iter().map(|(file, _)| file).collect()),
     })
-}
-
-/// `dir`'s entries, sorted, so a run reads them in one order everywhere.
-fn list_dir(dir: &Path) -> CliResult<Vec<PathBuf>> {
-    if !dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut entries = Vec::new();
-    for entry in std::fs::read_dir(dir).map_err(CliError::file(FileAction::List, dir))? {
-        entries.push(entry.map_err(CliError::file(FileAction::List, dir))?.path());
-    }
-    entries.sort();
-    Ok(entries)
 }
 
 /// Register the framework's migration `framework`: one `migrator.rs` entry,

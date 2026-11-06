@@ -383,6 +383,35 @@ fn the_auth_adapters_compile_with_the_orm_off() {
     );
 }
 
+/// A port that grew `entities/` takes the adapters gating an operation, over either
+/// port shape: `crate::<port>::Entity` still names its first entity, the `#[expose]`
+/// the port's `CrudService` reads takes the `graphql` flag, and no `#[subject]` lands
+/// beside them.
+#[test]
+fn the_gated_adapters_compile_over_a_port_keeping_its_entities_in_a_folder() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    nestrs(dir.path(), &["new", "acme"], &[]);
+    let workspace = dir.path().join("acme");
+    for args in [
+        &["g", "resource", "posts"][..],
+        &["g", "entity", "posts/comments"],
+        &["g", "graphql", "posts"],
+        &["g", "mcp", "posts"],
+        &["g", "feature", "notes"],
+        &["g", "entity", "notes/articles"],
+        &["g", "entity", "notes/labels"],
+        &["g", "graphql", "notes"],
+        &["g", "mcp", "notes"],
+    ] {
+        nestrs(&workspace, args, &[]);
+    }
+    patch_to_working_tree(&workspace);
+
+    if let Err(stderr) = cargo_check(&workspace) {
+        panic!("the adapters over a folder of entities do not compile:\n{stderr}");
+    }
+}
+
 /// The clippy config a new workspace writes refuses raw SQL where a feature writes
 /// it, an `#[expect]` opens it, on the module when a derive expands to the call, and a
 /// migration's DDL stays out of it: the gate `nestrs run lint` runs, compiled over the

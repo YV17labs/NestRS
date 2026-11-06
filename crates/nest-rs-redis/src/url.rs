@@ -734,6 +734,25 @@ mod tests {
         );
     }
 
+    /// The client repeats a `protocol` it does not read, which may be anything
+    /// pasted there: the refusal says what is wrong and where to look instead.
+    #[test]
+    fn a_protocol_the_client_does_not_read_is_refused_without_its_value() {
+        let (error, rendered) = refused("rediss://valkey:6379/?protocol=zzqx-value");
+        assert!(matches!(error, RedisError::InvalidUrl { .. }), "{rendered}");
+        assert!(
+            rendered
+                .contains("a query parameter of the URL holds a value the client does not read"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&nest_rs_config::var_name("redis", "URL")),
+            "{rendered}"
+        );
+        let printed = nest_rs_testing::printed(&error);
+        assert!(!printed.contains("zzqx-value"), "{printed}");
+    }
+
     #[test]
     fn the_endpoint_is_the_address_the_client_dials_and_never_a_credential() {
         for (url, shown) in [

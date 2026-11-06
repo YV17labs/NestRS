@@ -222,16 +222,25 @@ async fn no_refusal_a_server_answers_prints_the_password_it_was_sent() {
         let proxy = ScriptedRedis::start(None, None).await;
         proxy.answer_with(Some(answer));
         let authority = proxy.url().replacen("rediss://", "", 1);
-        refused_quoting_no_password(
-            answer,
-            RedisConfig {
-                url: format!("rediss://app:{PASSWORD}@{authority}0").into(),
-                connect_timeout: Duration::from_millis(300),
-                tls: crate::harness::tls::trusting_the_test_authority(),
-                ..RedisConfig::default()
-            },
-        )
-        .await;
+        for url in [
+            format!("rediss://app:{PASSWORD}@{authority}0"),
+            format!(
+                "rediss-sentinel://app:{PASSWORD}@{authority}0?sentinelServiceName=main\
+                 &sentinelUsername=watch&sentinelPassword={PASSWORD}"
+            ),
+            format!("rediss-cluster://app:{PASSWORD}@{authority}0"),
+        ] {
+            refused_quoting_no_password(
+                answer,
+                RedisConfig {
+                    url: url.into(),
+                    connect_timeout: Duration::from_millis(300),
+                    tls: crate::harness::tls::trusting_the_test_authority(),
+                    ..RedisConfig::default()
+                },
+            )
+            .await;
+        }
     }
 }
 

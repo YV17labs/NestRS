@@ -364,7 +364,7 @@ impl RepoListeners {
 struct BoundModule;
 
 /// `event`, emitted by a task holding no unit of its own.
-async fn emitted_off_every_unit<E: Clone + Send + 'static>(bus: Arc<EventBus>, event: E) {
+async fn emitted_off_every_unit(bus: Arc<EventBus>, event: RowAsked) {
     let task = nest_rs_core::TaskContext::current().carry(async move { bus.emit(event).await });
     tokio::spawn(task).await.expect("the task ends");
 }

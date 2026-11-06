@@ -210,18 +210,10 @@ impl Exchange {
         }
     }
 
-    /// The status the store answered, if it answered.
-    pub(crate) fn status(&self) -> Option<StatusCode> {
-        match self {
-            Self::Answered(status) | Self::KeyRejected { status, .. } => Some(*status),
-            Self::Unanswered { .. } => None,
-        }
-    }
-
     /// Whether the exchange failed: no answer, or one whose status is not a
     /// success.
     pub(crate) fn failed(&self) -> bool {
-        !self.status().is_some_and(|status| status.is_success())
+        !matches!(self, Self::Answered(status) if status.is_success())
     }
 }
 

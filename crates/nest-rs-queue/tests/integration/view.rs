@@ -364,14 +364,9 @@ async fn a_filter_answering_a_client_error_dead_letters_the_job_at_once() {
 
 #[tokio::test]
 async fn a_filter_answering_a_wait_holds_the_next_attempt_back_that_long() {
-    let mut delivery = Delivery::new(
-        &BARE,
-        QueueName::new("throttled").expect("a valid name"),
-        json!({ "v": WIRE_FORMAT_VERSION, "payload": { "file": "a.wav" } }),
-    );
     let outcome = consume::attempt(
         method("ViewedProcessor::throttled"),
-        &mut delivery,
+        &mut delivery("throttled"),
         providing(),
         None,
     )

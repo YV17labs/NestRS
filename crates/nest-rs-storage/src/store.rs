@@ -487,15 +487,10 @@ struct Witness(HttpClient);
 #[async_trait::async_trait]
 impl HttpService for Witness {
     async fn call(&self, request: HttpRequest) -> std::result::Result<HttpResponse, HttpError> {
-        let (answer, exchange) = match self.0.execute(request).await {
-            Ok(answered) => {
-                let (answered, exchange) = read(answered).await;
-                (Ok(answered), exchange)
-            }
-            Err(failed) => {
-                let exchange = Exchange::unanswered(&failed);
-                (Err(failed), exchange)
-            }
+        let mut answer = self.0.execute(request).await;
+        let exchange = match &mut answer {
+            Ok(answered) => read(answered).await,
+            Err(failed) => Exchange::unanswered(failed),
         };
         // An exchange outside a witnessed unit has no reader: object_store's
         // own resume of a download's body, read after its call returned.
@@ -504,23 +499,23 @@ impl HttpService for Witness {
     }
 }
 
-/// `answered`, and the exchange it ended: a refusal's error document is read and
-/// handed back, so object_store still meets the answer it was sent; every other
-/// answer's body is left unread, a download's above all.
-async fn read(answered: HttpResponse) -> (HttpResponse, Exchange) {
+/// The exchange `answered` ended: a refusal's error document is read and put back,
+/// so object_store still meets the answer it was sent; every other answer's body
+/// is left unread, a download's above all.
+async fn read(answered: &mut HttpResponse) -> Exchange {
     let status = answered.status();
     if !matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-        return (answered, Exchange::Answered(status));
+        return Exchange::Answered(status);
     }
-    let (parts, body) = answered.into_parts();
+    let body = std::mem::replace(answered.body_mut(), bytes::Bytes::new().into());
     let document = refusal_document(body).await;
     let code = key_rejected_by(&document);
-    let exchange = if code.is_some() || status == StatusCode::UNAUTHORIZED {
+    *answered.body_mut() = document.into();
+    if code.is_some() || status == StatusCode::UNAUTHORIZED {
         Exchange::KeyRejected { status, code }
     } else {
         Exchange::Answered(status)
-    };
-    (HttpResponse::from_parts(parts, document.into()), exchange)
+    }
 }
 
 /// What a refusal's body holds, up to [`REFUSAL_DOCUMENT_BOUND`]: nothing when
@@ -656,16 +651,6 @@ mod tests {
         authority: &nest_rs_testing::TestAuthority,
         listing: u16,
     ) -> (String, Heard) {
-        store_answering(authority, Arc::new(AtomicU16::new(listing))).await
-    }
-
-    /// [`store_presenting`], answering a listing with the status `listing`
-    /// holds when its connection arrives — each answer closes its connection,
-    /// so that is the listing's own.
-    async fn store_answering(
-        authority: &nest_rs_testing::TestAuthority,
-        listing: Arc<AtomicU16>,
-    ) -> (String, Heard) {
         store_refusing(authority, listing, String::new()).await
     }
 
@@ -679,9 +664,20 @@ mod tests {
         )
     }
 
-    /// [`store_answering`], whose answer to a listing it does not serve carries
+    /// [`store_presenting`], whose answer to a listing it does not serve carries
     /// `document`.
     async fn store_refusing(
+        authority: &nest_rs_testing::TestAuthority,
+        listing: u16,
+        document: String,
+    ) -> (String, Heard) {
+        store_answering(authority, Arc::new(AtomicU16::new(listing)), document).await
+    }
+
+    /// [`store_refusing`], answering a listing with the status `listing` holds
+    /// when its connection arrives — each answer closes its connection, so that
+    /// is the listing's own.
+    async fn store_answering(
         authority: &nest_rs_testing::TestAuthority,
         listing: Arc<AtomicU16>,
         document: String,
@@ -844,8 +840,7 @@ mod tests {
         let authority = nest_rs_testing::TestAuthority::new();
         let logs = nest_rs_testing::LogCapture::install();
         for (status, document) in rejected_keys() {
-            let (endpoint, heard) =
-                store_refusing(&authority, Arc::new(AtomicU16::new(status)), document).await;
+            let (endpoint, heard) = store_refusing(&authority, status, document).await;
             let refused = Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
                 .await
                 .expect_err("every real call would fail as this listing did");
@@ -874,10 +869,8 @@ mod tests {
     async fn a_store_refusing_by_its_policy_boots_with_one_warn_naming_the_credentials() {
         let authority = nest_rs_testing::TestAuthority::new();
         let logs = nest_rs_testing::LogCapture::install();
-        let answers = policy_refusals();
-        for (status, document) in answers.clone() {
-            let (endpoint, _) =
-                store_refusing(&authority, Arc::new(AtomicU16::new(status)), document).await;
+        for (status, document) in policy_refusals() {
+            let (endpoint, _) = store_refusing(&authority, status, document).await;
             Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
                 .await
                 .expect("a least-privilege policy is no reason to refuse the boot");
@@ -885,7 +878,7 @@ mod tests {
         let warned = logs.find(crate::TARGET, REFUSED_TO_LIST);
         assert_eq!(
             warned.len(),
-            answers.len(),
+            policy_refusals().len(),
             "one per boot: {:#?}",
             logs.events()
         );
@@ -1018,8 +1011,7 @@ mod tests {
     async fn a_probe_reads_a_store_refusing_by_its_policy_as_answering_as_the_boot_does() {
         let authority = nest_rs_testing::TestAuthority::new();
         for (status, document) in policy_refusals() {
-            let (endpoint, _) =
-                store_refusing(&authority, Arc::new(AtomicU16::new(status)), document).await;
+            let (endpoint, _) = store_refusing(&authority, status, document).await;
             unproved(&endpoint, &authority)
                 .answers()
                 .await
@@ -1031,8 +1023,7 @@ mod tests {
     async fn a_probe_reads_a_store_rejecting_the_key_as_the_boot_refuses_it() {
         let authority = nest_rs_testing::TestAuthority::new();
         for (status, document) in rejected_keys() {
-            let (endpoint, heard) =
-                store_refusing(&authority, Arc::new(AtomicU16::new(status)), document).await;
+            let (endpoint, heard) = store_refusing(&authority, status, document).await;
             let refused = unproved(&endpoint, &authority)
                 .answers()
                 .await
@@ -1050,12 +1041,12 @@ mod tests {
     #[tokio::test]
     async fn a_refusal_read_hands_its_document_on_as_it_was_sent() {
         let document = error_document("SignatureDoesNotMatch");
-        let sent = http::Response::builder()
+        let mut answered = http::Response::builder()
             .status(StatusCode::FORBIDDEN)
             .body(HttpResponseBody::from(document.clone()))
             .expect("a response");
 
-        let (answered, exchange) = read(sent).await;
+        let exchange = read(&mut answered).await;
 
         assert_eq!(answered.status(), StatusCode::FORBIDDEN);
         assert_eq!(
@@ -1078,7 +1069,7 @@ mod tests {
             " ".repeat(REFUSAL_DOCUMENT_BOUND),
             error_document("SignatureDoesNotMatch")
         );
-        let (endpoint, _) = store_refusing(&authority, Arc::new(AtomicU16::new(403)), padded).await;
+        let (endpoint, _) = store_refusing(&authority, 403, padded).await;
         Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
             .await
             .expect("read as a refusal saying nothing of the key");
@@ -1088,7 +1079,7 @@ mod tests {
     async fn a_store_starting_to_refuse_the_listing_is_said_once_by_the_probe_that_meets_it() {
         let authority = nest_rs_testing::TestAuthority::new();
         let listing = Arc::new(AtomicU16::new(403));
-        let (endpoint, _) = store_answering(&authority, Arc::clone(&listing)).await;
+        let (endpoint, _) = store_answering(&authority, Arc::clone(&listing), String::new()).await;
         let logs = nest_rs_testing::LogCapture::install();
         let store = Store::open(&reaching(&endpoint, "s3://bucket", authority.client_tls()))
             .await

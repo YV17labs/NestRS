@@ -119,4 +119,3 @@ is a compile error on the DTO, so it fails safe.
 itself, which would spare that line. It is additive, so it can land in a minor if the
 line proves a cost; it also has to read `Option<Secret<T>>` and whatever else a field
 wraps it in, where the attribute already works on any shape.
-

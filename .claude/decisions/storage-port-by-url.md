@@ -102,4 +102,3 @@ never refused over a word this code cannot read.
 `AccessDenied`, which nothing tells from least privilege: it boots, reads `up`,
 and shows at its first call. A server speaking S3's API with a code of its own
 for a rejected key reads as a policy's refusal until its code joins the list.
-

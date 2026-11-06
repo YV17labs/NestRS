@@ -680,6 +680,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | an `Ability` attached by a guard of your own (`cx.attach(ability)`), or installed with `with_ambient(Arc::new(ability), fut)` | `AbilityGuard<F>` over an `AbilityFactory`, after the authentication guard: the ability guard is the one place an ability comes from |
    | `ab.cannot(action, E).requires_scope(scope)` | `ab.cannot(action, E)`: a denial holds whatever the token carries. To let a narrower token through, gate the grant with `requires_scope` instead |
    | `ab.cannot(action, E).fields([...])` | drop `.fields`: a denial hides rows, never columns. Narrow what a grant exposes with the grant's own `.fields` |
+   | `ab.can(Action::Update, E).fields([...])`, on `Create` or on `Manage`, written to narrow the write's reply | the list is both what the write sets and what its reply shows, so a reply narrower than the write cannot be declared. List each column the write chooses, and its reply shows them. Dropping the list answers every exposed column on that write, whose reply reads its own grant, never `Read`'s. A column a service sets by itself goes on the list or in `before_save` |
+   | `FieldSet::Only(cols)` read against a wire key | the set holds `Column::as_str()`, the table's name: `fields.permits(column.as_str())`. Only a `column_name` tells the two apart |
    | `RuleSpec<'_, E>` naming what `cannot` returns, a helper's return type or a binding's | `RuleSpec<'_, E, Cannot>`, `Cannot` from `nest_rs::authz`; a grant's stays `RuleSpec<'_, E>` |
    | `masked_item_for::<A, E, _>(ctx, item)` | `masked_item_for::<A, E, _>(ctx, &nest_rs::authz::graphql::ability()?, item)` |
    | `model_attrs(derive(PartialEq, Serialize, Deserialize))` — or a `Serialize` or `Deserialize` in the entity's `#[derive]` — and `use serde::{Deserialize, Serialize}` on an `#[expose]`d entity | refused at the derive: delete both, and the features crate's `serde` line if nothing else names serde. `#[expose]` writes the round trip a mask reads a row through, so the `Model` derives no serde. Keep `model_attrs(derive(PartialEq))` only where your code compares rows |
@@ -2273,6 +2275,18 @@ lists what the boot, a log or the wire shows when one is missed.
   List the two scopes.
 - **`requires_scope("…")`** no longer compiles (`E0308`, expected `Scope`,
   found `&str`): declare the scope as a `Scope` constant.
+- **A `.fields` on `Update`, `Create` or `Manage`** now holds a write to its list. A write
+  setting another column answers `403`, `FORBIDDEN`, where it wrote the column: under `errors`
+  by the input's field on a `#[crud]` operation, in `detail` by the table's name through
+  `ServiceError`, and `DbErr::AccessDenied` to a service reading `Repo` itself. `nest_rs::orm`
+  files `access denied — a column the caller's grants withhold` at `warn`. A `PUT` carrying a
+  column back as it stands passes where the caller may read it; one it may not read refuses
+  whatever the value, so grant the read, take the column out of `input(update)`, or give that
+  caller a route of its own. A `.fields` on `Manage` holds every action's writes, so an
+  `Update` grant of its own beside it widens them. A row whose grants do not permit each column
+  answers `404`, as any row outside the scope.
+- **`.fields([Headline])` on a `#[sea_orm(column_name = …)]` column** keeps `headline` in the
+  reply, where the mask stripped it: a client reading its absence reads the value.
 - **`cannot(..).requires_scope(..)` or `cannot(..).fields(..)`** no longer
   compiles (`E0599`, `no method named requires_scope found for struct
   RuleSpec<'_, E, Cannot>`), nor does a `RuleSpec<'_, E>` written for what

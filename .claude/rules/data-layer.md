@@ -107,8 +107,8 @@ bounded per run — the demo's notifications purge is the shape.
 
 **A database failure is classified once and said once.** `DbOutcome` reads a
 `DbErr` into the class every edge answers — a unique violation is a conflict,
-a row a write found gone is not found, a statement Postgres cancelled (`57014`)
-is unavailable, a `503` said at `warn` and retryable inside a transaction,
+a row a write found gone is not found, a write a grant's `.fields` withholds is
+forbidden, a statement Postgres cancelled (`57014`) is unavailable, a `503` said at `warn` and retryable inside a transaction,
 anything else is opaque — and
 `ServiceError`, `#[crud]` and the product read it rather than matching the
 driver's error again. The server's message quotes the input it refused, so a
@@ -262,6 +262,20 @@ entity's `ActiveModelBehavior` stays its own and `timestamps` stamps
 migration defaults the key to `uuidv7()`
 (`.claude/decisions/create-fills-what-the-grants-pin.md`). Held by
 `nest-rs-authz`'s and `nest-rs-seaorm`'s tests.
+
+## What a write sets — the grant's columns
+
+**A grant's `.fields` limits what a write chooses, in the write's own statement**:
+`Repo::update` and `Creatable` read the columns set before a hook, a pin or a default
+fills the row, refuse by name one no grant of the action permits, sending nothing,
+and hold the row to a grant per column in its `WHERE` or a create's re-check, so a
+relational rule is exact and no round trip is added. A row's columns are the union of
+the grants it meets, on a write as on a reply. The key addresses a row and is `when`'s
+to hold; a soft delete's stamp is the framework's. A replacement carries back what it
+read: under such a grant `Updatable::update` drops a column left as it stands from the
+statement, only where the caller may read it, or the refusal would tell it what the
+row holds (`.claude/decisions/field-grant-limits-a-write.md`). Held by `nest-rs-authz`'s
+and `nest-rs-seaorm`'s tests.
 
 ## Write capability is segregated, never a placeholder
 

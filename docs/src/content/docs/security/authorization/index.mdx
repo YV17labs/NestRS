@@ -228,6 +228,7 @@ on such a unit asks `Repo::can`, which refuses there, rather than skipping on `N
 ```rust title="nest_rs::authz::Ability"
 ability.can_class(Action::Read, TypeId::of::<user::Entity>())
 ability.condition_for::<user::Entity>(Action::Read)
+ability.condition_for_columns::<user::Entity>(Action::Update, &[user::Column::Name])?
 ability.can::<user::Entity>(Action::Update, &model)
 Repo::<user::Entity>::can(Action::Update, &model).await?
 ability.mask::<user::Entity>(Action::Read, &model)

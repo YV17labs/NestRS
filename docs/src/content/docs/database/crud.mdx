@@ -256,7 +256,9 @@ and the generated `create_user` fills the caller's org exactly as REST's does.
 A generated operation answers the class a client branches on, the same on both
 edges: a unique violation is a `409` (`CONFLICT`), a row gone before
 the write a `404` (`NOT_FOUND`), a create the row-level re-check rolled back
-a `403` (`FORBIDDEN`), and a statement Postgres cancelled at its bound
+a `403` (`FORBIDDEN`), as is a write setting a column
+[a grant's `.fields` withholds](/security/authorization/policies/#what-a-write-may-set),
+naming the input's field under `errors`, and a statement Postgres cancelled at its bound
 (`57014`, `<PREFIX>_SEAORM__STATEMENT_TIMEOUT_SECS`) a `503` (`UNAVAILABLE`),
 filed at `warn` — the server could not serve it in time, and another attempt
 may: as the request timeout's own `503` names the budget that ran out, it

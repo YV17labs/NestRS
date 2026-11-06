@@ -23,3 +23,10 @@ now says so; `PATCH` at that address answers `405` with an `Allow` naming `PUT`.
 
 Reopened when an application needs a partial update generated rather than
 written as its own route.
+
+## 2026-11-05 — a field grant reads what a replacement changes
+
+A `.fields` grant on `Update` now limits what a write sets, and this input sets every
+writable field, so a replacement carrying back what the caller read is no write of those
+columns (`field-grant-limits-a-write.md`). A partial `Update<E>` stays refused, for the
+reasons above.

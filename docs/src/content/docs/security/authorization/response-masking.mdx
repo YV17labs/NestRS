@@ -334,7 +334,8 @@ denial, and `Repo::can` asks SQL.
 
 A grant with no `.fields` returns `FieldSet::All` — every exposed column
 is permitted. A grant with `.fields([Id, Name])` returns
-`FieldSet::Only({"id", "name"})`. The masker unions:
+`FieldSet::Only({"id", "name"})`, each as the table names it, which the mask reads
+through the key the wire carries that column under. The masker unions:
 `FieldSet::Only(union_of_grants)` unless any matching grant is
 `FieldSet::All`, which clears the restriction. A grant the mask cannot
 decide on the row widens nothing; when only such grants admitted a row

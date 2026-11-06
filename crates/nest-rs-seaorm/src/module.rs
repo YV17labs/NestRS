@@ -265,7 +265,7 @@ async fn connect(
 ) -> anyhow::Result<DatabaseConnection> {
     let probe = config.probe_options()?;
     let endpoint = endpoint(&probe);
-    crate::config::warn_when_open(&probe, &endpoint);
+    crate::config::warn_when_open(&probe);
     let budget = options
         .get_connect_timeout()
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT);

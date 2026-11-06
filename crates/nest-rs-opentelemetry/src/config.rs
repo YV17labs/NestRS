@@ -22,11 +22,8 @@ pub(crate) const PINNED_SERVICE_NAME: &str = "`OpenTelemetryConfig::service_name
 /// while experimental.
 const CONFIG_FILES: [&str; 2] = ["OTEL_CONFIG_FILE", "OTEL_EXPERIMENTAL_CONFIG_FILE"];
 
-#[cfg(feature = "otlp")]
-pub(crate) use opentelemetry_semantic_conventions::attribute::SERVICE_NAME;
 /// The resource attribute naming the service, as the semantic conventions spell
 /// it; the crate exporting the constant is the `otlp` feature's.
-#[cfg(not(feature = "otlp"))]
 pub(crate) const SERVICE_NAME: &str = "service.name";
 
 /// The specification's variable naming the service.

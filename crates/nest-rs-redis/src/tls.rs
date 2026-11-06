@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{ClientTls, Environment};
+use nest_rs_config::{ClientTls, Surface};
 use redis::aio::{ConnectionLike, MultiplexedConnection};
 
 use crate::RedisError;
@@ -30,11 +30,9 @@ pub(crate) const PLAINTEXT_OPEN: &str = "Redis is reached in plaintext outside a
 /// topology opens through, once per instance, where a client rebuilt or a link
 /// reopened never comes back.
 pub(crate) fn warn_when_open(instance: &RedisInstance, url: &RedisUrl) {
-    let Some(endpoint) = url.plaintext_off_this_machine() else {
-        return;
-    };
-    let environment = Environment::from_env();
-    if environment.is_deployed() {
+    if let Some(environment) = Surface::Open.opened_in_deployment()
+        && let Some(endpoint) = url.plaintext_off_this_machine()
+    {
         tracing::warn!(
             target: crate::TARGET,
             instance = instance.name(),
@@ -223,11 +221,6 @@ mod tests {
 
     use crate::testing::{AUTHORITY, mutual_tls_listener, trusting_the_authority, unnamed};
 
-    /// `url`, as the default instance reads it.
-    fn read(url: &str) -> RedisUrl {
-        RedisUrl::parse(url, &unnamed()).unwrap_or_else(|refused| panic!("{url}: {refused}"))
-    }
-
     /// A deployment reaching Redis in plaintext says so, whichever URL wrote
     /// it, naming the hosts and never what the URL carries. A URL's hosts
     /// on this machine's loopback say nothing where the link reaches those
@@ -294,7 +287,7 @@ mod tests {
             ] {
                 jail.set_env(nest_rs_config::Environment::var_name(), profile);
                 let logs = nest_rs_testing::LogCapture::install();
-                warn_when_open(&unnamed(), &read(url));
+                warn_when_open(&unnamed(), &RedisUrl::parse(url, &unnamed()).expect(url));
                 let lines = logs.find(crate::TARGET, PLAINTEXT_OPEN);
                 assert_eq!(
                     lines

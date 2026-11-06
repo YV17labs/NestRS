@@ -37,11 +37,6 @@ async fn inside_the_subscriber() -> nest_rs_core::anyhow::Result<()> {
     Ok(())
 }
 
-/// What a deployment exporting a signal over plain HTTP off this machine says.
-#[cfg(feature = "otlp")]
-const EXPORTS_IN_PLAINTEXT: &str = "a signal is exported over plain HTTP outside a dev profile: its \
-     telemetry travels unencrypted";
-
 /// The role whose child writes the boot line on a text console.
 const BOOT_LINE: &str = "boot-line";
 
@@ -502,32 +497,46 @@ fn the_boot_line_s_signal_states_read_whole_as_logfmt() {
     assert_eq!(field("mode"), "otlp", "{line}");
 }
 
+/// What a deployment exporting a signal over plain HTTP off this machine says.
+#[cfg(feature = "otlp")]
+const EXPORTS_IN_PLAINTEXT: &str = "a signal is exported over plain HTTP outside a dev profile: its \
+     telemetry travels unencrypted";
+
+/// The lines saying a plaintext export, in a process under `profile` exporting
+/// to `endpoint`.
+#[cfg(feature = "otlp")]
+fn plaintext_said_under(profile: &str, endpoint: &str) -> Vec<nest_rs_testing::CapturedEvent> {
+    let logs = nest_rs_testing::LogCapture::install();
+    let otel = init_under(
+        &[
+            (Environment::var_name().as_str(), profile),
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint),
+        ],
+        OpenTelemetryConfig::default(),
+    )
+    .expect("the process's first subscriber");
+    // Nothing answers there, and a final flush would wait its bound.
+    std::mem::forget(otel);
+    logs.find(nest_rs_opentelemetry::TARGET, EXPORTS_IN_PLAINTEXT)
+}
+
 /// An `http://` endpoint declares the export in plaintext; off this machine, a
 /// deployment says it once per signal, naming each signal's endpoint.
 #[cfg(feature = "otlp")]
 #[test]
 fn a_deployment_exporting_in_plaintext_off_this_machine_says_it_per_signal() {
-    let logs = nest_rs_testing::LogCapture::install();
-    let otel = init_under(
-        &[
-            (Environment::var_name().as_str(), "production"),
-            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://192.0.2.1:4318"),
-        ],
-        OpenTelemetryConfig::default(),
-    )
-    .expect("the process's first subscriber");
-    let mut said: Vec<(String, String)> = logs
-        .find(nest_rs_opentelemetry::TARGET, EXPORTS_IN_PLAINTEXT)
-        .into_iter()
-        .map(|line| {
-            assert_eq!(line.level, "warn");
-            assert_eq!(line.field("environment").as_deref(), Some("production"));
-            (
-                line.field("signal").expect("its signal"),
-                line.field("endpoint").expect("its endpoint"),
-            )
-        })
-        .collect();
+    let mut said: Vec<(String, String)> =
+        plaintext_said_under("production", "http://192.0.2.1:4318")
+            .into_iter()
+            .map(|line| {
+                assert_eq!(line.level, "warn");
+                assert_eq!(line.field("environment").as_deref(), Some("production"));
+                (
+                    line.field("signal").expect("its signal"),
+                    line.field("endpoint").expect("its endpoint"),
+                )
+            })
+            .collect();
     said.sort();
     assert_eq!(
         said,
@@ -538,65 +547,39 @@ fn a_deployment_exporting_in_plaintext_off_this_machine_says_it_per_signal() {
         ]
         .map(|(signal, endpoint)| (signal.to_owned(), endpoint.to_owned()))
     );
-    // Nothing answers there, and a final flush would wait its bound.
-    std::mem::forget(otel);
 }
 
 /// A development or test profile's collector is no opening.
 #[cfg(feature = "otlp")]
 #[test]
 fn a_development_profile_exporting_in_plaintext_says_nothing() {
-    let logs = nest_rs_testing::LogCapture::install();
-    let otel = init_under(
-        &[
-            (Environment::var_name().as_str(), "development"),
-            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://192.0.2.1:4318"),
-        ],
-        OpenTelemetryConfig::default(),
-    )
-    .expect("the process's first subscriber");
-    assert!(
-        logs.find(nest_rs_opentelemetry::TARGET, EXPORTS_IN_PLAINTEXT)
-            .is_empty(),
-        "{:#?}",
-        logs.events()
-    );
-    // Nothing answers there, and a final flush would wait its bound.
-    std::mem::forget(otel);
+    let said = plaintext_said_under("development", "http://192.0.2.1:4318");
+    assert!(said.is_empty(), "{said:#?}");
 }
 
 /// A collector beside the app, the common plaintext shape, crosses no network.
 #[cfg(feature = "otlp")]
 #[test]
 fn a_deployment_exporting_to_its_loopback_says_nothing() {
-    let logs = nest_rs_testing::LogCapture::install();
-    let otel = init_under(
-        &[
-            (Environment::var_name().as_str(), "production"),
-            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:9"),
-        ],
-        OpenTelemetryConfig::default(),
-    )
-    .expect("the process's first subscriber");
-    assert!(
-        logs.find(nest_rs_opentelemetry::TARGET, EXPORTS_IN_PLAINTEXT)
-            .is_empty(),
-        "{:#?}",
-        logs.events()
-    );
-    drop(otel);
+    let said = plaintext_said_under("production", "http://127.0.0.1:9");
+    assert!(said.is_empty(), "{said:#?}");
+}
+
+/// The boot line a child in `role` writes under the variables `set`.
+fn boot_line_in(role: &str, set: &[(&str, &str)]) -> String {
+    let output = child_in(role, set);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{set:?}: {stdout}");
+    stdout
+        .lines()
+        .find(|line| line.contains("OpenTelemetry initialised"))
+        .unwrap_or_else(|| panic!("the boot line under {set:?}: {stdout}"))
+        .to_owned()
 }
 
 /// The boot line a child in `role` writes under `profile`, `""` declaring none.
 fn boot_line_under(role: &str, profile: &str) -> String {
-    let output = child_in(role, &[(Environment::var_name().as_str(), profile)]);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "{profile:?}: {stdout}");
-    stdout
-        .lines()
-        .find(|line| line.contains("OpenTelemetry initialised"))
-        .unwrap_or_else(|| panic!("the boot line under {profile:?}: {stdout}"))
-        .to_owned()
+    boot_line_in(role, &[(Environment::var_name().as_str(), profile)])
 }
 
 /// `log_format` says what the console writes, in the words a written format
@@ -734,14 +717,8 @@ fn app_run_refuses_an_endpoint_when_main_never_called_init() {
 /// the exporters or without them: the two read the specification's variables
 /// alike.
 fn service_named_under(set: &[(&str, &str)]) -> String {
-    let output = child_in(BOOT_LINE, set);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "{set:?}: {stdout}");
-    let line = stdout
-        .lines()
-        .find(|line| line.contains("OpenTelemetry initialised"))
-        .unwrap_or_else(|| panic!("the boot line under {set:?}: {stdout}"));
-    logfmt(line)
+    let line = boot_line_in(BOOT_LINE, set);
+    logfmt(&line)
         .into_iter()
         .find(|(key, _)| key == "service")
         .map(|(_, value)| value)

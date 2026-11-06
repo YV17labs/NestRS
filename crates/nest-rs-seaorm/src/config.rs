@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use nest_rs_config::__private::is_loopback;
 use nest_rs_config::{
-    Bound, ConfigError, CountBounds, DurationBounds, Environment, Floor, Namespaced, Result, config,
+    Bound, ConfigError, CountBounds, DurationBounds, Floor, Namespaced, Result, Surface, config,
 };
 use nest_rs_core::Secret;
 use sea_orm::ConnectOptions;
@@ -312,25 +312,26 @@ impl SeaOrmConfig {
 /// pool opens with, in plaintext off this machine: honoured, since `sslmode=disable`
 /// or libpq's `PGSSLMODE` wrote it. A server on the loopback or a socket is
 /// reached over no network, a sidecar proxy's common shape.
-pub(crate) fn warn_when_open(options: &PgConnectOptions, endpoint: &str) {
-    if !matches!(options.get_ssl_mode(), PgSslMode::Disable)
-        || options.get_socket().is_some()
-        || is_loopback(options.get_host())
+pub(crate) fn warn_when_open(options: &PgConnectOptions) {
+    if matches!(options.get_ssl_mode(), PgSslMode::Disable)
+        && options.get_socket().is_none()
+        && !is_loopback(options.get_host())
+        && let Some(environment) = Surface::Open.opened_in_deployment()
     {
-        return;
-    }
-    let environment = Environment::from_env();
-    if environment.is_deployed() {
         tracing::warn!(
             target: crate::target::ORM,
             environment = environment.as_str(),
-            endpoint = %endpoint,
+            endpoint = %crate::module::endpoint(options),
             "{PLAINTEXT_OPEN}",
         );
     }
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 mod tests {
     use nest_rs_config::{Config, ConfigService};
 
@@ -399,10 +400,6 @@ mod tests {
     /// never the URL, which carries the password. A server on this machine, by
     /// its loopback or a socket, is reached over no network.
     #[test]
-    #[expect(
-        clippy::result_large_err,
-        reason = "figment::Jail fixes the closure's error type"
-    )]
     fn a_deployment_reaching_postgres_in_plaintext_off_this_machine_is_said() {
         const DISABLED: &str = "postgres://app:s3cret@db.internal:5433/app?sslmode=disable";
         figment::Jail::expect_with(|jail| {
@@ -446,8 +443,7 @@ mod tests {
             ] {
                 jail.set_env(nest_rs_config::Environment::var_name(), profile);
                 let logs = nest_rs_testing::LogCapture::install();
-                let probe = pinned(url).probe_options().expect(url);
-                warn_when_open(&probe, &crate::module::endpoint(&probe));
+                warn_when_open(&pinned(url).probe_options().expect(url));
                 let lines = logs.find(crate::target::ORM, PLAINTEXT_OPEN);
                 assert_eq!(
                     lines
@@ -477,10 +473,6 @@ mod tests {
     /// libpq's own variable turns TLS off beside a URL naming no mode, as the
     /// URL's parameter does, and is said as one.
     #[test]
-    #[expect(
-        clippy::result_large_err,
-        reason = "figment::Jail fixes the closure's error type"
-    )]
     fn pgsslmode_disabling_tls_beside_a_url_naming_no_mode_is_said() {
         figment::Jail::expect_with(|jail| {
             jail.set_env(nest_rs_config::Environment::var_name(), "production");
@@ -490,7 +482,7 @@ mod tests {
                 .probe_options()
                 .expect("a URL");
             assert!(matches!(probe.get_ssl_mode(), PgSslMode::Disable));
-            warn_when_open(&probe, &crate::module::endpoint(&probe));
+            warn_when_open(&probe);
             let line = logs.expect_one(crate::target::ORM, PLAINTEXT_OPEN);
             assert_eq!(line.field("endpoint").as_deref(), Some("db.internal:5432"));
             Ok(())

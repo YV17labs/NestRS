@@ -112,8 +112,7 @@ impl OpenTelemetry {
                     "an OpenTelemetry variable is passed over",
                 );
             }
-            let environment = nest_rs_config::Environment::from_env();
-            if environment.is_deployed() {
+            if let Some(environment) = nest_rs_config::Surface::Open.opened_in_deployment() {
                 for (signal, endpoint) in summary.in_plaintext {
                     tracing::warn!(
                         target: crate::TARGET,

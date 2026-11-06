@@ -1527,7 +1527,7 @@ fn build_resource(
     binary: Option<&AppIdentity>,
     read: &impl Fn(&str) -> Option<String>,
 ) -> Result<Resource, ConfigError> {
-    config.pinned_service_name()?;
+    let pinned = config.pinned_service_name()?;
     let attributes = resource_attributes(read)?;
     let service_name = service_name(read)?;
     // The SDK's environment detector, which `Resource::builder` runs, reads
@@ -1545,9 +1545,8 @@ fn build_resource(
             .clone()
             .unwrap_or_else(|| Uuid::now_v7().to_string()),
     )];
-    let name = config
-        .service_name
-        .clone()
+    let name = pinned
+        .map(str::to_owned)
         .or_else(|| binary.map(|binary| binary.name.clone()));
     let version = config
         .service_version

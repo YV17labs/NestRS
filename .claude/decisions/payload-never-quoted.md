@@ -374,3 +374,21 @@ request's parse on that bound and pass the second, whose answer then left the re
 whole: seen this date on a real `POST`, debug build, 433 levels of `{a` around a literal
 answering ` --> 1:895` and the line holding it. The place then also came from the second
 parse, beside `locations` from the first.
+
+## 2026-11-06 — a `ServiceError`'s opaque cause is said to every reader
+
+`ServiceError::Internal` closes, for that type, the limit of the entry that says every
+reader holds an error to what it prints. Seen this date: a `{:?}` wrote `Internal {
+__cause: OpaqueCause { detail: "…", source: Some(Error("invalid type: string \"…\",
+expected u64", …)) } }`, and a report the same cause, on a type every service returns.
+`Debug` and `source()` hand out the view `Validation` and `Db` do, its sentence what
+`error_message` says of the `OpaqueCause` beneath the constant the variant displays, so
+every sentence it said before stands, a blank detail left out and one repeating the
+constant said once; in `nest-rs-seaorm`, with no change to `nest-rs-core`. What it
+costs: nothing typed sits beneath `Internal` for a reader to downcast, and no caller in
+the tree did; a failure a caller decides on is a variant of its own error, as a business
+variant already is.
+
+**The limit, unchanged:** `AuthError`'s `OpaqueCause`, `AtomicError::Database`'s boxed
+`DbErr`, a bare `DbErr` an app holds from `Repo` and `QueueError::Serialize` are as that
+entry reads them, the second pass's.

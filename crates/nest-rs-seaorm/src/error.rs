@@ -39,8 +39,8 @@ pub(crate) enum UnwiredBind {
 /// `Internal`) answer a constant on every edge and keep their cause,
 /// said through [`error_message`](fn@nest_rs_core::error_message), for the
 /// operator's line. A `{:?}`, an `anyhow` report and a `main` returning it read
-/// what that says of `Validation` and `Db` too: the value a rule refused and the
-/// server's message stay in the variant, for a `match`.
+/// what that says too: the value a rule refused and the server's message stay in
+/// the variant, for a `match`, and an internal failure's cause stays beneath it.
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum ServiceError {
@@ -69,7 +69,7 @@ pub enum ServiceError {
     /// An internal failure that is not a `DbErr` (a hash, an enqueue push, an
     /// upstream call). Maps to **500**: it displays the constant every edge
     /// answers, and its [`source`](Error::source) says the detail, then the
-    /// cause's chain, for the operator's line. Built by
+    /// cause's chain, in one sentence, for the operator's line. Built by
     /// [`internal`](Self::internal) or, with what failed,
     /// [`internal_because`](Self::internal_because).
     #[non_exhaustive]
@@ -97,24 +97,16 @@ impl fmt::Display for ServiceError {
 
 impl fmt::Debug for ServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Validation(errors) => f
-                .debug_tuple("Validation")
-                .field(SaidFailure::ref_cast(errors))
-                .finish(),
-            Self::Db(err) => f
-                .debug_tuple("Db")
-                .field(SaidFailure::ref_cast(err))
-                .finish(),
-            Self::Invalid(said) => f.debug_tuple("Invalid").field(said).finish(),
-            Self::Conflict(said) => f.debug_tuple("Conflict").field(said).finish(),
-            Self::Forbidden(said) => f.debug_tuple("Forbidden").field(said).finish(),
-            Self::NotFound(said) => f.debug_tuple("NotFound").field(said).finish(),
-            Self::Internal { __cause } => f
-                .debug_struct("Internal")
-                .field("__cause", __cause)
-                .finish(),
-        }
+        let (variant, field): (&str, &dyn fmt::Debug) = match self {
+            Self::Validation(errors) => ("Validation", SaidFailure::ref_cast(errors)),
+            Self::Db(err) => ("Db", SaidFailure::ref_cast(err)),
+            Self::Invalid(said) => ("Invalid", said),
+            Self::Conflict(said) => ("Conflict", said),
+            Self::Forbidden(said) => ("Forbidden", said),
+            Self::NotFound(said) => ("NotFound", said),
+            Self::Internal { __cause } => ("Internal", SaidFailure::ref_cast(__cause)),
+        };
+        f.debug_tuple(variant).field(field).finish()
     }
 }
 
@@ -125,7 +117,7 @@ impl Error for ServiceError {
         match self {
             Self::Validation(errors) => Some(SaidFailure::ref_cast(errors)),
             Self::Db(err) => Some(SaidFailure::ref_cast(err)),
-            Self::Internal { __cause } => Some(__cause),
+            Self::Internal { __cause } => Some(SaidFailure::ref_cast(__cause)),
             Self::Invalid(_) | Self::Conflict(_) | Self::Forbidden(_) | Self::NotFound(_) => None,
         }
     }
@@ -153,6 +145,34 @@ impl fmt::Display for SaidFailure<DbErr> {
 impl fmt::Display for SaidFailure<ValidationErrors> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&DecodeError::redact(&self.0.to_string(), None))
+    }
+}
+
+impl fmt::Display for SaidFailure<OpaqueCause> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sentence = nest_rs_core::error_message(UnderTheConstant::ref_cast(&self.0));
+        let below = sentence
+            .strip_prefix(nest_rs_core::OPAQUE_CLIENT_MESSAGE)
+            .unwrap_or(&sentence);
+        f.write_str(below.strip_prefix(": ").unwrap_or(below))
+    }
+}
+
+/// A cause read beneath the constant `Internal` displays, as its chain is, so its
+/// sentence leaves a blank detail out and says one repeating the constant once.
+#[derive(Debug, RefCast)]
+#[repr(transparent)]
+struct UnderTheConstant(OpaqueCause);
+
+impl fmt::Display for UnderTheConstant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(nest_rs_core::OPAQUE_CLIENT_MESSAGE)
+    }
+}
+
+impl Error for UnderTheConstant {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.0)
     }
 }
 
@@ -1452,7 +1472,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn every_other_atomic_failure_is_internal_and_keeps_it_as_its_cause() {
+    fn every_other_atomic_failure_is_internal_and_says_it_as_its_cause() {
         for (err, said) in [
             (
                 AtomicError::Poisoned { retryable: false },
@@ -1475,12 +1495,6 @@ pub(crate) mod tests {
             assert!(
                 matches!(internal, ServiceError::Internal { .. }),
                 "an atomic failure is opaque to the client: {internal:?}"
-            );
-            assert!(
-                internal
-                    .source()
-                    .and_then(Error::source)
-                    .is_some_and(|cause| cause.is::<AtomicError>())
             );
             assert_eq!(
                 error_message(&internal),
@@ -1824,6 +1838,55 @@ pub(crate) mod tests {
         );
     }
 
+    /// An opaque failure's cause reads the same: a decode failure or a driver's error
+    /// beneath the detail is said, by every reader, as `error_message` says it.
+    #[test]
+    fn no_reader_of_an_internal_failure_prints_what_its_cause_quotes() {
+        let decode = || serde_json::from_str::<u64>(r#""secret-123""#).expect_err("not a number");
+        let runtime = || match bad_uuid() {
+            DbErr::Exec(runtime) => runtime,
+            other => panic!("a refused statement: {other:?}"),
+        };
+        for (error, sentence) in [
+            (
+                ServiceError::internal_because("the reply did not decode", decode()),
+                "internal error: the reply did not decode: invalid type: a string, expected u64 \
+                 at line 1 column 12",
+            ),
+            (
+                ServiceError::internal_because(
+                    "the reply did not decode",
+                    anyhow::Error::from(decode()).context("reading the reply"),
+                ),
+                "internal error: the reply did not decode: reading the reply: invalid type: a \
+                 string, expected u64 at line 1 column 12",
+            ),
+            (
+                ServiceError::internal_because("the export failed", bad_uuid()),
+                "internal error: the export failed: Execution Error: database error 22P02",
+            ),
+            (
+                ServiceError::from(AtomicError::Database(Box::new(runtime()))),
+                "internal error: the atomic block failed: the atomic block could not be settled: \
+                 database error 22P02",
+            ),
+        ] {
+            assert_eq!(error_message(&error), sentence);
+            let printed = nest_rs_testing::printed(&error);
+            assert!(!printed.contains("secret-123"), "{printed}");
+            let debug = format!("{error:?}");
+            assert!(!debug.contains("secret-123"), "{debug}");
+            let report = format!("{:?}", anyhow::Error::from(error));
+            assert!(!report.contains("secret-123"), "{report}");
+            let (_, cause) = sentence.split_once(": ").expect("a cause");
+            assert!(report.contains(cause), "{report}");
+        }
+        assert_eq!(
+            format!("{:?}", ServiceError::internal("could not sign the export")),
+            "Internal(\"could not sign the export\")"
+        );
+    }
+
     /// `#[error(transparent)]` hands out the error's own `source()`, skipping the
     /// error itself: what an operator's line says of the failure is that link's.
     #[test]
@@ -1840,6 +1903,10 @@ pub(crate) mod tests {
             (
                 ServiceError::Db(bad_uuid()),
                 "database error: Execution Error: database error 22P02",
+            ),
+            (
+                ServiceError::internal_because("the export failed", bad_uuid()),
+                "internal error: the export failed: Execution Error: database error 22P02",
             ),
         ] {
             let wrapping = Wrapping(error);
@@ -1897,15 +1964,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_internal_failure_keeps_its_detail_and_cause_and_stays_clone() {
+    fn an_internal_failure_says_its_detail_and_cause_and_stays_clone() {
         let refused = std::io::Error::other("the key store refused the connection");
         let err = ServiceError::internal_because("could not sign the export", refused);
         let copy = err.clone();
         for err in [&err, &copy] {
-            let detail = err.source().expect("the detail is the source");
-            assert_eq!(detail.to_string(), "could not sign the export");
-            let cause = detail.source().expect("the cause is the detail's source");
-            assert!(cause.is::<std::io::Error>(), "{cause:?}");
+            let said = err.source().expect("the failure is the source");
+            assert_eq!(
+                said.to_string(),
+                "could not sign the export: the key store refused the connection"
+            );
+            assert!(said.source().is_none(), "the sentence holds the chain");
             assert_eq!(
                 error_message(err),
                 "internal error: could not sign the export: the key store refused the connection"
@@ -1916,7 +1985,40 @@ pub(crate) mod tests {
             error_message(&bare),
             "internal error: could not sign the export"
         );
-        assert!(bare.source().and_then(Error::source).is_none());
+        assert_eq!(
+            bare.source().map(ToString::to_string).as_deref(),
+            Some("could not sign the export"),
+        );
+    }
+
+    /// The sentence reads against the constant above it, as the chain did: a blank
+    /// detail is left out, and one repeating the constant is said once.
+    #[test]
+    fn a_blank_detail_or_one_repeating_the_constant_says_what_it_adds() {
+        let cause = || std::io::Error::other("boom");
+        for (error, sentence) in [
+            (ServiceError::internal(""), "internal error"),
+            (ServiceError::internal("  "), "internal error"),
+            (ServiceError::internal("internal error"), "internal error"),
+            (
+                ServiceError::internal_because("", cause()),
+                "internal error: boom",
+            ),
+            (
+                ServiceError::internal_because("internal error", cause()),
+                "internal error: boom",
+            ),
+            (
+                ServiceError::internal_because("internal error: x", cause()),
+                "internal error: internal error: x: boom",
+            ),
+            (
+                ServiceError::internal_because("x", cause()),
+                "internal error: x: boom",
+            ),
+        ] {
+            assert_eq!(error_message(&error), sentence, "{error:?}");
+        }
     }
 
     /// Each opaque failure whose chain holds an upstream's decode failure.

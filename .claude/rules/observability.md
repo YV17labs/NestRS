@@ -187,8 +187,9 @@ a cause flattened into the detail with `format!`. The `error` field is
 the cause's chain reach the line together, a decode failure or a driver's
 error in it said without its value;
 the variant displays the edge's constant, and the cause sits beneath an
-`OpaqueCause` link, where an edge's search for what to answer stops. Held by
-each type's unit tests.
+`OpaqueCause` link, where an edge's search for what to answer stops;
+`ServiceError` hands every reader that link's sentence in its place, and
+`AuthError` the link. Held by each type's unit tests.
 
 Three deviations from OpenTelemetry's log data model, each deliberate:
 

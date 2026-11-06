@@ -464,6 +464,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | a test helper signing a bearer with `app.container().get::<JwtService>()`, or with a private key the suite commits | `.ephemeral_signing_key()` on the builder, then `app.bearer(&claims)` — the app verifies the test's key in place of its own, for its own audience and issuer — `nest-rs`'s `authn` feature beside `testing` |
    | an `AuthnConfig` a suite seeds to verify its own tokens | delete it: the app reads its audience and issuer from its `.env`, and `ephemeral_signing_key` replaces its key alone |
    | `app.socket(path).bearer(token)` on a `WsApp` | `app.socket(path).header("authorization", app.bearer(&claims))` |
+   | a test reading silence from `next_frame()`, `next_message()`, `next_event()` or `next_item(id)`, which now wait sixty seconds | name its bound: `expect_silence(within)`, `next_frame_within(within)`, `next_message_within(within)`, `next_event_within(within)`, `next_item_within(id, within)` |
 
    **Lifecycle hooks and the way down**
 

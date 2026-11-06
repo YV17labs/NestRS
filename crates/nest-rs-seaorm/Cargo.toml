@@ -98,6 +98,9 @@ inventory.workspace = true
 # its `Uuid` primary key.
 uuid.workspace = true
 thiserror.workspace = true
+# `ServiceError`'s chain says the `DbErr` or the `ValidationErrors` a variant holds
+# through a `#[repr(transparent)]` view of the field, which a borrow alone can reach.
+ref-cast.workspace = true
 tracing.workspace = true
 # The ambient executor is carried in a `tokio::task_local!`.
 tokio.workspace = true

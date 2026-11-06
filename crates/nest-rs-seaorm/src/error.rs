@@ -8,9 +8,12 @@
 
 use std::borrow::Cow;
 use std::error::Error;
+use std::fmt;
 
 use nest_rs_core::__private::OpaqueCause;
+use nest_rs_core::DecodeError;
 use nest_rs_database::AtomicError;
+use ref_cast::RefCast;
 use sea_orm::sqlx::error::DatabaseError;
 use sea_orm::sqlx::postgres::PgDatabaseError;
 use sea_orm::{DbErr, RuntimeErr, SqlxError};
@@ -35,37 +38,33 @@ pub(crate) enum UnwiredBind {
 /// client-facing message and map to their 4xx; the opaque ones (`Db`,
 /// `Internal`) answer a constant on every edge and keep their cause,
 /// said through [`error_message`](fn@nest_rs_core::error_message), for the
-/// operator's line.
-#[derive(Debug, Clone, thiserror::Error)]
+/// operator's line. A `{:?}`, an `anyhow` report and a `main` returning it read
+/// what that says of `Validation` and `Db` too: the value a rule refused and the
+/// server's message stay in the variant, for a `match`.
+#[derive(Clone)]
 #[non_exhaustive]
 pub enum ServiceError {
     /// The input breaks the rules its type declares (`validator`) — maps to a
     /// **400**, as the edge's own refusal of that value does, whoever checks
     /// it. The fields ride under `errors` ([`field_errors`](Self::field_errors)),
     /// never `validator`'s `Debug`, which echoes the rejected value.
-    #[error("validation failed")]
-    Validation(#[from] ValidationErrors),
+    Validation(ValidationErrors),
     /// A `Repo`/ORM query failed for a reason the caller cannot act on
     /// ([`DbOutcome::Internal`], a `500`), or Postgres cancelled it at its
     /// bound ([`DbOutcome::Unavailable`], a `503`). The `DbErr` stays for
     /// `tracing`, said by its SQLSTATE; the wire sees a generic message.
-    #[error("database error")]
-    Db(#[source] DbErr),
+    Db(DbErr),
     /// A well-formed request the service rejects on business grounds (empty
     /// body, non-positive amount). Maps to **422**; the message is client-facing.
-    #[error("{0}")]
     Invalid(String),
     /// The action conflicts with the resource's current state (spending past a
     /// balance, acting on a closed record). Maps to **409**; client-facing.
-    #[error("{0}")]
     Conflict(String),
     /// The caller is known but not permitted to perform this action. Maps to
     /// **403**; client-facing.
-    #[error("{0}")]
     Forbidden(String),
     /// The addressed resource does not exist (or is deliberately hidden from
     /// this caller). Maps to **404**; client-facing.
-    #[error("{0}")]
     NotFound(String),
     /// An internal failure that is not a `DbErr` (a hash, an enqueue push, an
     /// upstream call). Maps to **500**: it displays the constant every edge
@@ -73,16 +72,100 @@ pub enum ServiceError {
     /// cause's chain, for the operator's line. Built by
     /// [`internal`](Self::internal) or, with what failed,
     /// [`internal_because`](Self::internal_because).
-    #[error("{}", nest_rs_core::OPAQUE_CLIENT_MESSAGE)]
     #[non_exhaustive]
     Internal {
         /// The detail and its cause, shared so the error stays `Clone` for
         /// dataloaders; read through [`Error::source`].
         #[doc(hidden)]
-        #[source]
         __cause: OpaqueCause,
     },
 }
+
+impl fmt::Display for ServiceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Validation(_) => "validation failed",
+            Self::Db(_) => "database error",
+            Self::Invalid(said)
+            | Self::Conflict(said)
+            | Self::Forbidden(said)
+            | Self::NotFound(said) => said,
+            Self::Internal { .. } => nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        })
+    }
+}
+
+impl fmt::Debug for ServiceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Validation(errors) => f
+                .debug_tuple("Validation")
+                .field(SaidFailure::ref_cast(errors))
+                .finish(),
+            Self::Db(err) => f
+                .debug_tuple("Db")
+                .field(SaidFailure::ref_cast(err))
+                .finish(),
+            Self::Invalid(said) => f.debug_tuple("Invalid").field(said).finish(),
+            Self::Conflict(said) => f.debug_tuple("Conflict").field(said).finish(),
+            Self::Forbidden(said) => f.debug_tuple("Forbidden").field(said).finish(),
+            Self::NotFound(said) => f.debug_tuple("NotFound").field(said).finish(),
+            Self::Internal { __cause } => f
+                .debug_struct("Internal")
+                .field("__cause", __cause)
+                .finish(),
+        }
+    }
+}
+
+// By hand: thiserror's `#[source]` hands out the field, which quotes what the variant
+// refused, and no link at all loses the cause under an `#[error(transparent)]` wrapper.
+impl Error for ServiceError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Validation(errors) => Some(SaidFailure::ref_cast(errors)),
+            Self::Db(err) => Some(SaidFailure::ref_cast(err)),
+            Self::Internal { __cause } => Some(__cause),
+            Self::Invalid(_) | Self::Conflict(_) | Self::Forbidden(_) | Self::NotFound(_) => None,
+        }
+    }
+}
+
+impl From<ValidationErrors> for ServiceError {
+    fn from(errors: ValidationErrors) -> Self {
+        Self::Validation(errors)
+    }
+}
+
+/// A failure a [`ServiceError`] holds, as its chain hands it out: its `Display` and
+/// its `Debug` are what [`error_message`](fn@nest_rs_core::error_message) says of it,
+/// where the library's own quote the rejected value or the server's message.
+#[derive(RefCast)]
+#[repr(transparent)]
+struct SaidFailure<T>(T);
+
+impl fmt::Display for SaidFailure<DbErr> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&said_db(&self.0))
+    }
+}
+
+impl fmt::Display for SaidFailure<ValidationErrors> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&DecodeError::redact(&self.0.to_string(), None))
+    }
+}
+
+impl<T> fmt::Debug for SaidFailure<T>
+where
+    Self: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.to_string(), f)
+    }
+}
+
+impl<T: 'static> Error for SaidFailure<T> where Self: fmt::Display {}
 
 impl ServiceError {
     /// **422** — a well-formed request the service rejects on business grounds.
@@ -1696,6 +1779,80 @@ pub(crate) mod tests {
         assert!(displayed.contains("secret-123"), "{displayed}");
         let redacted = nest_rs_core::DecodeError::redact(&displayed, Some(&error));
         assert_eq!(redacted, "Execution Error: database error 22P02");
+    }
+
+    /// A rule's failure as `validator` hands it over: its parameters holding the
+    /// rejected value, as `bad_uuid`'s message does.
+    fn short_password() -> ValidationErrors {
+        let mut rule = validator::ValidationError::new("length");
+        rule.add_param("value".into(), &"secret-123");
+        let mut errors = ValidationErrors::new();
+        errors.add("password", rule);
+        errors
+    }
+
+    /// A `{:?}`, a `main` returning it and an `anyhow` report print each link as
+    /// it is: each says what `error_message` says, and what the variant refused
+    /// stays in the variant, for the `match` that reads it.
+    #[test]
+    fn no_reader_of_a_service_error_prints_what_it_refused() {
+        for (error, sentence) in [
+            (
+                ServiceError::Validation(short_password()),
+                "validation failed: password: Validation error: length",
+            ),
+            (
+                ServiceError::Db(bad_uuid()),
+                "database error: Execution Error: database error 22P02",
+            ),
+        ] {
+            assert_eq!(error_message(&error), sentence);
+            let printed = nest_rs_testing::printed(&error);
+            assert!(!printed.contains("secret-123"), "{printed}");
+            let report = format!("{:?}", anyhow::Error::from(error));
+            assert!(!report.contains("secret-123"), "{report}");
+            let (_, cause) = sentence.split_once(": ").expect("a cause");
+            assert!(report.contains(cause), "{report}");
+        }
+        assert_eq!(
+            format!("{:?}", ServiceError::Db(bad_uuid())),
+            "Db(\"Execution Error: database error 22P02\")"
+        );
+        assert_eq!(
+            format!("{:?}", ServiceError::Validation(short_password())),
+            "Validation(\"password: Validation error: length\")"
+        );
+    }
+
+    /// `#[error(transparent)]` hands out the error's own `source()`, skipping the
+    /// error itself: what an operator's line says of the failure is that link's.
+    #[test]
+    fn a_wrapper_written_transparent_says_the_cause_as_the_error_does() {
+        #[derive(Debug, thiserror::Error)]
+        #[error(transparent)]
+        struct Wrapping(#[from] ServiceError);
+
+        for (error, said) in [
+            (
+                ServiceError::Validation(short_password()),
+                "validation failed: password: Validation error: length",
+            ),
+            (
+                ServiceError::Db(bad_uuid()),
+                "database error: Execution Error: database error 22P02",
+            ),
+        ] {
+            let wrapping = Wrapping(error);
+            assert_eq!(error_message(&wrapping), said);
+            let printed = nest_rs_testing::printed(&wrapping);
+            assert!(!printed.contains("secret-123"), "{printed}");
+        }
+    }
+
+    #[test]
+    fn a_validation_failure_with_no_field_says_its_sentence_alone() {
+        let empty = ServiceError::Validation(ValidationErrors::new());
+        assert_eq!(error_message(&empty), "validation failed");
     }
 
     #[test]

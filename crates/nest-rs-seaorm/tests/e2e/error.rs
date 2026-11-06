@@ -80,6 +80,8 @@ async fn an_input_the_server_refused_is_said_by_its_sqlstate_and_never_quoted() 
     let service = ServiceError::from(refused);
     assert!(matches!(service, ServiceError::Db(_)), "{service:?}");
     assert!(!error_message(&service).contains("secret-123"));
+    let printed = nest_rs_testing::printed(&service);
+    assert!(!printed.contains("secret-123"), "{printed}");
 }
 
 #[tokio::test]

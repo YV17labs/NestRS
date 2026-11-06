@@ -35,6 +35,7 @@ opentelemetry-appender-tracing = "0.33"
 tracing-opentelemetry = "0.34"
 
 thiserror = "2.0"
+ref-cast = "1.0"
 anyhow = "1.0"  # public
 
 jsonwebtoken = { version = "11.1", features = ["aws_lc_rs"] }

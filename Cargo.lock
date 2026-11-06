@@ -3283,6 +3283,7 @@ dependencies = [
  "nest-rs-seaorm-macros",
  "nest-rs-testing",
  "nest-rs-ws",
+ "ref-cast",
  "schemars",
  "sea-orm",
  "sea-orm-migration",

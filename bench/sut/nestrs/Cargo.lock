@@ -1794,6 +1794,7 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-pipes",
  "nest-rs-seaorm-macros",
+ "ref-cast",
  "schemars",
  "sea-orm",
  "serde",

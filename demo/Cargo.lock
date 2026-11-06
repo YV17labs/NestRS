@@ -3085,6 +3085,7 @@ dependencies = [
  "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-seaorm-macros",
+ "ref-cast",
  "schemars",
  "sea-orm",
  "sea-orm-migration",

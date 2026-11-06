@@ -464,8 +464,8 @@ struct Signup {
     password: String,
 }
 
-/// `ServiceError::Validation`'s shape: a constant sentence, the validation
-/// failure kept as its source.
+/// A developer's own error: a constant sentence, the validation failure kept as
+/// its source.
 #[derive(Debug, thiserror::Error)]
 enum SignupError {
     #[error("validation failed")]

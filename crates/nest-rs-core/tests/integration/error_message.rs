@@ -15,8 +15,7 @@ struct Signup {
     email: String,
 }
 
-/// `ServiceError::Validation`'s shape: a constant sentence, the failure kept as
-/// its source.
+/// A developer's own error: a constant sentence, the failure kept as its source.
 #[derive(Debug, thiserror::Error)]
 #[error("validation failed")]
 struct Refused(#[from] ValidationErrors);

@@ -184,11 +184,13 @@ and `OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT` (values are exported
 whole), `OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT` (and `OTEL_ATTRIBUTE_COUNT_LIMIT`
 while the logs export: no log record's attributes are limited),
 `OTEL_METRICS_EXEMPLAR_FILTER`, `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION`,
-the SDK's own `OTEL_BSP_MAX_CONCURRENT_EXPORTS`, and `OTEL_LOG_LEVEL`, whose
+the SDK's own `OTEL_BSP_MAX_CONCURRENT_EXPORTS`, `OTEL_EXPORTER_OTLP_INSECURE`
+and its per-signal spellings, which apply to gRPC alone since over OTLP/HTTP the
+endpoint's scheme decides, and `OTEL_LOG_LEVEL`, whose
 subject — the SDK's own lines — follows the console's filter here, as every
 library's does (`RUST_LOG=info,opentelemetry_sdk=debug`). A value that names what the
 build does says nothing: `OTEL_METRICS_EXEMPLAR_FILTER=always_off`,
-`explicit_bucket_histogram`, one concurrent export.
+`explicit_bucket_histogram`, one concurrent export, `OTEL_EXPORTER_OTLP_INSECURE=false`.
 
 The console's three variables are read by the kernel's one parser, as
 the baseline logger reads them: a value that does not parse fails `init` with

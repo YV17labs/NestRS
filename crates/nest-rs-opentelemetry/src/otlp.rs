@@ -35,16 +35,17 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{InstrumentationScope, Key, KeyValue, global};
 use opentelemetry_otlp::{
     Compression, LogExporter, MetricExporter, OTEL_EXPORTER_OTLP_COMPRESSION,
-    OTEL_EXPORTER_OTLP_HEADERS, OTEL_EXPORTER_OTLP_LOGS_COMPRESSION,
-    OTEL_EXPORTER_OTLP_LOGS_HEADERS, OTEL_EXPORTER_OTLP_LOGS_PROTOCOL,
-    OTEL_EXPORTER_OTLP_LOGS_TIMEOUT, OTEL_EXPORTER_OTLP_METRICS_COMPRESSION,
-    OTEL_EXPORTER_OTLP_METRICS_HEADERS, OTEL_EXPORTER_OTLP_METRICS_PROTOCOL,
+    OTEL_EXPORTER_OTLP_HEADERS, OTEL_EXPORTER_OTLP_INSECURE, OTEL_EXPORTER_OTLP_LOGS_COMPRESSION,
+    OTEL_EXPORTER_OTLP_LOGS_HEADERS, OTEL_EXPORTER_OTLP_LOGS_INSECURE,
+    OTEL_EXPORTER_OTLP_LOGS_PROTOCOL, OTEL_EXPORTER_OTLP_LOGS_TIMEOUT,
+    OTEL_EXPORTER_OTLP_METRICS_COMPRESSION, OTEL_EXPORTER_OTLP_METRICS_HEADERS,
+    OTEL_EXPORTER_OTLP_METRICS_INSECURE, OTEL_EXPORTER_OTLP_METRICS_PROTOCOL,
     OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
     OTEL_EXPORTER_OTLP_PROTOCOL, OTEL_EXPORTER_OTLP_PROTOCOL_HTTP_PROTOBUF,
     OTEL_EXPORTER_OTLP_TIMEOUT, OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
     OTEL_EXPORTER_OTLP_TRACES_COMPRESSION, OTEL_EXPORTER_OTLP_TRACES_HEADERS,
-    OTEL_EXPORTER_OTLP_TRACES_PROTOCOL, OTEL_EXPORTER_OTLP_TRACES_TIMEOUT, Protocol, SpanExporter,
-    WithExportConfig, WithHttpConfig,
+    OTEL_EXPORTER_OTLP_TRACES_INSECURE, OTEL_EXPORTER_OTLP_TRACES_PROTOCOL,
+    OTEL_EXPORTER_OTLP_TRACES_TIMEOUT, Protocol, SpanExporter, WithExportConfig, WithHttpConfig,
 };
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::{
@@ -1243,6 +1244,10 @@ struct Unserved {
 const NO_VALUE_LENGTH_LIMIT: &str =
     "this SDK limits no attribute value's length, so each is exported whole";
 
+/// Why the transport-security flag is passed over, the value `false` asking for
+/// nothing this exporter does otherwise.
+const GRPC_ALONE: &str = "it applies to gRPC alone; over OTLP/HTTP the endpoint's scheme decides";
+
 /// Every specification variable no crate this build links reads, nor offers a
 /// setting for (opentelemetry_sdk 0.33, opentelemetry-otlp 0.33), and the
 /// SDK's own the processor this crate builds ignores.
@@ -1287,6 +1292,26 @@ const UNSERVED: &[Unserved] = &[
         variable: OTEL_BSP_MAX_CONCURRENT_EXPORTS,
         honoured: Some("1"),
         reason: "the batch span processor this build runs exports one batch at a time",
+    },
+    Unserved {
+        variable: OTEL_EXPORTER_OTLP_INSECURE,
+        honoured: Some("false"),
+        reason: GRPC_ALONE,
+    },
+    Unserved {
+        variable: OTEL_EXPORTER_OTLP_TRACES_INSECURE,
+        honoured: Some("false"),
+        reason: GRPC_ALONE,
+    },
+    Unserved {
+        variable: OTEL_EXPORTER_OTLP_METRICS_INSECURE,
+        honoured: Some("false"),
+        reason: GRPC_ALONE,
+    },
+    Unserved {
+        variable: OTEL_EXPORTER_OTLP_LOGS_INSECURE,
+        honoured: Some("false"),
+        reason: GRPC_ALONE,
     },
 ];
 
@@ -3706,6 +3731,10 @@ mod tests {
                         "base2_exponential_bucket_histogram"
                     ),
                     (OTEL_BSP_MAX_CONCURRENT_EXPORTS, "4"),
+                    (OTEL_EXPORTER_OTLP_INSECURE, "true"),
+                    (OTEL_EXPORTER_OTLP_TRACES_INSECURE, "true"),
+                    (OTEL_EXPORTER_OTLP_METRICS_INSECURE, "TRUE"),
+                    (OTEL_EXPORTER_OTLP_LOGS_INSECURE, "anything"),
                 ],
                 true
             ),
@@ -3718,6 +3747,10 @@ mod tests {
                 OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION,
                 OTEL_LOG_LEVEL,
                 OTEL_BSP_MAX_CONCURRENT_EXPORTS,
+                OTEL_EXPORTER_OTLP_INSECURE,
+                OTEL_EXPORTER_OTLP_TRACES_INSECURE,
+                OTEL_EXPORTER_OTLP_METRICS_INSECURE,
+                OTEL_EXPORTER_OTLP_LOGS_INSECURE,
             ]
         );
         assert!(
@@ -3729,6 +3762,10 @@ mod tests {
                         "EXPLICIT_BUCKET_HISTOGRAM"
                     ),
                     (OTEL_BSP_MAX_CONCURRENT_EXPORTS, "1"),
+                    (OTEL_EXPORTER_OTLP_INSECURE, "false"),
+                    (OTEL_EXPORTER_OTLP_TRACES_INSECURE, " FALSE "),
+                    (OTEL_EXPORTER_OTLP_METRICS_INSECURE, "False"),
+                    (OTEL_EXPORTER_OTLP_LOGS_INSECURE, "false"),
                 ],
                 true
             )
@@ -3752,6 +3789,9 @@ mod tests {
         );
         for over in unserved(&reading(&[(OTEL_LOG_LEVEL, "warn")]), false) {
             assert!(!over.reason.contains("warn"), "{over:?}");
+        }
+        for over in unserved(&reading(&[(OTEL_EXPORTER_OTLP_INSECURE, "true")]), false) {
+            assert_eq!(over.reason, GRPC_ALONE);
         }
     }
 

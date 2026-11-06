@@ -133,7 +133,9 @@ The image runs under the production profile, which reads no app's own
 
 Runtime image is `gcr.io/distroless/cc-debian13:nonroot` — no shell, no package
 manager, runs as UID 65532. `cargo-chef` cooks dependencies in a cacheable
-layer. Adding a new app under `demo/apps/` requires no Dockerfile change.
+layer. Both builds are `--locked`, so a `Cargo.lock` behind its manifests fails
+the image, and run on the toolchain the `RUST_VERSION` argument names. Adding a
+new app under `demo/apps/` requires no Dockerfile change.
 
 `migrate` ships beside the apps — the schema is an app of its own. `seed` does
 not: it writes demo fixtures, which a production image has no business being

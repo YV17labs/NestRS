@@ -13,5 +13,7 @@ Justfile
 Dockerfile
 .dockerignore
 bacon.toml
+# An image builds on the toolchain its Dockerfile's ARG names: rustup would take this over it.
+rust-toolchain.toml
 *.log
 **/.env*.local

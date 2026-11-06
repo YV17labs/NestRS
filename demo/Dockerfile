@@ -27,9 +27,9 @@ COPY --from=planner /app/demo/recipe.json /app/demo/recipe.json
 COPY Cargo.toml /app/
 COPY crates /app/crates
 WORKDIR /app/demo
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --locked --recipe-path recipe.json
 COPY . /app
-RUN cargo build --release --workspace --exclude seed --bins
+RUN cargo build --release --locked --workspace --exclude seed --bins
 # The cook built an empty binary for every member, `seed` among them.
 RUN mkdir -p /out && \
     find target/release -maxdepth 1 -type f -executable ! -name seed -exec cp {} /out/ \;

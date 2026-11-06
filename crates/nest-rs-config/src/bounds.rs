@@ -81,7 +81,9 @@ impl Bound {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub enum Floor {
-    /// At least `count` of the unit, whichever side set the value.
+    /// At least `count` of the unit, whichever side set the value. On an
+    /// `Option<Duration>`, `0` is off, so a zero set in code is refused whatever
+    /// the count.
     Units(Bound),
     /// Longer than nothing: the variable is held to one whole unit, and a value
     /// set in code to anything above zero is taken. The reason is why zero fails.
@@ -225,7 +227,8 @@ impl DurationBounds {
 /// assert!(refused.to_string().contains("must be at most 256 — past it the pool"));
 /// ```
 ///
-/// A count that may go without a limit is an `Option<usize>` on the same range:
+/// A count that may go without a limit is an `Option<usize>` on the same range.
+/// On an `Option`, `0` is off, so the floor is at least 1:
 ///
 /// ```
 /// use nest_rs_config::{Bound, Config, ConfigService, CountBounds, config};
@@ -683,22 +686,28 @@ fn pinned_duration<T: BoundedField<Bounds = DurationBounds>>(
             ),
         )
     };
+    let refuse_zero = |why: &str| {
+        ConfigError::parse(
+            var.clone(),
+            format!(
+                "{lead}`{path}` set in code is {value:?}, and it must be above zero — \
+                 {why}{or_off}",
+            ),
+        )
+    };
     match bounds.least {
         Floor::Units(bound) => {
             let least = bounds.unit.duration(bound.count);
             if value < least {
                 return Err(refuse("below", least, "at least", bound.why));
             }
+            if off == Off::AtZero && value.is_zero() {
+                return Err(refuse_zero(
+                    "zero turns the field off, and is no limit it holds",
+                ));
+            }
         }
-        Floor::AboveZero(why) if value.is_zero() => {
-            return Err(ConfigError::parse(
-                var.clone(),
-                format!(
-                    "{lead}`{path}` set in code is {value:?}, and it must be above zero — \
-                     {why}{or_off}",
-                ),
-            ));
-        }
+        Floor::AboveZero(why) if value.is_zero() => return Err(refuse_zero(why)),
         Floor::AboveZero(_) => {}
     }
     let most = bounds.unit.duration(bounds.most.count);
@@ -979,6 +988,69 @@ mod tests {
             "{held}"
         );
         assert_eq!(CEILING.check("fixture", None).expect("off"), None);
+    }
+
+    /// A floor of nothing refuses no zero itself, and under an off a zero is
+    /// never a limit: `None` is off in code, as an `Option<usize>` holds it.
+    #[test]
+    fn a_pinned_zero_under_an_off_is_refused_whatever_the_floor() {
+        const FROM_NOTHING: BoundedSetting<Option<Duration>> = BoundedSetting::new(
+            DurationBounds::secs(
+                Floor::Units(Bound::new(0, "the floor's reason")),
+                Bound::new(60, "the ceiling's reason"),
+            ),
+            Field::new("WINDOW", "FixtureConfig::window"),
+        );
+        for said in [
+            refused(FROM_NOTHING.read(&env(&[]), Some(Duration::ZERO))),
+            refused(FROM_NOTHING.check("fixture", Some(Duration::ZERO))),
+        ] {
+            assert!(
+                said.contains(&var_name("fixture", "WINDOW_SECS"))
+                    && said.contains("`FixtureConfig::window` set in code is 0ns")
+                    && said.contains("zero turns the field off")
+                    && said.contains("`None` turns it off"),
+                "{said}"
+            );
+        }
+        assert_eq!(
+            FROM_NOTHING
+                .read(&env(&[]), Some(Duration::from_millis(1)))
+                .expect("a pin above zero is inside the range"),
+            Some(Duration::from_millis(1)),
+        );
+        assert_eq!(
+            FROM_NOTHING
+                .read(&env(&[("WINDOW_SECS", "0")]), Some(Duration::from_secs(5)))
+                .expect("off"),
+            None,
+            "`0` from the environment stays off",
+        );
+    }
+
+    /// A `Duration` has no off, so a floor of nothing takes a pinned zero as the
+    /// value it is, as `AuthnConfig::leeway` holds one.
+    #[test]
+    fn a_pinned_zero_with_no_off_stands_on_a_floor_of_nothing() {
+        const LEEWAY: BoundedSetting<Duration> = BoundedSetting::new(
+            DurationBounds::secs(
+                Floor::Units(Bound::new(0, "the floor's reason")),
+                Bound::new(60, "the ceiling's reason"),
+            ),
+            Field::new("LEEWAY", "FixtureConfig::leeway"),
+        );
+        assert_eq!(
+            LEEWAY
+                .read(&env(&[]), Duration::ZERO)
+                .expect("zero is inside the range"),
+            Duration::ZERO,
+        );
+        assert_eq!(
+            LEEWAY
+                .check("fixture", Duration::ZERO)
+                .expect("zero is inside the range"),
+            Duration::ZERO,
+        );
     }
 
     /// A floor whose only failure is zero holds the variable to one unit, and a

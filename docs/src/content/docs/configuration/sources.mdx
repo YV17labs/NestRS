@@ -123,6 +123,8 @@ report of a variable no config reads. **Reading through it mutates nothing.** `E
 resolves the real process environment first, then falls back to the `.env`
 cascade parsed into a map *inside the crate* — `std::env::set_var` is unsound
 against a concurrent `getenv` on another thread, so no read path may write.
+Read by hand outside a `ConfigService`, `EnvSource::get` witnesses nothing and the
+report calls that variable unread; `env_var` witnesses.
 
 One step publishes the cascade into the process environment:
 `#[nest_rs::main]` runs it before your `main`, before the runtime exists. It

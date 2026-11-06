@@ -82,6 +82,12 @@ The worker says how long it chose, on the line that reports the failure:
  WARN nest_rs::queue: job failed; will retry within the budget error=transcode failed retry_after_ms=1143 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a83a4d58c89c3d5d
 ```
 
+A failure can ask for longer. A `Problem` carrying `with_retry_after(30)` — the
+upstream's `429` or `503` passed on — holds the next attempt back at least that
+long, so the job does not spend its budget while the upstream is still refusing.
+The wait is the longer of the two, what it asks counts up to an hour, and the
+line adds `retry_after_asked_secs=30` beside the wait it chose.
+
 On Redis the next attempt waits off the stream, due on Redis's clock, until a
 running worker files it back — see [Delayed jobs](/queue/delivery/#delayed-jobs)
 — and the worker that ran the failed attempt moves on: no permit is held while

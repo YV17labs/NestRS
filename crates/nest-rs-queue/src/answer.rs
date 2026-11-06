@@ -28,16 +28,16 @@ pub(crate) const fn dead_letters(problem: &Problem) -> bool {
 pub struct ProcessAnswer<E>(pub E);
 
 impl<E: ToProblem> ProcessAnswer<E> {
-    /// The attempt's failure, classified by the problem the error says.
+    /// The attempt's failure, classified by the problem the error says, and
+    /// held back the wait it asks.
     pub fn into_job_error(self) -> JobError {
-        if self
-            .0
-            .to_problem()
-            .is_some_and(|problem| dead_letters(&problem))
-        {
-            JobError::abort(self.0)
-        } else {
-            JobError::retry(self.0)
+        let problem = self.0.to_problem();
+        if problem.as_ref().is_some_and(dead_letters) {
+            return JobError::abort(self.0);
+        }
+        JobError {
+            retry_after_secs: problem.as_ref().and_then(Problem::retry_after),
+            ..JobError::retry(self.0)
         }
     }
 }

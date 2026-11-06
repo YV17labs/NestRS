@@ -174,17 +174,25 @@ pub struct JobError {
     /// Structured detail the failure carried, when it had any — the per-field
     /// errors of a job the rules of its type refused, logged as `errors`.
     pub details: Option<serde_json::Value>,
+    /// The seconds the failure's [`Problem`](nest_rs_core::Problem) asked the
+    /// next attempt to wait.
+    pub(crate) retry_after_secs: Option<u32>,
 }
 
 impl JobError {
-    /// A **retryable** failure: a transient fault worth another attempt.
+    /// A **retryable** failure: a transient fault worth another attempt, held
+    /// back at least the wait a [`Problem`](nest_rs_core::Problem) in its chain
+    /// asks ([`with_retry_after`](nest_rs_core::Problem::with_retry_after)).
     ///
     /// Boxed by [`nest_rs_core::boxed_error`], so an `anyhow::Error` keeps every
     /// link of its chain, and a decode failure inside it never quotes the value.
     pub fn retry(source: impl Into<Box<dyn std::error::Error + Send + Sync>> + 'static) -> Self {
+        let source = nest_rs_core::boxed_error(source);
+        let asked = nest_rs_core::__private::find_in_chain::<nest_rs_core::Problem>(&*source);
         Self {
             retryable: true,
-            source: nest_rs_core::boxed_error(source),
+            retry_after_secs: asked.and_then(nest_rs_core::Problem::retry_after),
+            source,
             details: None,
         }
     }
@@ -197,6 +205,7 @@ impl JobError {
             retryable: false,
             source: nest_rs_core::boxed_error(source),
             details: None,
+            retry_after_secs: None,
         }
     }
 
@@ -208,6 +217,7 @@ impl JobError {
             retryable: unhonoured.retryable,
             source: Box::new(unhonoured),
             details: None,
+            retry_after_secs: None,
         }
     }
 
@@ -239,6 +249,7 @@ impl std::fmt::Debug for JobError {
             .field("retryable", &self.retryable)
             .field("source", &self.source)
             .field("details", &self.details)
+            .field("retry_after_secs", &self.retry_after_secs)
             .finish()
     }
 }

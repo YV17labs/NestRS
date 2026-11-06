@@ -210,7 +210,9 @@ pub enum AttemptOutcome {
     /// `after` has passed.
     ///
     /// `after` is `min(5 min, 1 s · 2^(n − 1))` for failed attempt `n`, scaled by
-    /// a jitter between 0.8 and 1.2 derived from the job's id and `n`.
+    /// a jitter between 0.8 and 1.2 derived from the job's id and `n`, unless the
+    /// failure's [`Problem`] asks for longer with `with_retry_after`, which holds
+    /// up to an hour.
     ///
     /// The [`Delivery`] already counts the next attempt. A backend declaring
     /// [`DelayedPush`](crate::Capability::DelayedPush) re-files
@@ -918,10 +920,12 @@ async fn run(
             )
         }
         Ok(Ok(Ran::Failed(error))) => {
+            let retry_after = backoff::honouring(retry_after, error.retry_after_secs);
             tracing::warn!(
                 target: TARGET,
                 error = %nest_rs_core::error_message(&error),
                 retry_after_ms = millis(retry_after),
+                retry_after_asked_secs = error.retry_after_secs,
                 "job failed; will retry within the budget",
             );
             (
@@ -1036,19 +1040,29 @@ impl Tail for JobTail<'_> {
 /// The [`JobError`] a failed attempt settles on: the problem an exception
 /// filter answered decides first, then a [`JobError`] keeps its disposition,
 /// then a [`Problem`] in the failure's chain decides; anything else retries
-/// within the budget.
+/// within the budget. What decides also says how long the next attempt waits.
 fn job_error(failure: Failure) -> JobError {
-    let (retryable, details) = if let Some(problem) = caught_problem(&failure) {
-        (!dead_letters(problem), None)
+    let (retryable, details, retry_after_secs) = if let Some(problem) = caught_problem(&failure) {
+        (!dead_letters(problem), None, problem.retry_after())
     } else if let Some(chosen) = failure.find::<JobError>() {
-        (chosen.retryable, chosen.details.clone())
+        (
+            chosen.retryable,
+            chosen.details.clone(),
+            chosen.retry_after_secs,
+        )
     } else {
-        (!failure.find::<Problem>().is_some_and(dead_letters), None)
+        let problem = failure.find::<Problem>();
+        (
+            !problem.is_some_and(dead_letters),
+            None,
+            problem.and_then(Problem::retry_after),
+        )
     };
     JobError {
         retryable,
         source: Box::new(Failed(failure)),
         details,
+        retry_after_secs,
     }
 }
 

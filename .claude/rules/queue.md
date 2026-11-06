@@ -58,7 +58,8 @@ contract (`.claude/decisions/queue-redis-streams.md`).
   recognised by type — `Checkpoint<S>` and `Attempt`, once each, never a
   context bag; a tick's twin is deferred. The wait before a retry is
   `nest_rs_core::Backoff`'s, seeded by the job id — jittered by a hash of the id
-  and the attempt, never a random draw, so it is reproducible.
+  and the attempt, never a random draw, so it is reproducible — lengthened by what
+  a failure's `Problem` asks (`with_retry_after`), bounded by a named ceiling.
 - **A backend declares each capability it honours, one at a time** — never
   `Capabilities::ALL`, so one the port names later is not claimed before it is
   honoured — and the port refuses a declaration or a push option the backend

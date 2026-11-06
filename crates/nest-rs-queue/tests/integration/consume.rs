@@ -2243,6 +2243,18 @@ struct RequestTimeoutQueue;
 #[queue(name = "answers-rate-limited", job = TranscodeCommand)]
 struct RateLimitedQueue;
 
+#[queue(name = "answers-rate-limited-in-a-chain", job = TranscodeCommand)]
+struct RateLimitedInAChainQueue;
+
+#[queue(name = "answers-rate-limited-by-choice", job = TranscodeCommand)]
+struct RateLimitedByChoiceQueue;
+
+#[queue(name = "answers-throttled", job = TranscodeCommand)]
+struct ThrottledAnswerQueue;
+
+#[queue(name = "answers-past-every-bound", job = TranscodeCommand)]
+struct PastEveryBoundAnswerQueue;
+
 #[queue(name = "answers-unavailable", job = TranscodeCommand)]
 struct UnavailableAnswerQueue;
 
@@ -2264,6 +2276,25 @@ impl nest_rs_core::ToProblem for LedgerDown {
     fn to_problem(&self) -> Option<nest_rs_core::Problem> {
         None
     }
+}
+
+/// A domain error saying the problem it is, as a statement Postgres cancelled
+/// says its `503`.
+#[derive(Debug, thiserror::Error)]
+#[error("the upstream is throttling")]
+struct Throttled;
+
+impl nest_rs_core::ToProblem for Throttled {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        Some(rate_limited().with_retry_after(ASKED_SECS))
+    }
+}
+
+/// What the answers asking a wait ask for.
+const ASKED_SECS: u32 = 30;
+
+fn rate_limited() -> nest_rs_core::Problem {
+    nest_rs_core::Problem::new(429, nest_rs_core::code::RATE_LIMITED)
 }
 
 /// Every answer a `#[process]` method can give its attempt, one per method.
@@ -2303,7 +2334,33 @@ impl AnsweringProcessor {
     #[process(queue = RateLimitedQueue, retries = 3)]
     async fn rate_limited(&self, job: TranscodeCommand) -> Result<(), nest_rs_core::Problem> {
         let _ = job;
-        Err(nest_rs_core::Problem::new(429, nest_rs_core::code::RATE_LIMITED).with_retry_after(30))
+        Err(rate_limited().with_retry_after(ASKED_SECS))
+    }
+
+    #[process(queue = RateLimitedInAChainQueue, retries = 3)]
+    async fn rate_limited_in_a_chain(&self, job: TranscodeCommand) -> anyhow::Result<()> {
+        Err(
+            anyhow::Error::new(rate_limited().with_retry_after(ASKED_SECS))
+                .context(format!("importing {}", job.file)),
+        )
+    }
+
+    #[process(queue = RateLimitedByChoiceQueue, retries = 3)]
+    async fn rate_limited_by_choice(&self, job: TranscodeCommand) -> Result<(), JobError> {
+        let _ = job;
+        Err(JobError::retry(rate_limited().with_retry_after(ASKED_SECS)))
+    }
+
+    #[process(queue = ThrottledAnswerQueue, retries = 3)]
+    async fn throttled(&self, job: TranscodeCommand) -> Result<(), Throttled> {
+        let _ = job;
+        Err(Throttled)
+    }
+
+    #[process(queue = PastEveryBoundAnswerQueue, retries = 3)]
+    async fn past_every_bound(&self, job: TranscodeCommand) -> Result<(), nest_rs_core::Problem> {
+        let _ = job;
+        Err(rate_limited().with_retry_after(u32::MAX))
     }
 
     #[process(queue = UnavailableAnswerQueue, retries = 3)]
@@ -2373,6 +2430,75 @@ async fn a_method_answering_a_problem_another_attempt_may_clear_retries_its_job(
             "{name}: 408, 429, a 5xx and a problem withheld invite a repeat: {outcome:?}",
         );
     }
+}
+
+/// The wait a retrying `outcome` holds its next attempt back for.
+fn waited(outcome: AttemptOutcome) -> Duration {
+    let AttemptOutcome::Retry { after } = outcome else {
+        panic!("a problem another attempt may clear retries: {outcome:?}");
+    };
+    after
+}
+
+#[tokio::test]
+async fn a_problem_asking_a_wait_holds_the_next_attempt_back_however_the_method_says_it() {
+    for (name, queue) in [
+        ("AnsweringProcessor::rate_limited", "answers-rate-limited"),
+        (
+            "AnsweringProcessor::rate_limited_in_a_chain",
+            "answers-rate-limited-in-a-chain",
+        ),
+        (
+            "AnsweringProcessor::rate_limited_by_choice",
+            "answers-rate-limited-by-choice",
+        ),
+        ("AnsweringProcessor::throttled", "answers-throttled"),
+    ] {
+        assert_eq!(
+            waited(first_answer(name, queue).await),
+            Duration::from_secs(ASKED_SECS.into()),
+            "{name}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_wait_asked_past_every_bound_holds_the_next_attempt_back_for_an_hour() {
+    let outcome = first_answer(
+        "AnsweringProcessor::past_every_bound",
+        "answers-past-every-bound",
+    )
+    .await;
+    assert_eq!(waited(outcome), Duration::from_secs(60 * 60));
+}
+
+#[tokio::test]
+async fn a_problem_asking_no_wait_keeps_the_backoff_of_its_job() {
+    let outcome = first_answer("AnsweringProcessor::unavailable", "answers-unavailable").await;
+    let waited = waited(outcome);
+    assert!(
+        waited >= Duration::from_millis(800) && waited <= Duration::from_millis(1200),
+        "the first attempt's wait, within its jitter: {waited:?}",
+    );
+}
+
+#[tokio::test]
+async fn the_line_reporting_a_failure_says_the_wait_it_chose_and_the_one_asked() {
+    let logs = nest_rs_testing::LogCapture::install();
+    first_answer(
+        "AnsweringProcessor::past_every_bound",
+        "answers-past-every-bound",
+    )
+    .await;
+    let line = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job failed; will retry within the budget",
+    );
+    assert_eq!(line.field("retry_after_ms").as_deref(), Some("3600000"));
+    assert_eq!(
+        line.field("retry_after_asked_secs").as_deref(),
+        Some("4294967295"),
+    );
 }
 
 #[tokio::test]

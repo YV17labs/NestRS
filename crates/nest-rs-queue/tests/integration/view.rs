@@ -43,6 +43,9 @@ struct UnprocessableQueue;
 #[queue(name = "unavailable", job = ViewedCommand)]
 struct UnavailableQueue;
 
+#[queue(name = "throttled", job = ViewedCommand)]
+struct ThrottledQueue;
+
 #[queue(name = "forgiven", job = ViewedCommand)]
 struct ForgivenQueue;
 
@@ -145,6 +148,22 @@ impl ExceptionFilter for Unavailable {
     }
 }
 
+/// Answers [`NotAWave`] with a `503` asking 30 seconds of the next attempt.
+#[injectable]
+#[derive(Default)]
+struct Throttling;
+
+impl Layer for Throttling {}
+
+#[async_trait]
+impl ExceptionFilter for Throttling {
+    type Exception = NotAWave;
+
+    async fn catch(&self, _: &NotAWave, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(503, code::UNAVAILABLE).with_retry_after(30))
+    }
+}
+
 /// Answers every failure by acknowledging its job.
 #[injectable]
 #[derive(Default)]
@@ -200,6 +219,13 @@ impl ViewedProcessor {
         Err(NotAWave.into())
     }
 
+    #[process(queue = ThrottledQueue, retries = 3)]
+    #[use_exception_filters(Throttling)]
+    async fn throttled(&self, job: ViewedCommand) -> anyhow::Result<()> {
+        let _ = job;
+        Err(NotAWave.into())
+    }
+
     #[process(queue = ForgivenQueue, retries = 3)]
     #[use_exception_filters(Forgiving)]
     async fn forgiven(&self, job: ViewedCommand) -> anyhow::Result<()> {
@@ -240,6 +266,7 @@ fn providing() -> Container {
         .provide(Acknowledging)
         .provide(Unprocessable)
         .provide(Unavailable)
+        .provide(Throttling)
         .provide(Forgiving)
         .build()
         .expect("the container builds")
@@ -333,6 +360,27 @@ async fn a_filter_answering_a_client_error_dead_letters_the_job_at_once() {
         "the clip is not a wave file",
         "the dead letter keeps the failure's own chain",
     );
+}
+
+#[tokio::test]
+async fn a_filter_answering_a_wait_holds_the_next_attempt_back_that_long() {
+    let mut delivery = Delivery::new(
+        &BARE,
+        QueueName::new("throttled").expect("a valid name"),
+        json!({ "v": WIRE_FORMAT_VERSION, "payload": { "file": "a.wav" } }),
+    );
+    let outcome = consume::attempt(
+        method("ViewedProcessor::throttled"),
+        &mut delivery,
+        providing(),
+        None,
+    )
+    .await;
+
+    let AttemptOutcome::Retry { after } = outcome else {
+        panic!("a 503 another attempt may clear retries: {outcome:?}");
+    };
+    assert_eq!(after, std::time::Duration::from_secs(30));
 }
 
 #[tokio::test]

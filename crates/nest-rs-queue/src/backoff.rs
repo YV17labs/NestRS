@@ -8,6 +8,10 @@
 //!
 //! The jitter is drawn from the job's id and the attempt number, never a random
 //! draw, so every wait is reproducible.
+//!
+//! A failure can ask for longer: a `Problem` carrying `with_retry_after`, an
+//! upstream's `429` passed on, holds the job back at least that long, up to
+//! [`ASKED_CEILING`].
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -25,6 +29,11 @@ const CEILING: Duration = Duration::from_secs(5 * 60);
 /// A job's retries: one second, doubling to five minutes.
 const RETRY: Backoff = Backoff::new(FIRST, CEILING);
 
+/// The longest wait a failure can ask of its job, so a value no upstream meant
+/// parks no job: an hour spans a rate limit's usual window, and the retry budget
+/// bounds how many times it is waited.
+const ASKED_CEILING: Duration = Duration::from_secs(60 * 60);
+
 /// How long to wait after attempt number `attempt` (1-based) of job `id` failed
 /// retryably, before the next attempt runs:
 /// `min(5 min, 1 s · 2^(attempt − 1))`, scaled by a jitter in `[0.8, 1.2]`
@@ -32,6 +41,14 @@ const RETRY: Backoff = Backoff::new(FIRST, CEILING);
 pub(crate) fn retry_after(id: &JobId, attempt: u32) -> Duration {
     let attempt = NonZeroU32::new(attempt).unwrap_or(NonZeroU32::MIN);
     RETRY.wait(attempt, Backoff::seed(id.as_bytes()))
+}
+
+/// `backoff`, lengthened to the `asked` seconds the failure asked, which count up
+/// to [`ASKED_CEILING`].
+pub(crate) fn honouring(backoff: Duration, asked: Option<u32>) -> Duration {
+    asked.map_or(backoff, |seconds| {
+        backoff.max(Duration::from_secs(seconds.into()).min(ASKED_CEILING))
+    })
 }
 
 #[cfg(test)]
@@ -63,6 +80,22 @@ mod tests {
     fn the_wait_is_a_function_of_the_job_and_the_attempt() {
         let job = JobId::mint();
         assert_eq!(retry_after(&job, 3), retry_after(&job, 3));
+    }
+
+    #[test]
+    fn what_a_failure_asks_lengthens_the_wait_and_never_shortens_it_or_passes_the_ceiling() {
+        let backoff = Duration::from_secs(16);
+        for (asked, waits) in [
+            (None, backoff),
+            (Some(0), backoff),
+            (Some(15), backoff),
+            (Some(30), Duration::from_secs(30)),
+            (Some(3600), ASKED_CEILING),
+            (Some(3601), ASKED_CEILING),
+            (Some(u32::MAX), ASKED_CEILING),
+        ] {
+            assert_eq!(honouring(backoff, asked), waits, "{asked:?}");
+        }
     }
 
     /// Pinned to literals computed outside this crate (FNV-1a as its

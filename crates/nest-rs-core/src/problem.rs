@@ -300,7 +300,8 @@ impl Problem {
     }
 
     /// How long the client should wait before retrying, in seconds: HTTP's
-    /// `Retry-After`, `retryAfterSeconds` on the edges with no header.
+    /// `Retry-After`, `retryAfterSeconds` on the edges with no header, and the
+    /// wait before a job's next attempt, which counts up to an hour.
     pub const fn with_retry_after(mut self, seconds: u32) -> Self {
         self.retry_after = Some(seconds);
         self

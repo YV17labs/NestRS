@@ -253,6 +253,11 @@ async fn a_password_postgres_refuses_fails_the_boot_at_once() {
         "neither the password nor the server's sentence: {said}"
     );
     assert!(!said.contains("  "), "one sentence, unpadded: {said}");
+    let printed = nest_rs_testing::printed(&*refused);
+    assert!(
+        !printed.contains("n0t-the-password"),
+        "what a live server answers holds no password, by any reader: {printed}"
+    );
     logs.expect_none(
         nest_rs_seaorm::target::ORM,
         "database unreachable — retrying within the connect budget",

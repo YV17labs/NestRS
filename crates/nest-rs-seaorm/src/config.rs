@@ -105,9 +105,10 @@ pub(crate) const PLAINTEXT_OPEN: &str = "Postgres is reached in plaintext outsid
 #[config(namespace = "seaorm")]
 #[derive(Clone, Debug)]
 pub struct SeaOrmConfig {
-    /// e.g. `postgres://user:pass@host/db`, a [`Secret`] since it may carry the
-    /// password. Empty aborts the build. `sslmode=disable` is plaintext, said
-    /// once at `warn` in a deployed profile when the server is off this machine.
+    /// e.g. `postgres://user:pass@host/db` or `postgresql://…`, a [`Secret`] since
+    /// it may carry the password. Empty or any other scheme aborts the build.
+    /// `sslmode=disable` is plaintext, said once at `warn` in a deployed profile
+    /// when the server is off this machine.
     pub url: Secret<String>,
     /// Upper bound on pooled connections, from 1 to 262143, Postgres's own
     /// ceiling; defaults to 10, sqlx's.
@@ -176,13 +177,25 @@ impl SeaOrmConfig {
     /// dials one per attempt where the pool would retry in silence.
     pub(crate) fn probe_options(&self) -> Result<PgConnectOptions> {
         let tls = self.tls()?;
+        Ok(tls(self.parsed()?))
+    }
+
+    /// The URL as sqlx reads it, or refused without quoting it: sqlx's parse
+    /// error can quote it, and sqlx reads no scheme where sea-orm picks its
+    /// driver by it, quoting the whole URL when it knows none.
+    fn parsed(&self) -> Result<PgConnectOptions> {
+        let url = self.url.expose_secret();
         #[expect(
             clippy::map_err_ignore,
             reason = "sqlx's parse error can quote the URL, which carries the password"
         )]
-        let url = PgConnectOptions::from_str(self.url.expose_secret())
+        let parsed = PgConnectOptions::from_str(url)
             .map_err(|_| Self::refuse_url("is not a Postgres URL"))?;
-        Ok(tls(url))
+        // After the parse: `is_prefix_of` panics on a URL that does not read.
+        if !sea_orm::DbBackend::Postgres.is_prefix_of(url) {
+            return Err(Self::refuse_url("is not a Postgres URL"));
+        }
+        Ok(parsed)
     }
 
     /// What every connection this config opens does with TLS: the mode
@@ -215,13 +228,7 @@ impl SeaOrmConfig {
     /// mode named, being sqlx's own default.
     fn tls_mode(&self) -> Result<PgSslMode> {
         let named = self.query(&["sslmode", "ssl-mode"]).is_some();
-        #[expect(
-            clippy::map_err_ignore,
-            reason = "sqlx's parse error can quote the URL, which carries the password"
-        )]
-        let parsed = PgConnectOptions::from_str(self.url.expose_secret())
-            .map_err(|_| Self::refuse_url("is not a Postgres URL"))?;
-        match parsed.get_ssl_mode() {
+        match self.parsed()?.get_ssl_mode() {
             PgSslMode::Prefer if !named => Ok(PgSslMode::VerifyFull),
             mode @ (PgSslMode::Disable | PgSslMode::VerifyFull) => Ok(mode),
             unverified if named => Err(Self::refuse_url(format!(
@@ -587,6 +594,8 @@ mod tests {
         for (url, said) in [
             ("", "must be set"),
             ("postgres://app:s3cret@db:port/app", "is not a Postgres URL"),
+            ("postgress://app:s3cret@db/app", "is not a Postgres URL"),
+            ("mysql://app:s3cret@db/app", "is not a Postgres URL"),
         ] {
             let refused = pinned(url).connect_options().expect_err(url).to_string();
             assert!(

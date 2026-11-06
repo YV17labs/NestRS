@@ -1,8 +1,8 @@
 //! Covers `src/module.rs`: the pool an app opens verifies the server's
 //! certificate, and logs in to none it cannot verify; the boot's proof refuses
 //! what every attempt would meet at once and retries the rest within the
-//! connect budget. Covers `src/config.rs` where libpq's own TLS variables meet
-//! that pool.
+//! connect budget; nothing it says, by any reader, quotes the URL's password.
+//! Covers `src/config.rs` where libpq's own TLS variables meet that pool.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -463,4 +463,186 @@ async fn a_provider_injecting_a_pool_no_module_opens_is_refused_naming_the_modul
             .is_some_and(|remedy| remedy.contains("`nest_rs::seaorm::SeaOrmModule`")),
         "{missing}"
     );
+}
+
+/// What marks the URL's password in anything that prints.
+const PASSWORD: &str = "zzqx-password";
+
+/// One Postgres message: its tag, then its length, which counts itself.
+fn postgres_message(tag: u8, body: &[u8]) -> Vec<u8> {
+    let length = u32::try_from(body.len() + 4).expect("a short message");
+    let mut message = vec![tag];
+    message.extend_from_slice(&length.to_be_bytes());
+    message.extend_from_slice(body);
+    message
+}
+
+/// A Postgres double on `listener` answering every startup message with `answer`.
+fn postgres_answering_with(listener: TcpListener, answer: Vec<u8>) {
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let answer = answer.clone();
+            tokio::spawn(async move {
+                let mut length = [0_u8; 4];
+                if socket.read_exact(&mut length).await.is_err() {
+                    return;
+                }
+                let rest = usize::try_from(u32::from_be_bytes(length))
+                    .unwrap_or(0)
+                    .saturating_sub(4);
+                let mut startup = vec![0_u8; rest];
+                if socket.read_exact(&mut startup).await.is_err()
+                    || socket.write_all(&answer).await.is_err()
+                {
+                    return;
+                }
+                // Held until the client's goodbye, as a server's connection is.
+                let mut rest = Vec::new();
+                let _ = socket.read_to_end(&mut rest).await;
+            });
+        }
+    });
+}
+
+/// A Postgres double refusing every startup message with `code` in the words
+/// `message` gives, on a port this returns.
+async fn postgres_refusing(code: &str, message: &str) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    let mut fields = Vec::new();
+    for (kind, value) in [
+        (b'S', "FATAL"),
+        (b'V', "FATAL"),
+        (b'C', code),
+        (b'M', message),
+    ] {
+        fields.push(kind);
+        fields.extend_from_slice(value.as_bytes());
+        fields.push(0);
+    }
+    fields.push(0);
+    postgres_answering_with(listener, postgres_message(b'E', &fields));
+    port
+}
+
+/// A Postgres double letting every connection in, as a server trusting its
+/// clients does: `AuthenticationOk`, then `ReadyForQuery`.
+async fn postgres_letting_in() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    let mut answer = postgres_message(b'R', &0_u32.to_be_bytes());
+    answer.extend(postgres_message(b'Z', b"I"));
+    postgres_answering_with(listener, answer);
+    port
+}
+
+/// The boot on `url`, which must be refused within a 1 s budget, as everything
+/// it prints and every line it files; neither may quote [`PASSWORD`].
+async fn refused_quoting_no_password(case: &str, url: String) -> String {
+    let logs = nest_rs_testing::LogCapture::install();
+    let Ok(Err(refused)) = tokio::time::timeout(
+        HUNG,
+        App::builder()
+            .provide(SeaOrmConfig {
+                url: url.into(),
+                connect_timeout: Duration::from_secs(1),
+                ..Default::default()
+            })
+            .module::<PoolModule>()
+            .build(),
+    )
+    .await
+    else {
+        panic!("{case}: a pool opened, or no budget ended its proof");
+    };
+    let printed = nest_rs_testing::printed(&*refused);
+    assert!(!printed.contains(PASSWORD), "{case}: {printed}");
+    for event in logs.events() {
+        assert!(!event.quotes(PASSWORD), "{case}: {event:#?}");
+    }
+    printed
+}
+
+/// What a `main` returning the boot's refusal prints is every link as it is:
+/// no failure of a URL holding a password quotes it, whether the server is
+/// silent, unnamed or refusing.
+#[tokio::test]
+async fn no_refused_boot_prints_the_urls_password() {
+    let closed = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        listener.local_addr().expect("its address").port()
+    };
+    let refused_password = postgres_refusing(
+        "28P01",
+        "password authentication failed for user \"nestrs\"",
+    )
+    .await;
+    let no_database = postgres_refusing("3D000", "database \"postgres\" does not exist").await;
+    let starting = postgres_refusing("57P03", "the database system is starting up").await;
+    let (untrusted, _) = postgres_signed_by(&TestAuthority::new(), None).await;
+    let cases = [
+        (
+            "nothing listens",
+            format!("postgres://nestrs:{PASSWORD}@127.0.0.1:{closed}/postgres?sslmode=disable"),
+        ),
+        (
+            "no such host",
+            format!("postgres://nestrs:{PASSWORD}@no-such-host.invalid/postgres?sslmode=disable"),
+        ),
+        (
+            "a wrong password",
+            format!(
+                "postgres://nestrs:{PASSWORD}@127.0.0.1:{refused_password}/postgres?sslmode=disable"
+            ),
+        ),
+        (
+            "no such database",
+            format!(
+                "postgres://nestrs:{PASSWORD}@127.0.0.1:{no_database}/postgres?sslmode=disable"
+            ),
+        ),
+        (
+            "a server starting up",
+            format!("postgres://nestrs:{PASSWORD}@127.0.0.1:{starting}/postgres?sslmode=disable"),
+        ),
+        (
+            "a certificate no authority signed",
+            untrusted.replace("s3cret", PASSWORD),
+        ),
+        (
+            "a URL that does not parse",
+            format!("postgres://nestrs:{PASSWORD}@127.0.0.1:port/postgres"),
+        ),
+        (
+            "a mode sqlx does not know",
+            format!("postgres://nestrs:{PASSWORD}@127.0.0.1:1/postgres?sslmode=zzqx-mode"),
+        ),
+        (
+            "a mode that does not verify",
+            format!("postgres://nestrs:{PASSWORD}@127.0.0.1:1/postgres?sslmode=require"),
+        ),
+    ];
+    for (case, url) in cases {
+        refused_quoting_no_password(case, url).await;
+    }
+}
+
+/// sea-orm names the driver by the URL's scheme, and quotes the whole URL when it
+/// knows none; sqlx, which the boot's proof dials through, never reads the
+/// scheme, so a server letting the proof in is what reaches that sentence.
+#[tokio::test]
+async fn a_scheme_naming_no_driver_is_refused_without_its_password() {
+    let port = postgres_letting_in().await;
+    for scheme in ["postgress", "mysql", "http"] {
+        let printed = refused_quoting_no_password(
+            scheme,
+            format!("{scheme}://nestrs:{PASSWORD}@127.0.0.1:{port}/postgres?sslmode=disable"),
+        )
+        .await;
+        assert!(
+            printed.contains(&nest_rs_config::var_name("seaorm", "URL"))
+                && printed.contains("is not a Postgres URL"),
+            "{scheme}: {printed}"
+        );
+    }
 }

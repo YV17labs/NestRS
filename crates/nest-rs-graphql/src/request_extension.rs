@@ -1,10 +1,10 @@
 //! What the schema does around each request, in the one extension it keeps,
 //! since an extension is entered on every field (`redact.rs`): before anything
-//! walks the document it refuses what the document would cost
-//! ([`document_cost`]), it seeds the request's loaders and what it files once
-//! ([`FiledOnce`]), and once validation passed answers the refusal the operation's
-//! read left ([`OperationRefusal`]). No other hook sits between validation and
-//! execution.
+//! walks the document it refuses one that does not parse ([`unparsed`]) and what
+//! one that does would cost ([`document_cost`]), it seeds the request's loaders and
+//! what it files once ([`FiledOnce`]), and once validation passed answers the refusal
+//! the operation's read left ([`OperationRefusal`]). No other hook sits between
+//! validation and execution.
 
 use std::sync::Arc;
 
@@ -18,6 +18,7 @@ use crate::document_cost::{self, DocumentLimits};
 use crate::filed_once::FiledOnce;
 use crate::loader::LoaderSeeds;
 use crate::operation_units::OperationRefusal;
+use crate::redact::unparsed;
 
 /// Hands each request the schema's one [`RequestExtension`], which holds nothing of
 /// a request's.
@@ -67,11 +68,14 @@ impl Extension for RequestExtension {
     ) -> ServerResult<Request> {
         let variables = std::mem::take(&mut request.variables);
         let operation = request.operation_name.take();
-        // The operation's read cached this parse; one that fails is answered by
-        // async-graphql's own, ahead.
-        let refusal = request.parsed_query().ok().and_then(|document| {
-            document_cost::refusal(document, operation.as_deref(), &variables, self.limits())
-        });
+        // The operation's read cached a parse that passed; one that failed runs again
+        // here, and the refusal says only what this one left.
+        let refusal = match request.parsed_query() {
+            Ok(document) => {
+                document_cost::refusal(document, operation.as_deref(), &variables, self.limits())
+            }
+            Err(refused) => Some(unparsed(refused)),
+        };
         request.variables = variables;
         request.operation_name = operation;
         if let Some(refusal) = refusal {

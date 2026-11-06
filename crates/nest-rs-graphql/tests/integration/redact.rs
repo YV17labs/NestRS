@@ -410,3 +410,91 @@ async fn a_to_problem_error_answers_its_code_and_detail() {
     );
     assert!(!body.to_string().contains("ada@example.com"), "{body}");
 }
+
+/// What a document below holds where a client's value would sit.
+const LITERAL: &str = "sk_live_literal";
+
+/// A mutation whose password never closes its argument list, and what it is told.
+const UNPARSED: &str = r#"mutation { login(password: "sk_live_literal" }"#;
+const UNPARSED_SAID: &str = "Syntax error at line 1 column 46: expected name";
+
+/// The parser renders the source line a document stopped on, so `POST` handed a
+/// document's literals back, and its whole text when it is one line.
+#[tokio::test]
+async fn a_document_that_does_not_parse_says_where_and_what_was_expected() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+
+    let body = answer(&app, UNPARSED).await;
+    assert_eq!(body["errors"][0]["message"], UNPARSED_SAID, "{body}");
+    assert_eq!(
+        body["errors"][0]["locations"],
+        serde_json::json!([{ "line": 1, "column": 46 }]),
+        "{body}",
+    );
+    assert!(!body.to_string().contains(LITERAL), "{body}");
+
+    let whole = LITERAL.repeat(40_000);
+    let body = answer(&app, &whole).await;
+    assert_eq!(
+        body["errors"][0]["message"],
+        "Syntax error at line 1 column 1: expected executable_definition",
+    );
+    assert!(
+        body.to_string().len() < 200,
+        "a reply as long as the document"
+    );
+
+    assert!(!logs.quotes(LITERAL), "{:#?}", logs.events());
+}
+
+/// A batch answers each document for itself.
+#[tokio::test]
+async fn a_batch_refuses_the_document_that_does_not_parse_and_answers_the_other() {
+    let app = boot().await;
+    let batch = serde_json::json!([
+        { "query": UNPARSED },
+        { "query": "{ charge(amount: 7) }" },
+    ]);
+    let resp = app.http().post("/graphql").body_json(&batch).send().await;
+    resp.assert_status_is_ok();
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+    assert_eq!(body[0]["errors"][0]["message"], UNPARSED_SAID, "{body}");
+    assert_eq!(body[1]["data"]["charge"], 7, "{body}");
+    assert!(!body.to_string().contains(LITERAL), "{body}");
+}
+
+/// The multipart reader hands its `operations` part to the same executor.
+#[tokio::test]
+async fn a_multipart_document_that_does_not_parse_says_the_same() {
+    let app = boot().await;
+    let form = nest_rs_testing::TestForm::new()
+        .text(
+            "operations",
+            serde_json::json!({ "query": UNPARSED }).to_string(),
+        )
+        .text("map", "{}");
+    let resp = app.http().post("/graphql").multipart(form).send().await;
+    resp.assert_status_is_ok();
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+    assert_eq!(body["errors"][0]["message"], UNPARSED_SAID, "{body}");
+    assert!(!body.to_string().contains(LITERAL), "{body}");
+}
+
+/// The socket executes through `execute_stream`, not `execute`.
+#[tokio::test]
+async fn a_document_that_does_not_parse_says_the_same_over_the_socket() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    socket.subscribe("unparsed", UNPARSED);
+    let item = socket.next_item("unparsed").await.expect("it answers");
+    assert_eq!(item["errors"][0]["message"], UNPARSED_SAID, "{item}");
+    assert!(!item.to_string().contains(LITERAL), "{item}");
+    assert!(!logs.quotes(LITERAL), "{:#?}", logs.events());
+
+    socket.subscribe("next", "{ charge(amount: 7) }");
+    let item = socket.next_item("next").await.expect("the socket stays up");
+    assert_eq!(item["data"]["charge"], 7, "{item}");
+}

@@ -81,11 +81,14 @@ sent`, `an unknown field of type "PostFilter"`, `Expected input type "Int",
 found a string.`, and a scalar's own refusal as `Failed to parse "UUID": a
 value its type does not accept`. And an `operationName` the document holds no
 operation of: the request's `operationName` is any text the client wrote, so
-the message reads `Unknown operation named by operationName`. Every rewrite
-holds on the socket as on `POST`. A name the document spells — a field, an
-argument, a fragment, a variable — stays in the message, as the GraphQL
-specification's own errors name it; it is the sender's own document, and no
-log line carries it.
+the message reads `Unknown operation named by operationName`. And a document
+that does not parse: the parser renders the line it stopped on, whatever that
+line holds, so the message says where it stopped and what the grammar expected
+there — `Syntax error at line 1 column 46: expected name`, `locations` naming the
+same place. Every rewrite holds on the socket as on `POST`. A name the document
+spells — a field, an argument, a fragment, a variable — stays in the message,
+as the GraphQL specification's own errors name it; it is the sender's own
+document, and no log line carries it.
 
 ## Extensions and codes
 

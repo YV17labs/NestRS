@@ -342,3 +342,35 @@ None is a framework line or a reply. `QueueError::Serialize` keeps serde's error
 marked value was reproduced there. Closing the first two means holding `error_message`'s
 sentence where the type-erased error sits, which moves what `source()` hands a reader of
 every port error: a change of `nest-rs-core`'s own, and not this entry's.
+
+## 2026-11-06 — a document that does not parse is told where it stopped
+
+**A document the parser refuses was handed back.** Run this date: `mutation {
+login(password: "…" }` answered ` --> 1:46`, a line `1 | mutation { login(password: "…" }`,
+a caret and `= expected name`, pest's rendering of a syntax error, as the reply's
+`message`, on `POST`, in a batch, in a multipart part and over the socket. A one-line
+document of 600,014 bytes answered 601,025. No line held it, so the entry of 2026-10-18
+holds for a line; a reply is what this rule forbids, and the document's names being the
+sender's own never covered its literals.
+
+The message now says the place and the grammar's words, `Syntax error at line 1 column
+46: expected name`, from the request extension's `prepare_request`, the first reader
+that may answer, over the failure the request's own parse left: the place is its
+`locations`, and the message is read by an allowlist. The parser's sentences over what
+the document declares stay, a name in them held to the Name grammar; a rendering's last
+line is said only when pest's words make all of it, rule names after `expected` or
+`unexpected`, or one of its limit sentences; anything else says the place alone. A
+document that parses pays nothing.
+
+**Refused:** matching the rendering's opening in `redact`, the shape every other
+sentence there has. async-graphql is pinned, `=7.2`, and its sentences with it, but pest
+floats inside `2.x` in an app's lockfile, where no test of ours runs: a rendering worded
+differently would pass whole. What a later pest words otherwise says the place alone; a
+last line of bare rule-shaped words would still pass, which is all the check holds.
+
+**Refused:** a second parse to read the failure as `parser::Error`. pest bounds nesting
+by the stack left, and two parses sit at different depths, so a document can fail the
+request's parse on that bound and pass the second, whose answer then left the rendering
+whole: seen this date on a real `POST`, debug build, 433 levels of `{a` around a literal
+answering ` --> 1:895` and the line holding it. The place then also came from the second
+parse, beside `locations` from the first.

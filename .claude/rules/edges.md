@@ -274,7 +274,9 @@ guard, filter or interceptor loop of its own.
     the payload (`DecodeError::located`), and a library's refusal quoting what
     the request sent — a value its variables held, a name or a header only
     the request named — by kind, matched on the locked version's wording, the
-    stated exceptions aside (`.claude/decisions/payload-never-quoted.md`).
+    stated exceptions aside (`.claude/decisions/payload-never-quoted.md`); a
+    document the parser refuses says its place and the grammar's words, read by
+    an allowlist, never its source.
     Held by each edge's behaviour tests and a trybuild snapshot of the
     refused `?`.
 13. **Discovery and its gate** (`container.md`).

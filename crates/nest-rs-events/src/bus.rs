@@ -14,7 +14,7 @@ use nest_rs_core::__private::{
 use nest_rs_core::tracing::Instrument;
 use nest_rs_core::{Container, Failure, Handler, Outcome, UnitContext};
 use nest_rs_database::__private::run_unit_bounded;
-use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitSpec};
+use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec};
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
 
@@ -42,6 +42,9 @@ struct Listener {
     handler: &'static Handler,
     /// The layers that site runs, composed once from the app's container.
     chains: Arc<UnitChains>,
+    /// The binding the app provides, resolved with those layers: what opens
+    /// the unit of a call whose emitter ran under none.
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
     run: ListenerFn,
 }
 
@@ -180,12 +183,14 @@ impl EventBus {
     ///
     /// Each listener call is a unit of work of its own, a child of the
     /// emitter's trace, opened by the unit-of-work binding the emitter ran
-    /// under: one transaction, committed when the listener answers `Ok` and
-    /// rolled back when it fails — on the pool for `transactional = false`. An
-    /// emitter outside every unit of work has no binding to open one, so its
-    /// listeners run bare, with no executor. A listener's body is cut at its
-    /// timeout, ten minutes unless its `#[on_event]` declares one; a commit
-    /// never is. An event the listener emits waits for its commit in turn.
+    /// under, or by the app's for an emitter outside every unit, a task it
+    /// spawned, which holds what it carried and a request's scope: one
+    /// transaction, committed when the listener answers `Ok` and rolled back
+    /// when it fails — on the pool for `transactional = false`. An app binding
+    /// none runs its listeners bare, with no executor. A listener's body is cut
+    /// at its timeout, ten minutes unless its `#[on_event]` declares one; a
+    /// commit never is. An event the listener emits waits for its commit in
+    /// turn.
     ///
     /// The app's interceptors and exception filters, then those its
     /// `#[listeners]` block and its `#[on_event]` method bind, run around each
@@ -337,12 +342,14 @@ async fn dispatch_one(
 }
 
 /// One listener call as a unit of work of its own, opened by the binding its
-/// emitter ran under — bare with none — around its pipeline, its body cut
-/// `timeout` after it started, never after the listeners queued before it.
+/// emitter ran under or else the app's — bare with neither — around its
+/// pipeline, its body cut `timeout` after it started, never after the listeners
+/// queued before it.
 async fn run(listener: &Listener, event: &'static str, tail: &mut ListenerTail) -> Outcome {
     let timeout = listener.timeout;
     let deadline = tokio::time::Instant::now() + timeout;
-    let binding = nest_rs_database::current_unit_of_work();
+    let binding =
+        nest_rs_database::current_unit_of_work().or_else(|| listener.unit_of_work.clone());
     let scope = nest_rs_database::current_executor_scope().unwrap_or(ExecutorScope::Request);
     let spec = UnitSpec::new(crate::unit::DISPATCH, scope, listener.policy);
     let mut view = EventsView::new(event, listener.name);
@@ -439,6 +446,7 @@ where
     Fut::Output: ListenerAnswer,
 {
     let chains = site.chains(container)?;
+    let unit_of_work = container.get_dyn::<dyn UnitOfWork>();
     let handler = site.handler();
     tracing::info!(
         target: crate::TARGET,
@@ -464,6 +472,7 @@ where
         timeout,
         handler,
         chains,
+        unit_of_work,
         run,
     });
     Ok(())

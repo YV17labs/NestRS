@@ -147,7 +147,7 @@ operation's own transaction, joined before the field's savepoint settles.
 **The executor** is installed by each edge running its unit of work through
 the one port, `nest_rs_database::run_unit`, over the `dyn UnitOfWork` the
 driver's binding provides — resolved once at mount or boot, never per unit,
-or read by the bus off the unit its emitter ran under;
+the bus preferring the one its emitter ran under;
 with none bound a unit runs bare, a host whose generated code runs `Repo`
 (`#[crud]`, a bound subject, a GraphQL-exposed entity's service —
 `#[expose(service = S, graphql)]`) is refused at boot naming the binding, and
@@ -204,9 +204,10 @@ happened: a listener never pushes a job, notifies or calls out about a write
 that did not land, and a statement it fails never poisons its emitter's
 writes. With nothing to wait for it dispatches before `emit` returns. **Each
 listener is a unit of its own, settled on its `Result` within its own
-deadline**: opened through the binding its emitter ran under
-(`current_unit_of_work`), bare under none, one transaction unless
-`transactional = false`, its `Err` rolled back and filed at `error` — at
+deadline**: opened through the binding its emitter ran under, the app's for an
+emitter under none (a task handed to `TaskContext`, whose listeners run under a
+request's scope and the ability it carried), bare in an app binding none, one
+transaction unless `transactional = false`, its `Err` rolled back and filed at `error` — at
 `warn` once a layer answered it — while the chain goes on — so an event a listener emits waits for that listener's commit. An open `EventBus::stream` reads the event at that same point, ahead of the listeners, and opens no unit.
 
 - **Waits:** every unit of its own — a mutating HTTP request, a GraphQL
@@ -217,9 +218,9 @@ deadline**: opened through the binding its emitter ran under
   `transactional = false`.
 - **Not waited for:** a transaction the caller opened itself (a `db.begin()`,
   as inside `retry_on_conflict`) — its commit is the caller's, so the caller
-  emits after its own `commit`. Inside a unit of work, a listener reached
-  sooner runs in a unit of its own beside it, never inside it; outside every
-  unit it runs bare, with no executor, so its `Repo` call fails closed
+  emits after its own `commit`. A listener reached sooner runs in a unit of its
+  own beside it, never inside it; in an app binding none it runs bare, with no
+  executor, so its `Repo` call fails closed
   (`.claude/decisions/listener-transaction-of-its-own.md`).
 - **Handed on:** an atomic block (`nest_rs_database::atomic`) hands its
   after-commit work to the enclosing unit on release and drops it on

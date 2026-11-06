@@ -1123,6 +1123,68 @@ async fn each_listener_held_for_its_emitters_commit_settles_a_unit_of_its_own_on
     );
 }
 
+/// The app `binding` serves, with [`SettlingListeners`] on its bus.
+async fn settling_on(binding: Arc<dyn nest_rs_database::UnitOfWork>) -> (App, Arc<EventBus>) {
+    let app = App::builder()
+        .module::<SettlingEventsModule>()
+        .provide_dyn::<dyn nest_rs_database::UnitOfWork>(binding)
+        .build()
+        .await
+        .expect("boots");
+    let bus = app.container().get::<EventBus>().expect("the bus");
+    (app, bus)
+}
+
+/// A task spawned off a unit carries its ability and no executor, so nothing
+/// around the emit names a binding: the app's opens each listener's unit, under
+/// a request's scope, which fails closed with no ability.
+#[tokio::test]
+async fn a_listener_emitted_from_a_spawned_task_settles_a_unit_of_the_apps_binding() {
+    let (binding, opened) = RecordingUnitOfWork::bound(false);
+    let (app, bus) = settling_on(binding).await;
+    let ran = app.container().get::<Ran>().expect("the probe");
+
+    let task = nest_rs_core::TaskContext::current().carry(async move {
+        assert!(
+            nest_rs_database::current_executor().is_none(),
+            "the task holds no unit of its own",
+        );
+        bus.emit(Settling).await;
+    });
+    tokio::spawn(task).await.expect("the task ends");
+
+    assert_eq!(ran.seen(), ["commits", "fails", "on_the_pool"]);
+    let unit = |policy, ok| Opened {
+        unit: nest_rs_events::unit::DISPATCH.name(),
+        policy,
+        scope: nest_rs_database::ExecutorScope::Request,
+        deadline: true,
+        ended: Some(Ended::Settled { ok }),
+    };
+    assert_eq!(
+        listener_units(&opened),
+        [
+            unit(nest_rs_database::TransactionPolicy::PerUnit, true),
+            unit(nest_rs_database::TransactionPolicy::PerUnit, false),
+            unit(nest_rs_database::TransactionPolicy::Pool, false),
+        ],
+    );
+}
+
+/// What a binding the emitter ran under opens stands: an edge's unit decides,
+/// and the app's binding only answers where no unit does.
+#[tokio::test]
+async fn a_listener_held_for_its_emitters_commit_opens_on_the_binding_its_emitter_ran_under() {
+    let (apps, opened_by_the_app) = RecordingUnitOfWork::bound(false);
+    let (_app, bus) = settling_on(apps).await;
+    let (emitters, opened_by_the_emitter) = RecordingUnitOfWork::bound(false);
+
+    emitted_in_a_unit(&emitters, &bus, Settling).await;
+
+    assert_eq!(listener_units(&opened_by_the_emitter).len(), 3);
+    assert!(listener_units(&opened_by_the_app).is_empty());
+}
+
 #[injectable]
 struct CutInAUnitListeners {
     #[inject]

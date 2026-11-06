@@ -24,11 +24,13 @@ async fn on_post_published(&self, event: PostPublishedEvent) -> anyhow::Result<(
   committing on its own, for a listener that brackets long work that is not
   the database's.
 
-An event a listener emits waits for **its** commit. With no unit of work
-around the emitter — an app with no database, a task you spawned, a binary of
-your own — there is none to open: the listener runs bare, with no executor, so
-a `Repo` call in it fails closed. [Transactions](/database/transactions/) has
-the unit's commit rules.
+An event a listener emits waits for **its** commit. A task you spawned has no
+unit of work around it, and its listeners get the same unit from the app's
+binding, under a request's scope: they read by the ability the task carried,
+and read no row without one. Only an app with no database binding imported has
+nothing to open one with: its listeners run bare, with no executor, so a `Repo`
+call in them fails closed. [Transactions](/database/transactions/) has the unit's commit
+rules.
 
 ## Each call files one line
 
@@ -102,9 +104,10 @@ unit's commit; a unit on the pool runs the listener at once, in a transaction
 of its own, and that has a price. It runs on another connection, so it does not
 see the rows you have not committed. It waits on any row you locked — you are
 awaiting `emit` — until its statement budget or its timeout cuts it. And its
-commit stands if you roll back afterwards. Outside every unit of work, it runs
-bare, as any listener there does: never in your transaction, and a `Repo` call
-in it fails closed.
+commit stands if you roll back afterwards. Outside every unit of work the app's
+binding opens that transaction of its own, at the same price; an app with no
+binding runs it bare, never in your transaction, and a `Repo` call in it fails
+closed.
 
 ## Going further
 

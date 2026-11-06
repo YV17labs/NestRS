@@ -2,6 +2,7 @@
 //! commit: its writes are one transaction settled on its answer, an event it
 //! emits waits for that commit, a pool listener's writes stand on their own,
 //! and a listener cut at its timeout rolls back and gives its connection back.
+//! A task emitting off every unit reaches the same through the app's binding.
 //!
 //! Each test runs over a one-connection pool and counts through it, so a count
 //! waits for the connection the listener's settle gives back.
@@ -13,7 +14,7 @@ use nest_rs_core::{App, injectable, module};
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_events::{EventBus, EventsModule, listeners};
 use nest_rs_seaorm::__private::current_executor;
-use nest_rs_seaorm::{SeaOrmConfig, SeaOrmUnitOfWork};
+use nest_rs_seaorm::{Repo, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, SeaOrmUnitOfWork};
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
 
 /// A queue attempt's unit, the emitter's here.
@@ -310,5 +311,86 @@ async fn a_listener_cut_at_its_timeout_leaves_no_row_and_gives_its_connection_ba
         crate::harness::committed_rows(&*conn, table).await,
         0,
         "the cut listener's write rolled back, and the pool's one connection came back",
+    );
+}
+
+mod off_every_unit {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "listener_unit_off_every_unit")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[derive(Clone)]
+struct RowAsked {
+    fails: bool,
+}
+
+#[injectable]
+#[derive(Default)]
+struct RepoListeners;
+
+#[listeners]
+impl RepoListeners {
+    #[on_event]
+    async fn writes_through_repo(&self, event: RowAsked) -> anyhow::Result<()> {
+        Repo::<off_every_unit::Entity>::insert_unscoped(off_every_unit::ActiveModel::default())
+            .await?;
+        anyhow::ensure!(!event.fails, "the reaction refused after writing");
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [
+        SeaOrmModule::for_root(SeaOrmConfig {
+            url: crate::harness::url().into(),
+            ..Default::default()
+        }),
+        SeaOrmDatabaseModule,
+        EventsModule,
+    ],
+    providers = [RepoListeners],
+)]
+struct BoundModule;
+
+/// `event`, emitted by a task holding no unit of its own.
+async fn emitted_off_every_unit<E: Clone + Send + 'static>(bus: Arc<EventBus>, event: E) {
+    let task = nest_rs_core::TaskContext::current().carry(async move { bus.emit(event).await });
+    tokio::spawn(task).await.expect("the task ends");
+}
+
+#[tokio::test]
+async fn a_listener_a_spawned_task_emits_to_settles_its_repo_write_on_its_answer() {
+    let conn = crate::harness::connect().await;
+    let table = "listener_unit_off_every_unit";
+    crate::harness::fresh_table(&conn, table).await;
+    let app = App::builder()
+        .module::<BoundModule>()
+        .build()
+        .await
+        .expect("boots");
+
+    emitted_off_every_unit(bus(&app), RowAsked { fails: true }).await;
+    assert_eq!(
+        crate::harness::committed_rows(&conn, table).await,
+        0,
+        "its `Err` rolled its write back",
+    );
+
+    emitted_off_every_unit(bus(&app), RowAsked { fails: false }).await;
+    assert_eq!(
+        crate::harness::committed_rows(&conn, table).await,
+        1,
+        "its `Ok` committed its write",
     );
 }

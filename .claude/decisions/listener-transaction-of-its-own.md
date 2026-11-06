@@ -64,3 +64,22 @@ unit of its own. The passenger the limit above describes is gone: an emit
 outside every unit runs its listeners with no executor, so a `Repo` call in one
 fails closed. What the limit still costs is that closed read, in a task handed
 to `TaskContext` under an app that binds a unit of work.
+
+## 2026-11-06 — the bus reaches the binding the container provides
+
+The limit above is closed. A listener resolves the app's `dyn UnitOfWork` where
+it is subscribed, as every edge resolves its binding once at boot, and opens its
+unit through the binding its emitter ran under, or that one for an emitter under
+none: a task handed to `TaskContext`, a binary's own task, a test. So a listener
+means one transaction settled on its answer wherever the emit stands, and its
+`Repo` call no longer fails for want of an executor in an app that binds a unit
+of work; an app binding none is what stays bare. The emitter's binding keeps
+precedence, since a unit it ran under is the one that decides.
+
+**The scope stays the fail-closed `Request`** when no unit tags one. A task
+carries no executor scope across `TaskContext`, so a listener a job's task
+reaches reads as a request does: by the ability the task carried, and with none
+it reads no row. Reading it as system work would hand an unscoped read to
+whatever a request's task emits. System work off every unit opens its own unit
+with `run_unit`, the escape `data-layer.md` names.
+

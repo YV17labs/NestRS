@@ -38,6 +38,7 @@ mod request_scope;
 mod retired_keys;
 mod setups;
 mod shutdown;
+mod silent_peer;
 mod transient_scope;
 mod transport_parity;
 mod units;

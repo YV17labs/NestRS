@@ -150,6 +150,13 @@ each field:
 | `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` | `20` | the `#[on_connect]` hook, on the message timeout's range |
 | `<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS` | `20` | the `#[on_disconnect]` hook, on the message timeout's range |
 
+The server sends no Ping, so a peer gone without a close reads as a quiet one:
+with nothing pushed to it, it holds its socket until
+`<PREFIX>_WS__MAX_CONNECTION_SECS`, four hours by default. A proxy's idle timeout
+is the client's to beat. A browser's `WebSocket` cannot send a Ping, so it sends a
+message of its own, an event the gateway answers; any other client can send a Ping,
+which the server answers.
+
 A socket answers one message at a time, so a handler that never returns would
 hold its socket until the connection's lifetime ran out. Past the message
 timeout its work is dropped and rolled back, the client gets an error frame on

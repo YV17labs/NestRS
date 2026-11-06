@@ -205,6 +205,12 @@ socket. When it elapses the server ends the socket, so the peer
 re-upgrades, which re-runs the guard chain and re-checks the token's
 `exp`. Set it to `0` to disable the ceiling.
 
+The server sends no Ping, so a peer gone without a close reads as a quiet one:
+with nothing pushed to it, it holds its socket until this ceiling. A proxy's idle
+timeout is the client's to beat. A browser's `WebSocket` cannot send a Ping, so it
+sends `graphql-transport-ws`'s own `ping`, which the server answers with a `pong`; any
+other client can send a Ping too, which the server answers.
+
 A query or a mutation sent over the socket is a unit of its own, as on
 `POST`: a mutation opens its transaction inside the socket's pool unit and
 settles it before its answer is sent, its root fields each in a savepoint

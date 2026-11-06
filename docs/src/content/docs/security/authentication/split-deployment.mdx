@@ -258,7 +258,7 @@ sets `AUTHN__AUDIENCE` to each app's origin and hands the signing key to `auth`
 alone. Run locally, each app's own `apps/<app>/.env` is
 ([an app's own files](/configuration/env-cascade/#an-apps-own-files)): the
 demo's api requires `http://localhost:3002`, the live app `:3004`, and the
-signing key sits in `apps/auth/.env` alone.
+signing key sits in `auth`'s own `.env.development` and `.env.test` alone.
 
 ## Telling clients where the issuer is
 

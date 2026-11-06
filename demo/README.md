@@ -30,7 +30,7 @@ list every recipe.
 | Command | What it does |
 |---------|--------------|
 | `nestrs run dev <app>` | Run an app in watch mode (rebuild + restart on change), e.g. `nestrs run dev api` |
-| `nestrs run start <app>` | Run an app in release mode, under the production profile, e.g. `nestrs run start api`: it reads no development file and no app's own `apps/<app>/.env`, so it names its database, Redis, store and port on the process, as a deployment does. Against the dev container's, declare development: `NESTRS_ENV=development nestrs run start api` |
+| `nestrs run start <app>` | Run an app in release mode, under the production profile, e.g. `nestrs run start api`: it reads no development file and no app's own `apps/<app>/.env`, so it names its database, Redis, store and port on the process, as a deployment does, an app verifying tokens, every app but the worker, its verifying key, and `auth` its signing key, clients and sign-in resources. Against the dev container's, declare development: `NESTRS_ENV=development nestrs run start api` |
 | `nestrs run build <app>` | Build one app in release (default `api`), e.g. `nestrs run build live` |
 | `nestrs run build --all` | Build release binaries for every app in the workspace |
 | `nestrs run test unit` | Run unit + integration + doctests (no DB) |

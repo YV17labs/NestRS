@@ -81,6 +81,12 @@ built in, so it names its own port and audience on the process, as
 package under test the same way, and `nestrs doctor -p apps/<app>` reports
 what that app reads.
 
+The root is the directory the process starts in, so a process started in
+`apps/auth/` reads that directory's `.env` under every profile. A committed
+credential therefore sits in `.env.development` and `.env.test`, which no
+deployed profile reads from any directory: that is where the demo's `auth` holds
+its fixtures.
+
 ## The active environment
 
 The `<environment>` segment is the variant of `Environment`, read from

@@ -2188,6 +2188,15 @@ lists what the boot, a log or the wire shows when one is missed.
   secret — ``configuration validation failed for `<PREFIX>_OAUTH__SERVER__*` ``, each client
   named by its id — which is what a deployment still setting
   `<PREFIX>_OAUTH__CLIENTS` alone meets, since nothing reads that name now.
+- **The demo run under the production profile**: no file production reads names a
+  client, a sign-in resource or a key, from the workspace's root or from an app's own
+  directory. Once `nestrs run start <app>` names its database and what else comes
+  first, an app verifying tokens, every app but the worker, refuses `no JWT key
+  configured`, and `auth` the client registry above and `resources
+  (<PREFIX>_SIGN_IN__RESOURCES): at_least_one_resource`. Name your own on the
+  process, or declare `<PREFIX>_ENV=development` against the dev container. An app
+  of yours modelled on those files moves what authenticates anyone to its
+  `.env.development` and `.env.test` the same way.
 - **A development-only route kept in a deployment**: an app listing
   `DevelopmentOnlyGuard` refuses its boot unless `<PREFIX>_ENV` declares
   `development` or `test` — `DevelopmentOnlyGuard guards a route only

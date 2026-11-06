@@ -72,7 +72,7 @@ async fn issues_a_token_for_a_registered_client() {
 The test never sets a `<PREFIX>_OAUTH__SERVER__*` or `<PREFIX>_SIGN_IN__*`
 variable: the two configs it reads are its seeds. What it still takes from the cascade is
 the server its throwaway database is created on, `<PREFIX>_SEAORM__URL`, and the signing key
-`apps/auth/.env` names. `nest_rs::oauth::server` takes the umbrella's `oauth-server` feature,
+`apps/auth/.env.test` names. `nest_rs::oauth::server` takes the umbrella's `oauth-server` feature,
 and `TestApp` its `testing` feature, in the suite's `[dev-dependencies]`.
 
 ## Pinning through `for_root`

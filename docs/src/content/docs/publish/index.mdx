@@ -48,8 +48,9 @@ issuer over HTTP.
 
 Every app reads the workspace's `.env` files, and what is one app's alone sits
 in its own `apps/<app>/.env`: its port, the audience it requires — its own
-origin, so a token minted for one app is refused by the others — and, for
-`auth` alone, the signing key
+origin, so a token minted for one app is refused by the others. `auth`'s
+`.env.development` and `.env.test` add the signing key, the registered clients
+and the resources a sign-in may name
 ([an app's own files](/configuration/env-cascade/#an-apps-own-files)).
 
 ## Deploy it
@@ -109,8 +110,10 @@ The chart's
 carries the trade-offs, including why replicas stop at one rather than zero.
 
 <Aside type="caution">
-The demo's `.env` is committed on purpose and its keypair is public — anyone
-with the repository can mint tokens it accepts. Generate your own before
+The demo's keypair and its client's secret are committed on purpose, so anyone
+with the repository can mint tokens a development run accepts. Only the
+development and test profiles read them: under production, an app verifying
+tokens refuses its boot until it names its own. Generate your own before
 deploying any of this, and pass it through `secrets`.
 </Aside>
 

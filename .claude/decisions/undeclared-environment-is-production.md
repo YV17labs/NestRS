@@ -121,3 +121,37 @@ resolved where the console is built, so no `Default` reads the process.
 - **A second enum for an emit.** It has the same three states and differs only
   in which profiles `ByProfile` opens; the consumer says so by the reader it
   calls, where a parallel type would spread one fact over two names.
+
+**2026-11-06 — the demo's credentials left every file production reads.** The
+2026-10-28 entry moved its services out of `.env`, and left the rest of what
+identifies a caller there. A process declaring no environment, run from `demo/`,
+authenticated `demo-service` with its committed secret and verified tokens with the
+public half of a keypair whose private half is committed, both seen on a run. Run from
+`apps/auth/`, it read the private half as well: the cascade's root is the current
+directory, and a deployed profile drops the app's layer, never the root's `.env`.
+`<PREFIX>_AUTHN__PRIVATE_KEY`, `<PREFIX>_OAUTH__SERVER__CLIENTS`,
+`<PREFIX>_SIGN_IN__RESOURCES` and `<PREFIX>_SOCIAL__*`, `auth`'s alone, moved to
+`apps/auth/.env.development` and `.env.test`, and `<PREFIX>_AUTHN__PUBLIC_KEY` to the
+root's two, the names no deployed profile reads from any directory. Nothing moves for
+development or a suite; a production run names its own: once it names what comes first,
+an app verifying tokens, every app but the worker, refuses `no JWT key configured`, and
+`auth` then its clients and its sign-in resources. Security decided, at no cost to the
+everyday run. `auth`'s e2e suite holds it: the real binary, spawned on a cleared
+environment from the workspace's root and from its own directory, has read nothing the
+suite's process read, so a line added back to a file production reads fails it.
+
+**Refused:**
+
+- **Leaving the public key, because it is no secret.** It decides whose tokens the
+  app accepts, and the other half is in the repository.
+- **Moving the license lines too.** `api` alone reads them today, and `apps.md` puts
+  what one app alone reads in its own file. They stay because the license is the
+  repository's, which any app opening a document would state, and no app's identity,
+  and they authenticate no one. Their one reader outside development and test is a
+  checkout process run from `demo/` that opens its documentation, since production
+  builds no document unless it is opened; a deployment reads no `.env`, and the chart
+  names no license, so its opened document states none either way.
+- **Leaving what `auth` alone reads in `apps/auth/.env`**, the first form of this
+  entry, reviewed the same day. A process started in that directory reads the file as
+  its root's, under every profile: `POST /token` as `demo-service` answered `200` under
+  production.

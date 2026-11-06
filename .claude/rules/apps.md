@@ -65,7 +65,8 @@ and a shared database, never RPC (`CLAUDE.md`, hard "no").
 `.env` cascade, the `Dockerfile` — built with the parent directory as context,
 so it reaches `../crates` — and a separate `Cargo.lock` and `target/` all live
 under `demo/`; what one app alone reads, its port first, sits in its own
-`apps/<app>/.env`, never pinned in its `module.rs`. The root workspace's `Justfile` holds the framework's checks (`just lint`,
+`apps/<app>/.env`, a committed credential in its `.env.development` and `.env.test`
+(`container.md`), never pinned in its `module.rs`. The root workspace's `Justfile` holds the framework's checks (`just lint`,
 `just test`, `just ci`) and never drives `demo/`.
 
 ## Transports and output

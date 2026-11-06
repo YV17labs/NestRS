@@ -82,7 +82,7 @@ pub fn assert_passes_under_profile(test: &str, profile: Option<&str>) {
 
 pub async fn assert_a_probe_reads_no_credential(app: &TestApp) {
     let logs = LogCapture::install();
-    for probe in ["/health/live", "/health/ready"] {
+    for probe in ["/health/live", "/health/ready", "/health/startup"] {
         app.http()
             .get(probe)
             .header(header::AUTHORIZATION, "Bearer not-a-token")

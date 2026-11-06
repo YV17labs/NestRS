@@ -80,12 +80,23 @@ The reason recorded above for booting on a `403` or a `401` ("a least-privilege
 policy without `s3:ListBucket` is correct") covers a policy, and the proof gave
 it to every refusal: a revoked or mistyped key booted and read `up`, with one
 `warn`, while every call failed. S3 tells them apart in its error document, so
-the connector reads a refusal's, at most 64 KiB and handing it back, and the
-`<Code>` decides. `InvalidAccessKeyId`, `SignatureDoesNotMatch`,
-`InvalidSecurity` and any `401` refuse the boot naming both credential variables,
-and read `down` on a probe. `AccessDenied` boots on with the `warn`, and so does
-what names no key: a code nobody listed, a gateway's page, no document. A boot is
-never refused over a word this code cannot read.
+the connector reads a refusal's, at most 64 KiB, and the `<Code>` decides.
+`InvalidAccessKeyId`, `SignatureDoesNotMatch`, `InvalidSecurity` and any `401`
+refuse the boot naming both credential variables, and read `down` on a probe.
+`AccessDenied` boots on with the `warn`, and so does what names no key: a code
+nobody listed, a gateway's page, no document. A boot is never refused over a word
+this code cannot read. The `warn` says what is known, a `403` naming no rejected
+key and most often a policy, with S3's code when a closed list holds it, so
+`RequestTimeTooSkewed` is not sent to read a policy. A read of the document that
+fails is what it is, an interruption: the proof retries it, since a document cut
+before `</Code>` may have named a rejected key.
+
+object_store then meets an empty body: it quotes what it meets in its error's
+sentence, and this document echoes the key and the request signed. A refused boot
+reaches a `main` returning it, which prints each link's own `Display`, past every
+`SafeLink`, so `Refused` and `Unreachable` hold object_store's error as the
+sentence `error_message` says it, never the error: its links also quote the
+request's URI, and the document of a `400` or a `404`.
 
 **Refused:**
 
@@ -97,8 +108,16 @@ never refused over a word this code cannot read.
 - **An XML parser for one element.** The code is matched against a closed list,
   so what a parser would add is rejecting a malformed document that names no
   rejected key anyway.
+- **Handing the document back to object_store.** Nothing there reads it for a
+  `401` or a `403` but the sentence it writes, so all it adds is what a `{:?}` of a
+  call's error would repeat.
+- **Quoting the code as the store spelled it.** A line repeats a member of the
+  list, never a word of the document.
 
 **The limit.** A valid key whose policies were all removed still answers
 `AccessDenied`, which nothing tells from least privilege: it boots, reads `up`,
 and shows at its first call. A server speaking S3's API with a code of its own
-for a rejected key reads as a policy's refusal until its code joins the list.
+for a rejected key reads as a policy's refusal until its code joins the list. A
+call's error keeps object_store's as its source, by contract, so a `{:?}` of it
+still quotes the request's URI, the key among it, and a document other than a
+`401`'s or a `403`'s; only `error_message` says it without them.

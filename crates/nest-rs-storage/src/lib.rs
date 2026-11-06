@@ -79,19 +79,19 @@
 //! certificate the client does not accept, or a status every attempt would
 //! meet (a redirect, a `400`) refuses the boot at once, as does a store
 //! rejecting the key (a `401`, or S3's `InvalidAccessKeyId`,
-//! `SignatureDoesNotMatch` or `InvalidSecurity`); a store whose policy refuses
-//! the listing (`AccessDenied`, no `s3:ListBucket`) boots with one `warn`;
-//! anything else — no answer, a `5xx`, a `408` or a `429` — is retried within
-//! the budget, then refused as unreachable.
+//! `SignatureDoesNotMatch` or `InvalidSecurity`); any other `403`, most often a
+//! policy without `s3:ListBucket`, boots with one `warn`, saying S3's code when
+//! it is a known one; anything else — no whole answer, a `5xx`, a `408` or a
+//! `429` — is retried within the budget, then refused as unreachable.
 //!
 //! ## Health
 //!
 //! Under the `health` feature, [`StorageModule`] attaches the store's
 //! indicator, which an app importing `HealthModule` runs on the readiness and
 //! startup probes: one attempt of that proof, under the name `storage`. A
-//! store reached over verified TLS reads up, even one whose policy refuses the
-//! listing itself, as it boots — and the probe that first meets that refusal
-//! files the boot's `warn`. A store rejecting the key reads down.
+//! store reached over verified TLS reads up, even one answering a `403` that
+//! names no rejected key, as it boots — and the probe that first meets that
+//! refusal files the boot's `warn`. A store rejecting the key reads down.
 //!
 //! ## How long a call waits
 //!
@@ -109,7 +109,10 @@
 //! A [`StorageError`] names the store and the operation, never a key, and
 //! keeps object_store's error as its source; its chain, through
 //! [`error_message`](fn@nest_rs_core::error_message), says object_store's links
-//! by their kind, without the key or the URL their own sentences quote.
+//! by their kind, without the key or the URL their own sentences quote. A refused
+//! boot keeps that sentence alone, since a `main` returning it prints each link as
+//! it is, and no error holds the document of a `401` or a `403`, which echoes the
+//! key and the request signed.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

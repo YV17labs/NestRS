@@ -1247,6 +1247,63 @@ mod tests {
         );
     }
 
+    /// A store answering its first request with a `403` whose document stops
+    /// short of the length it announced, then stopping the clock and holding the
+    /// connection, so the budget cuts the read.
+    async fn store_stalling_its_refusal(authority: &nest_rs_testing::TestAuthority) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local listener");
+        let addr = listener.local_addr().expect("a bound address");
+        let acceptor = authority.server(&["127.0.0.1"]).acceptor(None);
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept");
+            let mut tls = acceptor.accept(socket).await.expect("the handshake");
+            let mut request = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = tls.read(&mut buf).await.expect("read the request");
+                assert!(read > 0, "the client hung up before its request ended");
+                request.extend_from_slice(&buf[..read]);
+            }
+            tls.write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 5000\r\n\r\n<Error>")
+                .await
+                .expect("answer the first request");
+            tls.flush().await.expect("send the answer");
+            tokio::time::pause();
+            std::future::pending::<()>().await;
+            drop(tls);
+        });
+        format!("https://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_refusal_stalling_its_document_is_named_by_the_budgets_cut() {
+        let budget = StorageConfig::default().operation_timeout;
+        let authority = nest_rs_testing::TestAuthority::new();
+        let storage = Storage::unproved(StorageConfig {
+            tls: authority.client_tls(),
+            ..s3_at(
+                &store_stalling_its_refusal(&authority).await,
+                Surface::Closed,
+            )
+        });
+        let refused = tokio::time::timeout(budget * 2, storage.get_bytes("k"))
+            .await
+            .expect("cut within the budget")
+            .expect_err("nothing comes back");
+        let chain = nest_rs_core::error_message(&refused);
+        assert!(
+            chain.ends_with(&format!(
+                "{}: the store answered 403 Forbidden",
+                cut_at(budget)
+            )),
+            "{chain}"
+        );
+    }
+
     /// No clock is read: a loaded machine moves where the call ends — its
     /// retries' own error, or the budget's cut past a stalled last attempt —
     /// and never what it names.

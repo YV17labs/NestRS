@@ -43,14 +43,17 @@ pub enum StorageError {
         endpoint: String,
     },
     /// Opening the store met what every attempt would: a bucket that does not
-    /// exist, a certificate the client does not accept.
+    /// exist, a certificate the client does not accept, a key the store rejects.
     #[error("the object store {store} cannot be opened: {reason}")]
     Refused {
         /// The store, as its sentences show it.
         store: String,
         /// What to change, naming the variables.
         reason: String,
-        /// What the store answered.
+        /// What the store answered, as
+        /// [`error_message`](fn@nest_rs_core::error_message) says it, and never
+        /// object_store's own error: a `main` returning this refusal prints each
+        /// link as it is.
         #[source]
         source: Source,
     },
@@ -61,7 +64,10 @@ pub enum StorageError {
         store: String,
         /// The budget the proof was held to.
         budget: Duration,
-        /// The last attempt's failure, if one ended before the budget did.
+        /// The last attempt's failure, if one ended before the budget did, as
+        /// [`error_message`](fn@nest_rs_core::error_message) says it, and never
+        /// object_store's own error: a `main` returning this refusal prints each
+        /// link as it is.
         #[source]
         source: Option<Source>,
     },
@@ -155,6 +161,21 @@ impl From<StorageError> for std::io::Error {
 /// Result alias for storage operations.
 pub type Result<T> = std::result::Result<T, StorageError>;
 
+/// What a refused boot keeps of object_store's error: the sentence
+/// [`error_message`](fn@nest_rs_core::error_message) says it in. A `main`
+/// returning the refusal prints each link's own `Display`, and object_store's
+/// quote the request's URI and whatever document the store answered.
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub(crate) struct SaidFailure(String);
+
+impl SaidFailure {
+    /// `error`, as its chain says it.
+    pub(crate) fn of(error: &object_store::Error) -> Self {
+        Self(nest_rs_core::error_message(error))
+    }
+}
+
 /// A call the operation budget cut, every retry included, keeping what its
 /// last attempt met when that attempt failed before the cut.
 #[derive(Debug, Error)]
@@ -177,6 +198,14 @@ pub(crate) enum Exchange {
     /// The store answered.
     #[error("the store answered {0}")]
     Answered(StatusCode),
+    /// The store answered a `403` naming no rejected key: most often a policy,
+    /// and what else S3 says by its code. Its document is never quoted past that
+    /// code, as [`KeyRejected`](Self::KeyRejected)'s.
+    #[error("the store answered {}{}", StatusCode::FORBIDDEN, said_code(*.code))]
+    Forbidden {
+        /// S3's code for the refusal, when its document names a known one.
+        code: Option<&'static str>,
+    },
     /// The store answered that it rejects the key the request was signed with:
     /// a `401`, or S3's own code for it. Its document is never quoted past that
     /// code, for it echoes the key and the request signed.
@@ -187,7 +216,8 @@ pub(crate) enum Exchange {
         /// S3's code for the rejection, when its document names one.
         code: Option<&'static str>,
     },
-    /// No answer came.
+    /// No whole answer came: no status, or a refusal cut before its document
+    /// ended.
     #[error("{}", http_kind(*.kind))]
     Unanswered {
         /// The HTTP client's kind of failure.
@@ -199,8 +229,8 @@ pub(crate) enum Exchange {
 }
 
 impl Exchange {
-    /// The exchange `failed` ended with no answer, said as [`below`] says it:
-    /// its kind, and the I/O error under it.
+    /// The exchange `failed` ended with no whole answer, said as [`below`] says
+    /// it: its kind, and the I/O error under it.
     pub(crate) fn unanswered(failed: &HttpError) -> Self {
         let cause = nest_rs_core::__private::find_in_chain::<std::io::Error>(failed)
             .map(|io| std::io::Error::new(io.kind(), io.to_string()));
@@ -217,7 +247,7 @@ impl Exchange {
     }
 }
 
-/// S3's code for a rejected key, said after the status it came with.
+/// S3's code for a refusal, said after the status it came with.
 fn said_code(code: Option<&str>) -> String {
     code.map_or_else(String::new, |code| format!(", {code}"))
 }
@@ -353,6 +383,7 @@ mod tests {
     fn an_exchange_failed_unless_the_store_answered_a_success() {
         assert!(!Exchange::Answered(StatusCode::OK).failed());
         assert!(Exchange::Answered(StatusCode::SERVICE_UNAVAILABLE).failed());
+        assert!(Exchange::Forbidden { code: None }.failed());
         assert!(
             Exchange::KeyRejected {
                 status: StatusCode::UNAUTHORIZED,

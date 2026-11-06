@@ -160,8 +160,8 @@ test that overrides `Storage` opens no store, and probes none.
   `down` until its replica takes over.
 - The store's is one attempt of the proof it passed at boot: a page of the
   bucket's listing under the URL's prefix. A store reached over verified TLS
-  reads up even when its policy refuses the listing itself — no
-  `s3:ListBucket` — as it boots, and the probe that first meets that refusal
+  reads up even when it answers a `403` naming no rejected key — most often a
+  policy without `s3:ListBucket` — as it boots, and the probe that first meets that refusal
   files the boot's `warn` naming the credential variables, so a policy revoked
   under a running app is said once; a key the store rejects, a bucket gone, a
   redirect, or no answer reads down. It sends that request on every probe, so a store billing per request

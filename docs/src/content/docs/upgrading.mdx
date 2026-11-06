@@ -1100,13 +1100,13 @@ lists what the boot, a log or the wire shows when one is missed.
     `<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`, a refused login fails at once naming
     the host and the SQLSTATE; a bucket that does not exist fails the boot
     naming `<PREFIX>_STORAGE__URL`, a key the store rejects fails it naming the
-    credential variables, and a policy refusing the listing leaves one
-    `warn`. A deployed profile reaching a backend in plaintext off this machine is one
-    `warn` per opening and the connection opens all the same: `Redis is reached in
-    plaintext outside a dev profile`, `Postgres is reached in plaintext outside a dev
-    profile` and `a signal is exported over plain HTTP outside a dev profile`; write
-    `rediss://`, `sslmode=verify-full` or `https://` to close it. A provider declaring a
-    `#[liveness]`, `#[readiness]` or `#[startup]`
+    credential variables, and any other `403`, most often a policy refusing the
+    listing, leaves one `warn`. A deployed profile reaching a backend in plaintext off
+    this machine is one `warn` per opening and the connection opens all the same: `Redis
+    is reached in plaintext outside a dev profile`, `Postgres is reached in plaintext
+    outside a dev profile` and `a signal is exported over plain HTTP outside a dev
+    profile`; write `rediss://`, `sslmode=verify-full` or `https://` to close it. A
+    provider declaring a `#[liveness]`, `#[readiness]` or `#[startup]`
     indicator in an app that does not import `HealthModule` is a `warn` too —
     `host not served: the health probes are not mounted`, with the host, its
     module and the import that serves it, and so is a host seeded or registered by a

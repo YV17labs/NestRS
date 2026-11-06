@@ -109,15 +109,18 @@ page of its listing under the URL's prefix, within `OPERATION_TIMEOUT_SECS`:
 - a store that rejects the key — a `401`, or S3's `InvalidAccessKeyId`,
   `SignatureDoesNotMatch` or `InvalidSecurity` — fails it at once, naming
   `ACCESS_KEY` and `SECRET_KEY`, since every call would fail the same way;
-- a store whose policy refuses the listing — `AccessDenied`, or a `403` saying
-  nothing of the key — boots on with one `warn` on `nest_rs::storage` naming the
-  credential variables. A least-privilege policy is no reason to stop an app;
-  grant `s3:ListBucket` on the prefix to silence the line. A valid key whose
-  policies were all removed answers the same, so this line is all it gets
-  until its first call fails;
-- anything else — no answer, a `5xx`, a `408` or a `429` — is retried within
-  the budget, each attempt a `warn`, then fails the boot as unreachable with
-  its last cause.
+- any other `403` boots on with one `warn` on `nest_rs::storage` naming the
+  credential variables. It is most often a policy without `s3:ListBucket` on the
+  prefix: a least-privilege policy is no reason to stop an app, and granting it
+  silences the line. The line's `code` says what S3 answered when it is
+  `AccessDenied`, `AccountProblem`, `AllAccessDisabled` or
+  `RequestTimeTooSkewed`, so a skewed clock or a suspended account reads there;
+  those last three fail every call. A valid key whose policies were all removed
+  answers `AccessDenied` too, so this line is all it gets until its first call
+  fails;
+- anything else — no whole answer, a `5xx`, a `408` or a `429` — is retried
+  within the budget, each attempt a `warn`, then fails the boot as unreachable
+  with its last cause.
 
 `memory:///` proves at once. The suite runs against RustFS 1.0 over TLS; AWS S3
 and the other servers speaking its API answer the same requests, but no test of
@@ -277,7 +280,10 @@ chain filed at `error`. Its sentences
 name the store and the operation, never a key: a key often carries user input,
 so the chain object_store's own errors add is said by their kind, without the
 key or the URL they quote. The library's error stays the source, read with
-`downcast_ref::<object_store::Error>()`. A `StorageError` converts into
+`downcast_ref::<object_store::Error>()`, but for a refused boot, which keeps that
+sentence alone: a `main` returning it prints each link as it is. No error holds
+the document of a `401` or a `403`, which echoes the key and the request signed.
+A `StorageError` converts into
 `std::io::Error`, so a `get_stream` feeds a streamed response body directly.
 
 ## Configuration

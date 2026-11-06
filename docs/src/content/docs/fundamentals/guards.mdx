@@ -618,6 +618,29 @@ allow-list, which the deployment decides rather than a feature. The demo's roots
 list none, since each controller and gateway binds its own, and
 `AuthzGraphqlModule` and `AuthzMcpModule` cover `/graphql` and `/mcp`.
 
+The boot's refusal does not replace a pool. It refuses a route or a gateway message
+with no `#[public]` and no guard that identifies or authorizes a caller. An MCP
+endpoint whose request runs only guards identifying no one refuses each operation it
+carries, tool, prompt or resource, that neither says `#[public]` nor has such a guard
+of its own; with no guard at all, one carrying no `#[public]` boots and
+[denies every call](/mcp/#the-smallest-possible-tool). The refusal reads the phase a
+guard declares, never what the guard checks, so a route under a weaker guard of the
+right phase boots.
+
+A pool is how an app makes its own guards run wherever a request meets a guard stage:
+every route, a gateway's upgrade, `/graphql` and a gated `/mcp`. That takes in the
+`#[public]` routes: `/health/*` are `#[public]`, so a pooled guard that turns anonymous
+callers away answers an orchestrator's probes too, unless it
+[reads the posture](#attach-context-and-route-metadata). These have no guard stage,
+so an API key in the pool does not cover them:
+
+- [the static files](/http/static-files/#limits);
+- [the OpenAPI document and UI](/openapi/configuration/#fields);
+- a [self-mount declared `Posture::Public`](/extending/transport/#serving-http-from-a-package);
+- [a public `/mcp`](/mcp/#the-smallest-possible-tool);
+- [what the router answers itself](/fundamentals/request-lifecycle/#what-each-edge-runs),
+  a `404` or a `405`.
+
 A guard listed at both sites still runs **exactly once** per request. The Layer
 System dedups every layer by
 [`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html) across the three

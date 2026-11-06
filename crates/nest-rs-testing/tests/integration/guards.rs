@@ -7,6 +7,7 @@ use nest_rs_core::{Ambient, AmbientValue, Layer, async_trait, injectable, module
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_health::HealthModule;
 use nest_rs_http::StatusCode;
 use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_testing::{HeadlessApp, TestApp};
@@ -430,6 +431,200 @@ async fn a_public_route_bypasses_an_active_global_guard() {
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
+}
+
+/// Admits every caller and declares no phase, as a rate limit does.
+#[injectable]
+#[derive(Default)]
+struct NoPhaseGuard;
+
+impl Layer for NoPhaseGuard {}
+
+#[async_trait]
+impl Guard for NoPhaseGuard {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for NoPhaseGuard {}
+
+#[controller(path = "/no-phase")]
+struct NoPhaseScope;
+
+#[routes]
+impl NoPhaseScope {
+    #[get("/x")]
+    #[use_guards(NoPhaseGuard)]
+    async fn under_no_phase(&self) -> &'static str {
+        "unreachable"
+    }
+}
+
+#[module(providers = [NoPhaseGuard, NoPhaseScope])]
+struct NoPhaseModule;
+
+#[tokio::test]
+async fn a_route_under_a_guard_declaring_no_phase_refuses_the_boot() {
+    let Err(refused) = TestApp::for_module::<NoPhaseModule>().await else {
+        panic!("the route would answer every caller with no posture said");
+    };
+    let chain = format!("{refused:#}");
+    assert!(
+        chain.contains("/no-phase/x") && chain.contains("#[public]"),
+        "the refusal names the route and its remedy: {chain}",
+    );
+}
+
+#[controller(path = "/declared")]
+struct DeclaredPhaseScope;
+
+#[routes]
+impl DeclaredPhaseScope {
+    #[get("/identifies")]
+    #[use_guards(SessionGuard)]
+    async fn under_authentication(&self) -> &'static str {
+        "admitted"
+    }
+
+    #[get("/authorizes")]
+    #[use_guards(PolicyGuard)]
+    async fn under_authorization(&self) -> &'static str {
+        "admitted"
+    }
+}
+
+#[module(providers = [SessionGuard, PolicyGuard, DeclaredPhaseScope])]
+struct DeclaredPhaseModule;
+
+/// The refusal reads the phase a guard declares, never what it checks: both guards
+/// here admit an anonymous caller, and the app boots.
+#[tokio::test]
+async fn a_route_under_a_guard_declaring_its_phase_boots_however_little_it_checks() {
+    let app = TestApp::for_module::<DeclaredPhaseModule>()
+        .await
+        .expect("a declared phase is all the boot reads");
+
+    for path in ["/declared/identifies", "/declared/authorizes"] {
+        app.http().get(path).send().await.assert_status_is_ok();
+    }
+}
+
+#[module(imports = [HealthModule], providers = [GlobalGuards<(DenyGuard,)>])]
+struct ProbesUnderADenyingPool;
+
+#[module(imports = [HealthModule], providers = [GlobalGuards<(PublicAwareGuard,)>])]
+struct ProbesUnderAPoolReadingThePosture;
+
+/// `/health/*` are `#[public]`, and `#[public]` strips no guard: a pool's own guard
+/// answers an orchestrator's probe unless it reads the posture.
+#[tokio::test]
+async fn a_pool_guard_runs_on_the_public_health_probes() {
+    let denying = TestApp::for_module::<ProbesUnderADenyingPool>()
+        .await
+        .expect("boots");
+    let reading = TestApp::for_module::<ProbesUnderAPoolReadingThePosture>()
+        .await
+        .expect("boots");
+
+    for probe in ["/health/live", "/health/ready", "/health/startup"] {
+        denying
+            .http()
+            .get(probe)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        reading.http().get(probe).send().await.assert_status_is_ok();
+    }
+}
+
+struct PublicStatusPageModule;
+
+static PUBLIC_STATUS_PAGE: nest_rs_core::Handler =
+    nest_rs_http::declare_endpoint::<PublicStatusPageModule>(
+        "PublicStatusPageModule",
+        "/status",
+        nest_rs_core::Posture::Public,
+    );
+
+impl nest_rs_core::Module for PublicStatusPageModule {
+    fn register(
+        builder: nest_rs_core::ContainerBuilder,
+        _: nest_rs_core::Registering<Self>,
+    ) -> nest_rs_core::ContainerBuilder {
+        builder.provide_meta(nest_rs_http::HttpEndpointMeta::new(
+            &PUBLIC_STATUS_PAGE,
+            "/status",
+            "status",
+            |_, routes| {
+                routes.route(
+                    nest_rs_http::Method::GET,
+                    "/status",
+                    nest_rs_http::endpoint_fn(|_req| async {
+                        Ok(nest_rs_http::Response::builder().body("up"))
+                    }),
+                );
+            },
+        ))
+    }
+}
+
+#[controller(path = "/under-the-pool")]
+struct UnderThePoolScope;
+
+#[routes]
+impl UnderThePoolScope {
+    #[get("/route")]
+    async fn under_the_pool(&self) -> &'static str {
+        "unreachable"
+    }
+}
+
+#[module(
+    imports = [PublicStatusPageModule],
+    providers = [UnderThePoolScope, GlobalGuards<(DenyGuard,)>],
+)]
+struct NoGuardStageUnderADenyingPool;
+
+/// The pool denies the route, so it is running: what answers beside it had no guard
+/// stage for it to run in.
+#[tokio::test]
+async fn a_pool_guard_reaches_neither_a_public_self_mount_nor_what_the_router_answers() {
+    let app = TestApp::for_module::<NoGuardStageUnderADenyingPool>()
+        .await
+        .expect("boots");
+
+    app.http()
+        .get("/under-the-pool/route")
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    app.http()
+        .get("/status")
+        .send()
+        .await
+        .assert_text("up")
+        .await;
+    app.http()
+        .get("/nowhere")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    app.http()
+        .post("/under-the-pool/route")
+        .send()
+        .await
+        .assert_status(StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

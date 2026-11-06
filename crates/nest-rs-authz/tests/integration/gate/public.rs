@@ -6,8 +6,11 @@
 //! is `nest-rs-seaorm`'s e2e suite.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read, current_ability};
+use nest_rs_authz::{
+    Ability, AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read, current_ability,
+};
 use nest_rs_core::{AmbientValue, Discovery, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::dataloader::DataLoader;
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
@@ -272,6 +275,14 @@ impl ArticlesResolver {
         stream::iter(rows())
     }
 
+    /// What a stream's own body reads, after its opening's unit ended.
+    #[subscription]
+    #[public(Read, article::Entity)]
+    #[use_guards(AuthzGuard)]
+    async fn stream_reads(&self) -> impl Stream<Item = bool> {
+        stream::once(async { reads_under_an_ability() })
+    }
+
     /// A field no mask reaches, below an operation naming its read.
     #[field_resolver]
     async fn nested_read(&self, parent: &ArticleDto) -> GqlResult<bool> {
@@ -534,6 +545,52 @@ async fn a_subscription_naming_its_read_masks_each_item_by_the_visitors_grant() 
     }
     let done = socket.next_item("1").await.expect("the stream ends");
     assert_eq!(done["type"], "complete", "the draft was dropped: {done}");
+}
+
+/// What `ability`, carried by the socket's request, leaves a stream's own body to read.
+async fn read_in_a_stream(ability: Ability, carried: Option<Arc<Caller>>) -> Value {
+    let app = app().await;
+    let socket = app.graphql_socket().ability(Arc::new(ability));
+    let socket = match carried {
+        Some(caller) => socket.attach(caller),
+        None => socket,
+    };
+    let mut socket = socket.open();
+    socket.connect().await;
+    socket.subscribe("1", "subscription { streamReads }");
+    let item = socket.next_item("1").await.expect("an item");
+    item["data"]["streamReads"].clone()
+}
+
+/// The item a stream yields is the mask's and what its body reads is not: a visitor's
+/// reads there stay closed, and a caller a token backs reads under what its request
+/// carried, the mask reaching none of what it derives from those rows.
+#[tokio::test]
+async fn a_streams_own_reads_are_closed_to_a_visitor_and_open_to_a_caller() {
+    let mut visitor = AbilityBuilder::new();
+    visitor.can(Action::Read, article::Entity);
+    let visitor = visitor.build_visitor().expect("a valid rule set");
+    assert_eq!(read_in_a_stream(visitor, None).await, json!(false));
+
+    let mut caller = AbilityBuilder::new();
+    caller.can(Action::Read, article::Entity);
+    let caller = caller.build().expect("a valid rule set");
+    assert_eq!(
+        read_in_a_stream(caller, Some(Arc::new(Caller))).await,
+        json!(true),
+    );
+}
+
+/// A field's own guard attaches its ability to the opening's unit and the mask of its
+/// items, and the stream's body, polled after that unit ended, reads under none.
+#[tokio::test]
+async fn an_ability_a_fields_own_guard_attaches_stays_off_its_streams_reads() {
+    let app = app().await;
+    let mut socket = app.graphql_socket().attach(Arc::new(Caller)).open();
+    socket.connect().await;
+    socket.subscribe("1", "subscription { streamReads }");
+    let item = socket.next_item("1").await.expect("an item");
+    assert_eq!(item["data"]["streamReads"], false, "{item}");
 }
 
 #[gateway(path = "/ws/articles")]

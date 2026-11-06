@@ -254,6 +254,10 @@ Everything else is the GraphQL module's own configuration — see
 - **A relational rule decides no item.** The subscriber sees nothing, and
   `nest_rs::authz` logs one `warn` (`reason = "undecidable_on_push"`) per
   entity and action, not one per item.
+- **A stream's own reads.** A visitor's read nothing; a caller a token backs reads
+  under the ability its request carried, and the mask covers only the item yielded,
+  so a scalar built from those rows ships as it is. An ability a field's own guards
+  attach reaches the mask of its items, never the stream's reads.
 - **`bind = Service` binds at subscribe, not per item** — it names one
   subject for the subscription, the way it names one for a mutation.
 - **A subscription's request scope lasts as long as the subscription.** A

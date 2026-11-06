@@ -48,15 +48,19 @@ const MAX_DEPTH: CountBounds = CountBounds::new(
     ),
 );
 
+/// Past ten million selections one document is a denial of service rather than a
+/// read, which `max_complexity`'s off leaves a fragment's repeats held to.
+const MOST_COMPLEXITY: usize = 10_000_000;
+
 const MAX_COMPLEXITY: CountBounds = CountBounds::new(
     Bound::new(
         1,
         "every field scores at least one, so a limit under one refuses every query",
     ),
     Bound::new(
-        10_000_000,
+        MOST_COMPLEXITY as u64,
         "past ten million resolved fields one query is a denial of service rather than a read; \
-         a deployment that means no ceiling turns it off",
+         a deployment that means no ceiling on the score turns it off",
     ),
 );
 
@@ -172,6 +176,11 @@ pub struct GraphqlConfig {
     /// `Some(2000)`, from 1 to ten million; `None` disables the check, as `0`
     /// does from the environment, and a pinned `Some(0)` is rejected at boot,
     /// as for `max_depth`.
+    ///
+    /// It also holds what spreading a fragment again adds to a document's
+    /// selections, counted before anything walks them, which `None` leaves at the
+    /// ten million no score may pass: a document of a kilobyte would otherwise hold
+    /// a worker for minutes.
     #[config(bounds = MAX_COMPLEXITY)]
     pub max_complexity: Option<usize>,
     /// Answer introspection queries. The schema is the API's documentation, so
@@ -274,6 +283,12 @@ impl Default for GraphqlConfig {
 }
 
 impl GraphqlConfig {
+    /// What spreading a fragment again may add to a document, however
+    /// [`max_complexity`](Self::max_complexity) scores its fields.
+    pub(crate) fn repeated_selections(&self) -> usize {
+        self.max_complexity.unwrap_or(MOST_COMPLEXITY)
+    }
+
     /// One `warn` per surface open outside a development or test profile:
     /// honoured, since the deployment chose it, and said.
     pub(crate) fn warn_when_open(&self) {
@@ -306,6 +321,27 @@ mod tests {
         assert_eq!(
             GraphqlConfig::default().max_connection,
             Some(nest_rs_http::DEFAULT_MAX_CONNECTION)
+        );
+    }
+
+    #[test]
+    fn a_fragments_repeats_are_held_to_the_limit_or_to_the_most_it_may_say() {
+        assert_eq!(
+            GraphqlConfig {
+                max_complexity: Some(5),
+                ..Default::default()
+            }
+            .repeated_selections(),
+            5,
+        );
+        let off = GraphqlConfig {
+            max_complexity: None,
+            ..Default::default()
+        }
+        .repeated_selections();
+        assert_eq!(
+            Some(off),
+            usize::try_from(GraphqlConfig::MAX_COMPLEXITY.bounds().most().count).ok(),
         );
     }
 

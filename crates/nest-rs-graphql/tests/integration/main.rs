@@ -9,6 +9,7 @@
 
 mod ambient;
 mod context;
+mod document_cost;
 mod duplicate_operation;
 mod endpoint;
 mod federation;

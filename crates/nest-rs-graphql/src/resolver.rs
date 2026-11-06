@@ -868,6 +868,7 @@ pub(crate) fn build_schema(
     .data(crate::field_spellings::FieldSpellings::default())
     .extension(crate::request_extension::RequestExtensionFactory::new(
         loaders,
+        config.repeated_selections(),
     ));
     if let Some(gate) =
         crate::federation::FederationExtensionFactory::for_schema(&container, config)

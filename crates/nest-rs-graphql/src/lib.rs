@@ -32,6 +32,7 @@ pub const TARGET: &str = "nest_rs::graphql";
 mod ambient;
 mod config;
 mod context;
+mod document_cost;
 mod endpoint;
 mod error;
 mod federation;

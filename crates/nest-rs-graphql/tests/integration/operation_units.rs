@@ -850,6 +850,37 @@ fn fragment_chain(links: usize, last: &str) -> String {
     query
 }
 
+/// A mutation fanning out is refused for what its fragments cost, where its root's
+/// read would call it a repeat once validation passed, as a `__typename` lets it
+/// pass: its unit opens and settles with nothing in it.
+#[tokio::test]
+async fn a_mutation_fanning_out_runs_nothing() {
+    let logs = LogCapture::install();
+    let (app, journal) = boot().await;
+    let mut document = String::from("mutation { ...F0 }");
+    for at in 0..14 {
+        document.push_str(&format!(
+            " fragment F{at} on Mutation {{ ...F{next} ...F{next} }}",
+            next = at + 1
+        ));
+    }
+    document.push_str(" fragment F14 on Mutation { __typename }");
+    let reply = post(&app, json!({ "query": document })).await;
+    assert_eq!(reply["data"], Value::Null, "{reply}");
+    assert_eq!(
+        reply["errors"][0]["message"], "Query is too complex.",
+        "{reply}"
+    );
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "settle graphql.operation false"
+        ],
+    );
+    assert!(dispatched(&logs).is_empty(), "no root field resolves");
+}
+
 /// The read of a mutation's root runs before async-graphql's own recursion
 /// limit, and a stack overflow aborts the process: as long a chain as a request's
 /// body holds is the limit's to refuse.

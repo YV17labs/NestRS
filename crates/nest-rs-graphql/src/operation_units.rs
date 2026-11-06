@@ -8,7 +8,7 @@
 //! nor stays silent on work that stands.
 
 use std::collections::{HashMap, HashSet};
-use std::convert::identity;
+use std::convert::{Infallible, identity};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, PoisonError};
@@ -484,7 +484,8 @@ fn coerce_variables(
 /// decides it where the rule is private (`schema.rs`,
 /// `remove_skipped_selection`): `@skip` and `@include`, each `if` read in
 /// `variables` alone, and anything but a boolean reading `false`. Pinned by
-/// `a_selection_is_left_out_as_async_graphql_leaves_it_out`.
+/// `a_selection_is_left_out_as_async_graphql_leaves_it_out`. A variable is never
+/// copied to read it: this runs before a document's cost is counted.
 pub(crate) fn is_skipped(directives: &[Positioned<Directive>], variables: &Variables) -> bool {
     directives.iter().any(|directive| {
         let include = match directive.node.name.node.as_str() {
@@ -496,7 +497,11 @@ pub(crate) fn is_skipped(directives: &[Positioned<Directive>], variables: &Varia
             let value = condition
                 .node
                 .clone()
-                .into_const_with(|name| variables.get(&name).cloned().ok_or(()));
+                .into_const_with::<Infallible>(|name| {
+                    Ok(Value::Boolean(
+                        variables.get(&name) == Some(&Value::Boolean(true)),
+                    ))
+                });
             include != matches!(value, Ok(Value::Boolean(true)))
         })
     })
@@ -926,6 +931,42 @@ mod tests {
             code,
             Some(&Value::from(code::INVALID_ARGUMENT.as_str())),
             "{refusal:?}"
+        );
+    }
+
+    /// A directive's `if` is read before a document's cost is counted, so it copies
+    /// nothing however large what it refers to is: the read of two thousand costs
+    /// less, on this thread's CPU clock, than copying the value a quarter as often,
+    /// where a copy per reference cost several times that.
+    #[test]
+    fn reading_a_directive_copies_no_variable() {
+        use crate::null_propagation::tests::thread_cpu_time;
+
+        let references = "@skip(if: $v) ".repeat(2_000);
+        let document =
+            async_graphql::parser::parse_query(format!("query($v: String) {{ a {references}}}"))
+                .expect("the document parses");
+        let DocumentOperations::Single(operation) = &document.operations else {
+            panic!("one operation");
+        };
+        let Selection::Field(field) = &operation.node.selection_set.node.items[0].node else {
+            panic!("one field");
+        };
+        let mut variables = Variables::default();
+        variables.insert(Name::new("v"), Value::String("x".repeat(1_000_000)));
+
+        let started = thread_cpu_time();
+        for _ in 0..500 {
+            drop(std::hint::black_box(variables.clone()));
+        }
+        let copying = thread_cpu_time() - started;
+        let started = thread_cpu_time();
+        assert!(!is_skipped(&field.node.directives, &variables));
+        let reading = thread_cpu_time() - started;
+
+        assert!(
+            reading < copying,
+            "read in {reading:?}, copied in {copying:?}"
         );
     }
 

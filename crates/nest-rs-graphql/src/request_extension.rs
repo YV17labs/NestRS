@@ -1,8 +1,10 @@
 //! What the schema does around each request, in the one extension it keeps,
-//! since an extension is entered on every field (`redact.rs`): it seeds the
-//! request's loaders and what it files once ([`FiledOnce`]), and once validation
-//! passed answers the refusal the operation's read left ([`OperationRefusal`]). No
-//! other hook sits between validation and execution.
+//! since an extension is entered on every field (`redact.rs`): before anything
+//! walks the document it refuses what the document would cost
+//! ([`document_cost`]), it seeds the request's loaders and what it files once
+//! ([`FiledOnce`]), and once validation passed answers the refusal the operation's
+//! read left ([`OperationRefusal`]). No other hook sits between validation and
+//! execution.
 
 use std::sync::Arc;
 
@@ -12,36 +14,77 @@ use async_graphql::extensions::{
 };
 use async_graphql::{Request, ServerError, ServerResult, ValidationResult};
 
+use crate::document_cost::{self, DocumentLimits};
 use crate::filed_once::FiledOnce;
 use crate::loader::LoaderSeeds;
 use crate::operation_units::OperationRefusal;
 
 /// Builds each request's [`RequestExtension`].
-pub(crate) struct RequestExtensionFactory(Arc<LoaderSeeds>);
+pub(crate) struct RequestExtensionFactory {
+    seeds: Arc<LoaderSeeds>,
+    repeated_selections: usize,
+}
 
 impl RequestExtensionFactory {
-    pub(crate) fn new(seeds: LoaderSeeds) -> Self {
-        Self(Arc::new(seeds))
+    /// Each request seeded from `seeds`, what spreading a fragment again adds to its
+    /// document held to `repeated_selections`.
+    pub(crate) fn new(seeds: LoaderSeeds, repeated_selections: usize) -> Self {
+        Self {
+            seeds: Arc::new(seeds),
+            repeated_selections,
+        }
     }
 }
 
 impl ExtensionFactory for RequestExtensionFactory {
     fn create(&self) -> Arc<dyn Extension> {
-        Arc::new(RequestExtension(Arc::clone(&self.0)))
+        Arc::new(RequestExtension {
+            seeds: Arc::clone(&self.seeds),
+            repeated_selections: self.repeated_selections,
+        })
     }
 }
 
-struct RequestExtension(Arc<LoaderSeeds>);
+struct RequestExtension {
+    seeds: Arc<LoaderSeeds>,
+    repeated_selections: usize,
+}
+
+impl RequestExtension {
+    /// What a document may add to its text. A request's arguments may copy twice what
+    /// it may carry, so any variable may be referred to twice: past that, a body's few
+    /// references to its own value would multiply it.
+    fn limits(&self) -> DocumentLimits {
+        DocumentLimits {
+            repeated_selections: self.repeated_selections,
+            copied_bytes: nest_rs_http::current_body_limit().saturating_mul(2),
+        }
+    }
+}
 
 #[async_trait]
 impl Extension for RequestExtension {
     async fn prepare_request(
         &self,
         ctx: &ExtensionContext<'_>,
-        request: Request,
+        mut request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
-        next.run(ctx, self.0.seed(request).data(FiledOnce::default()))
+        // The operation's read cached this parse; one that fails is answered by
+        // async-graphql's own, ahead.
+        let limits = self.limits();
+        let variables = std::mem::take(&mut request.variables);
+        // The operation's read cached this parse; one that fails is answered by
+        // async-graphql's own, ahead.
+        let refusal = request
+            .parsed_query()
+            .ok()
+            .and_then(|document| document_cost::refusal(document, &variables, limits));
+        request.variables = variables;
+        if let Some(refusal) = refusal {
+            return Err(refusal);
+        }
+        next.run(ctx, self.seeds.seed(request).data(FiledOnce::default()))
             .await
     }
 

@@ -575,6 +575,13 @@ router parses. The rewrite is skipped when nothing is versioned.
 
 ## Surface decisions
 
+- **A GraphQL document's cost is counted before anything walks it**
+  (`crates/nest-rs-graphql/src/document_cost.rs`), in `Extension::prepare_request`,
+  the one hook ahead of async-graphql's walks: what spreading a fragment again adds
+  is held to `max_complexity`, or the most it may say when off, what its arguments
+  copy to twice `max_body_bytes`, and a fragment no operation reaches is refused
+  unread. A read of a document ahead of that count reads each fragment once and
+  copies no variable (`.claude/decisions/graphql-transactions.md`).
 - **A transport is activated by the host that serves on it**: a listed host
   brings its edge's module bare (`container.md`, *Discovery and its gate*) —
   `HttpModule` for HTTP, both it and `WsModule` for a gateway, `GraphqlModule`,

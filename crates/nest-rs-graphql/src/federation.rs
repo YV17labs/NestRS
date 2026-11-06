@@ -13,6 +13,7 @@
 //! stage adds what else the `/graphql` request ran that identifies a caller.
 
 use std::any::TypeId;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use async_graphql::async_trait::async_trait;
@@ -287,7 +288,7 @@ fn refuse_oversized_entity_calls(
 
     let mut total = 0usize;
     let mut position = None;
-    let mut seen = Vec::new();
+    let mut seen = HashSet::new();
     visit_root_fields(
         document,
         &operation.node.selection_set,
@@ -363,10 +364,10 @@ fn representation_count(
 /// Walk an operation's **root** selection set, following fragments, and hand
 /// every field to `visit`. `seen` breaks a self-referential fragment's cycle:
 /// the document is not validated yet.
-fn visit_root_fields(
-    document: &ExecutableDocument,
-    selection_set: &Positioned<SelectionSet>,
-    seen: &mut Vec<String>,
+fn visit_root_fields<'d>(
+    document: &'d ExecutableDocument,
+    selection_set: &'d Positioned<SelectionSet>,
+    seen: &mut HashSet<&'d str>,
     visit: &mut dyn FnMut(&Positioned<async_graphql::parser::types::Field>) -> ServerResult<()>,
 ) -> ServerResult<()> {
     for selection in &selection_set.node.items {
@@ -376,11 +377,9 @@ fn visit_root_fields(
                 visit_root_fields(document, &fragment.node.selection_set, seen, visit)?;
             }
             Selection::FragmentSpread(spread) => {
-                let name = spread.node.fragment_name.node.as_str();
-                if seen.iter().any(|s| s == name) {
+                if !seen.insert(spread.node.fragment_name.node.as_str()) {
                     continue;
                 }
-                seen.push(name.to_owned());
                 if let Some(fragment) = document.fragments.get(&spread.node.fragment_name.node) {
                     visit_root_fields(document, &fragment.node.selection_set, seen, visit)?;
                 }
@@ -392,10 +391,12 @@ fn visit_root_fields(
 
 #[cfg(test)]
 mod tests {
+    use async_graphql::parser::parse_query;
     use async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
     use nest_rs_testing::LogCapture;
 
     use super::*;
+    use crate::null_propagation::tests::thread_cpu_time;
 
     struct Query;
 
@@ -404,6 +405,32 @@ mod tests {
         async fn ping(&self) -> bool {
             true
         }
+    }
+
+    /// A root may spread tens of thousands of fragments, each a look at what the
+    /// read already holds and never a scan of it: the read costs a fraction of the
+    /// parse it reads, on this thread's CPU clock, where a scan cost half of it here
+    /// and more than all of it at twice the size.
+    #[test]
+    fn counting_a_roots_representations_costs_a_fraction_of_parsing_it() {
+        let spreads: String = (0..8_000).map(|at| format!(" ...B{at}")).collect();
+        let bodies: String = (0..8_000)
+            .map(|at| format!(" fragment B{at} on Query {{ ping }}"))
+            .collect();
+        let text = format!("query {{{spreads} }}{bodies}");
+
+        let started = thread_cpu_time();
+        let document = parse_query(&text).expect("the document parses");
+        let parsing = thread_cpu_time() - started;
+        let started = thread_cpu_time();
+        refuse_oversized_entity_calls(&document, &Variables::default(), None, 100)
+            .expect("it calls `_entities` nowhere");
+        let counting = thread_cpu_time() - started;
+
+        assert!(
+            counting * 4 < parsing,
+            "parsed in {parsing:?} of this thread's CPU, counted in {counting:?}"
+        );
     }
 
     /// A schema `GraphqlModule` did not build carries no container: the

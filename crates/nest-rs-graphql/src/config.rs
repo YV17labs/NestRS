@@ -209,6 +209,9 @@ pub struct GraphqlConfig {
     /// Read from `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES`, from 1 to a gibibyte
     /// ([`nest_rs_http::MAX_MESSAGE_BYTES_BOUNDS`]); defaults to 64 KiB, as
     /// `<PREFIX>_WS__MAX_MESSAGE_BYTES` does.
+    ///
+    /// What an operation's arguments copy on the socket is held to twice this, as
+    /// a POST's are to twice `max_body_bytes`.
     #[config(bounds = nest_rs_http::MAX_MESSAGE_BYTES_BOUNDS)]
     pub max_message_bytes: usize,
     /// How long an upgraded graphql-ws socket may wait for `connection_init`

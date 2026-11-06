@@ -1398,9 +1398,11 @@ lists what the boot, a log or the wire shows when one is missed.
   out answers `{}` at a Non-Null position, where it answered `null`.
 - **A GraphQL document spreading its fragments again past `max_complexity`** reads `Query
   is too complex.` before anything walks it, a `__typename` at the end of them included,
-  which was answered; so does one whose arguments copy more than twice `max_body_bytes`.
-  `max_complexity: None` leaves a fragment's repeats at ten million. Spread less, or raise
-  the limit, which also holds a score under one that its repeats pass.
+  which was answered; so does one whose arguments copy or scan more than twice what the
+  request may carry, `max_body_bytes` on a `POST` and `max_message_bytes` on a graphql-ws
+  socket, a key repeated with thousands of arguments among them. `max_complexity: None`
+  leaves a fragment's repeats at ten million. Spread less, or raise the limit, which also
+  holds a score under one that its repeats pass.
 - **A GraphQL document holding a fragment no operation spreads** reads `Fragment "F" is
   never used` for the first in its text alone, where validation listed each beside the
   document's other errors. It was refused either way.

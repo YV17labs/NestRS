@@ -1,6 +1,6 @@
 //! Covers `src/document_cost.rs`: what a document's fragments multiply and its
-//! arguments copy is refused before async-graphql walks it, as a document past the
-//! limit is refused, on every path a document reaches the schema by.
+//! arguments copy and scan is refused before async-graphql walks it, as a document
+//! past the limit is refused, on every path a document reaches the schema by.
 //!
 //! The walk it stands in front of is synchronous, so no test here can time out of a
 //! regression: each proves its order by the answer, which a walk reaching its end
@@ -11,10 +11,11 @@ use async_graphql::futures_util::stream::{self, Stream};
 use nest_rs_config::Surface;
 use nest_rs_core::{Module, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_testing::TestApp;
 use serde_json::{Value, json};
 
-use crate::fan_out;
+use crate::{fan_out, next_message};
 
 #[derive(SimpleObject)]
 struct Leaf {
@@ -37,6 +38,12 @@ impl ExpansionResolver {
     #[query]
     #[public]
     async fn echo(&self, values: Option<Vec<String>>) -> usize {
+        values.map_or(0, |values| values.len())
+    }
+
+    #[query]
+    #[public]
+    async fn numbers(&self, values: Option<Vec<i32>>) -> usize {
         values.map_or(0, |values| values.len())
     }
 
@@ -80,6 +87,32 @@ struct AppLimitsOff;
     ExpansionFeatureModule,
 ])]
 struct AppIntrospected;
+
+/// The body cap the promise of a variable's two references is read at, small enough
+/// for a list of numbers filling it to cost a test nothing.
+const SMALL_BODY: usize = 64 * 1024;
+
+#[module(imports = [
+    HttpModule::for_root(HttpConfig {
+        max_body_bytes: SMALL_BODY,
+        ..HttpConfig::default()
+    }),
+    GraphqlModule,
+    ExpansionFeatureModule,
+])]
+struct AppSmallBody;
+
+/// A socket's message cap past half the limit a POST reads by default.
+const LARGE_MESSAGE: usize = 3 * 1024 * 1024;
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        max_message_bytes: LARGE_MESSAGE,
+        ..Default::default()
+    }),
+    ExpansionFeatureModule,
+])]
+struct AppLargeMessage;
 
 async fn boot<M: Module + 'static>() -> TestApp {
     TestApp::builder()
@@ -279,8 +312,131 @@ async fn the_copies_a_documents_references_make_are_held_to_what_a_request_may_c
     let answered = post(&app, &echo(2, &largest)).await;
     assert_eq!(
         answered["data"]["echo"], 2,
-        "any variable may be referred to twice"
+        "every variable may be referred to twice"
     );
+}
+
+/// A request filling the body cap with a variable may refer to it twice, whatever the
+/// variable holds: a list of small numbers weighs what its text does, not what its
+/// values take in memory.
+#[tokio::test]
+async fn every_variable_may_be_referred_to_twice_whatever_it_holds() {
+    let app = boot::<AppSmallBody>().await;
+    let refused = answer_past_the_limit(&app).await;
+    let references = |count: usize, field: &str, kind: &str| {
+        let fields: String = (0..count)
+            .map(|at| format!("a{at}: {field}(values: $v) "))
+            .collect();
+        format!("query($v: {kind}) {{ {fields}}}")
+    };
+    let numbers = vec![1; (SMALL_BODY - 200) / 2];
+    let strings = vec!["x".repeat(SMALL_BODY - 300)];
+    for (document, variable) in [
+        (references(2, "numbers", "[Int]"), json!(numbers)),
+        (references(2, "echo", "[String]"), json!(strings)),
+    ] {
+        let body = json!({ "query": document, "variables": { "v": variable } });
+        assert!(body.to_string().len() <= SMALL_BODY, "within the body cap");
+        let answered = post(&app, &body).await;
+        assert!(
+            answered.get("errors").is_none(),
+            "{:.300}",
+            answered.to_string()
+        );
+    }
+    let thrice = json!({
+        "query": references(3, "numbers", "[Int]"),
+        "variables": { "v": numbers },
+    });
+    assert_eq!(post(&app, &thrice).await, refused);
+}
+
+/// A reference copies a default as it copies what the request sent.
+#[tokio::test]
+async fn a_default_copies_at_each_reference() {
+    let app = boot::<AppDefaults>().await;
+    let refused = answer_past_the_limit(&app).await;
+    let default = "x".repeat(100_000);
+    let echo = |references: usize| {
+        let list = vec!["$v"; references].join(",");
+        format!(r#"query($v: String = "{default}") {{ echo(values: [{list}]) }}"#)
+    };
+    assert_eq!(answer(&app, &echo(100)).await, refused);
+    assert_eq!(answer(&app, &echo(2)).await["data"]["echo"], 2);
+}
+
+/// A reference scans the definitions down to its own, at execution, past every limit
+/// and inside one poll of the resolver.
+#[tokio::test]
+async fn the_definitions_a_documents_references_scan_are_held_to_what_a_request_may_carry() {
+    let app = boot::<AppDefaults>().await;
+    let refused = answer_past_the_limit(&app).await;
+    let scanning = |definitions: usize, again: usize| {
+        let defined: String = (0..definitions)
+            .map(|at| format!(r#"$a{at}: String = "", "#))
+            .collect();
+        let each: String = (0..definitions).map(|at| format!("$a{at}, ")).collect();
+        let last = "$z, ".repeat(again);
+        format!(r#"query({defined}$z: String = "") {{ echo(values: [{each}{last}$z]) }}"#)
+    };
+    assert_eq!(answer(&app, &scanning(3_000, 3_000)).await, refused);
+    assert_eq!(answer(&app, &scanning(100, 100)).await["data"]["echo"], 201);
+}
+
+/// A repeated key's arguments look each other up, ahead of every limit. A document past
+/// that hears the limit, where validation would have paid the square to list what it
+/// holds; the arguments a schema declares never come near it.
+#[tokio::test]
+async fn a_key_repeated_with_thousands_of_arguments_is_refused_unread() {
+    let app = boot::<AppDefaults>().await;
+    let refused = answer_past_the_limit(&app).await;
+    let arguments: String = (0..3_000).map(|at| format!("a{at}: 1, ")).collect();
+    let document = format!("{{ echo({arguments}) echo({arguments}) }}");
+    assert_eq!(answer(&app, &document).await, refused);
+
+    let repeated = r#"{ echo(values: ["a"]) echo(values: ["a"]) }"#;
+    assert_eq!(answer(&app, repeated).await["data"]["echo"], 1);
+}
+
+/// An operation the request's name leaves out copies nothing of its own: each of these
+/// refers once to a value only a document of one operation could copy three times.
+#[tokio::test]
+async fn an_operation_a_name_leaves_out_is_not_counted() {
+    let app = boot::<AppDefaults>().await;
+    let value = "x".repeat(1_500_000);
+    let operations: String = ["A", "B", "C"]
+        .map(|name| format!("query {name}($v: String) {{ echo(values: [$v]) }} "))
+        .concat();
+    let body = json!({ "query": operations, "operationName": "A", "variables": { "v": value } });
+    assert_eq!(post(&app, &body).await["data"]["echo"], 1);
+}
+
+/// What async-graphql copies whichever operation runs: a fragment's arguments, by what
+/// validates them, and with no name to leave one out, every operation's.
+#[tokio::test]
+async fn a_fragment_and_a_document_with_no_name_are_counted_whichever_runs() {
+    let app = boot::<AppDefaults>().await;
+    let refused = answer_past_the_limit(&app).await;
+    let value = "x".repeat(100_000);
+    let list = vec!["$v"; 100].join(",");
+    let direct =
+        format!("query A {{ __typename }} query B($v: String) {{ echo(values: [{list}]) }}");
+    let spread = format!(
+        "query A {{ __typename }} query B($v: String) {{ ...F }} \
+         fragment F on Query {{ echo(values: [{list}]) }}"
+    );
+    let selecting = |document: &str, name: Option<&str>| {
+        json!({
+            "query": document,
+            "operationName": name,
+            "variables": { "v": value },
+        })
+    };
+
+    let answered = post(&app, &selecting(&direct, Some("A"))).await;
+    assert_eq!(answered["data"]["__typename"], "Query", "{answered}");
+    assert_eq!(post(&app, &selecting(&spread, Some("A"))).await, refused);
+    assert_eq!(post(&app, &selecting(&direct, None)).await, refused);
 }
 
 /// A fragment's arguments are copied again at each of its spreads, its text's and its
@@ -376,6 +532,54 @@ async fn over_graphql_ws_a_fan_out_is_refused_and_the_socket_stays() {
     socket.subscribe("next", "{ root { label } }");
     let item = socket.next_item("next").await.expect("the socket stays");
     assert_eq!(item["data"]["root"]["label"], "root", "{item}");
+}
+
+/// `document`'s first answer over a socket of `M`, by a real upgrade, the one path that
+/// holds an operation to its socket's message cap.
+async fn over_a_real_socket<M: Module + 'static>(document: &str) -> Value {
+    let app = TestApp::builder()
+        .module::<M>()
+        .build_ws()
+        .await
+        .expect("the schema boots on a real port");
+    let mut socket = app
+        .socket("/graphql")
+        .header("sec-websocket-protocol", "graphql-transport-ws")
+        .connect()
+        .await;
+    socket.send_text(r#"{"type":"connection_init"}"#).await;
+    assert_eq!(next_message(&mut socket).await["type"], "connection_ack");
+    let subscribe = json!({ "id": "1", "type": "subscribe", "payload": { "query": document } });
+    socket.send_text(subscribe.to_string()).await;
+    let answered = next_message(&mut socket).await;
+    app.shutdown().await.expect("the transport stops cleanly");
+    answered
+}
+
+/// What a socket's operation copies is held to twice its own message cap, as a POST's
+/// is to twice its body cap: what a POST may copy here, a socket of the default cap
+/// may not, and one raised past that POST's limit may.
+#[tokio::test]
+async fn over_graphql_ws_copies_are_held_to_twice_the_message_cap() {
+    let copying = |spreads: usize, literal: usize| {
+        format!(
+            r#"{{ {} }} fragment F on Query {{ echo(values: ["{}"]) }}"#,
+            "...F ".repeat(spreads),
+            "x".repeat(literal),
+        )
+    };
+    let app = boot::<AppDefaults>().await;
+    let refused = answer_past_the_limit(&app).await;
+
+    let past_the_default_cap = copying(100, 2_000);
+    assert_eq!(answer(&app, &past_the_default_cap).await["data"]["echo"], 1);
+    let answered = over_a_real_socket::<AppDefaults>(&past_the_default_cap).await;
+    assert_eq!(answered["payload"], refused, "{answered}");
+
+    let past_a_posts_limit = copying(50, 100_000);
+    assert_eq!(answer(&app, &past_a_posts_limit).await, refused);
+    let answered = over_a_real_socket::<AppLargeMessage>(&past_a_posts_limit).await;
+    assert_eq!(answered["payload"]["data"]["echo"], 1, "{answered}");
 }
 
 /// Apollo's and graphql-js's introspection document, as tools send it.

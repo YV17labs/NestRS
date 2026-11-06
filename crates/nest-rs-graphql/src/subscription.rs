@@ -228,6 +228,19 @@ impl Refusal {
     }
 }
 
+tokio::task_local! {
+    /// The message cap of the socket this task serves.
+    static MESSAGE_BYTES: usize;
+}
+
+/// What a request on this task may carry: its socket's message cap, or the body cap
+/// the transport serves it under.
+pub(crate) fn current_request_limit() -> usize {
+    MESSAGE_BYTES
+        .try_with(|bytes| *bytes)
+        .unwrap_or_else(|_| nest_rs_http::current_body_limit())
+}
+
 /// What one socket is held to, read once off [`GraphqlConfig`].
 #[derive(Clone, Copy, Debug)]
 struct SocketBounds {
@@ -372,7 +385,10 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 // A local slot, since the executor scope wraps a `()` future.
                 let mut ended: Option<Ended> = None;
                 let serving: crate::BoxFuture<'_, ()> = Box::pin(async {
-                    let served = serve_socket(stream, executor, protocol, data, end, bounds, pipes);
+                    let served = MESSAGE_BYTES.scope(
+                        bounds.max_message_bytes,
+                        serve_socket(stream, executor, protocol, data, end, bounds, pipes),
+                    );
                     ended = Some(match bounds.max_connection {
                         // A peer that stopped reading cannot hold the socket past
                         // the ceiling plus the close grace.

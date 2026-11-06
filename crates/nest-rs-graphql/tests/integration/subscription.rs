@@ -455,17 +455,11 @@ fn the_socket_lifetime_ceiling_defaults_on_and_is_disabled_only_by_zero() {
 use nest_rs_testing::ws::{WsApp, WsFrame, WsRead, WsSocket, WsSocketBuilder};
 use nest_rs_ws::CloseCode;
 
+use crate::next_message;
+
 fn graphql_ws(app: &WsApp) -> WsSocketBuilder {
     app.socket("/graphql")
         .header("sec-websocket-protocol", "graphql-transport-ws")
-}
-
-/// The next text frame, parsed.
-async fn next_message(socket: &mut WsSocket) -> serde_json::Value {
-    match socket.next_frame().await {
-        Some(WsFrame::Text(text)) => serde_json::from_str(&text).expect("a protocol message"),
-        other => panic!("expected a protocol message, got {other:?}"),
-    }
 }
 
 /// `connection_init`, `connection_ack`, then `subscribe` as id `1`.

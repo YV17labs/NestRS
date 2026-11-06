@@ -23,6 +23,8 @@ use nest_rs_testing::{LogCapture, TestApp};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
+use crate::next_message;
+
 /// What the binding was asked to do, in order.
 #[derive(Default)]
 struct Journal(Mutex<Vec<String>>);
@@ -1605,16 +1607,6 @@ async fn with_no_binding_no_root_field_resolves_after_one_nulls_the_data() {
     .await;
     assert_eq!(reply["data"], Value::Null, "{reply}");
     assert_eq!(dispatched(&logs), ["write"], "`b` never resolves");
-}
-
-/// The next text frame of a graphql-ws socket, parsed.
-async fn next_message(socket: &mut nest_rs_testing::ws::WsSocket) -> Value {
-    match socket.next_frame().await {
-        Some(nest_rs_testing::ws::WsFrame::Text(text)) => {
-            serde_json::from_str(&text).expect("a protocol message")
-        }
-        other => panic!("expected a protocol message, got {other:?}"),
-    }
 }
 
 /// The socket executes through `execute_stream`: what a POST reads of a

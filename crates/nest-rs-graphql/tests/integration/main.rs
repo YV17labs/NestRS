@@ -134,6 +134,16 @@ async fn graphql_answer(app: &nest_rs_testing::TestApp, query: &str) -> serde_js
         .deserialize()
 }
 
+/// The next text frame of a real socket, parsed.
+async fn next_message(socket: &mut nest_rs_testing::ws::WsSocket) -> serde_json::Value {
+    match socket.next_frame().await {
+        Some(nest_rs_testing::ws::WsFrame::Text(text)) => {
+            serde_json::from_str(&text).expect("a protocol message")
+        }
+        other => panic!("expected a protocol message, got {other:?}"),
+    }
+}
+
 /// `root { ...F0 }` under `operation`, each fragment on `on` spreading the next
 /// twice, the last holding `leaf`.
 fn fan_out(operation: &str, on: &str, depth: usize, leaf: &str) -> String {

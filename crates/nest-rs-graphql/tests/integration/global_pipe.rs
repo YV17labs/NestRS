@@ -7,8 +7,10 @@ use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::HttpView;
 use nest_rs_pipes::{ArgumentKind, GlobalPipe, GlobalPipes, PipeError};
 use nest_rs_testing::TestApp;
-use nest_rs_testing::ws::{WsApp, WsFrame, WsSocket};
+use nest_rs_testing::ws::{WsApp, WsSocket};
 use serde_json::Value;
+
+use crate::next_message;
 
 /// Uppercases the `raw` string variable, rejects the literal `"boom"`,
 /// flattens the variables into a string for `"flatten"` and negates the `flip`
@@ -312,14 +314,6 @@ async fn socket_app() -> WsApp {
         .build_ws()
         .await
         .expect("the schema boots on a real port")
-}
-
-/// The next text frame, parsed.
-async fn next_message(socket: &mut WsSocket) -> Value {
-    match socket.next_frame().await {
-        Some(WsFrame::Text(text)) => serde_json::from_str(&text).expect("a protocol message"),
-        other => panic!("expected a protocol message, got {other:?}"),
-    }
 }
 
 /// `connection_init`, then `connection_ack`.

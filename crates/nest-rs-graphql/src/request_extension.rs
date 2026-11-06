@@ -47,12 +47,12 @@ struct RequestExtension {
 
 impl RequestExtension {
     /// What a document may add to its text. A request's arguments may copy twice what
-    /// it may carry, so any variable may be referred to twice: past that, a body's few
-    /// references to its own value would multiply it.
+    /// it may carry, so every variable may be referred to twice: past that, a request's
+    /// few references to its own value would multiply it.
     fn limits(&self) -> DocumentLimits {
         DocumentLimits {
             repeated_selections: self.repeated_selections,
-            copied_bytes: nest_rs_http::current_body_limit().saturating_mul(2),
+            copied_bytes: crate::subscription::current_request_limit().saturating_mul(2),
         }
     }
 }
@@ -66,13 +66,14 @@ impl Extension for RequestExtension {
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
         let variables = std::mem::take(&mut request.variables);
+        let operation = request.operation_name.take();
         // The operation's read cached this parse; one that fails is answered by
         // async-graphql's own, ahead.
-        let refusal = request
-            .parsed_query()
-            .ok()
-            .and_then(|document| document_cost::refusal(document, &variables, self.limits()));
+        let refusal = request.parsed_query().ok().and_then(|document| {
+            document_cost::refusal(document, operation.as_deref(), &variables, self.limits())
+        });
         request.variables = variables;
+        request.operation_name = operation;
         if let Some(refusal) = refusal {
             return Err(refusal);
         }

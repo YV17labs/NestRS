@@ -262,3 +262,37 @@ async fn a_listeners_mount_and_its_dispatch_say_one_event() {
         .expect("the listener ran");
     assert_eq!(dispatched.field("event"), mounted.field("event"));
 }
+
+#[expect(
+    dead_code,
+    reason = "the bus is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct Emitter {
+    #[inject]
+    bus: Arc<EventBus>,
+}
+
+#[module(providers = [Emitter])]
+struct EmitterModule;
+
+#[module(imports = [EmitterModule, EventsModule])]
+struct BusAfterItsEmitter;
+
+#[tokio::test]
+async fn a_provider_built_before_the_bus_is_told_the_module() {
+    let Err(refused) = App::builder().module::<BusAfterItsEmitter>().build().await else {
+        panic!("the bus registers after what injects it");
+    };
+    let said = format!("{refused:#}");
+    assert!(said.contains("`EventsModule` registers it later"), "{said}");
+}
+
+#[tokio::test]
+async fn a_provider_with_no_bus_is_told_the_module() {
+    let Err(refused) = App::builder().module::<EmitterModule>().build().await else {
+        panic!("nothing opens the bus");
+    };
+    let said = format!("{refused:#}");
+    assert!(said.contains("`nest_rs::events::EventsModule`"), "{said}");
+}

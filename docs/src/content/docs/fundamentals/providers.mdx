@@ -173,8 +173,8 @@ unmet dependency: `PostsService` (in module `PostsModule`) depends on `Jobs`, wh
 
 A crate of your own names one for a type it owns with
 `nest_rs::core::DependencyRemedy`, keyed by the type the container holds. The
-same line closes the refusal when a module lists the type out of the consumer's
-reach, and when what provides it registers too late to build the consumer.
+same line closes the refusal when only a module your app does not reach lists the
+type; a module it reaches is named instead, since importing it is the fix.
 
 HTTP, WebSockets, GraphQL, and MCP each install a fresh request scope per call
 (one per request for HTTP and MCP — every operation one `/mcp` request or one

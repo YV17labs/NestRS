@@ -1720,7 +1720,6 @@ impl ContainerBuilder {
             provider: stall.provider,
             missing,
             cause: self.absence_cause(reached, module, &keys),
-            remedy: keys.iter().find_map(|key| crate::access::remedy_for(*key)),
         })
     }
 
@@ -1736,7 +1735,6 @@ impl ContainerBuilder {
             provider: built.provider.1,
             dependency,
             cause: self.absence_cause(reached, built.module.0, &[key]),
-            remedy: crate::access::remedy_for(key),
         })
     }
 
@@ -1753,11 +1751,27 @@ impl ContainerBuilder {
             return crate::UnbuiltCause::RegisteredByAPool;
         }
         match unbuilt_cause(reached, module, keys) {
-            crate::UnbuiltCause::RegisteredLater if !self.booting => {
+            crate::UnbuiltCause::RegisteredLater(_) if !self.booting => {
                 crate::UnbuiltCause::ImportedFirst
+            }
+            crate::UnbuiltCause::RegisteredLater(_) => {
+                crate::UnbuiltCause::RegisteredLater(self.registrants(keys))
             }
             cause => cause,
         }
+    }
+
+    /// The imports whose phase registered `keys`, each once, in the keys' order.
+    fn registrants(&self, keys: &[TypeId]) -> Vec<&'static str> {
+        let mut registrants = Vec::new();
+        for key in keys {
+            if let Some(Origin::Import(site)) = self.origin(*key)
+                && !registrants.contains(&site.import)
+            {
+                registrants.push(site.import);
+            }
+        }
+        registrants
     }
 
     /// The providers `#[module]`s list that the register phase never built, in

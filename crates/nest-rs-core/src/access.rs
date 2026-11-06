@@ -117,9 +117,9 @@ pub(crate) mod __private {
 /// The line to add when a provider depends on `key` and no module the app
 /// imports provides it — submitted by the crate owning `key`'s type, so the
 /// boot's [`MissingDependencyError`] names the module that binds it instead of
-/// the kernel's generic remedy, as do [`AccessGraphError`] and a provider a
-/// later registration left unbuilt. Text only: it mounts nothing, so it is no
-/// discovery to gate.
+/// the kernel's generic remedy, as does [`AccessGraphError`] when no module the
+/// app reaches lists the key. Text only: it mounts nothing, so it is no discovery
+/// to gate.
 ///
 /// A port names its first-party binding for its trait object, and an adapter
 /// the module opening its resource:
@@ -411,14 +411,19 @@ pub(crate) fn validate_access_graph(
     let walked = reachable_in_order(roots, &by_id);
     let reached: HashSet<TypeId> = walked.iter().copied().collect();
     // An optional dependency's owner is read among the modules this app reaches:
-    // one only another binary's module provides is absent here, not a leak.
+    // one only another binary's module provides is absent here, not a leak. So is
+    // a key a hand-written module registers: that module, not the other binary's.
     let provided_by = owners(descriptors.iter().copied());
-    let reached_provided_by = owners(
+    let in_reach = || {
         descriptors
             .iter()
             .copied()
-            .filter(|d| reached.contains(&(d.module)())),
-    );
+            .filter(|d| reached.contains(&(d.module)()))
+    };
+    let reached_provided_by = owners(in_reach());
+    // Importing one is the fix whatever the key's crate names: that crate's
+    // binding beside it would register the key twice.
+    let reached_listings = listings(in_reach());
 
     for module_id in &walked {
         let Some(desc) = by_id.get(module_id) else {
@@ -483,18 +488,22 @@ pub(crate) fn validate_access_graph(
                 if global.contains(&dep) || closure_keys.contains(&dep) {
                     continue;
                 }
-                let owners = if optional {
+                let owners = if optional || registered.contains(&dep) {
                     &reached_provided_by
                 } else {
                     &provided_by
                 };
-                if let Some((dependency, owner)) = owners.get(&dep) {
+                let owner = reached_listings
+                    .get(&dep)
+                    .map(|listing| (listing, None))
+                    .or_else(|| owners.get(&dep).map(|owner| (owner, remedy_for(dep))));
+                if let Some((&(dependency, owner), remedy)) = owner {
                     return Err(AccessGraphError {
                         module: desc.name,
                         consumer: p.name,
                         dependency,
                         owner,
-                        remedy: remedy_for(dep),
+                        remedy,
                     }
                     .into());
                 }
@@ -522,21 +531,31 @@ pub(crate) fn validate_access_graph(
 /// listing under the key's own type goes before what a provider registers on
 /// its module's behalf: a pool reports a layer a module may well list.
 fn owners<'a>(
-    modules: impl Iterator<Item = &'a ModuleDescriptor>,
+    modules: impl Iterator<Item = &'a ModuleDescriptor> + Clone,
 ) -> HashMap<TypeId, (&'static str, &'static str)> {
-    let providers: Vec<(&ModuleDescriptor, &ProviderDescriptor)> = modules
-        .flat_map(|d| d.providers.iter().map(move |p| (d, p)))
-        .collect();
-    let mut owners = HashMap::new();
-    for (d, p) in &providers {
-        owners.entry((p.provides)()).or_insert((p.name, d.name));
-    }
-    for (d, p) in &providers {
-        for (key, label) in (p.also_provides)() {
-            owners.entry(key).or_insert((label, d.name));
+    let mut owners = listings(modules.clone());
+    for d in modules {
+        for p in d.providers {
+            for (key, label) in (p.also_provides)() {
+                owners.entry(key).or_insert((label, d.name));
+            }
         }
     }
     owners
+}
+
+/// The provider and the module of each key `modules` list under the key's own
+/// type, first listing first.
+fn listings<'a>(
+    modules: impl Iterator<Item = &'a ModuleDescriptor>,
+) -> HashMap<TypeId, (&'static str, &'static str)> {
+    let mut listings = HashMap::new();
+    for d in modules {
+        for p in d.providers {
+            listings.entry((p.provides)()).or_insert((p.name, d.name));
+        }
+    }
+    listings
 }
 
 /// `ids` beside their labels, in order, a missing label read as unnamed.
@@ -781,7 +800,7 @@ pub(crate) fn unbuilt_cause(
             return UnbuiltCause::ImportCycle(modules);
         }
     }
-    UnbuiltCause::RegisteredLater
+    UnbuiltCause::RegisteredLater(Vec::new())
 }
 
 /// Every key `provider` registers: its own, then each it registers on its

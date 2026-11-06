@@ -62,10 +62,7 @@ async fn a_provider_injecting_metrics_without_the_module_is_refused_naming_it() 
         "{refused:#}"
     );
     let said = format!("{refused:#}");
-    assert!(
-        said.contains("nest_rs::opentelemetry::OpenTelemetryModule"),
-        "the remedy names the module: {said}"
-    );
+    assert!(said.contains("OpenTelemetryModule"), "{said}");
 }
 
 /// The module installs `Metrics` in its own `register`, which the access graph
@@ -93,8 +90,5 @@ async fn a_module_skipping_the_import_reaches_metrics_by_registration_order_alon
         "{refused:#}"
     );
     let said = format!("{refused:#}");
-    assert!(
-        said.contains("nest_rs::opentelemetry::OpenTelemetryModule"),
-        "the remedy names the module: {said}"
-    );
+    assert!(said.contains("OpenTelemetryModule"), "{said}");
 }

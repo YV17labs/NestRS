@@ -844,7 +844,10 @@ async fn a_layer_its_module_could_not_build_stays_that_modules_refusal() {
             .downcast_ref::<UnbuiltProviderError>()
             .unwrap_or_else(|| panic!("not the seal's: {refused:#}"));
         assert_eq!(unbuilt.provider, layer, "{refused:#}");
-        assert_eq!(unbuilt.cause, UnbuiltCause::RegisteredLater, "{refused:#}");
+        assert!(
+            matches!(unbuilt.cause, UnbuiltCause::RegisteredLater(_)),
+            "{refused:#}"
+        );
     }
 }
 

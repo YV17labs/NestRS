@@ -106,20 +106,32 @@ no unit over SeaORM's executor.
 
 "The docs teach only the parameter" was false of a root field, which had no parameter to teach: `&DataLoader<L>` on a `#[query]` was an `InputType` error, so `ctx.data::<DataLoader<L>>()?` was its one spelling, and with the owner unreached it sent the client ``Data `…DataLoader<…>` does not exist.``, a Rust type path, with no operator line and no boot refusal. `#[query]`, `#[mutation]`, `#[subscription]` and `#[entity]` now take the parameter, left out of the schema's arguments and an entity's key, each submitting a `GraphqlRootLoaderRegistration`. It is read against the resolver rather than the objects a schema serves: an `#[entity]` is no field of any object, and a root field is served exactly when the app reaches its resolver. A `Context` a body reads by hand stays unreadable by the boot, as above; the answer is what moves. `Redacted` reads `Context::data`'s refusal off every error, as it reads async-graphql's other sentences, and answers the opaque error with the type on the operator's line, so no Rust type path reaches a client, whichever data was missing. That line names no field: an error's path holds the client's aliases, which no log line carries, and the field's own `graphql.field` line sits under the same trace. Decided on security and on the developer's ease: the shorter spelling is the checked one.
 
-## 2026-11-05 — every refusal naming a key says its remedy, and no port binding is left to the kernel's sentence
+## 2026-11-05 — a refusal naming a key names the module that answers it, and no port binding is left to the kernel's sentence
 
 The owner's mandate of 2026-11-05. A crate's remedy was read for
 `MissingDependencyError` alone. So a root listing `ThrottlerGuard` in its pool
 "owned" the guard for an adapter binding it with no port, which was told to add
 that root to its imports, or any other module the binary links listing the guard
 by hand; and a provider injecting `Metrics` before `OpenTelemetryModule` registered
-was told to "import that module", naming none, though the crate names it.
-`AccessGraphError` now says the remedy in place of its add-owner clause, and
-`UnbuiltProviderError` and `LateOptionalDependencyError` in place of
-`UnbuiltCause::RegisteredLater`'s edit; a cycle or a pool's cause keeps its own,
-since there the import is not the fix. `dyn ThrottlerStore`, `dyn OccurrenceLock`
-and `dyn OutboxStore` submit one too, and the kernel's sentence for a key no crate
-names now leads with the import.
+was told to "import that module", naming none.
+
+`AccessGraphError` names `owner` when the app reaches it and it lists the key under
+the key's own type: that import is the fix, and the crate's binding beside it
+registers the key twice, which a run saw refused. Otherwise, a pool reporting the key
+on its root's behalf or a module of another binary, it says the crate's remedy when
+there is one. A key a hand-written module registers is that module's, whatever another
+binary's module lists: the graph reads its owner among what the app reaches, as for an
+optional dependency, where the boot told it to add that other module or refused it
+importing the right one. `UnbuiltCause::RegisteredLater` carries the imports whose phase
+registered what was absent, read off the builder's origins, so `UnbuiltProviderError`
+and `LateOptionalDependencyError` name them; a cycle or a pool's cause keeps its own.
+`dyn ThrottlerStore`, `dyn OccurrenceLock`, `dyn OutboxStore` and `EventBus` submit a
+remedy too, and the kernel's sentence for a key no crate names now leads with the import.
+
+**Refused:** the crate's remedy in `RegisteredLater`'s place. Text cannot say whether it
+names what registered the key: a provider built before a hand-written module of the app
+registering a port's key was told to import the port, which beside that module is a
+duplicate the boot refuses. The boot knows the registrant, so it says that.
 
 **Refused:** naming the instance in `RedisConnection<Cache>`'s remedy stays refused,
 as above: it takes a probe at the inject site.

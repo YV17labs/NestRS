@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use nest_rs_core::{
     AccessGraphError, App, ContainerBuilder, Discoverable, DynamicModule, MissingDependencyError,
-    ProviderCycleError, ProviderScope, ReachableProviders, Registering, ResolvesProvider,
+    Module, ProviderCycleError, ProviderScope, ReachableProviders, Registering, ResolvesProvider,
     ScopeViolationError, injectable, module,
 };
 
@@ -956,7 +956,7 @@ async fn a_missing_dependency_whose_crate_names_a_remedy_is_refused_with_that_li
 }
 
 /// A key a module lists, whose owning crate names the line to add all the same:
-/// the module listing it is not always the one to import.
+/// which of the two fixes depends on whether the app reaches that module.
 #[injectable]
 #[derive(Default)]
 struct RemediedListed;
@@ -967,8 +967,16 @@ nest_rs_core::inventory::submit! {
     nest_rs_core::DependencyRemedy::new(TypeId::of::<RemediedListed>, REMEDIED_LISTED_REMEDY)
 }
 
+/// Another binary's, on either side of the one reached: the registry's order is
+/// the linker's, and first listing must not name one of these.
+#[module(providers = [RemediedListed])]
+struct ListedElsewhereBefore;
+
 #[module(providers = [RemediedListed])]
 struct ListingModule;
+
+#[module(providers = [RemediedListed])]
+struct ListedElsewhereAfter;
 
 #[expect(
     dead_code,
@@ -983,14 +991,66 @@ struct RemediedListedConsumer {
 #[module(providers = [RemediedListedConsumer])]
 struct RemediedListedConsumerModule;
 
+#[tokio::test]
+async fn a_key_only_modules_out_of_reach_list_is_refused_with_its_crates_line() {
+    let said = refused_boot::<RemediedListedConsumerModule>()
+        .await
+        .to_string();
+    assert!(said.ends_with(REMEDIED_LISTED_REMEDY), "{said}");
+    assert!(!said.contains("— add `"), "one remedy: {said}");
+}
+
 #[module(imports = [RemediedListedConsumerModule, ListingModule])]
 struct RemediedListedRoot;
 
+/// The crate's line would register the key a second time.
 #[tokio::test]
-async fn a_key_out_of_reach_whose_crate_names_a_remedy_is_refused_with_that_line() {
-    let said = refused_boot::<RemediedListedRoot>().await.to_string();
-    assert!(said.ends_with(REMEDIED_LISTED_REMEDY), "{said}");
-    assert!(!said.contains("add `ListingModule`"), "one remedy: {said}");
+async fn a_key_a_reached_module_lists_is_refused_naming_that_module() {
+    let refused = refused_boot::<RemediedListedRoot>().await;
+    let violation = refused
+        .downcast_ref::<AccessGraphError>()
+        .unwrap_or_else(|| panic!("not an access violation: {refused:#}"));
+    assert_eq!(violation.owner, "ListingModule");
+    assert_eq!(violation.remedy, None);
+    let said = violation.to_string();
+    assert!(said.contains("add `ListingModule`"), "{said}");
+    assert!(!said.contains(REMEDIED_LISTED_REMEDY), "{said}");
+}
+
+#[module(imports = [ListingModule], providers = [RemediedListedConsumer])]
+struct ImportsWhatItWasTold;
+
+#[module(imports = [ImportsWhatItWasTold, ListingModule])]
+struct FollowedTheRefusalRoot;
+
+#[tokio::test]
+async fn following_that_refusal_boots() {
+    App::builder()
+        .module::<FollowedTheRefusalRoot>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("the import is the fix: {refused:#}"));
+}
+
+/// Registers the key by hand, which only other binaries' modules list here.
+struct RegistersTheListedKeyByHand;
+
+impl Module for RegistersTheListedKeyByHand {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide(RemediedListed)
+    }
+}
+
+#[module(imports = [RegistersTheListedKeyByHand], providers = [RemediedListedConsumer])]
+struct ImportsTheHandWrittenOne;
+
+#[tokio::test]
+async fn a_key_a_hand_written_module_registers_is_its_whatever_another_binary_lists() {
+    App::builder()
+        .module::<ImportsTheHandWrittenOne>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("that module is imported: {refused:#}"));
 }
 
 #[expect(

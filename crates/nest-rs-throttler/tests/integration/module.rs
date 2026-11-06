@@ -121,11 +121,19 @@ mod guard_outside_for_root {
     #[module(providers = [ReadsTheStore])]
     struct StoreWithoutThePort;
 
+    /// `store_the_app_binds` below links a module listing the store, one this app
+    /// does not reach, so the access graph says it: the crate's line, all the same.
     #[tokio::test]
     async fn a_provider_injecting_the_store_with_no_port_imported_is_told_the_import() {
-        let dependency =
-            dependency_told_the_import(App::builder().module::<StoreWithoutThePort>()).await;
-        assert!(dependency.contains("ThrottlerStore"), "{dependency}");
+        let Err(refused) = App::builder().module::<StoreWithoutThePort>().build().await else {
+            panic!("no module binds the store");
+        };
+        let said = refused.to_string();
+        assert!(
+            said.contains("depends on `dyn ThrottlerStore`")
+                && said.contains("`nest_rs::throttler::ThrottlerModule`"),
+            "{said}"
+        );
     }
 
     #[module(imports = [ThrottlerModule], providers = [GlobalGuards<(ThrottlerGuard,)>])]
@@ -139,6 +147,126 @@ mod guard_outside_for_root {
             .await
             .expect("the import is what the refusal told it to write");
         assert!(app.container().get::<ThrottlerGuard>().is_some());
+    }
+}
+
+/// A store the app binds itself, whose module is the fix however the port's
+/// crate names its own: importing the port beside it registers the key twice.
+mod store_the_app_binds {
+    use std::sync::Arc;
+
+    use nest_rs_core::{
+        AccessGraphError, App, ContainerBuilder, Module, Registering, async_trait, injectable,
+        module,
+    };
+    use nest_rs_throttler::{
+        Decision, Throttle, ThrottlerModule, ThrottlerStore, ThrottlerStoreError,
+    };
+
+    #[injectable]
+    #[derive(Default)]
+    struct SharedStore;
+
+    #[async_trait]
+    impl ThrottlerStore for SharedStore {
+        async fn hit(&self, _key: &str, _limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+            Ok(Decision::allowed())
+        }
+    }
+
+    #[module(providers = [SharedStore as dyn ThrottlerStore])]
+    struct SharedStoreModule;
+
+    #[injectable]
+    struct Reader {
+        #[inject]
+        store: Arc<dyn ThrottlerStore>,
+    }
+
+    #[module(providers = [Reader])]
+    struct ReaderWithoutTheStore;
+
+    #[module(imports = [SharedStoreModule, ReaderWithoutTheStore])]
+    struct ListedBesideTheReader;
+
+    #[tokio::test]
+    async fn a_reader_beside_the_module_listing_the_store_is_told_that_module() {
+        let Err(refused) = App::builder()
+            .module::<ListedBesideTheReader>()
+            .build()
+            .await
+        else {
+            panic!("the reader imports nothing");
+        };
+        let violation = refused
+            .downcast_ref::<AccessGraphError>()
+            .unwrap_or_else(|| panic!("not an access violation: {refused:#}"));
+        assert_eq!(violation.owner, "SharedStoreModule");
+        let said = violation.to_string();
+        assert!(said.contains("add `SharedStoreModule`"), "{said}");
+        assert!(!said.contains("ThrottlerModule"), "{said}");
+    }
+
+    #[module(imports = [SharedStoreModule], providers = [Reader])]
+    struct ReaderOverTheStore;
+
+    #[tokio::test]
+    async fn following_that_sentence_boots_on_the_apps_store() {
+        let app = App::builder()
+            .module::<ReaderOverTheStore>()
+            .build()
+            .await
+            .unwrap_or_else(|refused| panic!("the import is the fix: {refused:#}"));
+        let container = app.container();
+        let read = container.get::<Reader>().expect("the reader is built");
+        let bound = container.get::<SharedStore>().expect("the store is listed");
+        assert_eq!(
+            Arc::as_ptr(&read.store).cast::<()>(),
+            Arc::as_ptr(&bound).cast::<()>(),
+        );
+    }
+
+    /// The port's sentence, followed where the port is the wrong fix.
+    #[module(imports = [ThrottlerModule], providers = [Reader])]
+    struct ReaderOverThePort;
+
+    #[module(imports = [SharedStoreModule, ReaderOverThePort])]
+    struct PortBesideTheStore;
+
+    #[tokio::test]
+    async fn the_port_beside_a_listed_store_is_refused_as_the_wrong_fix() {
+        let Err(refused) = App::builder().module::<PortBesideTheStore>().build().await else {
+            panic!("one key, two registrations");
+        };
+        let said = format!("{refused:#}");
+        assert!(said.contains("duplicate provider"), "{said}");
+    }
+
+    /// The same store a hand-written module registers, while `SharedStoreModule`
+    /// above is only another binary's here.
+    struct HandWrittenStoreModule;
+
+    impl Module for HandWrittenStoreModule {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.provide_dyn::<dyn ThrottlerStore>(Arc::new(SharedStore))
+        }
+    }
+
+    #[module(imports = [ReaderWithoutTheStore, HandWrittenStoreModule])]
+    struct RegisteredAfterTheReader;
+
+    #[tokio::test]
+    async fn a_reader_built_before_a_hand_written_store_is_told_that_module() {
+        let Err(refused) = App::builder()
+            .module::<RegisteredAfterTheReader>()
+            .build()
+            .await
+        else {
+            panic!("the store registers after its reader");
+        };
+        let said = format!("{refused:#}");
+        assert!(said.contains("`HandWrittenStoreModule`"), "{said}");
+        assert!(!said.contains("ThrottlerModule"), "{said}");
     }
 }
 

@@ -387,29 +387,34 @@ async fn a_provider_injecting_what_a_hand_written_module_registers_later_fails_t
     assert_eq!(unbuilt.module, "BookkeepingModule");
     assert_eq!(unbuilt.provider, "Bookkeeper");
     assert_eq!(unbuilt.missing, ["Ledger"]);
-    assert_eq!(unbuilt.cause, UnbuiltCause::RegisteredLater, "{unbuilt}");
+    assert_eq!(
+        unbuilt.cause,
+        UnbuiltCause::RegisteredLater(vec!["LedgerModule"]),
+        "{unbuilt}"
+    );
     assert!(
         unbuilt
             .to_string()
-            .contains("import that module in `BookkeepingModule`'s `imports`"),
+            .contains("`LedgerModule` registers it later: import that module in `BookkeepingModule`'s `imports`"),
         "{unbuilt}"
     );
 }
 
-/// What a hand-written module registers, whose owning crate names that module.
-struct Journal;
+/// What a port's crate names its own module for, and an app's hand-written
+/// module registers instead.
+struct Almanac;
 
-const JOURNAL_REMEDY: &str = "Import `JournalModule`, which opens it.";
+const ALMANAC_REMEDY: &str = "Import `AlmanacPortModule`, which binds the default.";
 
 nest_rs_core::inventory::submit! {
-    nest_rs_core::DependencyRemedy::new(std::any::TypeId::of::<Journal>, JOURNAL_REMEDY)
+    nest_rs_core::DependencyRemedy::new(std::any::TypeId::of::<Almanac>, ALMANAC_REMEDY)
 }
 
-struct JournalModule;
+struct OwnAlmanacModule;
 
-impl Module for JournalModule {
+impl Module for OwnAlmanacModule {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
-        builder.provide(Journal)
+        builder.provide(Almanac)
     }
 }
 
@@ -418,46 +423,27 @@ impl Module for JournalModule {
     reason = "the dependency is declared for the container to resolve, never read"
 )]
 #[injectable]
-struct Clerk {
+struct AlmanacReader {
     #[inject]
-    journal: Arc<Journal>,
+    almanac: Arc<Almanac>,
 }
 
-#[module(providers = [Clerk])]
-struct ClerkModule;
+#[module(providers = [AlmanacReader])]
+struct AlmanacReaderModule;
 
-#[module(imports = [ClerkModule, JournalModule])]
-struct JournalAfterRoot;
+#[module(imports = [AlmanacReaderModule, OwnAlmanacModule])]
+struct OwnAlmanacAfterRoot;
 
+/// The port would register the key a second time: the module registering it is
+/// the fix, whatever the key's crate names.
 #[tokio::test]
-async fn a_dependency_registered_later_whose_crate_names_a_remedy_is_refused_with_that_line() {
-    let said = refused_boot::<JournalAfterRoot>().await.to_string();
-    assert!(said.ends_with(JOURNAL_REMEDY), "{said}");
-    assert!(!said.contains("import that module"), "one remedy: {said}");
-}
-
-#[expect(
-    dead_code,
-    reason = "the dependency is declared for the container to resolve, never read"
-)]
-#[injectable]
-struct Auditor {
-    #[inject]
-    journal: Option<Arc<Journal>>,
-}
-
-#[module(providers = [Auditor])]
-struct AuditorModule;
-
-#[module(imports = [AuditorModule, JournalModule])]
-struct OptionalJournalAfterRoot;
-
-#[tokio::test]
-async fn an_optional_dependency_registered_later_whose_crate_names_a_remedy_is_refused_with_that_line()
- {
-    let said = refused_boot::<OptionalJournalAfterRoot>().await.to_string();
-    assert!(said.ends_with(JOURNAL_REMEDY), "{said}");
-    assert!(!said.contains("import that module"), "one remedy: {said}");
+async fn a_dependency_registered_later_names_the_module_registering_it_over_the_crates_line() {
+    let said = refused_boot::<OwnAlmanacAfterRoot>().await.to_string();
+    assert!(
+        said.contains("`OwnAlmanacModule` registers it later"),
+        "{said}"
+    );
+    assert!(!said.contains(ALMANAC_REMEDY), "the wrong fix: {said}");
 }
 
 #[module(imports = [LedgerModule], providers = [Bookkeeper])]
@@ -614,7 +600,11 @@ async fn a_provider_built_before_its_optional_dependency_registers_fails_the_boo
     assert_eq!(late.module, "SchedulerModule");
     assert_eq!(late.provider, "Scheduler");
     assert_eq!(late.dependency, "Clock");
-    assert_eq!(late.cause, UnbuiltCause::RegisteredLater, "{late}");
+    assert_eq!(
+        late.cause,
+        UnbuiltCause::RegisteredLater(vec!["ClockModule"]),
+        "{late}"
+    );
 }
 
 #[injectable]

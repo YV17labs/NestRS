@@ -10,6 +10,14 @@ use nest_rs_core::{
 
 use crate::{EventBus, ListenerMethod};
 
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<EventBus>,
+        "Import `nest_rs::events::EventsModule` in the module whose provider injects `EventBus`: \
+         it opens the bus and subscribes the listeners the app reaches.",
+    )
+}
+
 /// Registers the [`EventBus`] and subscribes every reachable `#[on_event]`
 /// method to it at the kernel's wiring step, from the assembled container and
 /// before the first lifecycle hook — so an event an init hook emits reaches its

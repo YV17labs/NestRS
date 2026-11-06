@@ -423,10 +423,9 @@ questions shape a port:
   as the `DependencyRemedy` of the type a provider injects — the port's trait
   object, or its handle where the binding registers one (`Jobs`) — which the
   unmet dependency names in place of the kernel's, as the module opening a
-  resource does for the resource's type, and so do an access violation, in
-  place of importing whichever module lists the key, and a provider a later
-  registration left unbuilt; a contract no binding registers carries a remedy
-  naming the handle. *By type
+  resource does for the resource's type, and so does an access violation when no
+  module the app reaches lists the key, whose import is otherwise the fix; a
+  contract no binding registers carries a remedy naming the handle. *By type
   parameter* (`AuthnGuard<S: Strategy>`): two instantiations are two types, so
   no arbitration is owed. *By configuration*: the import opens the gate and
   configuration decides which members are active, zero to all — or, for a

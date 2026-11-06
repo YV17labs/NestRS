@@ -282,3 +282,39 @@ store load names at `error` and each tool call's arguments at `debug`, so
 `rmcp=off` stays. Its events read against 3.5.1 add none on the server's
 paths. The schema-cache gate, whose `Host` check mirrored rmcp's, left with
 the cache (`every-refusal-carries-its-class.md`, this date).
+
+## 2026-11-06 — an error is held to what it prints, by every reader
+
+`error_message` and `SafeLink` are one reader. A `{:?}`, an `anyhow` report and a
+`main` returning the error are others, and they print each link's own `Display` or
+`Debug`, past every `SafeLink`. So a driver's error kept as a source is judged by what
+it prints with a marked value in hand, never by what was read of it:
+`nest_rs_testing::printed` is every reader at once, and a test holds the failure to it.
+
+Run on 2026-11-06, a URL's password marked: seaorm's boot quoted it once (a scheme
+sea-orm has no driver for, which sqlx lets through, in sea-orm's own sentence), and
+redis's never, on any topology or server answer, though its client repeated a
+`protocol=` value. Each is closed at the input, so the refusals that hold keep their
+driver's error as their source, `redis::RedisError` a public field among them. A storage
+key held in object_store's errors is the opposite case: every such error quotes it, so
+none is kept (`storage-port-by-url.md`, this date).
+
+**Refused:** a sentence for every boot refusal of seaorm and redis, on the suspicion
+alone. It takes the code and the server's words from an operator, moves a public field,
+and fixes nothing a run showed. A library's retry lines were read the same way: with a
+marked key, no line of object_store, reqwest or hyper_util quotes it at any level on a
+refused connection or a failing status, so object_store takes no clamp (read against
+object_store 0.14.2, reqwest 0.13.5).
+
+**The limit, seen the same day: `ServiceError` is this family, and stays open.** In a
+scratch run, a `{:?}` of `ServiceError::Validation` wrote `params: {"value":
+String("…")}`, and an `anyhow` report of it `password: Validation error: length
+[{"value": String("…")}]`, the rejected value both times; a `{:?}` of `ServiceError::Db`
+wrote the server's `detail`, `Key (email)=(…) already exists.`, and its report the
+server's message. `error_message` says both without them, so no framework line or reply
+quotes one: an app's own `?err`, `.unwrap()` or `main` does. `QueueError::Serialize`
+keeps serde's error the same way. Each is by design so far: a raw link stays in the
+chain for `error_message` to say (`DecodeError::of`, `SafeLink`). Closing it moves what
+`source()` hands every reader of the one type every service names, and of each such
+error across the crates: a sweep of its own, not this entry's.
+

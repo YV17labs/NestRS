@@ -153,7 +153,9 @@ field or the enclosing span carries, and no two layers emit the same event.
 `ConfigError::validation`, a serde failure through `DecodeError`, a driver's
 error through its `SafeLink`; no sentence formats a raw `ValidationErrors`, a
 serde error, a driver's error or a configured string. Held by review: no lint
-reads a `Display`.
+reads a `Display`. `SafeLink` is one reader of a chain, and a `{:?}` or a `main`
+returning the error another, past it: a test holds a failure carrying a marked value
+to `nest_rs_testing::printed`, every reader at once.
 
 **An edge's lines carry the server's values only**: what a client addressed
 reaches them as the server's own name for it — the route template, a method

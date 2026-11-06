@@ -365,6 +365,12 @@ is read. Keep identifiers — a code, a constraint, a table — and drop every
 message: SeaORM says a unique violation as `database error 23505 on
 constraint "users_email_key", table "users"`.
 
+A sayer speaks for one reader. A `{:?}`, an `anyhow` report or a `main` returning
+the error print each link as it is, so a library error that always quotes a value
+is kept as that sentence and never as a source, as `nest_rs::storage` keeps
+object_store's. Hold it with a marked value in a test: `nest_rs_testing::printed`
+is every reader at once.
+
 ## TLS
 
 Your store's connections verify the server, with no way to turn it off but an
@@ -374,7 +380,7 @@ Postgres's is libpq's URL parameters, so SeaORM reads `sslmode` and
 every mode that encrypts without verifying:
 
 ```rust title="from nest-rs-seaorm's config, abridged"
-match parsed.get_ssl_mode() {
+match self.parsed()?.get_ssl_mode() {
     PgSslMode::Prefer if !named => Ok(PgSslMode::VerifyFull),
     mode @ (PgSslMode::Disable | PgSslMode::VerifyFull) => Ok(mode),
     unverified if named => Err(Self::refuse_url(format!(

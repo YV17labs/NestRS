@@ -13,6 +13,10 @@ helm install demo demo/charts/demo \
   --set secrets.REDIS__TRANSCODES__URL="rediss://cache:6379"
 ```
 
+Those three name a cluster's own services. The apps refuse to boot without the rest
+of the *Required* list in [`values.yaml`](values.yaml): the signing keypair, the
+object store's credentials, `auth`'s registered clients.
+
 `helm template` renders against the Kubernetes version its Helm was built with,
 which may sit below this chart's floor — pass `--kube-version 1.31.0` when
 rendering locally.

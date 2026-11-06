@@ -152,6 +152,10 @@ helm install demo charts/demo \
   --set secrets.REDIS__TRANSCODES__URL="rediss://cache:6379"
 ```
 
+Those three name a cluster's own services. The apps refuse to boot without the rest
+of the *Required* list in [`values.yaml`](charts/demo/values.yaml): the signing
+keypair, the object store's credentials, `auth`'s registered clients.
+
 Set `apps.<name>.host` rather than the cross-app URLs: the issuer, the audience,
 the RFC 9728 resource identifier and the MCP `Host` allowlist are each some
 app's public origin, and the chart derives them from the hostnames.

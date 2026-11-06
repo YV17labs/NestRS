@@ -104,16 +104,16 @@ narrow no column pays one rule lookup per field and no round trip.
 
 **A `#[field_resolver]` answering a wire type**, whatever read its rows and whatever
 holds them: `Option`, `Vec` or another list, `Box`, `Arc`, `Cow`, a tokio lock, a `Json`
-scalar, a map's values, a `Connection` whose nodes are the wire type or hold it in an
-`Option`, a `Box`, an `Arc` or a `Json` scalar. A root's rule, by the entity the type names
-and the field's selection: it answers a selected column the grant withholds with the same
-refusal, a scalar every column the grant withholds, and a caller a grant does not reach on
-that entity reads none of its columns. A `Connection` keeps its flags and each kept edge's
-cursor, a row the ability refuses leaves with its edge, a `None` node stays, and a selected
-cursor reads as the primary key, as on a list relation. Where no ability is attached nothing
-decided what the caller reads, so the field answers `INTERNAL`, as a root's and a relation's
-do. A refusal repeated under every parent files one line per operation, each parent keeping
-its own error and `path`.
+scalar, a map's values, a `Connection` whose nodes are the wire type or hold it in any of
+those. A root's rule, by the entity the type names and the field's selection: it answers a
+selected column the grant withholds with the same refusal, a scalar every column the grant
+withholds, and a caller a grant does not reach on that entity reads none of its columns. A
+`Connection` keeps its flags and each kept edge's cursor, a row the ability refuses leaves
+with its edge, or from the list or the map its node holds, a `None` node stays, and a
+selected cursor reads as the primary key, as on a list relation. Where no ability is attached
+nothing decided what the caller reads, so the field answers `INTERNAL`, as a root's and a
+relation's do. A refusal repeated under every parent files one line per operation, each
+parent keeping its own error and `path`.
 
 A caller a token backs reads through `Repo`, so its answer is judged as a reply, trusted
 on a rule the row cannot decide ([what the mask cannot see](#what-the-mask-cannot-see)),
@@ -126,13 +126,15 @@ name no entity, so no mask reaches them, and a row out of a loader holds every e
 column, as a row out of `Repo` does. Keep a withheld column out of such an answer, or answer
 the wire type.
 
-A row the mask cannot read never passes in silence. A `&'static` borrow or slice and a
+A row the mask cannot read refuses rather than ships. A `&'static` borrow or slice and a
 `Weak` have no place for the row it cuts, so they do not compile. An object of your own
 holding the row fails the boot whoever would have asked: a column of the wire type, a
 `#[graphql(flatten)]` or a `MergedObject` of it, a union or an interface with it among its
-members, an `Edge` answered alone, an `Arc` around a `Connection`, a `Connection` of any of
-those. The refusal names the field and where it holds the row. Serve that column from a
-`#[field_resolver]` of the object, which masks what it answers:
+members, an `Edge` answered alone, an `Arc` around a `Connection`, an object a `Connection`
+or its `Edge` holds beside its nodes, a `Connection` of any of those. The refusal names the
+field and where it holds the row. Give that column `#[graphql(skip)]` and serve it from a
+`#[field_resolver]` of the object, which masks what it answers, wherever a flatten or a
+merge copies it:
 
 ```rust title="crates/features/src/writers/graphql/resolver.rs"
 #[derive(SimpleObject, Clone)]
@@ -148,6 +150,19 @@ async fn star(&self, parent: &Casting) -> Writer {
     parent.star.clone()
 }
 ```
+
+Three shapes still ship what they hold, since neither a type nor the schema tells them from
+a masked field. Each is a line in your own code, so keep a withheld column out of it:
+
+- **A scalar the body builds.** A `Json` of a struct of your own holding the row, a `Json` or a
+  map column of an object of your own, a `serde_json::Value`, a `hashbrown` map under
+  async-graphql's own feature: what it serializes names no wire type the boot can read.
+- **A `#[graphql(flatten)]` of the wire type beside a `#[field_resolver]` answering that same
+  type.** The field's link reads as the only way to the row, so the copied columns ship as
+  they stand.
+- **A column renamed onto its field resolver's name.** `#[graphql(name = "star")] raw_star: Writer`
+  beside `#[field_resolver] async fn star`: the derive answers its own column first, and the
+  resolver's field hides it from the schema. `#[graphql(skip)]` is the column's one spelling.
 
 <Aside type="caution">
 A grant cuts a row's columns, never the link a relation follows. `posts { author { id } }`

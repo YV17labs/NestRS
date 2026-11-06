@@ -2,12 +2,12 @@ error[E0080]: evaluation panicked: a `#[field_resolver]` answering a wire type's
  --> $RUST/core/src/panic.rs
   |
   |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
-  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<&'static writer::Writer as nest_rs::seaorm::__private::WireAnswer>::READABLE` failed here
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `<&'static writer::Writer as nest_rs::seaorm::__private::WireAnswer>::UNMASKED` failed here
   |
  ::: $WORKSPACE/crates/nest-rs-graphql/src/wire_answer.rs
   |
-  |       const READABLE: () = panic!(
-  |  __________________________-
+  |       const UNMASKED: UnmaskedObjects = panic!(
+  |  _______________________________________-
   | |         "a `#[field_resolver]` answering a wire type's row behind a `&'static` borrow holds no \
   | |          place for the row the mask cuts, so it would ship what a grant withholds: answer the \
   | |          row by value, or behind an `Arc`"
@@ -17,14 +17,14 @@ error[E0080]: evaluation panicked: a `#[field_resolver]` answering a wire type's
 note: erroneous constant encountered
  --> $WORKSPACE/crates/nest-rs-graphql/src/wire_answer.rs
   |
-  |     const READABLE: () = A::READABLE;
-  |                          ^^^^^^^^^^^
+  |     const UNMASKED: UnmaskedObjects = A::UNMASKED;
+  |                                       ^^^^^^^^^^^
 
 note: erroneous constant encountered
  --> $WORKSPACE/crates/nest-rs-graphql/src/wire_answer.rs
   |
-  |         let () = T::READABLE;
-  |                  ^^^^^^^^^^^
+  |     pub const UNMASKED: UnmaskedObjects = T::UNMASKED;
+  |                                           ^^^^^^^^^^^
 
 note: erroneous constant encountered
   --> tests/integration/diagnostics/seaorm/field_resolver_answering_a_static_row_in_an_option.rs:36:1

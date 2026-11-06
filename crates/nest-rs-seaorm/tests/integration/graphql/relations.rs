@@ -1902,11 +1902,25 @@ fn holder() -> Holder {
     }
 }
 
+fn first_edge_of_writers() -> Connection<String, writer::Writer> {
+    let mut page = Connection::new(false, false);
+    page.edges.push(Edge::new("first".to_owned(), lead_row()));
+    page
+}
+
 /// An object holding a [`Holder`], which holds the row one level down.
 #[derive(Clone, SimpleObject)]
 #[graphql(crate = "::nest_rs_graphql::async_graphql")]
 struct OuterHolder {
     inner: Holder,
+}
+
+/// An object taking the columns of another, one of which holds the row.
+#[derive(Clone, SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct FlatOfHolder {
+    #[graphql(flatten)]
+    holder: Holder,
 }
 
 /// An object taking the row's columns as its own.
@@ -1951,9 +1965,10 @@ impl WrittenHolder {
     }
 }
 
-/// One app whose one field resolver answers the shape under test.
+/// One app whose one field resolver answers the shape under test, beside what else
+/// its resolver serves.
 macro_rules! answering {
-    ($app:ident, [$($answer:tt)*], $value:expr) => {
+    ($app:ident, [$($answer:tt)*], $value:expr $(, { $($beside:tt)* })?) => {
         mod $app {
             use super::*;
 
@@ -1978,6 +1993,8 @@ macro_rules! answering {
                 async fn answer(&self, _parent: &Parent) -> $($answer)* {
                     $value
                 }
+
+                $($($beside)*)?
             }
 
             #[module(
@@ -2040,12 +2057,315 @@ answering!(
     [Connection<String, Holder>],
     first_edge(holder())
 );
-page_named!(ListsPage, ListsEdge, "Lists");
+answering!(
+    a_connection_of_flattened_holders,
+    [Connection<String, FlatOfHolder>],
+    {
+        let mut page = Connection::new(false, false);
+        page.edges.push(Edge::new(
+            "first".to_owned(),
+            FlatOfHolder { holder: holder() },
+        ));
+        page
+    }
+);
+answering!(
+    a_connection_holding_a_row_beside_its_edges,
+    [Connection<String, writer::Writer, Holder>],
+    {
+        let mut page = Connection::with_additional_fields(false, false, holder());
+        page.edges.push(Edge::new("first".to_owned(), lead_row()));
+        page
+    }
+);
+answering!(
+    an_edge_holding_a_row_beside_its_node,
+    [Connection<String, writer::Writer, EmptyFields, Holder>],
+    {
+        let mut page = Connection::new(false, false);
+        page.edges.push(Edge::with_additional_fields(
+            "first".to_owned(),
+            lead_row(),
+            holder(),
+        ));
+        page
+    }
+);
+answering!(
+    a_page_of_a_list_holding_a_row_beside_its_edges,
+    [Vec<Connection<String, writer::Writer, Holder>>],
+    vec![Connection::with_additional_fields(false, false, holder())]
+);
+answering!(
+    a_connection_holding_nothing_beside_its_edges,
+    [Connection<String, writer::Writer>],
+    first_edge_of_writers()
+);
+
+// One shape's page in each app, so they share one name.
+page_named!(NodesPage, NodesEdge, "Nodes");
+
+/// A page holding `Node`s.
+type NodesOf<Node> = WrappedPage<Node, NodesPage, NodesEdge>;
 
 answering!(
-    a_connection_of_lists,
-    [WrappedPage<Vec<writer::Writer>, ListsPage, ListsEdge>],
+    nodes_of_a_vec,
+    [NodesOf<Vec<writer::Writer>>],
     first_edge(vec![lead_row()])
+);
+answering!(
+    nodes_of_a_deque,
+    [NodesOf<VecDeque<writer::Writer>>],
+    first_edge(VecDeque::from([lead_row()]))
+);
+answering!(
+    nodes_of_a_linked_list,
+    [NodesOf<LinkedList<writer::Writer>>],
+    first_edge(LinkedList::from([lead_row()]))
+);
+answering!(
+    nodes_of_a_sorted_set,
+    [NodesOf<BTreeSet<writer::Writer>>],
+    first_edge(BTreeSet::from([lead_row()]))
+);
+answering!(
+    nodes_of_a_hashed_set,
+    [NodesOf<HashSet<writer::Writer>>],
+    first_edge(HashSet::from([lead_row()]))
+);
+answering!(
+    nodes_of_a_boxed_slice,
+    [NodesOf<Box<[writer::Writer]>>],
+    first_edge(vec![lead_row()].into_boxed_slice())
+);
+answering!(
+    nodes_of_a_shared_slice,
+    [NodesOf<Arc<[writer::Writer]>>],
+    first_edge(Arc::from([lead_row()]))
+);
+answering!(
+    nodes_of_an_array,
+    [NodesOf<[writer::Writer; 1]>],
+    first_edge([lead_row()])
+);
+answering!(
+    nodes_of_a_cow,
+    [NodesOf<Cow<'static, writer::Writer>>],
+    first_edge(Cow::Owned(lead_row()))
+);
+answering!(
+    nodes_of_a_result,
+    [NodesOf<Result<writer::Writer, GqlError>>],
+    first_edge(Ok(lead_row()))
+);
+answering!(
+    nodes_of_a_mutex,
+    [NodesOf<tokio::sync::Mutex<writer::Writer>>],
+    first_edge(tokio::sync::Mutex::new(lead_row()))
+);
+answering!(
+    nodes_of_a_read_write_lock,
+    [NodesOf<tokio::sync::RwLock<writer::Writer>>],
+    first_edge(tokio::sync::RwLock::new(lead_row()))
+);
+answering!(
+    nodes_of_a_list_of_options,
+    [NodesOf<Vec<Option<writer::Writer>>>],
+    first_edge(vec![Some(lead_row()), None])
+);
+answering!(
+    nodes_of_a_json_list,
+    [NodesOf<Json<Vec<writer::Writer>>>],
+    first_edge(Json(vec![lead_row()]))
+);
+answering!(
+    nodes_of_a_sorted_map,
+    [NodesOf<BTreeMap<String, writer::Writer>>],
+    first_edge(BTreeMap::from([("first".to_owned(), lead_row())]))
+);
+answering!(
+    nodes_of_a_hashed_map,
+    [NodesOf<HashMap<String, writer::Writer>>],
+    first_edge(HashMap::from([("first".to_owned(), lead_row())]))
+);
+answering!(
+    nodes_of_a_json_map,
+    [NodesOf<Json<BTreeMap<String, writer::Writer>>>],
+    first_edge(Json(BTreeMap::from([("first".to_owned(), lead_row())])))
+);
+answering!(
+    nodes_of_a_json_array,
+    [NodesOf<Json<[writer::Writer; 1]>>],
+    first_edge(Json([lead_row()]))
+);
+
+/// What a flatten and a merge copy of an object whose column a field resolver serves.
+#[derive(Clone, SimpleObject)]
+#[graphql(complex, crate = "::nest_rs_graphql::async_graphql")]
+struct Cast {
+    role: String,
+    #[graphql(skip)]
+    star: writer::Writer,
+}
+
+fn cast() -> Cast {
+    Cast {
+        role: "lead".to_owned(),
+        star: lead_row(),
+    }
+}
+
+#[derive(Clone, SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct FlatCast {
+    #[graphql(flatten)]
+    cast: Cast,
+}
+
+#[derive(MergedObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct MergedCast(Cast, Footnote);
+
+#[derive(SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct CastCopies {
+    flat: FlatCast,
+    merged: MergedCast,
+}
+
+answering!(
+    copying_a_resolved_column,
+    [CastCopies],
+    CastCopies {
+        flat: FlatCast { cast: cast() },
+        merged: MergedCast(
+            cast(),
+            Footnote {
+                text: "a footnote".to_owned(),
+            },
+        ),
+    },
+    {
+        #[field_resolver]
+        async fn star(&self, parent: &Cast) -> writer::Writer {
+            parent.star.clone()
+        }
+    }
+);
+
+/// A column a flatten copied, served by a field resolver.
+#[derive(Clone, SimpleObject)]
+#[graphql(complex, crate = "::nest_rs_graphql::async_graphql")]
+struct CopiedCast {
+    role: String,
+    #[graphql(skip)]
+    star: writer::Writer,
+}
+
+/// The same name as what it sits beside, holding the row itself.
+#[derive(Clone, SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct RawStar {
+    star: writer::Writer,
+}
+
+#[derive(Clone, SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct CopyBesideRaw {
+    #[graphql(flatten)]
+    cast: CopiedCast,
+    raw: RawStar,
+}
+
+answering!(
+    a_raw_column_beside_a_copied_one,
+    [CopyBesideRaw],
+    CopyBesideRaw {
+        cast: CopiedCast {
+            role: "lead".to_owned(),
+            star: lead_row(),
+        },
+        raw: RawStar { star: lead_row() },
+    },
+    {
+        #[field_resolver]
+        async fn star(&self, parent: &CopiedCast) -> writer::Writer {
+            parent.star.clone()
+        }
+    }
+);
+
+/// What the page and the decision name as passing: a row flattened beside a masked field
+/// answering its own type leaves a link, so no reading of the schema tells it from a
+/// column the resolver alone serves.
+#[derive(Clone, SimpleObject)]
+#[graphql(complex, crate = "::nest_rs_graphql::async_graphql")]
+struct FlatBesideMasked {
+    #[graphql(flatten)]
+    row: writer::Writer,
+}
+
+answering!(
+    a_flatten_beside_a_masked_field,
+    [FlatBesideMasked],
+    FlatBesideMasked { row: lead_row() },
+    {
+        #[field_resolver]
+        async fn also(&self, parent: &FlatBesideMasked) -> writer::Writer {
+            parent.row.clone()
+        }
+    }
+);
+
+/// What the page and the decision name as passing: a derive answers its own column
+/// first, and the resolver's name hides it from the schema.
+#[derive(Clone, SimpleObject)]
+#[graphql(complex, crate = "::nest_rs_graphql::async_graphql")]
+struct RenamedOntoItsResolver {
+    #[graphql(name = "star")]
+    raw_star: writer::Writer,
+}
+
+answering!(
+    a_column_renamed_onto_its_resolver,
+    [RenamedOntoItsResolver],
+    RenamedOntoItsResolver {
+        raw_star: lead_row()
+    },
+    {
+        #[field_resolver]
+        async fn star(&self, parent: &RenamedOntoItsResolver) -> writer::Writer {
+            parent.raw_star.clone()
+        }
+    }
+);
+
+/// What the page and the decision name as passing: a scalar serializes what a body put
+/// in it, and its type names no wire type.
+#[derive(serde::Serialize)]
+struct BodysOwnScalar {
+    lead: writer::Writer,
+}
+
+answering!(
+    a_scalar_a_body_builds,
+    [Json<BodysOwnScalar>],
+    Json(BodysOwnScalar { lead: lead_row() })
+);
+
+/// The same, as a column of an object: the schema reads a scalar there too.
+#[derive(Clone, SimpleObject)]
+#[graphql(crate = "::nest_rs_graphql::async_graphql")]
+struct ScalarColumn {
+    lead: Json<writer::Writer>,
+}
+
+answering!(
+    a_scalar_column_of_an_object,
+    [ScalarColumn],
+    ScalarColumn {
+        lead: Json(lead_row()),
+    }
 );
 
 /// What `module`'s boot says, or, where it boots, what its answer ships to a member
@@ -2069,6 +2389,7 @@ where
     for held in holds {
         assert!(refusal.contains(held), "{held}: {refusal}");
     }
+    assert!(refusal.contains("#[graphql(skip)]"), "{refusal}");
     assert!(refusal.contains("#[field_resolver]"), "{refusal}");
 }
 
@@ -2118,10 +2439,234 @@ async fn a_connection_the_mask_cannot_read_ships_no_withheld_column() {
     .await;
     let nodes = "{ parent { answer { nodes { email } } } }";
     assert_refused_at_boot::<a_shared_connection::AnsweringModule>(nodes, &["`Writer`"]).await;
-    assert_refused_at_boot::<a_connection_of_lists::AnsweringModule>(nodes, &["`Writer`"]).await;
     assert_refused_at_boot::<a_connection_of_holders::AnsweringModule>(
         "{ parent { answer { nodes { lead { email } } } } }",
         &["`Holder.lead`"],
     )
     .await;
+    assert_refused_at_boot::<a_connection_of_flattened_holders::AnsweringModule>(
+        "{ parent { answer { nodes { lead { email } } } } }",
+        &["`FlatOfHolder.lead`"],
+    )
+    .await;
+}
+
+/// What a connection and its edges hold beside their nodes is an object of the body's,
+/// which no mask reads, wherever the connection sits.
+#[tokio::test]
+async fn what_a_connection_holds_beside_its_nodes_ships_no_withheld_column() {
+    assert_refused_at_boot::<a_connection_holding_a_row_beside_its_edges::AnsweringModule>(
+        "{ parent { answer { lead { email } } } }",
+        &["`Holder.lead`"],
+    )
+    .await;
+    assert_refused_at_boot::<an_edge_holding_a_row_beside_its_node::AnsweringModule>(
+        "{ parent { answer { edges { lead { email } } } } }",
+        &["`Holder.lead`"],
+    )
+    .await;
+    assert_refused_at_boot::<a_page_of_a_list_holding_a_row_beside_its_edges::AnsweringModule>(
+        "{ parent { answer { lead { email } } } }",
+        &["`Holder.lead`"],
+    )
+    .await;
+}
+
+/// A connection holding nothing beside its nodes boots, and masks as it did.
+#[tokio::test]
+async fn a_connection_holding_nothing_beside_its_nodes_masks_them() {
+    let app = booted::<a_connection_holding_nothing_beside_its_edges::AnsweringModule>().await;
+
+    let read = answer(&app, "member", "{ parent { answer { nodes { email } } } }").await;
+
+    assert_forbidden(&read, &["email"]);
+    assert!(!read.to_string().contains(SECRET_EMAIL), "{read}");
+}
+
+async fn booted<M>() -> TestApp
+where
+    M: nest_rs_core::Module + 'static,
+{
+    crate::over_an_unconnected_pool()
+        .module::<M>()
+        .build()
+        .await
+        .expect("boots")
+}
+
+/// The query selecting `selection` of the one field an `answering!` app serves.
+fn of_the_answer(selection: &str) -> String {
+    format!("{{ parent {{ answer {{ {selection} }} }} }}")
+}
+
+/// A node a client selects into: its selection masks each row the node holds, and what
+/// a refused row leaves of its edges is `outside`.
+async fn assert_node_masked<M>(outside: Value)
+where
+    M: nest_rs_core::Module + 'static,
+{
+    let app = booted::<M>().await;
+
+    let read = answer(
+        &app,
+        "member",
+        &of_the_answer("nodes { name } edges { cursor node { name } }"),
+    )
+    .await;
+    assert!(read.get("errors").is_none(), "{read}");
+    assert!(read.to_string().contains("Ada"), "{read}");
+
+    for selection in ["nodes { name email }", "edges { node { name email } }"] {
+        let read = answer(&app, "member", &of_the_answer(selection)).await;
+        assert_forbidden(&read, &["email"]);
+        assert!(!read.to_string().contains(SECRET_EMAIL), "{read}");
+    }
+
+    let read = answer(&app, "reader", &of_the_answer("nodes { email }")).await;
+    assert!(read.get("errors").is_none(), "{read}");
+    assert!(read.to_string().contains(SECRET_EMAIL), "{read}");
+
+    let read = answer(&app, "outsider", &of_the_answer("edges { node { id } }")).await;
+    assert!(read.get("errors").is_none(), "{read}");
+    assert_eq!(read["data"]["parent"]["answer"]["edges"], outside, "{read}");
+}
+
+/// A node a client selects nothing into: a scalar serializing whole, so every column the
+/// mask takes refuses it, and what a refused row leaves of its edges is `outside`.
+async fn assert_scalar_node_masked<M>(outside: Value)
+where
+    M: nest_rs_core::Module + 'static,
+{
+    let app = booted::<M>().await;
+
+    for selection in ["nodes", "edges { node }"] {
+        let read = answer(&app, "member", &of_the_answer(selection)).await;
+        assert_forbidden(&read, &["circle", "email", "nickname"]);
+        assert!(!read.to_string().contains(SECRET_EMAIL), "{read}");
+        assert!(!read.to_string().contains("countess"), "{read}");
+    }
+
+    let read = answer(&app, "reader", &of_the_answer("nodes")).await;
+    assert!(read.get("errors").is_none(), "{read}");
+    assert!(read.to_string().contains(SECRET_EMAIL), "{read}");
+
+    let read = answer(&app, "outsider", &of_the_answer("edges { node }")).await;
+    assert!(read.get("errors").is_none(), "{read}");
+    assert_eq!(read["data"]["parent"]["answer"]["edges"], outside, "{read}");
+}
+
+/// What a list or a set holds inside a node is masked as a list's rows are: a refused row
+/// leaves the node, which stays.
+#[tokio::test]
+async fn a_connection_whose_nodes_list_a_row_masks_it() {
+    let logs = LogCapture::install();
+    let empty = || json!([{ "node": [] }]);
+
+    assert_node_masked::<nodes_of_a_vec::AnsweringModule>(empty()).await;
+    assert_node_masked::<nodes_of_a_deque::AnsweringModule>(empty()).await;
+    assert_node_masked::<nodes_of_a_linked_list::AnsweringModule>(empty()).await;
+    assert_node_masked::<nodes_of_a_sorted_set::AnsweringModule>(empty()).await;
+    assert_node_masked::<nodes_of_a_hashed_set::AnsweringModule>(empty()).await;
+    assert_node_masked::<nodes_of_a_boxed_slice::AnsweringModule>(empty()).await;
+    assert_node_masked::<nodes_of_a_shared_slice::AnsweringModule>(empty()).await;
+    assert_node_masked::<nodes_of_a_list_of_options::AnsweringModule>(
+        json!([{ "node": [Value::Null] }]),
+    )
+    .await;
+    assert_no_error_line(&logs);
+}
+
+/// One row a node holds alone, or an array has no place to drop, leaves with its edge.
+#[tokio::test]
+async fn a_connection_whose_nodes_hold_one_row_masks_it() {
+    let logs = LogCapture::install();
+
+    assert_node_masked::<nodes_of_an_array::AnsweringModule>(json!([])).await;
+    assert_node_masked::<nodes_of_a_cow::AnsweringModule>(json!([])).await;
+    assert_node_masked::<nodes_of_a_result::AnsweringModule>(json!([])).await;
+    assert_node_masked::<nodes_of_a_mutex::AnsweringModule>(json!([])).await;
+    assert_node_masked::<nodes_of_a_read_write_lock::AnsweringModule>(json!([])).await;
+    assert_no_error_line(&logs);
+}
+
+#[tokio::test]
+async fn a_connection_whose_nodes_are_a_scalar_of_rows_refuses_every_column_cut() {
+    let logs = LogCapture::install();
+
+    assert_scalar_node_masked::<nodes_of_a_json_list::AnsweringModule>(json!([{ "node": [] }]))
+        .await;
+    assert_scalar_node_masked::<nodes_of_a_sorted_map::AnsweringModule>(json!([{ "node": {} }]))
+        .await;
+    assert_scalar_node_masked::<nodes_of_a_hashed_map::AnsweringModule>(json!([{ "node": {} }]))
+        .await;
+    assert_scalar_node_masked::<nodes_of_a_json_map::AnsweringModule>(json!([{ "node": {} }]))
+        .await;
+    assert_scalar_node_masked::<nodes_of_a_json_array::AnsweringModule>(json!([])).await;
+    assert_no_error_line(&logs);
+}
+
+/// A column a flatten or a merge copies reads through the object it copied, so the field
+/// resolver of that object masks it.
+#[tokio::test]
+async fn a_copy_of_a_column_a_field_resolver_serves_masks_it() {
+    let app = booted::<copying_a_resolved_column::AnsweringModule>().await;
+
+    let read = answer(
+        &app,
+        "member",
+        &of_the_answer("flat { role star { name } } merged { text star { name } }"),
+    )
+    .await;
+    assert!(read.get("errors").is_none(), "{read}");
+    assert_eq!(
+        read["data"]["parent"]["answer"]["flat"]["star"]["name"],
+        "Ada"
+    );
+    assert_eq!(
+        read["data"]["parent"]["answer"]["merged"]["star"]["name"],
+        "Ada"
+    );
+
+    for column in ["flat { star { email } }", "merged { star { email } }"] {
+        let read = answer(&app, "member", &of_the_answer(column)).await;
+        assert_forbidden(&read, &["email"]);
+        assert!(!read.to_string().contains(SECRET_EMAIL), "{read}");
+    }
+}
+
+/// A column of another object holding the row by the same name is no copy of it.
+#[tokio::test]
+async fn a_raw_column_beside_a_copied_one_ships_no_withheld_column() {
+    assert_refused_at_boot::<a_raw_column_beside_a_copied_one::AnsweringModule>(
+        "{ parent { answer { raw { star { email } } } } }",
+        &["`RawStar.star`"],
+    )
+    .await;
+}
+
+/// What the page and the decision name as passing, pinned so a change closing one reads
+/// here: each boots and ships what a grant withholds, on the body's own line.
+#[tokio::test]
+async fn what_the_page_names_as_passing_passes() {
+    for (app, selection) in [
+        (
+            booted::<a_flatten_beside_a_masked_field::AnsweringModule>().await,
+            of_the_answer("email also { name }"),
+        ),
+        (
+            booted::<a_column_renamed_onto_its_resolver::AnsweringModule>().await,
+            of_the_answer("star { email }"),
+        ),
+        (
+            booted::<a_scalar_a_body_builds::AnsweringModule>().await,
+            "{ parent { answer } }".to_owned(),
+        ),
+        (
+            booted::<a_scalar_column_of_an_object::AnsweringModule>().await,
+            of_the_answer("lead"),
+        ),
+    ] {
+        let read = answer(&app, "member", &selection).await;
+        assert!(read.to_string().contains(SECRET_EMAIL), "{read}");
+    }
 }

@@ -346,17 +346,20 @@ mask, decided by the subject's type:
   reading `null` or leaving its page; and a `#[field_resolver]` whose answer holds a
   wire type's rows, read off the hidden impl `#[expose(…, graphql)]` emits on the
   type and a walk down what async-graphql serves around it (every list, `Option`,
-  `Box`, `Arc`, `Cow`, a tokio lock, `Json`, a map's values, a `Connection`), which a
-  DTO and a scalar a body derives do not have, so what those ship is the body's. **A
-  row the walk cannot read never passes in silence**: a shape with no place for the
-  row it cuts is a compile error, and an answer holding one where only the schema can
-  say so, an object's column among them, refuses the boot; a `#[field_resolver]` of
-  that object serves the column. Its rows are judged as a reply's for a caller a token
-  backs, and as a push's for a visitor, whose reads are withheld there; where no
-  ability is attached it fails closed. What the mask files repeating under every parent
-  is one line per operation, a socket's operations each their own, and one error per path.
-  **A relation's batch filters
-  rows and masks nothing**: it is shared by every alias asking, so a
+  `Box`, `Arc`, `Cow`, a tokio lock, `Json`, a map's values, a `Connection` and what its
+  nodes hold of those), which a DTO and a scalar a body derives do not have, so what
+  those ship is the body's. **A row the walk cannot read refuses**: a shape with no
+  place for the row it cuts is a compile error, and an answer holding one where only the
+  schema can say so, an object's column among them, what a `Connection` or its `Edge`
+  holds beside its nodes too, refuses the boot; a `#[graphql(skip)]` column and a
+  `#[field_resolver]` of that object serve it. What neither a type nor the schema tells
+  from a masked field passes, each named on the page and in the decision: a scalar a body
+  builds, a row flattened beside a masked field of its type, a column renamed onto its
+  resolver's name. Its rows are judged as a reply's for a caller a token backs, and as a
+  push's for a visitor, whose reads are withheld there; where no ability is attached it
+  fails closed. What the mask files repeating under every parent is one line per
+  operation, a socket's operations each their own, and one error per path. **A relation's
+  batch filters rows and masks nothing**: it is shared by every alias asking, so a
   selection-dependent value could not be cached in it, and each field masks by its
   own. A caller whose grants narrow no column pays one rule lookup per field for a
   relation, its row being the entity's own type read through `Repo`, which spares

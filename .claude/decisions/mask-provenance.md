@@ -316,9 +316,13 @@ body's own line. It is not: it names the entity, and reads as no line a reviewer
 **Decided, by security, then elegance:** the walk masks what it can reach, and what it cannot
 refuses at the first rung that can say so.
 
-- **What can hold a cut row is masked**: a tokio lock through `into_inner`, a `Connection` of
-  `Option`, `Box`, `Arc` or `Json` rows through `WireRow`. A node selecting nothing is a
-  scalar serializing whole, so a `Json` node reads every exposed column as selected.
+- **What can hold a cut row is masked**: a tokio lock through `into_inner`, and through
+  `WireRow` a `Connection` whose nodes hold rows in whatever `WireAnswer` walks: an `Option`,
+  a `Box`, an `Arc`, a `Cow`, a `Result`, a lock, a `Json`, a list or a set, a map. A row
+  refused inside a list or a map leaves it and the node stays, as a list answering a field
+  does; an array has no place to drop it from, so its node leaves with its edge. A node
+  selecting nothing is a scalar serializing whole, so it reads every exposed column as
+  selected.
 - **What has no place for one does not compile**: `&'static A`, `&'static [A]`, `Weak<A>`,
   by `WireAnswer::READABLE`, which every wrapper forwards and the field's registration
   evaluates in a `static`'s initializer. Refused: `const { panic!() }` inside `masked`, as
@@ -329,8 +333,13 @@ refuses at the first rung that can say so.
   `#[field_resolver]` serves, down to a type `#[expose(…, graphql)]` declared. A flattened and
   a merged object copy the columns and leave no link, so a wire type nothing links is one of
   those. `Arc<Connection>` lands here: an impl of its own overlaps `Arc<A: Clone>`, since
-  upstream could make a `Connection` `Clone`. The check runs at boot and reads nothing per
-  request; a resolver that answers no such shape pays nothing.
+  upstream could make a `Connection` `Clone`. So do the objects a `Connection` and its `Edge`
+  hold beside their nodes: every wrapper forwards their `create_type_info` to the probe, as it
+  does the refusal above, and `EmptyFields` walks to nothing. A column a flatten or a merge
+  copied from an object a `#[field_resolver]` serves it on counts as served, since it reads
+  through that object at run time: the copier holds every column of an object nothing links.
+  The check runs at boot and reads nothing per request; a resolver that answers no such shape
+  pays nothing.
 
 **Refused:**
 
@@ -353,8 +362,13 @@ fails closed** where the entry above let it pass: the answer can tell, since not
 what the caller reads, and reads there already refuse. **A `null` in a list passes the mask**:
 it holds no row; a root's map stays refused, a key being no column and a map no row on a value.
 
-**The limit named:** a scalar the body builds (`Json<Holder>`, `serde_json::Value`, a
-`hashbrown` map) names nothing a type or a schema can read; a `Connection`'s or an `Edge`'s
-additional-fields object is the body's, the walk reading its nodes; a flattened row beside a
-masked field answering the same wire type leaves a link, so the boot reads no orphan. All of it
-closes with the cell.
+**The limit named, each pinned by a test so that closing one reads there:** a scalar the body
+builds (`Json<Holder>`, a `Json<Wire>` or a map column of an object of its own,
+`serde_json::Value`, a `hashbrown` map) names nothing a type or a schema can read. A flattened row beside a masked field answering the same wire type leaves a link, so
+the boot reads no orphan; telling it from an object that merely shares a small wire type's
+columns (`Category { id, name }` beside a field answering `Tag { id, name }`) would refuse that
+everyday shape. A column renamed onto its field resolver's name
+(`#[graphql(name = "star")] raw_star` beside `async fn star`) is answered by the derive first and
+hidden from the registry by the resolver's field, so no registry reading can see it; left under
+its own name it stops at E0592, and the refusal names `#[graphql(skip)]`. All of it closes with
+the cell.

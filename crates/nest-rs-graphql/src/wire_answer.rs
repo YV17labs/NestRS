@@ -6,9 +6,10 @@
 //! them owes the mask no serde impl.
 //!
 //! A shape the walk cannot put a cut row back into refuses at compile time
-//! ([`WireAnswer::READABLE`]), and what no impl can name, an object holding a row
-//! among them, refuses the boot ([`check_field_answers`]): a row never passes unread
-//! in silence.
+//! ([`WireAnswer::UNMASKED`]), and what no impl can name, an object holding a row among
+//! them, refuses the boot ([`check_field_answers`]). What neither can read is named in
+//! `mask-provenance`'s limits: a scalar a body builds, a row flattened beside a masked
+//! field of its type, a column renamed onto its field resolver's name.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList, VecDeque};
@@ -26,12 +27,17 @@ use nest_rs_guards::Denial;
 use crate::error::denial_to_graphql_error;
 use crate::resolver::{GraphqlFieldRegistration, ServedObjects};
 
+/// How the boot reads the objects an answer holds where no mask walks them, each
+/// registered and named; `None` where it holds none.
+pub type UnmaskedObjects = Option<fn(&mut Registry) -> Vec<String>>;
+
 /// An answer holding an `#[expose]`d wire type's rows.
 pub trait WireAnswer: Sized {
-    /// Evaluated at the field's expansion: a shape holding no place for the row the
+    /// Evaluated at the field's expansion: what this answer holds beside its rows,
+    /// which a `Connection` alone does, and a shape holding no place for the row the
     /// mask cuts panics here, a compile error naming it. Every wrapper forwards its
-    /// row's, so the refusal holds however deep the shape sits.
-    const READABLE: () = ();
+    /// row's, so each holds however deep the shape sits.
+    const UNMASKED: UnmaskedObjects = None;
 
     /// This answer, masked as a root field's answer is.
     ///
@@ -61,11 +67,12 @@ pub trait WireAnswer: Sized {
     }
 }
 
-/// A wire type `#[expose(…, graphql)]` emits, naming the entity whose mask shapes
-/// its rows. Never written by hand.
+/// What a connection's nodes hold a wire type's rows in: the type `#[expose(…, graphql)]`
+/// emits, naming the entity whose mask shapes them, and whatever the walk reads around
+/// one. Never written by hand.
 pub trait WireRow: WireAnswer {
     /// One page's rows masked in place by the selection of the connection `ctx`
-    /// answers: whether each stays.
+    /// answers: whether each node stays.
     ///
     /// # Errors
     ///
@@ -74,15 +81,143 @@ pub trait WireRow: WireAnswer {
 }
 
 /// A node holding no row stays; the rest are the row's to judge.
+fn masked_held<A: WireRow>(
+    ctx: &Context<'_>,
+    held: Vec<Option<&mut A>>,
+) -> Result<Vec<bool>, Error> {
+    let holds: Vec<bool> = held.iter().map(Option::is_some).collect();
+    let mut kept = A::masked_nodes(ctx, held.into_iter().flatten().collect())?.into_iter();
+    Ok(holds
+        .into_iter()
+        .map(|holds| !holds || kept.next().unwrap_or(false))
+        .collect())
+}
+
+/// What a list or a set holds inside each node: a row the mask refuses leaves the list,
+/// and the node stays, as a list answering a field does.
+fn masked_lists<N, A>(ctx: &Context<'_>, nodes: Vec<&mut N>) -> Result<Vec<bool>, Error>
+where
+    N: Default + IntoIterator<Item = A> + FromIterator<A>,
+    A: WireRow,
+{
+    let stays = vec![true; nodes.len()];
+    for node in nodes {
+        let mut rows: Vec<A> = std::mem::take(node).into_iter().collect();
+        let mut kept = A::masked_nodes(ctx, rows.iter_mut().collect())?.into_iter();
+        rows.retain(|_| kept.next().unwrap_or(false));
+        *node = rows.into_iter().collect();
+    }
+    Ok(stays)
+}
+
+/// What a map holds inside each node: a row the mask refuses leaves with its key, and
+/// the node stays.
+fn masked_maps<N, K, A>(ctx: &Context<'_>, nodes: Vec<&mut N>) -> Result<Vec<bool>, Error>
+where
+    N: Default + IntoIterator<Item = (K, A)> + FromIterator<(K, A)>,
+    A: WireRow,
+{
+    let stays = vec![true; nodes.len()];
+    for node in nodes {
+        let (keys, mut rows): (Vec<K>, Vec<A>) = std::mem::take(node).into_iter().unzip();
+        let kept = A::masked_nodes(ctx, rows.iter_mut().collect())?;
+        *node = keys
+            .into_iter()
+            .zip(rows)
+            .zip(kept)
+            .filter_map(|(entry, kept)| kept.then_some(entry))
+            .collect();
+    }
+    Ok(stays)
+}
+
 impl<A: WireRow> WireRow for Option<A> {
     fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
-        let holds: Vec<bool> = nodes.iter().map(|node| node.is_some()).collect();
-        let rows = nodes.into_iter().filter_map(Option::as_mut).collect();
-        let mut kept = A::masked_nodes(ctx, rows)?.into_iter();
-        Ok(holds
+        masked_held(ctx, nodes.into_iter().map(Option::as_mut).collect())
+    }
+}
+
+impl<A: WireRow, E> WireRow for Result<A, E> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        let held = nodes.into_iter().map(|node| node.as_mut().ok()).collect();
+        masked_held(ctx, held)
+    }
+}
+
+impl<A: WireRow> WireRow for Vec<A> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, nodes)
+    }
+}
+
+impl<A: WireRow> WireRow for VecDeque<A> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, nodes)
+    }
+}
+
+impl<A: WireRow> WireRow for LinkedList<A> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, nodes)
+    }
+}
+
+impl<A: WireRow + Ord> WireRow for BTreeSet<A> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, nodes)
+    }
+}
+
+impl<A: WireRow + Eq + Hash, S: BuildHasher + Default> WireRow for HashSet<A, S> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, nodes)
+    }
+}
+
+impl<A: WireRow> WireRow for Box<[A]> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        masked_lists(ctx, nodes)
+    }
+}
+
+impl<A: WireRow + Clone> WireRow for Arc<[A]> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        let mut lists: Vec<Vec<A>> = nodes.iter().map(|node| node.to_vec()).collect();
+        let stays = masked_lists(ctx, lists.iter_mut().collect())?;
+        for (node, list) in nodes.into_iter().zip(lists) {
+            *node = list.into();
+        }
+        Ok(stays)
+    }
+}
+
+/// An array has no place for a row a list would drop, so its node leaves with its edge.
+impl<A: WireRow, const N: usize> WireRow for [A; N] {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        nodes
             .into_iter()
-            .map(|holds| !holds || kept.next().unwrap_or(false))
-            .collect())
+            .map(|node| {
+                let kept = A::masked_nodes(ctx, node.iter_mut().collect())?;
+                Ok(kept.into_iter().all(|kept| kept))
+            })
+            .collect()
+    }
+}
+
+impl<K: Ord, A: WireRow> WireRow for BTreeMap<K, A> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        masked_maps(ctx, nodes)
+    }
+}
+
+impl<K, A, S> WireRow for HashMap<K, A, S>
+where
+    K: Eq + Hash,
+    A: WireRow,
+    S: BuildHasher + Default,
+{
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        masked_maps(ctx, nodes)
     }
 }
 
@@ -98,14 +233,32 @@ impl<A: WireRow + Clone> WireRow for Arc<A> {
     }
 }
 
+impl<A: WireRow + Clone> WireRow for Cow<'static, A> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        A::masked_nodes(ctx, nodes.into_iter().map(Cow::to_mut).collect())
+    }
+}
+
 impl<A: WireRow> WireRow for Json<A> {
     fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
         A::masked_nodes(ctx, nodes.into_iter().map(|node| &mut node.0).collect())
     }
 }
 
+impl<A: WireRow> WireRow for tokio::sync::Mutex<A> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        A::masked_nodes(ctx, nodes.into_iter().map(Self::get_mut).collect())
+    }
+}
+
+impl<A: WireRow> WireRow for tokio::sync::RwLock<A> {
+    fn masked_nodes(ctx: &Context<'_>, nodes: Vec<&mut Self>) -> Result<Vec<bool>, Error> {
+        A::masked_nodes(ctx, nodes.into_iter().map(Self::get_mut).collect())
+    }
+}
+
 impl<A: WireAnswer> WireAnswer for Option<A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         A::masked_option(self, ctx)
@@ -113,7 +266,7 @@ impl<A: WireAnswer> WireAnswer for Option<A> {
 }
 
 impl<A: WireAnswer> WireAnswer for Vec<A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         A::masked_list(self, ctx)
@@ -121,7 +274,7 @@ impl<A: WireAnswer> WireAnswer for Vec<A> {
 }
 
 impl<A: WireAnswer> WireAnswer for VecDeque<A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         A::masked_list(self.into(), ctx).map(Into::into)
@@ -129,7 +282,7 @@ impl<A: WireAnswer> WireAnswer for VecDeque<A> {
 }
 
 impl<A: WireAnswer> WireAnswer for LinkedList<A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         let rows = A::masked_list(self.into_iter().collect(), ctx)?;
@@ -138,7 +291,7 @@ impl<A: WireAnswer> WireAnswer for LinkedList<A> {
 }
 
 impl<A: WireAnswer + Ord> WireAnswer for BTreeSet<A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         let rows = A::masked_list(self.into_iter().collect(), ctx)?;
@@ -147,7 +300,7 @@ impl<A: WireAnswer + Ord> WireAnswer for BTreeSet<A> {
 }
 
 impl<A: WireAnswer + Eq + Hash, S: BuildHasher + Default> WireAnswer for HashSet<A, S> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         let rows = A::masked_list(self.into_iter().collect(), ctx)?;
@@ -156,7 +309,7 @@ impl<A: WireAnswer + Eq + Hash, S: BuildHasher + Default> WireAnswer for HashSet
 }
 
 impl<A: WireAnswer> WireAnswer for Box<[A]> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         A::masked_list(self.into_vec(), ctx).map(Vec::into_boxed_slice)
@@ -164,7 +317,7 @@ impl<A: WireAnswer> WireAnswer for Box<[A]> {
 }
 
 impl<A: WireAnswer + Clone> WireAnswer for Arc<[A]> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         A::masked_list(self.to_vec(), ctx).map(Into::into)
@@ -174,7 +327,7 @@ impl<A: WireAnswer + Clone> WireAnswer for Arc<[A]> {
 /// Each row on its own: an array has no place for one a list would drop, so a row
 /// the mask refuses refuses its selected columns.
 impl<A: WireAnswer, const N: usize> WireAnswer for [A; N] {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         let rows = self
@@ -192,7 +345,7 @@ impl<A: WireAnswer, const N: usize> WireAnswer for [A; N] {
 
 /// A map's values are rows of an answer with no selection, each masked on its own.
 impl<K: Ord, A: WireAnswer> WireAnswer for BTreeMap<K, A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         self.into_iter()
@@ -208,7 +361,7 @@ where
     A: WireAnswer,
     S: BuildHasher + Default,
 {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         self.into_iter()
@@ -218,7 +371,7 @@ where
 }
 
 impl<A: WireAnswer> WireAnswer for Box<A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         (*self).masked(ctx).map(Box::new)
@@ -226,7 +379,7 @@ impl<A: WireAnswer> WireAnswer for Box<A> {
 }
 
 impl<A: WireAnswer + Clone> WireAnswer for Arc<A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         Self::unwrap_or_clone(self).masked(ctx).map(Self::new)
@@ -234,7 +387,7 @@ impl<A: WireAnswer + Clone> WireAnswer for Arc<A> {
 }
 
 impl<A: WireAnswer + Clone> WireAnswer for Cow<'static, A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         self.into_owned().masked(ctx).map(Cow::Owned)
@@ -242,7 +395,7 @@ impl<A: WireAnswer + Clone> WireAnswer for Cow<'static, A> {
 }
 
 impl<A: WireAnswer> WireAnswer for Json<A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         self.0.masked(ctx).map(Json)
@@ -250,7 +403,7 @@ impl<A: WireAnswer> WireAnswer for Json<A> {
 }
 
 impl<A: WireAnswer, E> WireAnswer for Result<A, E> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         match self {
@@ -262,7 +415,7 @@ impl<A: WireAnswer, E> WireAnswer for Result<A, E> {
 
 /// async-graphql serves it behind its own `tokio-sync` feature, an app's to turn on.
 impl<A: WireAnswer> WireAnswer for tokio::sync::Mutex<A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         self.into_inner().masked(ctx).map(Self::new)
@@ -271,7 +424,7 @@ impl<A: WireAnswer> WireAnswer for tokio::sync::Mutex<A> {
 
 /// async-graphql serves it behind its own `tokio-sync` feature, an app's to turn on.
 impl<A: WireAnswer> WireAnswer for tokio::sync::RwLock<A> {
-    const READABLE: () = A::READABLE;
+    const UNMASKED: UnmaskedObjects = A::UNMASKED;
 
     fn masked(self, ctx: &Context<'_>) -> Result<Self, Error> {
         self.into_inner().masked(ctx).map(Self::new)
@@ -280,48 +433,49 @@ impl<A: WireAnswer> WireAnswer for tokio::sync::RwLock<A> {
 
 /// Holds no place for the row the mask cuts.
 impl<A: WireAnswer> WireAnswer for &'static A {
-    const READABLE: () = panic!(
+    const UNMASKED: UnmaskedObjects = panic!(
         "a `#[field_resolver]` answering a wire type's row behind a `&'static` borrow holds no \
          place for the row the mask cuts, so it would ship what a grant withholds: answer the \
          row by value, or behind an `Arc`"
     );
 
     fn masked(self, _ctx: &Context<'_>) -> Result<Self, Error> {
-        let () = Self::READABLE;
+        let _ = Self::UNMASKED;
         Ok(self)
     }
 }
 
 /// Holds no place for the rows the mask cuts.
 impl<A: WireAnswer> WireAnswer for &'static [A] {
-    const READABLE: () = panic!(
+    const UNMASKED: UnmaskedObjects = panic!(
         "a `#[field_resolver]` answering a wire type's rows behind a `&'static` slice holds no \
          place for the rows the mask cuts, so it would ship what a grant withholds: answer them \
          in a `Vec`, or behind an `Arc<[_]>`"
     );
 
     fn masked(self, _ctx: &Context<'_>) -> Result<Self, Error> {
-        let () = Self::READABLE;
+        let _ = Self::UNMASKED;
         Ok(self)
     }
 }
 
 /// Nothing would hold the row the mask cuts: a `Weak` of it reads as gone.
 impl<A: WireAnswer> WireAnswer for Weak<A> {
-    const READABLE: () = panic!(
+    const UNMASKED: UnmaskedObjects = panic!(
         "a `#[field_resolver]` answering a wire type's row behind a `Weak` leaves nothing to \
          hold the row the mask cuts, so it would ship what a grant withholds: answer the row \
          by value, or behind an `Arc`"
     );
 
     fn masked(self, _ctx: &Context<'_>) -> Result<Self, Error> {
-        let () = Self::READABLE;
+        let _ = Self::UNMASKED;
         Ok(self)
     }
 }
 
-/// Its rows masked in place, a refused one leaving with its edge; its flags, each
-/// kept edge's cursor and what else it holds are the body's.
+/// Its rows masked in place, a refused one leaving with its edge; its flags and each
+/// kept edge's cursor are the body's, and the objects it and its edges hold beside its
+/// nodes are the boot's to read, naming no entity for a mask to read them by.
 impl<K, R, Fields, EdgeFields, Name, EdgeName, Nodes> WireAnswer
     for Connection<K, R, Fields, EdgeFields, Name, EdgeName, Nodes>
 where
@@ -333,7 +487,10 @@ where
     EdgeName: EdgeNameType,
     Nodes: NodesFieldSwitcherSealed,
 {
-    const READABLE: () = R::READABLE;
+    const UNMASKED: UnmaskedObjects = {
+        let _ = R::UNMASKED;
+        Some(additional_fields::<Fields, EdgeFields>)
+    };
 
     fn masked(mut self, ctx: &Context<'_>) -> Result<Self, Error> {
         let nodes = self.edges.iter_mut().map(|edge| &mut edge.node).collect();
@@ -343,16 +500,24 @@ where
     }
 }
 
+/// What a connection and its edges hold beside their nodes, `EmptyFields` walking to
+/// nothing.
+fn additional_fields<Fields: ObjectType, EdgeFields: ObjectType>(
+    registry: &mut Registry,
+) -> Vec<String> {
+    vec![
+        Fields::create_type_info(registry),
+        EdgeFields::create_type_info(registry),
+    ]
+}
+
 /// A field resolver's answer, borrowed so the compiler can be asked what it holds.
 pub struct FieldAnswer<'a, T>(pub &'a T);
 
 impl<T: WireAnswer> FieldAnswer<'_, T> {
-    /// What the boot reads of this answer: nothing, since the mask walks it down to
-    /// its rows. Evaluating it refuses a shape the walk cannot read.
-    pub const UNMASKED: Option<fn(&mut Registry) -> String> = {
-        let () = T::READABLE;
-        None
-    };
+    /// What the boot reads of this answer: only what it holds beside its rows, since
+    /// the mask walks it down to them. Evaluating it refuses a shape the walk cannot read.
+    pub const UNMASKED: UnmaskedObjects = T::UNMASKED;
 
     /// The entity's mask.
     pub fn mask(&self) -> fn(&Context<'_>, T) -> Result<T, Error> {
@@ -366,7 +531,7 @@ pub trait FieldAnswerFallback {
     type Value;
 
     /// How the boot reads what the answer's type holds, which no mask walks.
-    const UNMASKED: Option<fn(&mut Registry) -> String>;
+    const UNMASKED: UnmaskedObjects;
 
     /// The answer as it is: a body's scalar or its own DTO names no entity.
     fn mask(&self) -> fn(&Context<'_>, Self::Value) -> Result<Self::Value, Error>;
@@ -375,7 +540,7 @@ pub trait FieldAnswerFallback {
 impl<T: OutputType> FieldAnswerFallback for FieldAnswer<'_, T> {
     type Value = T;
 
-    const UNMASKED: Option<fn(&mut Registry) -> String> = Some(T::create_type_info);
+    const UNMASKED: UnmaskedObjects = Some(|registry| vec![T::create_type_info(registry)]);
 
     fn mask(&self) -> fn(&Context<'_>, T) -> Result<T, Error> {
         |_, answer| Ok(answer)
@@ -393,10 +558,11 @@ pub struct GraphqlWireType {
 inventory::collect!(GraphqlWireType);
 
 /// Refuse every served `#[field_resolver]` whose answer holds a wire type's row where
-/// no mask reads it: an object's column, a union's member, a flattened object, a
-/// `Connection` of those. The mask walks a type to its rows, and an object of a body's
-/// own names no entity and hands its columns to no walk, so the row would ship what a
-/// grant withholds, to any caller, on no line a reviewer reads.
+/// no mask reads it: an object's column, a union's member, a flattened object, what a
+/// `Connection` or its `Edge` holds beside its nodes, a `Connection` of those. The mask
+/// walks a type to its rows, and an object of a body's own names no entity and hands its
+/// columns to no walk, so the row would ship what a grant withholds, to any caller, on no
+/// line a reviewer reads.
 pub(crate) fn check_field_answers(served: &ServedObjects) -> anyhow::Result<()> {
     let wire: HashSet<&str> = inventory::iter::<GraphqlWireType>()
         .map(|wire| (wire.rust_type)())
@@ -415,28 +581,44 @@ pub(crate) fn check_field_answers(served: &ServedObjects) -> anyhow::Result<()> 
         refused.sort_unstable();
         anyhow::bail!(
             "a field's answer holds an `#[expose]`d wire type's row where no mask reads it, so \
-             it would ship what a grant withholds: {}. Serve that column from a \
-             `#[field_resolver]`, which masks what it answers, or answer the wire type itself",
+             it would ship what a grant withholds: {}. Give that column `#[graphql(skip)]` and \
+             serve it from a `#[field_resolver]`, which masks what it answers, or answer the \
+             wire type itself",
             refused.join("; ")
         );
     }
     Ok(())
 }
 
-/// The first wire type's row `answer`'s type holds on a link no mask reads, as a refusal
-/// says it: every column of an object not a wire type itself, but one a
+/// The first wire type's row the objects `answer` names hold on a link no mask reads, as a
+/// refusal says it: every column of an object not a wire type itself, but one a
 /// `#[field_resolver]` serves, whose own answer the boot reads.
 fn unread_row(
-    answer: fn(&mut Registry) -> String,
+    answer: fn(&mut Registry) -> Vec<String>,
     wire: &HashSet<&str>,
     resolved: &HashSet<(&str, &str)>,
 ) -> Option<String> {
     let mut registry = Registry::default();
     let answered = answer(&mut registry);
     let is_wire = |ty: &MetaType| ty.rust_typename().is_some_and(|name| wire.contains(name));
+    let linked: HashSet<&str> = registry
+        .types
+        .values()
+        .flat_map(links_of)
+        .map(|(held, _)| held)
+        .collect();
+    let unlinked = || {
+        registry
+            .types
+            .values()
+            .filter(|ty| !linked.contains(ty.name()))
+    };
 
     let mut seen = HashSet::new();
-    let mut pending = vec![(MetaTypeName::concrete_typename(&answered), String::new())];
+    let mut pending: Vec<(&str, String)> = answered
+        .iter()
+        .map(|name| (MetaTypeName::concrete_typename(name), String::new()))
+        .collect();
     while let Some((name, at)) = pending.pop() {
         if !seen.insert(name) {
             continue;
@@ -448,10 +630,10 @@ fn unread_row(
             return Some(format!("`{name}`{at}"));
         }
         for (held, column) in links_of(ty) {
-            if column
-                .zip(ty.rust_typename())
-                .is_some_and(|(column, rust)| resolved.contains(&(rust, column)))
-            {
+            if column.is_some_and(|column| {
+                serves(resolved, ty, column)
+                    || unlinked().any(|from| copies(ty, from) && serves(resolved, from, column))
+            }) {
                 continue;
             }
             let at = column.map_or_else(
@@ -464,17 +646,26 @@ fn unread_row(
 
     // A flattened object and a merged one copy a row's columns and leave no link to
     // it, yet each registers it: a wire type nothing links is one of those.
-    let linked: HashSet<&str> = registry
-        .types
-        .values()
-        .flat_map(links_of)
-        .map(|(held, _)| held)
-        .collect();
-    registry
-        .types
+    unlinked()
+        .find(|ty| is_wire(ty))
+        .map(|ty| format!("`{}`", ty.name()))
+}
+
+/// Whether a `#[field_resolver]` serves `ty`'s `column`.
+fn serves(resolved: &HashSet<(&str, &str)>, ty: &MetaType, column: &str) -> bool {
+    ty.rust_typename()
+        .is_some_and(|rust| resolved.contains(&(rust, column)))
+}
+
+/// Whether `ty` holds every column `from` does, as a flatten and a merge of it do, each
+/// reading through `from` at run time: the registry keeps no other trace of a copy.
+fn copies(ty: &MetaType, from: &MetaType) -> bool {
+    let (Some(columns), Some(copied)) = (ty.fields(), from.fields()) else {
+        return false;
+    };
+    copied
         .iter()
-        .find(|(name, ty)| is_wire(ty) && !linked.contains(name.as_str()))
-        .map(|(name, _)| format!("`{name}`"))
+        .all(|(column, field)| columns.get(column).is_some_and(|held| held.ty == field.ty))
 }
 
 /// The types `ty` links to, each beside the column holding it: its fields', and a

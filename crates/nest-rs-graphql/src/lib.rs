@@ -88,7 +88,7 @@ pub mod __private {
     pub use crate::scope::{scoped_parameter, unprovided};
     pub use crate::subscription::{compose_schema, keep_masked_item};
     pub use crate::wire_answer::{
-        FieldAnswer, FieldAnswerFallback, GraphqlWireType, WireAnswer, WireRow,
+        FieldAnswer, FieldAnswerFallback, GraphqlWireType, UnmaskedObjects, WireAnswer, WireRow,
     };
 
     pub use inventory;

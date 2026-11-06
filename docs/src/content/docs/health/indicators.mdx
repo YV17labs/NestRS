@@ -103,6 +103,10 @@ import nothing beside it:
 | A named Redis instance | `RedisModule::<Cache>` | `redis:cache` | the same, on that instance |
 | The object store | `StorageModule` | `storage` | one page of the bucket's listing |
 
+The queue and the outbox are read through the Valkey and the pool they run on; the
+OTLP collector, an authorization server and a social provider have no check,
+because their outage must not take every replica out of rotation.
+
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;

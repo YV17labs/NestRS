@@ -194,7 +194,10 @@ setting to raise them. Its traffic has moved when the signal lands, so the
 transports find little to drain, but what still runs at the tenth second — a
 long request, a hook, a flush — dies without its line. Lower the HTTP window
 there, `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, so a long request is cut with its
-`cancelled` line and the hooks still get their turn.
+`cancelled` line and the hooks still get their turn. Even at a one-second window
+the bounds add up to 10.5 s (the window, its settle, the hooks, the flush and the
+console: 1 + 0.5 + 5 + 3 + 1), so hooks and a telemetry flush that spend their
+whole budgets still meet the kill.
 
 ## Going further
 

@@ -64,6 +64,7 @@ resolver — carries across intact.
 | `onModuleDestroy()` / `beforeApplicationShutdown(signal)`, run before the server closes | `#[on_module_destroy]` / `#[before_application_shutdown]`, run once every transport has drained; work due at the signal waits on `stopping()` on an injected `Arc<AppLifecycle>` ([why](/fundamentals/lifecycle/#the-five-phases)) |
 | `onApplicationShutdown(signal)` | `#[on_application_shutdown]`; the signal is `cause()` on an injected `Arc<AppLifecycle>` (`StopCause::Terminate`, `Interrupt`, …) |
 | `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `<PREFIX>_<NS>__<KEY>` |
+| `XModule.forRootAsync({ useFactory })` | none, by design: a config comes from `for_root`, the environment or a `_FILE`; a resource computed from another provider is a factory [reading `ConfigModule::resolved`](/extending/package/#a-resource-it-opens) |
 | `ServeStaticModule.forRoot({ rootPath })` | `StaticFilesModule::for_root(StaticFilesConfig { root, .. })` — or `for_root(Embedded::of::<WebAssets>())` for a folder embedded in the binary |
 | `Test.createTestingModule(...)` | `TestApp` booting the real `ApiModule` |
 | `NestFactory.createApplicationContext(...)`, then `app.close()` | `App::builder()…build()`, `init()`, then `close()` ([running without serving](/fundamentals/lifecycle/#running-without-serving)) |

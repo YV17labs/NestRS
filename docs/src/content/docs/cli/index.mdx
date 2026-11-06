@@ -155,9 +155,13 @@ someone looking at a browser — so there is no routeless variant to pick. Delet
 the feature once you have a real one; `nestrs new blog` refuses if a `blog`
 feature already exists, rather than overwriting it.
 
-Ports: the CLI reads the port each existing app listens on and writes the next
-free one into the new app's own `.env` (same pattern as `auth` → 3001, `api` →
-3002, …). The workspace's root `.env` files do **not** set
+Ports: the CLI reads the port each existing app listens on — from its `.env`, a
+port pinned in its root, or the default when its root names a module or host
+serving HTTP — and writes the next free one into the new app's own `.env` (same
+pattern as `auth` → 3001, `api` → 3002, …). A root reaching its host through a
+module whose name says no edge counts as not listening, so two apps can land on
+one port; the second to start fails its boot at the listen, naming the address.
+The workspace's root `.env` files do **not** set
 `<PREFIX>_HTTP__PORT`, and no `module.rs` pins it — a pin would take the app's
 whole HTTP namespace off the `.env` cascade:
 

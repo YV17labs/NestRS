@@ -475,7 +475,8 @@ probe tables of their own, or in a whole database through `EphemeralDatabase`
 — a SeaORM fixture, which `testing` carries only beside the `seaorm`
 capability. Yours creates its own the same way, in your store's terms — a
 database per test, dropped after it, is the plainest — and never writes in the
-database a deployment's URL names.
+database a deployment's URL names. No behaviour kit ships for database drivers
+yet, so these cases are yours to write.
 
 ## What the seam carries, and what stays store-native
 

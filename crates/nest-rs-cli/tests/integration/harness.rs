@@ -85,6 +85,31 @@ pub(crate) fn run_err(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// Move a `g resource` port's service into `services/articles.rs`, renamed
+/// `ArticlesService`, and every reference to it after it: a shape
+/// `architecture.md` allows, which no generator writes.
+pub(crate) fn move_service_into_a_folder(port: &Path) {
+    fs::create_dir_all(port.join("services")).unwrap();
+    let service = fs::read_to_string(port.join("service.rs"))
+        .unwrap()
+        .replace("super::entity::", "super::super::entity::");
+    fs::write(port.join("services/articles.rs"), service).unwrap();
+    fs::remove_file(port.join("service.rs")).unwrap();
+    fs::write(
+        port.join("services/mod.rs"),
+        "mod articles;\n\npub use articles::PostsService;\n",
+    )
+    .unwrap();
+    for (file, bytes) in files_under(port) {
+        let moved = String::from_utf8(bytes)
+            .unwrap()
+            .replace("mod service;", "mod services;")
+            .replace("service::PostsService", "services::PostsService")
+            .replace("PostsService", "ArticlesService");
+        fs::write(port.join(file), moved).unwrap();
+    }
+}
+
 /// Every file under `root`, by its path below it, with its bytes: what a
 /// refused generator leaves unchanged.
 pub(crate) fn files_under(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {

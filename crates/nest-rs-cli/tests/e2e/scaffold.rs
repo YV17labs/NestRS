@@ -1,6 +1,6 @@
 //! Covers `src/templates/` and `src/commands/generate/` as the tutorial drives
 //! them: its pages replayed from the workspace root as a reader follows them,
-//! and the suite they end on run against the live Postgres.
+//! and the suite they end on run against the live Postgres and store.
 
 use std::path::{Path, PathBuf};
 
@@ -235,8 +235,8 @@ async fn the_tutorial_s_curls_answer_as_its_pages_print() {
 "#;
 
 /// A call through the gateway and the tool `g ws` and `g mcp` write over the
-/// every-type resource, and a key in the store the profile's lines name: each
-/// boots what the generators wired, where the scaffold suite only compiles it.
+/// every-type resource, and a key in the store the environment names: each boots
+/// what the generators wired, where the scaffold suite only compiles it.
 const EDGES_TEST: &str = r#"use nest_rs::core::module;
 use nest_rs::http::StatusCode;
 use nest_rs::storage::{Storage, StorageModule};
@@ -299,7 +299,7 @@ async fn the_generated_tool_answers_a_call_under_its_grant() {
 struct StoredModule;
 
 #[tokio::test]
-async fn the_profile_s_store_opens_and_holds_a_key() {
+async fn the_store_the_environment_names_opens_and_holds_a_key() {
     let app = TestApp::for_module::<StoredModule>()
         .await
         .expect("the store the environment names opens");
@@ -561,7 +561,7 @@ fn the_tutorial_reaches_a_protected_endpoint_as_written() {
         "gauges::gauges_round_trip",
         "edges::the_generated_gateway_answers_a_message_behind_its_guards",
         "edges::the_generated_tool_answers_a_call_under_its_grant",
-        "edges::the_profile_s_store_opens_and_holds_a_key",
+        "edges::the_store_the_environment_names_opens_and_holds_a_key",
         "key_shapes::the_keys_the_generated_migrations_create_do_what_they_declare",
         "tutorial::the_tutorial_s_curls_answer_as_its_pages_print",
     ] {

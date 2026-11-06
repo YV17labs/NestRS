@@ -3,8 +3,8 @@
 //! names, and the wiring into feature and app.
 
 use crate::harness::{
-    assigned, files_under, run_err, run_ok, scaffolded_var, write_fake_app,
-    write_fake_migrations_crate, write_fake_workspace,
+    assigned, files_under, move_service_into_a_folder, run_err, run_ok, scaffolded_var,
+    write_fake_app, write_fake_migrations_crate, write_fake_workspace,
 };
 use std::fs;
 use std::process::Command;
@@ -1430,26 +1430,7 @@ fn an_adapter_reads_a_crud_service_in_the_services_folder() {
     let path = dir.path().to_str().unwrap();
     run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
     let port = dir.path().join("crates/features/src/posts");
-    fs::create_dir_all(port.join("services")).unwrap();
-    let service = fs::read_to_string(port.join("service.rs"))
-        .unwrap()
-        .replace("super::entity::", "super::super::entity::")
-        .replace("PostsService", "ArticlesService");
-    fs::write(port.join("services/articles.rs"), service).unwrap();
-    fs::remove_file(port.join("service.rs")).unwrap();
-    fs::write(
-        port.join("services/mod.rs"),
-        "mod articles;\n\npub use articles::ArticlesService;\n",
-    )
-    .unwrap();
-    let index = fs::read_to_string(port.join("mod.rs"))
-        .unwrap()
-        .replace("mod service;", "mod services;")
-        .replace(
-            "pub use service::PostsService;",
-            "pub use services::ArticlesService;",
-        );
-    fs::write(port.join("mod.rs"), index).unwrap();
+    move_service_into_a_folder(&port);
 
     run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
     run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);

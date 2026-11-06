@@ -7,6 +7,7 @@ use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 
 use crate::generated::{EVERY_COLUMN_TYPE, cargo, cargo_check, nestrs, patch_to_working_tree};
+use crate::harness::move_service_into_a_folder;
 
 /// Scaffold `acme`, run `generate` inside it, and compile the result.
 fn scaffold_and_check(generate: &[&[&str]], what: &str) {
@@ -409,6 +410,25 @@ fn the_gated_adapters_compile_over_a_port_keeping_its_entities_in_a_folder() {
 
     if let Err(stderr) = cargo_check(&workspace) {
         panic!("the adapters over a folder of entities do not compile:\n{stderr}");
+    }
+}
+
+/// A port whose `CrudService` moved into `services/` under a name of its own takes
+/// every adapter over it, each injecting the service by that name.
+#[test]
+fn every_adapter_compiles_over_a_port_keeping_its_service_in_a_folder() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+    nestrs(dir.path(), &["new", "acme"], &[]);
+    let workspace = dir.path().join("acme");
+    nestrs(&workspace, &["g", "resource", "posts"], &[]);
+    move_service_into_a_folder(&workspace.join("crates/features/src/posts"));
+    for edge in ["graphql", "ws", "queue", "schedule", "mcp", "events"] {
+        nestrs(&workspace, &["g", edge, "posts"], &[]);
+    }
+    patch_to_working_tree(&workspace);
+
+    if let Err(stderr) = cargo_check(&workspace) {
+        panic!("the adapters over a folder of services do not compile:\n{stderr}");
     }
 }
 

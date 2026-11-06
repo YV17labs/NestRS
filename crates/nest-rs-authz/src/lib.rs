@@ -41,7 +41,7 @@ pub use ability::{Ability, FieldSet};
 pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};
 pub use builder::{AbilityBuilder, Can, Cannot, RuleSpec};
 pub use context::{current_ability, with_ability};
-pub use error::{MalformedRuleError, MaskReplyError};
+pub use error::{ColumnsRefused, MalformedRuleError, MaskReplyError};
 pub use factory::AbilityFactory;
 pub use gate::class_gate;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]

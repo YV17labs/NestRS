@@ -12,6 +12,7 @@ use sea_orm::sea_query::Condition;
 use sea_orm::{EntityTrait, IdenStatic, Value};
 
 use crate::action::Action;
+use crate::error::ColumnsRefused;
 use crate::predicate::{Predicate, Truth, no_row, nothing_invented};
 use crate::wire_model::{WireModel, kept_key};
 
@@ -154,6 +155,14 @@ pub enum FieldSet {
 }
 
 impl FieldSet {
+    /// Whether the set permits the column `Column::as_str()` names so.
+    pub fn permits(&self, column: &str) -> bool {
+        match self {
+            FieldSet::All => true,
+            FieldSet::Only(columns) => columns.contains(column),
+        }
+    }
+
     /// Keep every field either set permits.
     fn widen(&mut self, other: &FieldSet) {
         match (&mut *self, other) {
@@ -521,15 +530,20 @@ impl Ability {
         })
     }
 
-    /// Whether some grant opens a concrete `action` on `subject` and none of them
-    /// narrows its columns: every row a read admits under this ability ships whole.
-    #[cfg(feature = "graphql")]
-    pub(crate) fn grants_every_column(&self, action: Action, subject: TypeId) -> bool {
-        let mut grants = self
-            .rules_for(action, subject)
-            .filter(|rule| !rule.inverted)
-            .peekable();
-        grants.peek().is_some() && grants.all(|rule| matches!(rule.fields, FieldSet::All))
+    /// Whether some grant opens `action` on `subject` and none of them narrows its
+    /// columns: every row a read admits under this ability ships whole, and a write
+    /// it admits sets what it likes.
+    ///
+    /// [`Action::Manage`] asks it of every concrete action: one narrowed, or one no
+    /// grant opens, answers `false`.
+    pub fn grants_every_column(&self, action: Action, subject: TypeId) -> bool {
+        self.actions_at_site(action, subject).iter().all(|&action| {
+            let mut grants = self
+                .rules_for(action, subject)
+                .filter(|rule| !rule.inverted)
+                .peekable();
+            grants.peek().is_some() && grants.all(|rule| matches!(rule.fields, FieldSet::All))
+        })
     }
 
     /// Layer ② — the query pre-filter: `(OR of grant conditions) AND NOT (OR of
@@ -566,6 +580,111 @@ impl Ability {
             out = out.add(deny.not());
         }
         out
+    }
+
+    /// Layer ② for a write setting `columns`: the rows on which the grants of
+    /// `action` that match the row permit each of them, as the mask reads a row's
+    /// columns off the union of the grants it meets. So `(OR of the grants
+    /// permitting one column) AND (… for each other) AND NOT (OR of denials)`, which
+    /// runs in the write's own statement, a relational rule exact, in no round trip.
+    ///
+    /// No grant permitting a column, no row could take the write, and
+    /// [`ColumnsRefused`] names each such column. A grant with no `.fields` permits
+    /// every column, so where none narrows this is
+    /// [`condition_for`](Self::condition_for), as it is for no column at all.
+    /// [`Action::Manage`] conjoins every concrete action's.
+    ///
+    /// ```
+    /// # use nest_rs_authz::{AbilityBuilder, Action};
+    /// # mod post {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    /// #     #[sea_orm(table_name = "posts")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key)]
+    /// #         pub id: i32,
+    /// #         pub title: String,
+    /// #         pub status: String,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {}
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// let mut ab = AbilityBuilder::new();
+    /// ab.can(Action::Update, post::Entity).fields([post::Column::Title]);
+    /// let ability = ab.build()?;
+    ///
+    /// let writes = [post::Column::Title];
+    /// assert!(ability.condition_for_columns::<post::Entity>(Action::Update, &writes).is_ok());
+    ///
+    /// let writes = [post::Column::Title, post::Column::Status];
+    /// let refused = ability
+    ///     .condition_for_columns::<post::Entity>(Action::Update, &writes)
+    ///     .unwrap_err();
+    /// assert_eq!(refused.columns, ["status"]);
+    /// # Ok::<(), nest_rs_authz::MalformedRuleError>(())
+    /// ```
+    pub fn condition_for_columns<E: EntityTrait>(
+        &self,
+        action: Action,
+        columns: &[E::Column],
+    ) -> Result<Condition, ColumnsRefused> {
+        let subject = TypeId::of::<E>();
+        let columns: Vec<&'static str> = columns.iter().map(IdenStatic::as_str).collect();
+        match self.actions_at_site(action, subject) {
+            [action] => self.condition_of_columns(*action, subject, &columns),
+            every => every.iter().try_fold(Condition::all(), |all, &action| {
+                Ok(all.add(self.condition_of_columns(action, subject, &columns)?))
+            }),
+        }
+    }
+
+    /// [`condition_for_columns`](Self::condition_for_columns) of one concrete action.
+    fn condition_of_columns(
+        &self,
+        action: Action,
+        subject: TypeId,
+        columns: &[&'static str],
+    ) -> Result<Condition, ColumnsRefused> {
+        let grants: Vec<&Rule> = self
+            .rules_for(action, subject)
+            .filter(|rule| !rule.inverted)
+            .collect();
+        // Each distinct set of grants once: most columns share one.
+        let mut permitting: Vec<Vec<usize>> = Vec::new();
+        let mut refused = Vec::new();
+        for &column in columns {
+            let of_column: Vec<usize> = (0..grants.len())
+                .filter(|&grant| grants[grant].fields.permits(column))
+                .collect();
+            if of_column.is_empty() {
+                refused.push(column);
+            } else if !permitting.contains(&of_column) {
+                permitting.push(of_column);
+            }
+        }
+        if !refused.is_empty() {
+            return Err(ColumnsRefused { columns: refused });
+        }
+        if permitting.is_empty() {
+            return Ok(self.condition_of(action, subject));
+        }
+        let mut out = Condition::all();
+        for of_column in permitting {
+            out = out.add(of_column.iter().fold(Condition::any(), |any, &grant| {
+                any.add(grants[grant].condition.clone())
+            }));
+        }
+        let deny = self
+            .rules_for(action, subject)
+            .filter(|rule| rule.inverted)
+            .fold(Condition::any(), |any, rule| {
+                any.add(rule.condition.clone())
+            });
+        if !deny.is_empty() {
+            out = out.add(deny.not());
+        }
+        Ok(out)
     }
 
     /// The column values the grants of `action` on `E` pin by equality — CASL's
@@ -2200,5 +2319,373 @@ mod tests {
             assert!(!both.can_class(Action::Create, posts()));
             assert!(both.can_class(Action::Update, posts()));
         }
+    }
+
+    /// The `WHERE` a write of `columns` runs under.
+    fn write_scope(ability: &Ability, action: Action, columns: &[post::Column]) -> String {
+        use sea_orm::{DatabaseBackend, QueryFilter, QueryTrait};
+        let scope = ability
+            .condition_for_columns::<post::Entity>(action, columns)
+            .expect("a grant permits each column");
+        let sql = post::Entity::find()
+            .filter(scope)
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+        sql.split_once(" WHERE ")
+            .map_or(String::new(), |(_, scope)| scope.to_owned())
+    }
+
+    fn in_org_id(
+        org: i32,
+    ) -> impl FnOnce(PredicateBuilder<post::Entity>) -> Predicate<post::Entity> {
+        move |p| p.eq(post::Column::OrgId, org)
+    }
+
+    #[test]
+    fn a_write_no_grant_narrows_is_held_to_its_actions_condition_alone() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity).when(in_org_id(7));
+        b.can(Action::Update, post::Entity).when(in_org_id(8));
+        b.cannot(Action::Update, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "locked"));
+        let ability = b.build().unwrap();
+
+        assert!(ability.grants_every_column(Action::Update, posts()));
+        let columns = [post::Column::Title, post::Column::ParentId];
+        assert_eq!(
+            write_scope(&ability, Action::Update, &columns),
+            sql(&ability, Action::Update)
+                .split_once(" WHERE ")
+                .unwrap()
+                .1,
+        );
+    }
+
+    #[test]
+    fn a_write_setting_nothing_is_held_to_its_actions_condition_alone() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        let ability = b.build().unwrap();
+
+        assert!(!ability.grants_every_column(Action::Update, posts()));
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[]),
+            r#""posts"."org_id" = 7"#,
+            "never every row, for want of a column to hold it to",
+        );
+    }
+
+    #[test]
+    fn no_grant_of_a_subject_narrows_nothing_and_opens_nothing() {
+        let ability = crate::AbilityBuilder::new().build().unwrap();
+
+        assert!(!ability.grants_every_column(Action::Update, posts()));
+        assert_eq!(write_scope(&ability, Action::Update, &[]), "1 = 0");
+        let refused = ability
+            .condition_for_columns::<post::Entity>(Action::Update, &[post::Column::Title])
+            .unwrap_err();
+        assert_eq!(refused.columns, ["title"]);
+    }
+
+    #[test]
+    fn a_column_no_grant_permits_is_refused_by_name_each_of_them() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        let ability = b.build().unwrap();
+
+        let refused = ability
+            .condition_for_columns::<post::Entity>(
+                Action::Update,
+                &[
+                    post::Column::OrgId,
+                    post::Column::Title,
+                    post::Column::ParentId,
+                ],
+            )
+            .unwrap_err();
+
+        assert_eq!(refused.columns, ["org_id", "parent_id"]);
+        assert_eq!(
+            refused.to_string(),
+            "no grant permits writing org_id, parent_id"
+        );
+    }
+
+    /// As the mask reads a row's columns off the union of the grants it meets, a
+    /// write needs a grant the row meets for each column, never one for them all.
+    #[test]
+    fn two_grants_permitting_different_columns_conjoin_on_the_row() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(8))
+            .fields([post::Column::ParentId]);
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[post::Column::Title]),
+            r#""posts"."org_id" = 7"#,
+        );
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[post::Column::ParentId]),
+            r#""posts"."org_id" = 8"#,
+        );
+        assert_eq!(
+            write_scope(
+                &ability,
+                Action::Update,
+                &[post::Column::Title, post::Column::ParentId],
+            ),
+            r#""posts"."org_id" = 7 AND "posts"."org_id" = 8"#,
+        );
+    }
+
+    #[test]
+    fn a_grant_with_no_field_list_permits_every_column_on_the_rows_it_meets() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        b.can(Action::Update, post::Entity).when(in_org_id(8));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[post::Column::Title]),
+            r#""posts"."org_id" = 7 OR "posts"."org_id" = 8"#,
+            "either grant permits it",
+        );
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[post::Column::ParentId]),
+            r#""posts"."org_id" = 8"#,
+            "only the wider grant does",
+        );
+    }
+
+    #[test]
+    fn two_columns_one_grant_permits_are_one_clause() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title, post::Column::ParentId]);
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            write_scope(
+                &ability,
+                Action::Update,
+                &[post::Column::Title, post::Column::ParentId],
+            ),
+            r#""posts"."org_id" = 7"#,
+        );
+    }
+
+    #[test]
+    fn a_denial_holds_over_a_write_a_grant_permits() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        b.cannot(Action::Update, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "locked"));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[post::Column::Title]),
+            r#""posts"."org_id" = 7 AND (NOT "posts"."title" = 'locked')"#,
+        );
+    }
+
+    #[test]
+    fn a_relational_grant_is_decided_in_the_statement() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org(7))
+            .fields([post::Column::Title]);
+        let ability = b.build().unwrap();
+
+        let scope = write_scope(&ability, Action::Update, &[post::Column::Title]);
+        assert!(
+            scope.contains(r#"SELECT"#) && scope.contains(r#""orgs""#),
+            "{scope}"
+        );
+    }
+
+    /// `Manage` is every action, so a list on it limits a write as it does a read.
+    #[test]
+    fn a_wildcards_field_list_limits_a_write_and_an_actions_own_grant_widens_it() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        let narrowed = b.build().unwrap();
+
+        assert!(!narrowed.grants_every_column(Action::Update, posts()));
+        let refused = narrowed
+            .condition_for_columns::<post::Entity>(Action::Update, &[post::Column::ParentId])
+            .unwrap_err();
+        assert_eq!(refused.columns, ["parent_id"]);
+
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        b.can(Action::Update, post::Entity).when(in_org_id(8));
+        let widened = b.build().unwrap();
+
+        assert_eq!(
+            write_scope(&widened, Action::Update, &[post::Column::ParentId]),
+            r#""posts"."org_id" = 8"#,
+        );
+    }
+
+    /// A write's reply reads that write's grant, so `Read`'s list narrows nothing
+    /// there: a write with no list of its own ships every exposed column.
+    #[test]
+    fn a_writes_reply_reads_its_own_grant_never_reads() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity).fields([post::Column::Id]);
+        b.can(Action::Update, post::Entity);
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Update, &a_post())),
+            None,
+        );
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            Some(vec!["id"]),
+        );
+    }
+
+    /// `Manage` is every action, as on `can_class`: an action narrowed, or one no
+    /// grant opens, answers for the site, and each action's own answer stands.
+    #[test]
+    fn every_column_at_a_manage_site_is_every_actions() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity).when(in_org_id(7));
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(8))
+            .fields([post::Column::Title]);
+        let one_narrowed = b.build().unwrap();
+        assert!(!one_narrowed.grants_every_column(Action::Manage, posts()));
+        assert!(!one_narrowed.grants_every_column(Action::Update, posts()));
+        assert!(one_narrowed.grants_every_column(Action::Read, posts()));
+
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity);
+        let wildcard_alone = b.build().unwrap();
+        assert!(wildcard_alone.grants_every_column(Action::Manage, posts()));
+        assert!(wildcard_alone.grants_every_column(Action::Update, posts()));
+
+        let mut b = crate::AbilityBuilder::new();
+        for action in Action::CONCRETE {
+            b.can(action, post::Entity);
+        }
+        assert!(
+            b.build()
+                .unwrap()
+                .grants_every_column(Action::Manage, posts())
+        );
+
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity);
+        let one_opened = b.build().unwrap();
+        assert!(!one_opened.grants_every_column(Action::Manage, posts()));
+        assert!(one_opened.grants_every_column(Action::Read, posts()));
+    }
+
+    #[test]
+    fn a_site_gated_on_manage_conjoins_every_actions_columns() {
+        let mut b = crate::AbilityBuilder::new();
+        for action in [Action::Read, Action::Create, Action::Delete] {
+            b.can(action, post::Entity).when(in_org_id(7));
+        }
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(8))
+            .fields([post::Column::Title]);
+        let ability = b.build().unwrap();
+
+        let refused = ability
+            .condition_for_columns::<post::Entity>(Action::Manage, &[post::Column::ParentId])
+            .unwrap_err();
+        assert_eq!(refused.columns, ["parent_id"], "`Update` withholds it");
+
+        let scope = write_scope(&ability, Action::Manage, &[post::Column::Title]);
+        assert!(
+            scope.contains(r#""posts"."org_id" = 7"#) && scope.contains(r#""posts"."org_id" = 8"#),
+            "{scope}",
+        );
+    }
+
+    /// `with_ability` narrows: what either side withholds stays withheld.
+    #[test]
+    fn an_intersection_writes_only_what_both_permit() {
+        let mut wide = crate::AbilityBuilder::new();
+        wide.can(Action::Update, post::Entity);
+        let mut narrow = crate::AbilityBuilder::new();
+        narrow
+            .can(Action::Update, post::Entity)
+            .fields([post::Column::Title]);
+        let both = wide.build().unwrap().intersection(&narrow.build().unwrap());
+
+        assert!(!both.grants_every_column(Action::Update, posts()));
+        let refused = both
+            .condition_for_columns::<post::Entity>(Action::Update, &[post::Column::OrgId])
+            .unwrap_err();
+        assert_eq!(refused.columns, ["org_id"]);
+        assert!(
+            both.condition_for_columns::<post::Entity>(Action::Update, &[post::Column::Title])
+                .is_ok()
+        );
+    }
+
+    mod renamed {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "renamed")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            #[sea_orm(column_name = "display_title")]
+            pub headline: String,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    #[test]
+    fn a_grant_names_a_column_by_identity_and_a_refusal_as_the_table_does() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, renamed::Entity)
+            .fields([renamed::Column::Headline]);
+        let ability = b.build().unwrap();
+        assert!(
+            ability
+                .condition_for_columns::<renamed::Entity>(
+                    Action::Update,
+                    &[renamed::Column::Headline],
+                )
+                .is_ok()
+        );
+
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, renamed::Entity)
+            .fields([renamed::Column::Id]);
+        let refused = b
+            .build()
+            .unwrap()
+            .condition_for_columns::<renamed::Entity>(Action::Update, &[renamed::Column::Headline])
+            .unwrap_err();
+        assert_eq!(refused.columns, ["display_title"]);
     }
 }

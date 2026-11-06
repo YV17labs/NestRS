@@ -303,3 +303,54 @@ mod enum_column {
         assert_eq!(create.stage, Stage::Draft);
     }
 }
+
+mod account {
+    use super::*;
+
+    #[expose(name = "Account")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "accounts")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[sea_orm(column_name = "display_name")]
+        #[expose(input(update))]
+        pub name: String,
+        #[expose(input(update))]
+        pub bio: Option<String>,
+        pub note: String,
+        #[expose]
+        pub plan: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// What a client may carry back as it stands is what the input carries, which
+/// `#[expose]` shows on the wire too, by the column's own name.
+#[test]
+fn an_update_reads_back_only_what_a_reply_shows() {
+    use nest_rs_seaorm::UpdateModel;
+
+    type Update = account::UpdateAccount;
+
+    assert!(<Update as UpdateModel<account::Entity>>::reads_back(
+        "display_name"
+    ));
+    assert!(<Update as UpdateModel<account::Entity>>::reads_back("bio"));
+    assert!(!<Update as UpdateModel<account::Entity>>::reads_back(
+        "note"
+    ));
+    assert!(
+        !<Update as UpdateModel<account::Entity>>::reads_back("plan"),
+        "shown, but the input does not carry it",
+    );
+    assert!(
+        !<Update as UpdateModel<account::Entity>>::reads_back("name"),
+        "the wire's name is not the column's",
+    );
+}

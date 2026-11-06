@@ -645,3 +645,63 @@ async fn a_list_that_hits_the_hard_cap_says_so() {
         Some(nest_rs_seaorm::LIST_CAP.to_string()).as_deref(),
     );
 }
+
+/// A relational grant narrowed to columns is decided in the write's own statement:
+/// a row outside it stands, and a column it withholds sends nothing.
+#[tokio::test]
+async fn a_relational_grant_limits_what_it_writes_in_the_statement() {
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
+    let TwoOrgs {
+        org_a,
+        item_a,
+        item_b,
+        ..
+    } = seed_two_orgs(&conn).await;
+    let labels_in_org_a = || {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Update, item::Entity)
+            .when(move |p| {
+                p.related::<container::Entity, _>(item::Relation::Container, move |c| {
+                    c.eq(container::Column::OrgId, org_a)
+                })
+            })
+            .fields([item::Column::Label]);
+        Arc::new(b.build().expect("valid test ability"))
+    };
+    let label = |id: Uuid| item::ActiveModel {
+        id: Set(id),
+        label: Set("relabelled".to_owned()),
+        ..Default::default()
+    };
+
+    let (own, other, moved) = with_request_executor(
+        SeaOrmExecutor::Pool(conn.clone()).into(),
+        install_ability(labels_in_org_a(), async {
+            (
+                Repo::<item::Entity>::update(label(item_a)).await,
+                Repo::<item::Entity>::update(label(item_b)).await,
+                Repo::<item::Entity>::update(item::ActiveModel {
+                    id: Set(item_a),
+                    container_id: Set(Uuid::now_v7()),
+                    ..Default::default()
+                })
+                .await,
+            )
+        }),
+    )
+    .await;
+
+    assert_eq!(own.expect("own org's label").label, "relabelled");
+    assert!(matches!(other, Err(DbErr::RecordNotUpdated)), "{other:?}");
+    assert!(
+        matches!(&moved, Err(DbErr::AccessDenied { resource, .. }) if resource == "rel_item(container_id)"),
+        "{moved:?}",
+    );
+    let untouched = item::Entity::find_by_id(item_b)
+        .one(&conn)
+        .await
+        .expect("read")
+        .expect("the row stands");
+    assert_eq!(untouched.label, "in B");
+}

@@ -26,6 +26,7 @@ mod module;
 mod page;
 mod repo;
 mod savepoint;
+mod service;
 mod unit;
 
 /// The principal the suite's authentication stand-ins attach: a caller with no

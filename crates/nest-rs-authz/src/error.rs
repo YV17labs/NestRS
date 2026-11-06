@@ -28,6 +28,17 @@ pub struct MalformedRuleError {
     pub kind: &'static str,
 }
 
+/// A write setting columns no grant of its action permits, refused before any
+/// statement: what [`Ability::condition_for_columns`](crate::Ability::condition_for_columns)
+/// answers for a column `.fields` leaves out of every grant.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("no grant permits writing {}", .columns.join(", "))]
+#[non_exhaustive]
+pub struct ColumnsRefused {
+    /// Each column refused, as `Column::as_str()` names it, in the order asked.
+    pub columns: Vec<&'static str>,
+}
+
 /// Why `masked_reply` could not produce a masked value. Callers must treat
 /// either case as fail-closed: send an error frame, never the unmasked body.
 #[derive(Debug, thiserror::Error)]

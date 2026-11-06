@@ -3,16 +3,22 @@
 //! aborts the unit's transaction — the writes beside it commit, with no
 //! savepoint around it. A soft-deletable entity's partial index over its live
 //! rows is inferred, and a key only a tombstone holds meets its violation
-//! inside a savepoint.
+//! inside a savepoint. A grant's `.fields` on an update is decided in the statement's
+//! own `WHERE`: the columns it permits and the hook's stamp land, and a row whose
+//! grants do not permit each column stays as it was.
 
 use std::sync::Arc;
 
+use nest_rs_authz::__private::install_ability;
+use nest_rs_authz::{Ability, AbilityBuilder, Action};
+use nest_rs_database::__private::with_request_executor;
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
+use nest_rs_seaorm::__private::SeaOrmExecutor;
 use nest_rs_seaorm::{DbOutcome, Insertion, Repo, SeaOrmConfig, SeaOrmUnitOfWork};
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
-    QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, IntoActiveModel,
+    PaginatorTrait, QueryFilter, Set,
 };
 
 mod account {
@@ -101,8 +107,35 @@ mod legacy {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/// The four tables: a plain unique key, one a hook normalises, a unique key over
-/// live rows alone, and a unique key counting tombstones.
+mod article {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "repo_probe_articles")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: Uuid,
+        pub org_id: Uuid,
+        pub title: String,
+        pub body: String,
+        pub note: Option<String>,
+        pub touched: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    #[async_trait::async_trait]
+    impl ActiveModelBehavior for ActiveModel {
+        async fn before_save<C: ConnectionTrait>(mut self, _: &C, _: bool) -> Result<Self, DbErr> {
+            self.touched = sea_orm::Set(1);
+            Ok(self)
+        }
+    }
+}
+
+/// The five tables: a plain unique key, one a hook normalises, a unique key over
+/// live rows alone, a unique key counting tombstones, and a row a hook stamps.
 async fn db() -> DatabaseConnection {
     let conn = crate::harness::connect().await;
     crate::harness::setup_shared_table(
@@ -127,6 +160,14 @@ async fn db() -> DatabaseConnection {
             id UUID PRIMARY KEY,
             email TEXT NOT NULL CONSTRAINT repo_probe_legacy_email_key UNIQUE,
             deleted_at TIMESTAMPTZ
+        );
+        CREATE TABLE IF NOT EXISTS repo_probe_articles (
+            id UUID PRIMARY KEY,
+            org_id UUID NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            note TEXT,
+            touched INTEGER NOT NULL DEFAULT 0
         );",
     )
     .await;
@@ -340,4 +381,135 @@ async fn a_key_only_a_tombstone_holds_meets_its_violation_and_aborts_nothing() {
         "{violation}"
     );
     assert_eq!(accounts_with(&conn, &after).await, 1);
+}
+
+/// `work`, in a request unit on the pool under `ability`.
+async fn under<T>(conn: &DatabaseConnection, ability: Ability, work: impl Future<Output = T>) -> T {
+    with_request_executor(
+        SeaOrmExecutor::Pool(conn.clone()).into(),
+        install_ability(Arc::new(ability), work),
+    )
+    .await
+}
+
+fn granting(grants: impl FnOnce(&mut AbilityBuilder)) -> Ability {
+    let mut b = AbilityBuilder::new();
+    grants(&mut b);
+    b.build().expect("valid test ability")
+}
+
+async fn an_article(conn: &DatabaseConnection, org_id: Uuid) -> article::Model {
+    article::Entity::insert(article::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        org_id: Set(org_id),
+        title: Set("first".to_owned()),
+        body: Set("as it stands".to_owned()),
+        note: Set(None),
+        touched: Set(0),
+    })
+    .exec_with_returning(conn)
+    .await
+    .expect("seed an article")
+}
+
+#[tokio::test]
+async fn a_narrowed_update_writes_what_its_grant_permits_and_the_hooks_stamp() {
+    let conn = db().await;
+    let org = Uuid::now_v7();
+    let row = an_article(&conn, org).await;
+    let ability = granting(|b| {
+        b.can(Action::Update, article::Entity)
+            .when(|p| p.eq(article::Column::OrgId, org))
+            .fields([article::Column::Title]);
+    });
+    let mut active = row.clone().into_active_model();
+    active.title = Set("second".to_owned());
+
+    let updated = under(&conn, ability, Repo::<article::Entity>::update(active))
+        .await
+        .expect("the grant permits the title");
+
+    assert_eq!(updated.title, "second");
+    assert_eq!(updated.touched, 1, "the hook's stamp needs no grant");
+    assert_eq!(updated.body, row.body);
+}
+
+/// As a read's columns are the union of the grants its row meets, so a write's: a
+/// row meeting one grant takes what that one permits, and only a row meeting both
+/// takes both columns, in one statement, atomically.
+#[tokio::test]
+async fn a_row_is_written_only_where_its_grants_permit_each_column() {
+    let conn = db().await;
+    let (titles, bodies) = (Uuid::now_v7(), Uuid::now_v7());
+    let in_titles = an_article(&conn, titles).await;
+    let in_bodies = an_article(&conn, bodies).await;
+    let two_grants = || {
+        granting(|b| {
+            b.can(Action::Update, article::Entity)
+                .when(|p| p.eq(article::Column::OrgId, titles))
+                .fields([article::Column::Title]);
+            b.can(Action::Update, article::Entity)
+                .when(|p| p.eq(article::Column::OrgId, bodies))
+                .fields([article::Column::Body]);
+        })
+    };
+    let title_of = |row: &article::Model| {
+        let mut active = row.clone().into_active_model();
+        active.title = Set("second".to_owned());
+        active
+    };
+
+    let written = under(
+        &conn,
+        two_grants(),
+        Repo::<article::Entity>::update(title_of(&in_titles)),
+    )
+    .await
+    .expect("the row's grant permits it");
+    assert_eq!(written.title, "second");
+
+    let outside = under(
+        &conn,
+        two_grants(),
+        Repo::<article::Entity>::update(title_of(&in_bodies)),
+    )
+    .await;
+    assert!(
+        matches!(outside, Err(DbErr::RecordNotUpdated)),
+        "{outside:?}"
+    );
+    let stands = article::Entity::find_by_id(in_bodies.id)
+        .one(&conn)
+        .await
+        .expect("read an article");
+    assert_eq!(stands.as_ref(), Some(&in_bodies));
+
+    let mut both = title_of(&in_titles);
+    both.body = Set("rewritten".to_owned());
+    let no_row_meets_both = under(&conn, two_grants(), Repo::<article::Entity>::update(both)).await;
+    assert!(
+        matches!(no_row_meets_both, Err(DbErr::RecordNotUpdated)),
+        "{no_row_meets_both:?}",
+    );
+}
+
+#[tokio::test]
+async fn an_update_under_no_field_list_writes_every_column_it_sets() {
+    let conn = db().await;
+    let org = Uuid::now_v7();
+    let row = an_article(&conn, org).await;
+    let ability = granting(|b| {
+        b.can(Action::Update, article::Entity)
+            .when(|p| p.eq(article::Column::OrgId, org));
+    });
+    let mut active = row.clone().into_active_model();
+    active.body = Set("rewritten".to_owned());
+    active.note = Set(Some("added".to_owned()));
+
+    let updated = under(&conn, ability, Repo::<article::Entity>::update(active))
+        .await
+        .expect("no list, no limit");
+
+    assert_eq!(updated.body, "rewritten");
+    assert_eq!(updated.note.as_deref(), Some("added"));
 }

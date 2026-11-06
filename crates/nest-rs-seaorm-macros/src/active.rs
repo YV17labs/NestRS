@@ -6,7 +6,8 @@
 //! the field carrying each column it sets (`field_for`), and every entity
 //! registers its table, whose unique keys the binding reads at boot, so a unique
 //! conflict names the fields of the input a `#[crud]` wrote, a hand-written one's
-//! included.
+//! included, and an update which of them a reply also shows (`reads_back`), which
+//! a caller may carry back as they stand under a grant narrowing what it writes.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -118,6 +119,7 @@ fn emit_update(model: &ResourceModel) -> TokenStream2 {
         return quote! {};
     }
     let field_for = emit_field_for(&carried);
+    let reads_back = emit_reads_back(&carried);
 
     let update = &model.update_ident;
     quote! {
@@ -128,6 +130,20 @@ fn emit_update(model: &ResourceModel) -> TokenStream2 {
             }
 
             #field_for
+
+            #reads_back
+        }
+    }
+}
+
+/// `reads_back`, over the fields an update sets, by each one's column as the table
+/// spells it: `#[expose]` shows a field whatever else it says, `input(update)` among it.
+fn emit_reads_back(fields: &[&ResourceField]) -> TokenStream2 {
+    let shown = fields.iter().filter_map(|f| f.column.as_ref());
+    quote! {
+        fn reads_back(column: &str) -> bool {
+            [#(<Column as ::nest_rs_seaorm::sea_orm::IdenStatic>::as_str(&Column::#shown)),*]
+                .contains(&column)
         }
     }
 }

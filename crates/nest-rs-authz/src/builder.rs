@@ -296,8 +296,15 @@ impl<S: Subject, K> RuleSpec<'_, S, K> {
 }
 
 impl<S: Subject> RuleSpec<'_, S> {
-    /// Restrict the grant to these columns — the response masker keeps only
-    /// these fields. Without this, every field is permitted.
+    /// Restrict the grant to these columns, named by their `Column`, whatever the
+    /// database or the wire calls them. Without this, every column is permitted.
+    ///
+    /// On a grant a reply reads, the response mask keeps only these. On one a write
+    /// reads, `Update`, `Create` or `Manage`, they are what the write may set: `Repo`
+    /// and `Creatable` refuse any other by name, sending nothing, and read neither
+    /// the key, which addresses the row and is `when`'s to hold, nor what a hook, a
+    /// pin or a default fills
+    /// ([`condition_for_columns`](crate::Ability::condition_for_columns)).
     pub fn fields<C: IdenStatic>(mut self, columns: impl IntoIterator<Item = C>) -> Self
     where
         S: RowSubject<__Column = C>,

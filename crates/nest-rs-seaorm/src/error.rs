@@ -159,9 +159,10 @@ impl ServiceError {
 
 /// A `DbErr` classified by [`DbOutcome`]: a unique violation is a
 /// [`Conflict`](ServiceError::Conflict) (`409`), a row a write found gone is
-/// [`NotFound`](ServiceError::NotFound) (`404`), anything else is
-/// [`Db`](ServiceError::Db) — a `503` for a statement Postgres cancelled, a
-/// `500` otherwise.
+/// [`NotFound`](ServiceError::NotFound) (`404`), a write a field grant refused is
+/// [`Forbidden`](ServiceError::Forbidden) (`403`), naming the columns as the
+/// table does, anything else is [`Db`](ServiceError::Db) — a `503` for a statement
+/// Postgres cancelled, a `500` otherwise.
 impl From<DbErr> for ServiceError {
     fn from(err: DbErr) -> Self {
         match DbOutcome::of(&err) {
@@ -169,6 +170,13 @@ impl From<DbErr> for ServiceError {
                 Self::Conflict("the request conflicts with an existing record".into())
             }
             DbOutcome::NotFound => Self::NotFound("not found".into()),
+            DbOutcome::Forbidden => Self::Forbidden(match refused_columns(&err) {
+                Some(columns) => format!(
+                    "the caller may not write {}",
+                    columns.collect::<Vec<_>>().join(", "),
+                ),
+                None => "forbidden".into(),
+            }),
             DbOutcome::Unavailable | DbOutcome::Internal => Self::Db(err),
         }
     }
@@ -244,6 +252,9 @@ pub enum DbOutcome {
     /// The row an update or delete addressed is no longer there: `404`,
     /// `NOT_FOUND`.
     NotFound,
+    /// A grant's `.fields` withholds a column the write sets, refused before any
+    /// statement: `403`, `FORBIDDEN`.
+    Forbidden,
     /// Postgres cancelled the statement (SQLSTATE `57014`), past its
     /// `statement_timeout` most often: the server could not serve it in time,
     /// `503`, `UNAVAILABLE`, said at `warn`. Inside a transaction nothing it
@@ -261,6 +272,7 @@ impl DbOutcome {
     pub fn of(err: &DbErr) -> Self {
         match err {
             DbErr::RecordNotUpdated | DbErr::RecordNotFound(_) => Self::NotFound,
+            DbErr::AccessDenied { .. } => Self::Forbidden,
             _ => match server_error(err) {
                 Some(server) if server.is_unique_violation() => Self::Conflict,
                 Some(server) if server.code().as_deref() == Some(CANCELLED) => Self::Unavailable,
@@ -268,6 +280,29 @@ impl DbOutcome {
             },
         }
     }
+}
+
+/// The refusal of a write setting what a field grant withholds, as `Repo` speaks:
+/// a `DbErr` is what its every caller reads, and this one says what `GRANT UPDATE
+/// (title) ON posts` would.
+pub(crate) fn write_refused(
+    statement: &'static str,
+    table: &str,
+    columns: &[&'static str],
+) -> DbErr {
+    DbErr::AccessDenied {
+        permission: statement.to_owned(),
+        resource: format!("{table}({})", columns.join(", ")),
+    }
+}
+
+/// The columns [`write_refused`] named.
+fn refused_columns(err: &DbErr) -> Option<impl Iterator<Item = &str>> {
+    let DbErr::AccessDenied { resource, .. } = err else {
+        return None;
+    };
+    let (_, columns) = resource.split_once('(')?;
+    Some(columns.strip_suffix(')')?.split(", "))
 }
 
 /// SQLSTATE `query_canceled`: a statement Postgres cancelled, at its
@@ -451,9 +486,10 @@ impl From<ServiceError> for nest_rs_graphql::async_graphql::Error {
 /// What a `#[crud]` operation's failure answers on every edge: a unique
 /// violation is a `409` — naming, for a create or an update, the fields of
 /// the input `written` the violated key holds — a create its scope re-check
-/// rolled back (`RecordNotInserted`) a `403`, a row gone before the write a
-/// `404`, a statement Postgres cancelled a `503` filed at `warn`; any other
-/// failure a `500`, its error filed once at `error`.
+/// rolled back (`RecordNotInserted`) a `403`, as is a write a field grant refused,
+/// naming the fields of `written` that set a column it withholds, a row gone
+/// before the write a `404`, a statement Postgres cancelled a `503` filed at
+/// `warn`; any other failure a `500`, its error filed once at `error`.
 #[cfg(any(feature = "http", feature = "graphql"))]
 fn crud_problem(err: &DbErr, written: Option<Written>) -> nest_rs_core::Problem {
     use nest_rs_core::{Problem, code};
@@ -469,6 +505,13 @@ fn crud_problem(err: &DbErr, written: Option<Written>) -> nest_rs_core::Problem 
             }
         }
         DbOutcome::NotFound => Problem::new(404, code::NOT_FOUND),
+        DbOutcome::Forbidden => {
+            let problem = Problem::new(403, code::FORBIDDEN);
+            match written.and_then(|written| withheld_fields(err, written)) {
+                Some(fields) => problem.with_errors(fields),
+                None => problem,
+            }
+        }
         DbOutcome::Unavailable => {
             tracing::warn!(
                 target: crate::target::ORM,
@@ -538,6 +581,23 @@ fn taken_fields(
     (!fields.is_empty()).then_some(serde_json::Value::Object(fields))
 }
 
+/// The code a field's entry carries when a field grant withholds its column: the
+/// class it answers, read beside the field.
+#[cfg(any(feature = "http", feature = "graphql"))]
+const WITHHELD: &str = "forbidden";
+
+/// The fields of `written`'s input setting a column `err` refused, each
+/// `[{"code": "forbidden"}]`; `None` when the input carries none of them, a
+/// service having set what it refused.
+#[cfg(any(feature = "http", feature = "graphql"))]
+fn withheld_fields(err: &DbErr, written: Written) -> Option<serde_json::Value> {
+    let fields: serde_json::Map<String, serde_json::Value> = refused_columns(err)?
+        .filter_map(|column| (written.field_for)(column))
+        .map(|field| (field.to_owned(), serde_json::json!([{ "code": WITHHELD }])))
+        .collect();
+    (!fields.is_empty()).then_some(serde_json::Value::Object(fields))
+}
+
 #[cfg(feature = "http")]
 pub use http::{crud_error as http_crud_error, crud_write_error as http_crud_write_error};
 
@@ -557,8 +617,9 @@ mod graphql {
     }
 
     /// [`crud_error`] for a create or an update on `E` whose input names a
-    /// column through `field_for`: a unique conflict names the input's fields
-    /// under `extensions.errors`. Called by the `#[crud]` expansion.
+    /// column through `field_for`: a unique conflict, or a write a grant's `.fields`
+    /// refuses, names the input's fields under `extensions.errors`. Called by the
+    /// `#[crud]` expansion.
     pub fn crud_write_error<E: sea_orm::EntityTrait>(
         field_for: fn(&str) -> Option<&'static str>,
     ) -> impl FnOnce(DbErr) -> Error {
@@ -652,6 +713,23 @@ mod graphql {
         }
 
         #[test]
+        fn a_write_a_field_grant_refuses_names_the_inputs_field_under_its_extensions() {
+            use crate::error::tests::{user, users_input};
+
+            let refused = super::super::write_refused("insert", "users", &["handle", "id"]);
+            let error = crud_write_error::<user::Entity>(users_input)(refused);
+
+            assert_eq!(error.message, "forbidden");
+            let extensions = serde_json::to_value(&error.extensions).expect("extensions serialize");
+            assert_eq!(extensions[CODE_EXTENSION], code::FORBIDDEN.as_str());
+            assert_eq!(
+                extensions[nest_rs_graphql::FIELD_ERRORS_EXTENSION],
+                serde_json::json!({ "slug": [{ "code": "forbidden" }] }),
+                "the field as the client spells it, and no column it does not carry: {extensions}",
+            );
+        }
+
+        #[test]
         fn anything_else_answers_opaquely_and_files_its_error_once_without_the_value() {
             let logs = nest_rs_testing::LogCapture::install();
 
@@ -713,17 +791,18 @@ mod http {
 
     /// A `#[crud]` operation's failure as the problem document of its class:
     /// `409` for a unique violation, `403` for a create its scope re-check
-    /// rolled back, `404` for a row gone before the write, `503` for a
-    /// statement Postgres cancelled, else a `500` whose error is filed at
-    /// `error` — each with the `code` member the other edges answer. Called by
-    /// the `#[crud]` expansion.
+    /// rolled back or a write a grant's `.fields` refused, `404` for a row gone
+    /// before the write, `503` for a statement Postgres cancelled, else a `500`
+    /// whose error is filed at `error` — each with the `code` member the other
+    /// edges answer. Called by the `#[crud]` expansion.
     pub fn crud_error(err: sea_orm::DbErr) -> HttpError {
         HttpError::from(super::crud_problem(&err, None))
     }
 
     /// [`crud_error`] for a create or an update on `E` whose input names a
-    /// column through `field_for`: a unique conflict names the input's fields
-    /// under `errors`. Called by the `#[crud]` expansion.
+    /// column through `field_for`: a unique conflict, or a write a grant's `.fields`
+    /// refuses, names the input's fields under `errors`. Called by the `#[crud]`
+    /// expansion.
     pub fn crud_write_error<E: sea_orm::EntityTrait>(
         field_for: fn(&str) -> Option<&'static str>,
     ) -> impl FnOnce(sea_orm::DbErr) -> HttpError {
@@ -916,6 +995,38 @@ mod http {
                 read.get("errors").is_none(),
                 "a read sent no input to name: {read}"
             );
+        }
+
+        /// The field as the client spells it, under `errors`; the column a service
+        /// set by itself names nothing, and neither reaches the body as the table
+        /// spells it.
+        #[tokio::test]
+        async fn a_write_a_field_grant_refuses_names_the_inputs_field_under_errors() {
+            use crate::error::tests::{user, users_input};
+
+            let refused = super::super::write_refused("update", "users", &["handle", "id"]);
+            let (status, ct, body) =
+                body_json_of(crud_write_error::<user::Entity>(users_input)(refused)).await;
+
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(ct.as_deref(), Some("application/problem+json"));
+            assert_eq!(body["code"], code::FORBIDDEN.as_str(), "{body}");
+            assert_eq!(
+                body["errors"],
+                serde_json::json!({ "slug": [{ "code": "forbidden" }] }),
+                "{body}",
+            );
+            for withheld in ["handle", "users"] {
+                assert!(!body.to_string().contains(withheld), "{withheld} in {body}");
+            }
+
+            let only_the_services = super::super::write_refused("update", "users", &["id"]);
+            let (status, _, body) = body_json_of(crud_write_error::<user::Entity>(users_input)(
+                only_the_services,
+            ))
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert!(body.get("errors").is_none(), "{body}");
         }
 
         #[tokio::test]
@@ -1456,6 +1567,45 @@ pub(crate) mod tests {
             DbOutcome::Internal
         );
         assert_eq!(DbOutcome::of(&bad_uuid()), DbOutcome::Internal);
+    }
+
+    /// `DbErr` is what `Repo`'s every caller reads, so a refused write crosses it,
+    /// says what a `GRANT` would and answers `403` on every edge a service reaches.
+    #[test]
+    fn a_write_a_field_grant_refuses_is_forbidden_naming_its_columns() {
+        let refused = write_refused("update", "posts", &["title", "status"]);
+
+        assert_eq!(DbOutcome::of(&refused), DbOutcome::Forbidden);
+        assert_eq!(
+            error_message(&refused),
+            "Access denied: cannot perform `update` on `posts(title, status)`",
+        );
+        let error = ServiceError::from(refused);
+        assert!(
+            matches!(
+                &error,
+                ServiceError::Forbidden(said) if said == "the caller may not write title, status"
+            ),
+            "{error:?}",
+        );
+        let problem = nest_rs_core::ToProblem::to_problem(&error).expect("a client's class");
+        assert_eq!(problem.status(), 403);
+        assert_eq!(problem.code(), nest_rs_core::code::FORBIDDEN);
+    }
+
+    /// No other `AccessDenied` exists but one sea-orm's own access control raises,
+    /// which names a table alone: refused all the same, with no column to name.
+    #[test]
+    fn an_access_denial_with_no_column_list_is_forbidden_all_the_same() {
+        let refused = DbErr::AccessDenied {
+            permission: "update".to_owned(),
+            resource: "posts".to_owned(),
+        };
+
+        assert_eq!(DbOutcome::of(&refused), DbOutcome::Forbidden);
+        assert!(
+            matches!(ServiceError::from(refused), ServiceError::Forbidden(said) if said == "forbidden"),
+        );
     }
 
     #[test]

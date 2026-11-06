@@ -6,13 +6,13 @@ use nest_rs_authz::{Action, Predicate, current_ability};
 use nest_rs_database::{ExecutorScope, atomic, current_executor_scope};
 use sea_orm::sea_query::{Condition, Expr, ExprTrait, OnConflict};
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, ColumnTrait, DbErr, Delete, DeleteResult, EntityTrait,
-    IdenStatic, Insert, IntoActiveModel, Iterable, ModelTrait, PrimaryKeyToColumn, PrimaryKeyTrait,
-    QueryFilter, Select, Update, Value,
+    ActiveModelBehavior, ActiveModelTrait, ActiveValue, ColumnTrait, DbErr, Delete, DeleteResult,
+    EntityName, EntityTrait, IdenStatic, Insert, IntoActiveModel, Iterable, ModelTrait,
+    PrimaryKeyToColumn, PrimaryKeyTrait, QueryFilter, Select, Update, Value,
 };
 
 use crate::column_default::fill_column_defaults;
-use crate::error::AtomicDbError;
+use crate::error::{AtomicDbError, write_refused};
 use crate::executor::{SeaOrmExecutor, current_executor};
 use crate::insertion::Insertion;
 use crate::select::RepoSelect;
@@ -30,7 +30,12 @@ use crate::soft_delete::{live_condition_of, tombstone_column};
 /// tombstoned row: [`Repo::delete`] is the hard purge, and
 /// [`Repo::soft_delete`] stays idempotent.
 pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
-    let scope = ability_scope::<E>(action);
+    live_within::<E>(action, ability_scope::<E>(action))
+}
+
+/// `scope`, hiding the tombstones of a soft-deletable `E` from every action but
+/// `Create` and `Delete` ([`scope_for`]).
+fn live_within<E: EntityTrait>(action: Action, scope: Condition) -> Condition {
     if matches!(action, Action::Create | Action::Delete) {
         return scope;
     }
@@ -50,6 +55,62 @@ pub(crate) fn ability_scope<E: EntityTrait>(action: Action) -> Condition {
             Predicate::<E>::Deny.to_condition()
         }
     }
+}
+
+/// What an `Update` or a `Create` holds a write to: [`scope_for`], or, under a grant
+/// whose `.fields` narrows what its action writes, the rows on which the grants
+/// permit each column `active` chooses
+/// ([`condition_for_columns`](nest_rs_authz::Ability::condition_for_columns)),
+/// refused by name when none does, which sends nothing. Read before a hook, a pin or
+/// a default fills `active`: what they set is the server's. A job holds no ability
+/// and no column is withheld from it.
+pub(crate) fn write_scope<A>(action: Action, active: &A) -> Result<Condition, DbErr>
+where
+    A: ActiveModelTrait,
+{
+    let subject = TypeId::of::<A::Entity>();
+    let Some(ability) =
+        current_ability().filter(|ability| !ability.grants_every_column(action, subject))
+    else {
+        return Ok(scope_for::<A::Entity>(action));
+    };
+    let columns = chosen_columns(action, active);
+    match ability.condition_for_columns::<A::Entity>(action, &columns) {
+        Ok(scope) => Ok(live_within::<A::Entity>(action, scope)),
+        Err(refused) => {
+            let table = A::Entity::default().table_name();
+            tracing::warn!(
+                target: crate::target::ORM,
+                entity = table,
+                action = action.as_str(),
+                columns = refused.columns.join(","),
+                "access denied — a column the caller's grants withhold",
+            );
+            let statement = match action {
+                Action::Create => "insert",
+                _ => "update",
+            };
+            Err(write_refused(statement, table, &refused.columns))
+        }
+    }
+}
+
+/// The columns a write chooses. Never the key, which addresses the row on an update
+/// and which a `Uuid` input seeds on a create: a grant's `when` holds it. A null on a
+/// create is no choice either, an input lowering a member it did not carry to one.
+fn chosen_columns<A: ActiveModelTrait>(
+    action: Action,
+    active: &A,
+) -> Vec<<A::Entity as EntityTrait>::Column> {
+    <A::Entity as EntityTrait>::Column::iter()
+        .filter(|&column| {
+            <A::Entity as EntityTrait>::PrimaryKey::from_column(column).is_none()
+                && match active.get(column) {
+                    ActiveValue::Set(value) => action != Action::Create || value != value.as_null(),
+                    ActiveValue::Unchanged(_) | ActiveValue::NotSet => false,
+                }
+        })
+        .collect()
 }
 
 /// Whether no row of `E` can pass `action`'s scope, known without a statement:
@@ -385,6 +446,11 @@ impl<E: EntityTrait> Repo<E> {
     /// row could pass for (no grant, a denial no `when` narrows, or a request
     /// holding no ability, as on a route no mask shapes), who gets the same
     /// error before any hook runs.
+    ///
+    /// A grant's `.fields` limits what `active` sets, its hook's stamps aside: a
+    /// column no grant permits is [`DbErr::AccessDenied`] naming it, before any hook
+    /// runs or anything is sent, and a row whose grants do not permit each column is
+    /// outside the scope.
     pub async fn update<A>(active: A) -> Result<E::Model, DbErr>
     where
         A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
@@ -407,10 +473,15 @@ impl<E: EntityTrait> Repo<E> {
         if barred_from_class::<E>(action) {
             return Err(DbErr::RecordNotUpdated);
         }
+        // A soft delete's stamp is the framework's, whatever a grant's `.fields` say.
+        let scope = match action {
+            Action::Update => write_scope(action, &active)?,
+            _ => scope_for::<E>(action),
+        };
         let active = A::before_save(active, &conn, false).await?;
         let model = Update::one(active)
             .validate()?
-            .filter(scope_for::<E>(action))
+            .filter(scope)
             .exec(&conn)
             .await?;
         A::after_save(model, &conn, false).await
@@ -1289,6 +1360,324 @@ mod tests {
             "{:?}",
             event.fields,
         );
+    }
+
+    /// A grant's `.fields` names what its caller may write: a column it leaves out
+    /// is refused by name before a hook runs or a statement is sent, on a pool that
+    /// dials nothing, and the operator's line says which, never a value.
+    #[tokio::test]
+    async fn a_write_of_a_column_its_grant_leaves_out_is_refused_with_no_statement() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Update, hooked::Entity)
+            .fields([hooked::Column::Name]);
+        let ability = Arc::new(b.build().expect("valid test ability"));
+        let mut written = hooked::Model {
+            id: 1,
+            name: "ada".to_owned(),
+            deleted_at: None,
+        }
+        .into_active_model();
+        written.name = Set("secret-name".to_owned());
+        written.deleted_at = Set(Some(crate::now()));
+
+        let refused = with_request_executor(
+            pool(),
+            install_ability(ability, Repo::<hooked::Entity>::update(written)),
+        )
+        .await;
+
+        assert!(
+            matches!(
+                &refused,
+                Err(DbErr::AccessDenied { permission, resource })
+                    if permission == "update" && resource == "hooked(deleted_at)"
+            ),
+            "{refused:?}",
+        );
+        assert_eq!(hooked::SAVES.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let event = logs.expect_one(
+            crate::target::ORM,
+            "access denied — a column the caller's grants withhold",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("entity").as_deref(), Some("hooked"));
+        assert_eq!(event.field("action").as_deref(), Some("update"));
+        assert_eq!(event.field("columns").as_deref(), Some("deleted_at"));
+        assert!(!event.quotes("secret-name"), "{event:#?}");
+    }
+
+    /// A lazy pool whose every acquire is refused: a write answering its error
+    /// sent its statement, where one refused earlier answers that refusal.
+    async fn a_pool_refusing_every_statement() -> Arc<dyn Executor> {
+        let mut options = sea_orm::ConnectOptions::new("postgres://nestrs@127.0.0.1:1/nowhere");
+        options
+            .connect_lazy(true)
+            .acquire_timeout(std::time::Duration::from_millis(50));
+        let unreachable = sea_orm::Database::connect(options)
+            .await
+            .expect("a lazy pool opens nothing");
+        SeaOrmExecutor::Pool(unreachable).into()
+    }
+
+    mod stamped {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use sea_orm::entity::prelude::*;
+
+        /// How many saves the entity's `before_save` stamped.
+        pub(super) static STAMPS: AtomicUsize = AtomicUsize::new(0);
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "stamped")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub name: String,
+            pub note: Option<String>,
+            pub updated_at: Option<DateTimeWithTimeZone>,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        #[async_trait::async_trait]
+        impl ActiveModelBehavior for ActiveModel {
+            async fn before_save<C: ConnectionTrait>(
+                mut self,
+                _: &C,
+                _: bool,
+            ) -> Result<Self, DbErr> {
+                STAMPS.fetch_add(1, Ordering::SeqCst);
+                self.updated_at = sea_orm::Set(Some(crate::now()));
+                Ok(self)
+            }
+        }
+    }
+
+    fn a_stamped_row() -> stamped::Model {
+        stamped::Model {
+            id: 1,
+            name: "ada".to_owned(),
+            note: None,
+            updated_at: None,
+        }
+    }
+
+    /// What the entity's hook stamps is the server's: no grant names it, and the
+    /// write still reaches its statement.
+    #[tokio::test]
+    async fn a_hooks_stamp_needs_no_grant() {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Update, stamped::Entity)
+            .fields([stamped::Column::Name]);
+        let ability = Arc::new(b.build().expect("valid test ability"));
+        let mut renamed = a_stamped_row().into_active_model();
+        renamed.name = Set("grace".to_owned());
+
+        let updated = with_request_executor(
+            a_pool_refusing_every_statement().await,
+            install_ability(ability, Repo::<stamped::Entity>::update(renamed)),
+        )
+        .await;
+
+        assert!(
+            !matches!(
+                updated,
+                Ok(_) | Err(DbErr::RecordNotUpdated | DbErr::AccessDenied { .. })
+            ),
+            "{updated:?}"
+        );
+        assert_eq!(stamped::STAMPS.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// A soft delete's stamp is the framework's: a `.fields` on the wildcard covering
+    /// `Delete` limits what a write chooses, and a delete chooses nothing.
+    #[tokio::test]
+    async fn a_soft_delete_stamps_whatever_a_field_grant_says() {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Manage, hooked::Entity)
+            .fields([hooked::Column::Name]);
+        let ability = Arc::new(b.build().expect("valid test ability"));
+        let row = hooked::Model {
+            id: 1,
+            name: "ada".to_owned(),
+            deleted_at: None,
+        };
+
+        let deleted = with_request_executor(
+            a_pool_refusing_every_statement().await,
+            install_ability(
+                ability,
+                Repo::<hooked::Entity>::soft_delete(row, hooked::Column::DeletedAt),
+            ),
+        )
+        .await;
+
+        assert!(
+            !matches!(
+                deleted,
+                Ok(()) | Err(DbErr::RecordNotUpdated | DbErr::AccessDenied { .. })
+            ),
+            "{deleted:?}"
+        );
+    }
+
+    /// A job holds no ability and is withheld nothing; `with_ability` is what
+    /// narrows one, to a principal's columns too.
+    #[tokio::test]
+    async fn a_job_is_withheld_no_column_until_it_narrows_to_a_principals() {
+        let mut written = a_stamped_row().into_active_model();
+        written.note = Set(Some("mine".to_owned()));
+
+        let system = with_job_executor(pool(), async { write_scope(Action::Update, &written) })
+            .await
+            .expect("system work");
+        assert!(system.is_empty(), "unscoped");
+
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Update, stamped::Entity)
+            .fields([stamped::Column::Name]);
+        let principal = Arc::new(b.build().expect("valid test ability"));
+        let narrowed = with_job_executor(
+            pool(),
+            nest_rs_authz::with_ability(principal, async { write_scope(Action::Update, &written) }),
+        )
+        .await;
+        assert!(
+            matches!(&narrowed, Err(DbErr::AccessDenied { resource, .. }) if resource == "stamped(note)"),
+            "{narrowed:?}",
+        );
+    }
+
+    /// The `WHERE` of `written`'s statement, as `Repo::update` sends it.
+    fn update_where<A>(written: A, scope: Condition) -> String
+    where
+        A: ActiveModelTrait,
+    {
+        let sql = Update::one(written)
+            .validate()
+            .expect("a PK-bearing active model validates")
+            .filter(scope)
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+        sql.split_once(" WHERE ")
+            .map_or(String::new(), |(_, scope)| scope.to_owned())
+    }
+
+    #[tokio::test]
+    async fn a_narrowed_write_runs_under_the_grants_permitting_what_it_sets() {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Update, stamped::Entity)
+            .when(|p| p.eq(stamped::Column::Id, 7))
+            .fields([stamped::Column::Name]);
+        b.can(Action::Update, stamped::Entity)
+            .when(|p| p.eq(stamped::Column::Id, 8))
+            .fields([stamped::Column::Note]);
+        let ability = Arc::new(b.build().expect("valid test ability"));
+        let mut written = a_stamped_row().into_active_model();
+        written.name = Set("grace".to_owned());
+        written.note = Set(None);
+
+        let scope = with_request_executor(
+            pool(),
+            install_ability(ability, async { write_scope(Action::Update, &written) }),
+        )
+        .await
+        .expect("a grant permits each column");
+
+        assert_eq!(
+            update_where(written, scope),
+            r#""stamped"."id" = 1 AND "stamped"."id" = 7 AND "stamped"."id" = 8"#,
+            "the key, then a grant per column, one statement deciding them all",
+        );
+    }
+
+    /// A caller no `.fields` narrows sends the statement it always did.
+    #[tokio::test]
+    async fn a_write_no_grant_narrows_is_held_to_scope_for_alone() {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Update, tombstone::Entity)
+            .when(|p| p.eq(tombstone::Column::Id, 7));
+        let ability = Arc::new(b.build().expect("valid test ability"));
+        let written = tombstone::ActiveModel {
+            id: Set(1),
+            deleted_at: Set(None),
+        };
+
+        let (scope, plain) = with_request_executor(
+            pool(),
+            install_ability(ability, async {
+                (
+                    write_scope(Action::Update, &written).expect("nothing narrowed"),
+                    scope_for::<tombstone::Entity>(Action::Update),
+                )
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            update_where(written.clone(), scope),
+            update_where(written, plain),
+        );
+    }
+
+    /// Hiding a tombstone is no grant's to lift: a narrowed write keeps it.
+    #[tokio::test]
+    async fn a_narrowed_write_still_hides_a_tombstone() {
+        let mut b = AbilityBuilder::new();
+        b.can(Action::Update, tombstone::Entity)
+            .when(|p| p.eq(tombstone::Column::Id, 7))
+            .fields([tombstone::Column::DeletedAt]);
+        let ability = Arc::new(b.build().expect("valid test ability"));
+        let written = tombstone::ActiveModel {
+            id: Set(1),
+            deleted_at: Set(None),
+        };
+
+        let scope = with_request_executor(
+            pool(),
+            install_ability(ability, async { write_scope(Action::Update, &written) }),
+        )
+        .await
+        .expect("the grant permits it");
+
+        let s = update_where(written, scope);
+        assert!(
+            s.contains(LIVE) && s.contains(r#""tombstones"."id" = 7"#),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn a_write_chooses_what_it_sets_but_the_key() {
+        let written = stamped::ActiveModel {
+            id: Set(1),
+            name: Set("grace".to_owned()),
+            note: Set(None),
+            updated_at: sea_orm::ActiveValue::NotSet,
+        };
+
+        assert_eq!(
+            names(chosen_columns(Action::Update, &written)),
+            ["name", "note"],
+            "an update's null clears a column; the key addresses the row",
+        );
+        assert_eq!(
+            names(chosen_columns(Action::Create, &written)),
+            ["name"],
+            "a create's null is a member its input did not carry; the key is seeded",
+        );
+
+        let loaded = a_stamped_row().into_active_model();
+        assert!(
+            chosen_columns(Action::Update, &loaded).is_empty(),
+            "what a row loaded with is no choice",
+        );
+    }
+
+    fn names<C: IdenStatic>(columns: Vec<C>) -> Vec<&'static str> {
+        columns.iter().map(IdenStatic::as_str).collect()
     }
 
     #[tokio::test]

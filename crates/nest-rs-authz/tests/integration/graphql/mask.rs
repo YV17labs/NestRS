@@ -298,6 +298,19 @@ impl MaskResolver {
         ]])
     }
 
+    /// Two items a narrow grant refuses alike.
+    #[subscription]
+    #[authorize(Read, widget::Entity)]
+    async fn two_list_feed(&self) -> impl Stream<Item = Vec<StrictWidgetDto>> {
+        let item = || {
+            vec![StrictWidgetDto {
+                id: 1,
+                name: "ada".into(),
+            }]
+        };
+        stream::iter([item(), item()])
+    }
+
     /// The stream both subscribers read; the resolver writes no masking call.
     #[subscription]
     #[authorize(Read, widget::Entity)]
@@ -1328,4 +1341,70 @@ mod ability_of_the_unit {
             "masked by the ability the field's guard attached: {item}",
         );
     }
+}
+
+/// The refusal one selection files under each root field asking it.
+fn refusal_lines(logs: &nest_rs_testing::LogCapture) -> usize {
+    logs.find("nest_rs::authz", "authorization denied").len()
+}
+
+/// One refused selection is one fact of its operation, and each operation of a socket is
+/// its own: a caller probing a column files a line per probe, however long the socket lives.
+#[tokio::test]
+async fn each_operation_on_a_socket_files_its_own_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+    let mut socket = app.graphql_socket().ability(ability_for("auditor")).open();
+    socket.connect().await;
+
+    for (filed, id) in (1..).zip(["1", "2"]) {
+        socket.subscribe(id, "{ strictWidget { id name } }");
+        let answered = socket.next_message().await.expect("an answer");
+        assert!(answered.to_string().contains("FORBIDDEN"), "{answered}");
+        socket.next_message().await.expect("its end");
+        assert_eq!(refusal_lines(&logs), filed, "operation {id}");
+    }
+}
+
+#[tokio::test]
+async fn one_operation_refusing_one_selection_twice_files_one_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+
+    let json = query(
+        &app,
+        "viewer",
+        "{ first: strictWidget { id name } again: strictWidget { id name } }",
+    )
+    .await;
+
+    assert_eq!(json["errors"].as_array().map(Vec::len), Some(2), "{json}");
+    assert_eq!(refusal_lines(&logs), 1);
+}
+
+#[tokio::test]
+async fn each_operation_of_a_batch_files_its_own_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = boot().await;
+    let refused = serde_json::json!({ "query": "{ strictWidget { id name } }" });
+
+    app.http()
+        .post("/graphql")
+        .header("x-role", "viewer")
+        .body_json(&serde_json::json!([refused, refused]))
+        .send()
+        .await
+        .assert_status_is_ok();
+
+    assert_eq!(refusal_lines(&logs), 2);
+}
+
+#[tokio::test]
+async fn a_subscription_refusing_every_item_files_one_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+
+    let items = items_to("auditor", "subscription { twoListFeed { id name } }").await;
+
+    assert_eq!(items, Vec::<serde_json::Value>::new());
+    assert_eq!(refusal_lines(&logs), 1);
 }

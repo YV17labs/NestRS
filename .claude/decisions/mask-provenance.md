@@ -342,10 +342,13 @@ refuses at the first rung that can say so.
   shape with a four-line remedy that keeps the mask.
 - **A warn in place of the refusal**: a line a deployment reads later, while the column ships.
 
-**A refused selection files one line per request**, held in `AmbientAbility`, which one request
-holds, where an `Ability` may serve every request of a role; the set is built by the first
-refusal, so a request refusing nothing pays nothing. A field's own guard attaching the ability
-per parent files per parent: it holds a holder per row. **A field resolver with no ability
+**What the mask files repeating under every parent is one line per operation**, a refused
+selection, a field no ability reached, a row it cannot read back: each is one fact, and its
+count must not be the caller's to choose. The record sits in the operation's own data, built
+by the first line, so an operation refusing nothing pays one empty value. Refused: holding it
+in `AmbientAbility`, as this entry first did, or in the `Ability`: a graphql-ws socket holds
+one holder for its whole life, so its second probe of a column filed nothing, and a guard on a
+field holds one per parent, so it filed per row. **A field resolver with no ability
 fails closed** where the entry above let it pass: the answer can tell, since nothing decided
 what the caller reads, and reads there already refuse. **A `null` in a list passes the mask**:
 it holds no row; a root's map stays refused, a key being no column and a map no row on a value.

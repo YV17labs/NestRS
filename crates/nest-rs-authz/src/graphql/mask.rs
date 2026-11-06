@@ -12,6 +12,7 @@ use std::any::TypeId;
 use std::collections::BTreeSet;
 
 use nest_rs_core::Edge;
+use nest_rs_graphql::__private::first_in_operation;
 use nest_rs_graphql::async_graphql::{Context, Error, SelectionField};
 use nest_rs_guards::Denial;
 use sea_orm::{Iterable, PrimaryKeyToColumn};
@@ -19,8 +20,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::ability;
-use super::context::{forbidden_fields, unreached};
+use super::context::{field_ability, forbidden_fields, unreached};
 use crate::ability::{Provenance, mask_reason};
 use crate::gate::{Refusal, reason};
 use crate::subject::{NoRows, Rows, SubjectMask};
@@ -57,11 +57,12 @@ where
     O: Serialize + DeserializeOwned,
 {
     let action = A::ACTION;
-    let wire = written::<E, O>(action, &item)?;
+    let wire = written::<E, O>(ctx, action, &item)?;
     if wire.is_array() {
         return masked_value_with::<E, O>(ctx, ability, action, item, Provenance::Pushed).map(Some);
     }
     let kept = masked_in_place::<E, O>(
+        ctx,
         ability,
         action,
         &mut item,
@@ -77,6 +78,7 @@ where
 /// and otherwise the row as it stands, unless `refused` says the keys the mask took
 /// off it refuse the field.
 fn masked_in_place<E, O>(
+    ctx: &Context<'_>,
     ability: &Ability,
     action: Action,
     row: &mut O,
@@ -94,6 +96,7 @@ where
     }
     let verdict = judged::<E>(ability, action, &wire, provenance).map_err(|err| {
         mask_failure::<E>(
+            ctx,
             action,
             mask_reason::IRRECONCILABLE,
             "row could not be reconciled with the subject model",
@@ -120,6 +123,7 @@ where
 
 /// [`masked_in_place`] over a row held by value: `Ok(None)` when the ability refuses it.
 fn masked_row<E, O>(
+    ctx: &Context<'_>,
     ability: &Ability,
     action: Action,
     mut row: O,
@@ -130,8 +134,8 @@ where
     E: WireModel,
     O: Serialize + DeserializeOwned,
 {
-    let wire = written::<E, O>(action, &row)?;
-    let kept = masked_in_place::<E, O>(ability, action, &mut row, wire, provenance, refused)?;
+    let wire = written::<E, O>(ctx, action, &row)?;
+    let kept = masked_in_place::<E, O>(ctx, ability, action, &mut row, wire, provenance, refused)?;
     Ok(kept.then_some(row))
 }
 
@@ -149,13 +153,18 @@ where
     let Some(row) = row else {
         return Ok(None);
     };
-    let ability = ability()?;
+    let ability = field_ability(ctx)?;
     if ability.grants_every_column(Action::Read, TypeId::of::<E>()) {
         return Ok(Some(row));
     }
-    masked_row::<E, O>(&ability, Action::Read, row, Provenance::Loaded, |removed| {
-        refused_field::<E>(ctx, Action::Read, removed)
-    })
+    masked_row::<E, O>(
+        ctx,
+        &ability,
+        Action::Read,
+        row,
+        Provenance::Loaded,
+        |removed| refused_field::<E>(ctx, Action::Read, removed),
+    )
 }
 
 /// [`graphql_masked_row`] over one page of a list relation, each row beside its
@@ -171,7 +180,7 @@ where
     if nodes.is_empty() {
         return Ok(nodes);
     }
-    let ability = ability()?;
+    let ability = field_ability(ctx)?;
     if ability.grants_every_column(Action::Read, TypeId::of::<E>()) {
         return Ok(nodes);
     }
@@ -179,11 +188,12 @@ where
     let mut kept = Vec::with_capacity(nodes.len());
     for (cursor, node) in nodes {
         let node = masked_row::<E, O>(
+            ctx,
             &ability,
             Action::Read,
             node,
             Provenance::Loaded,
-            |removed| refused_selection::<E>(&selected, Action::Read, removed),
+            |removed| refused_selection::<E>(ctx, &selected, Action::Read, removed),
         )?;
         if let Some(node) = node {
             kept.push((cursor, node));
@@ -200,7 +210,7 @@ where
     E: WireModel,
     O: Serialize + DeserializeOwned,
 {
-    let ability = crate::context::installed().ok_or_else(unreached)?;
+    let ability = crate::context::installed().ok_or_else(|| unreached(ctx))?;
     masked_value_with::<E, O>(
         ctx,
         &ability,
@@ -221,16 +231,22 @@ where
     E: WireModel,
     O: Serialize + DeserializeOwned,
 {
-    let ability = crate::context::installed().ok_or_else(unreached)?;
+    let ability = crate::context::installed().ok_or_else(|| unreached(ctx))?;
     let provenance = answer_provenance(&ability);
     let selected = page_selection::<E>(ctx);
     nodes
         .into_iter()
         .map(|node| {
-            let wire = written::<E, O>(Action::Read, &*node)?;
-            masked_in_place::<E, O>(&ability, Action::Read, node, wire, provenance, |removed| {
-                refused_selection::<E>(&selected, Action::Read, removed)
-            })
+            let wire = written::<E, O>(ctx, Action::Read, &*node)?;
+            masked_in_place::<E, O>(
+                ctx,
+                &ability,
+                Action::Read,
+                node,
+                wire,
+                provenance,
+                |removed| refused_selection::<E>(ctx, &selected, Action::Read, removed),
+            )
         })
         .collect()
 }
@@ -273,7 +289,7 @@ where
     E: WireModel,
     O: Serialize + DeserializeOwned,
 {
-    let ability = ability()?;
+    let ability = field_ability(ctx)?;
     masked_value_with::<E, O>(ctx, &ability, A::ACTION, value, Provenance::Loaded)
 }
 
@@ -289,7 +305,7 @@ where
     E: WireModel,
     O: Serialize + DeserializeOwned,
 {
-    let wire = written::<E, O>(action, &value)?;
+    let wire = written::<E, O>(ctx, action, &value)?;
     match mask_wire_json::<E>(ability, action, wire, provenance) {
         Ok(MaskedWire::Passthrough(_)) => Ok(value),
         Ok(MaskedWire::Masked(masked)) => match serde_json::from_value(masked) {
@@ -299,6 +315,7 @@ where
             Err(_) => unrepresentable::<E, O>(ctx, ability, action, value, provenance),
         },
         Err(err) => Err(mask_failure::<E>(
+            ctx,
             action,
             mask_reason::IRRECONCILABLE,
             "value could not be reconciled with the subject model",
@@ -387,9 +404,10 @@ where
 {
     // Written again rather than kept: the mask consumed the first, and only a
     // field grant the type cannot express comes this way.
-    let wire = written::<E, O>(action, &value)?;
+    let wire = written::<E, O>(ctx, action, &value)?;
     let detail = mask_wire_detail::<E>(ability, action, wire, provenance).map_err(|err| {
         mask_failure::<E>(
+            ctx,
             action,
             mask_reason::IRRECONCILABLE,
             "value could not be reconciled with the subject model",
@@ -409,6 +427,7 @@ where
     }
     serde_json::from_value(detail.kept).map_err(|err| {
         mask_failure::<E>(
+            ctx,
             action,
             mask_reason::IRRECONCILABLE,
             "masked value did not match the authorized subject type",
@@ -418,9 +437,10 @@ where
 }
 
 /// What a value serializes to, or the fail-closed exit of one that does not.
-fn written<E, O: Serialize>(action: Action, value: &O) -> Result<Value, Error> {
+fn written<E, O: Serialize>(ctx: &Context<'_>, action: Action, value: &O) -> Result<Value, Error> {
     serde_json::to_value(value).map_err(|err| {
         mask_failure::<E>(
+            ctx,
             action,
             mask_reason::NOT_SERIALIZABLE,
             "value did not serialize",
@@ -444,9 +464,9 @@ fn refused_field<E>(
     let selected = selection(ctx);
     if selected.is_empty() {
         let whole: Vec<&str> = removed.iter().map(String::as_str).collect();
-        return refused_selection::<E>(&whole, action, removed);
+        return refused_selection::<E>(ctx, &whole, action, removed);
     }
-    refused_selection::<E>(&selected, action, removed)
+    refused_selection::<E>(ctx, &selected, action, removed)
 }
 
 /// What a selection reads of each row of a connection: the fields its `nodes` and
@@ -495,6 +515,7 @@ fn page_selection<'c, E: WireModel>(ctx: &'c Context<'_>) -> Vec<&'c str> {
 /// A key outside the selection set of an object is never serialized, so it cannot
 /// leak; a field with no selection is [`refused_field`]'s to read.
 fn refused_selection<E>(
+    ctx: &Context<'_>,
     selected: &[&str],
     action: Action,
     removed: &BTreeSet<String>,
@@ -511,7 +532,7 @@ fn refused_selection<E>(
     // wire keeps the list.
     let joined = refused.join(",");
     let subject = std::any::type_name::<E>();
-    if crate::context::first_refusal(subject, action, &joined) {
+    if first_in_operation(ctx, format!("{subject} {action:?} {joined}")) {
         crate::gate::warn_denied(Refusal {
             subject: Some(subject),
             action: Some(action),
@@ -524,23 +545,28 @@ fn refused_selection<E>(
     Some(forbidden_fields(&refused))
 }
 
-/// One shape for every fail-closed masking exit: the queryable `warn` plus the
-/// opaque client error, which never names the column or the reason.
+/// One shape for every fail-closed masking exit: the queryable `warn`, one per operation
+/// however many parents repeat it, plus the opaque client error, which never names the
+/// column or the reason.
 fn mask_failure<E>(
+    ctx: &Context<'_>,
     action: Action,
     reason: &'static str,
     detail: &'static str,
     err: &serde_json::Error,
 ) -> Error {
-    warn_mask_failure(
-        std::any::type_name::<E>(),
-        action,
-        reason,
-        detail,
-        Some(Edge::Graphql.as_str()),
-        None,
-        Some(err),
-    );
+    let subject = std::any::type_name::<E>();
+    if first_in_operation(ctx, format!("{subject} {action:?} {reason}")) {
+        warn_mask_failure(
+            subject,
+            action,
+            reason,
+            detail,
+            Some(Edge::Graphql.as_str()),
+            None,
+            Some(err),
+        );
+    }
     nest_rs_graphql::denial_to_graphql_error(Denial::internal("response masking failed"))
 }
 

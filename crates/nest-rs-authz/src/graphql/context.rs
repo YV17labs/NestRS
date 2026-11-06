@@ -1,51 +1,49 @@
 //! The [`Ability`] a GraphQL field runs under — the one its unit carries,
-//! which its class gate checked — GraphQL's denial shape, and what a request
-//! already filed of those denials.
+//! which its class gate checked — and GraphQL's denial shape.
 
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::Arc;
 
 use nest_rs_core::{Edge, Problem, code};
-use nest_rs_graphql::async_graphql::{Error, ErrorExtensions, Result};
+use nest_rs_graphql::__private::first_in_operation;
+use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 use nest_rs_guards::Denial;
 
-use crate::gate::Refusal;
-use crate::{Ability, Action};
-
-/// One refused selection: the subject, the action, the columns.
-type RefusedSelection = (&'static str, Action, String);
-
-/// The selections one request refused, each one fact however many parents repeat it:
-/// its line must not grow with what the caller asks for. Built by the first refusal, so
-/// a request refusing nothing pays nothing.
-#[derive(Default)]
-pub(crate) struct FiledRefusals(OnceLock<Mutex<HashSet<RefusedSelection>>>);
-
-impl FiledRefusals {
-    /// Whether this is the first time the request files this refusal.
-    pub(crate) fn first(&self, subject: &'static str, action: Action, fields: &str) -> bool {
-        self.0
-            .get_or_init(Mutex::default)
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert((subject, action, fields.to_owned()))
-    }
-}
+use crate::Ability;
+use crate::gate::{Refusal, reason};
 
 /// The [`Ability`] the running field's unit carries — what the guards at its
 /// request or at the field itself attached, the one its class gate checked. A
 /// wiring defect when absent — no ability guard ran — refused opaquely and
 /// filed at `error`, never a client error.
 pub fn ability() -> Result<Arc<Ability>> {
-    crate::current_ability().ok_or_else(unreached)
+    crate::current_ability().ok_or_else(|| {
+        file_unreached();
+        unreached_answer()
+    })
 }
 
-/// The fail-closed exit of a field no ability reached, every one funnelling here.
-pub(super) fn unreached() -> Error {
+/// [`ability`], for a nested field, which runs once per parent.
+pub(super) fn field_ability(ctx: &Context<'_>) -> Result<Arc<Ability>> {
+    crate::current_ability().ok_or_else(|| unreached(ctx))
+}
+
+/// The fail-closed exit of a nested field no ability reached: one wiring defect, its
+/// line one per operation however many parents meet it, each keeping its error.
+pub(super) fn unreached(ctx: &Context<'_>) -> Error {
+    if first_in_operation(ctx, reason::NO_AMBIENT_ABILITY.to_owned()) {
+        file_unreached();
+    }
+    unreached_answer()
+}
+
+fn file_unreached() {
     crate::gate::error_unreached(Refusal {
         remedy: Some(UNREACHED),
         ..Refusal::on(Edge::Graphql.as_str())
     });
+}
+
+fn unreached_answer() -> Error {
     nest_rs_graphql::denial_to_graphql_error(Denial::internal(
         "no ability reached the GraphQL operation",
     ))

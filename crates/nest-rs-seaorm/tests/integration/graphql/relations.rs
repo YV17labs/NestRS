@@ -10,8 +10,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList, VecDequ
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use nest_rs_authz::__private::AmbientAbility;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
-use nest_rs_core::{OPAQUE_CLIENT_MESSAGE, injectable, module};
+use nest_rs_core::{Layer, OPAQUE_CLIENT_MESSAGE, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::connection::{
     Connection, ConnectionNameType, Edge, EdgeNameType, EmptyFields,
 };
@@ -21,6 +22,7 @@ use nest_rs_graphql::async_graphql::{
     SimpleObject, Union,
 };
 use nest_rs_graphql::{GraphqlModule, GraphqlView, dataloader, operations, resolver};
+use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::EndpointGuards;
 use nest_rs_seaorm::graphql::{PkLoadable, RelatedTo, RelationKey, RelationPage};
 use nest_rs_seaorm::{CrudService, PageCursor, SeaOrmDatabaseModule, ServiceError};
@@ -367,6 +369,27 @@ fn ability_of(role: &str) -> nest_rs_authz::Ability {
     }
     ab.build().expect("a valid rule set")
 }
+
+/// Attaches a member's ability on the field it guards, whatever the request carries.
+#[injectable]
+#[derive(Default)]
+struct ReadingAsMember;
+
+impl Layer for ReadingAsMember {}
+
+#[async_trait]
+impl Guard for ReadingAsMember {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(AmbientAbility::new(ability_of("member")));
+        Ok(())
+    }
+}
+
+impl GuardFor<GraphqlView> for ReadingAsMember {}
 
 /// The parent a hand-written field resolver answers under.
 #[derive(Clone, SimpleObject)]
@@ -779,6 +802,12 @@ impl LibraryResolver {
     }
 
     #[field_resolver]
+    #[use_guards(ReadingAsMember)]
+    async fn guarded_lead(&self, _parent: &Reading) -> writer::Writer {
+        lead_row()
+    }
+
+    #[field_resolver]
     async fn invented_lead(&self, _parent: &Reading) -> writer::Writer {
         writer::Writer {
             id: "anonymous".to_owned(),
@@ -817,6 +846,7 @@ impl LibraryResolver {
         ShelvesService,
         Rows,
         RoleGuard,
+        ReadingAsMember,
         EndpointGuards<GraphqlView, (RoleGuard,)>,
         LibraryResolver,
     ],
@@ -1498,6 +1528,25 @@ impl UngrantedLibraryResolver {
         UngrantedReading { id: 1 }
     }
 
+    /// Three parents, each answering a row through a hand-written field.
+    #[query]
+    #[public]
+    async fn three_ungranted_readings(&self) -> Vec<UngrantedReading> {
+        (1..=3).map(|id| UngrantedReading { id }).collect()
+    }
+
+    /// Three parents, each reaching one writer through its relation.
+    #[query]
+    #[public]
+    async fn three_ungranted_books(&self) -> Vec<book::Book> {
+        (1..=3)
+            .map(|id| book::Book {
+                id: Uuid::from_u128(id).to_string(),
+                writer_id: writer_id().to_string(),
+            })
+            .collect()
+    }
+
     #[field_resolver]
     async fn lead(&self, _parent: &UngrantedReading) -> GqlResult<Option<writer::Writer>> {
         Ok(Some(lead_row()))
@@ -1552,8 +1601,65 @@ async fn a_field_resolver_refuses_where_no_ability_is_attached() {
     );
 }
 
+/// No ability under any of three parents is one wiring defect, its line one per
+/// operation, whichever field meets it first; each parent keeps its error.
+#[tokio::test]
+async fn no_ability_under_every_parent_files_one_line() {
+    for query in [
+        "{ threeUngrantedReadings { lead { email } } }",
+        "{ threeUngrantedReadings { handNovels { nodes { isbn } } } }",
+        "{ threeUngrantedBooks { writer { email } } }",
+    ] {
+        let logs = LogCapture::install();
+        let app = crate::over_an_unconnected_pool()
+            .module::<UngrantedLibraryModule>()
+            .build()
+            .await
+            .expect("boots");
+
+        let read = answer(&app, "", query).await;
+
+        assert_eq!(read["errors"].as_array().map(Vec::len), Some(3), "{read}");
+        assert!(!read.to_string().contains(SECRET_EMAIL), "{read}");
+        let event = logs.expect_one("nest_rs::authz", "authorization denied");
+        assert_eq!(event.level, "error", "{query}");
+        assert_eq!(event.field("reason").as_deref(), Some("no_ambient_ability"));
+    }
+}
+
+/// A row no mask can read back, under every parent, is one fact too.
+#[tokio::test]
+async fn a_value_the_mask_cannot_read_back_under_every_parent_files_one_line() {
+    let logs = LogCapture::install();
+    let app = library().await;
+
+    let read = answer(
+        &app,
+        "member",
+        "{ threeReadings { inventedLead { id name } } }",
+    )
+    .await;
+
+    assert_eq!(read["errors"].as_array().map(Vec::len), Some(3), "{read}");
+    logs.expect_one("nest_rs::authz", "response masking failed");
+}
+
+/// A guard on the field holds a holder per parent, so the line is the operation's to
+/// count, never the holder's.
+#[tokio::test]
+async fn a_selection_a_field_guard_refuses_the_ability_of_files_one_line() {
+    let logs = LogCapture::install();
+    let app = library().await;
+
+    let read = answer(&app, "", "{ threeReadings { guardedLead { email } } }").await;
+
+    assert_eq!(read["errors"].as_array().map(Vec::len), Some(3), "{read}");
+    let event = logs.expect_one("nest_rs::authz", "authorization denied");
+    assert_eq!(event.field("reason").as_deref(), Some("field_not_granted"));
+}
+
 /// One refused selection is one fact, however many parents repeat it: a line per
-/// request, an error per path, each carrying its own.
+/// operation, an error per path, each carrying its own.
 #[tokio::test]
 async fn one_refused_selection_files_one_warn_and_one_error_per_parent() {
     for (query, root, path) in [
@@ -1592,7 +1698,7 @@ async fn one_refused_selection_files_one_warn_and_one_error_per_parent() {
 }
 
 #[tokio::test]
-async fn each_refused_selection_of_a_request_files_its_own_line() {
+async fn each_refused_selection_of_an_operation_files_its_own_line() {
     let logs = LogCapture::install();
     let app = library().await;
 
@@ -1614,7 +1720,7 @@ async fn each_refused_selection_of_a_request_files_its_own_line() {
 }
 
 #[tokio::test]
-async fn the_next_request_files_its_own_line() {
+async fn the_next_operation_files_its_own_line() {
     let logs = LogCapture::install();
     let app = library().await;
 

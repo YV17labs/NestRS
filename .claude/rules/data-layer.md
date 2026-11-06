@@ -353,8 +353,9 @@ mask, decided by the subject's type:
   say so, an object's column among them, refuses the boot; a `#[field_resolver]` of
   that object serves the column. Its rows are judged as a reply's for a caller a token
   backs, and as a push's for a visitor, whose reads are withheld there; where no
-  ability is attached it fails closed. A selection refused under every parent files one
-  `warn` per request and one error per path. **A relation's batch filters
+  ability is attached it fails closed. What the mask files repeating under every parent
+  is one line per operation, a socket's operations each their own, and one error per path.
+  **A relation's batch filters
   rows and masks nothing**: it is shared by every alias asking, so a
   selection-dependent value could not be cached in it, and each field masks by its
   own. A caller whose grants narrow no column pays one rule lookup per field for a

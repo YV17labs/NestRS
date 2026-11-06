@@ -1811,9 +1811,9 @@ lists what the boot, a log or the wire shows when one is missed.
   answer to a visitor on a rule only a read could decide reads `null` or is refused. Answer
   a DTO of your own.
 - **A `#[field_resolver]` answering a wire type where no ability is attached** answers
-  `INTERNAL` with one `no_ambient_ability` line, as a root and a relation do, where it
-  served every column. Attach the ability at `/graphql`'s request, or answer a DTO of your
-  own.
+  `INTERNAL` with one `no_ambient_ability` line per operation, as a root and a relation do,
+  where it served every column. Attach the ability at `/graphql`'s request, or answer a DTO of
+  your own.
 - **An object of your own holding a wire type's row, answered by a `#[field_resolver]`,**
   fails the boot naming the field and where it holds the row, where it shipped what a grant
   withholds to any caller: a column of the wire type, a `#[graphql(flatten)]` or a

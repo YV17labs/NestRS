@@ -1,8 +1,8 @@
 //! What the schema does around each request, in the one extension it keeps,
 //! since an extension is entered on every field (`redact.rs`): it seeds the
-//! request's loaders, and once validation passed answers the refusal the
-//! operation's read left ([`OperationRefusal`]). No other hook sits between
-//! validation and execution.
+//! request's loaders and what it files once ([`FiledOnce`]), and once validation
+//! passed answers the refusal the operation's read left ([`OperationRefusal`]). No
+//! other hook sits between validation and execution.
 
 use std::sync::Arc;
 
@@ -12,6 +12,7 @@ use async_graphql::extensions::{
 };
 use async_graphql::{Request, ServerError, ServerResult, ValidationResult};
 
+use crate::filed_once::FiledOnce;
 use crate::loader::LoaderSeeds;
 use crate::operation_units::OperationRefusal;
 
@@ -40,7 +41,8 @@ impl Extension for RequestExtension {
         request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
-        next.run(ctx, self.0.seed(request)).await
+        next.run(ctx, self.0.seed(request).data(FiledOnce::default()))
+            .await
     }
 
     async fn validation(

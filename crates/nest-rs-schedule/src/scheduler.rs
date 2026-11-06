@@ -1,5 +1,4 @@
 use std::any::{Any, TypeId};
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -341,8 +340,8 @@ impl Default for Scheduler {
 
 #[async_trait]
 impl Transport for Scheduler {
-    fn name() -> Cow<'static, str> {
-        Edge::Schedule.as_str().into()
+    fn name() -> String {
+        Edge::Schedule.as_str().to_owned()
     }
 
     async fn configure(&mut self, container: &Container) -> Result<()> {

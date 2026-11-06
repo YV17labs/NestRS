@@ -1,5 +1,4 @@
 use std::any::TypeId;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
@@ -456,8 +455,8 @@ fn no_guard_at_the_request(surface: &str, path: &str, then: &str) {
 
 #[async_trait]
 impl Transport for HttpTransport {
-    fn name() -> Cow<'static, str> {
-        Edge::Http.as_str().into()
+    fn name() -> String {
+        Edge::Http.as_str().to_owned()
     }
 
     async fn configure(&mut self, container: &Container) -> Result<()> {

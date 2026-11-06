@@ -377,8 +377,8 @@ struct Worded;
 
 #[async_trait::async_trait]
 impl Transport for Worded {
-    fn name() -> std::borrow::Cow<'static, str> {
-        "metrics".into()
+    fn name() -> String {
+        "metrics".to_owned()
     }
 
     async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {

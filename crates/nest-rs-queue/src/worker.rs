@@ -19,7 +19,6 @@
 //! within the reserve; leases are renewed until the last delivery ends. What
 //! still runs then is said at `error` and left to its lease.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::Future;
 use std::num::NonZeroU32;
@@ -120,8 +119,8 @@ impl QueueWorker {
 
 #[async_trait]
 impl Transport for QueueWorker {
-    fn name() -> Cow<'static, str> {
-        Edge::Queue.as_str().into()
+    fn name() -> String {
+        Edge::Queue.as_str().to_owned()
     }
 
     async fn configure(&mut self, container: &Container) -> anyhow::Result<()> {

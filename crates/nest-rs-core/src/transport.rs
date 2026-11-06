@@ -2,7 +2,6 @@
 //! seam between the container and anything that accepts inbound requests on
 //! the app's behalf.
 
-use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -35,11 +34,11 @@ pub trait Transport: Send + Sync + 'static {
     /// What the boot's lines and refusals call this transport: the word an
     /// operator sets it under (`http`, `queue`, `schedule`). A transport
     /// declaring none reads as its short type name.
-    fn name() -> Cow<'static, str>
+    fn name() -> String
     where
         Self: Sized,
     {
-        Cow::Owned(crate::type_name::short_type_name::<Self>())
+        crate::type_name::short_type_name::<Self>()
     }
 
     /// Scan the container for the surfaces this transport serves and wire them
@@ -115,7 +114,7 @@ pub struct TransportContribution {
 impl TransportContribution {
     pub(crate) fn new<T: Transport>(build: fn(&Container) -> Result<T>) -> Self {
         Self {
-            name: T::name().into_owned(),
+            name: T::name(),
             build: Box::new(move |container| Ok(Box::new(build(container)?))),
         }
     }

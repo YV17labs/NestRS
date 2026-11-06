@@ -269,7 +269,7 @@ async fn a_blocked_read_follows_the_ask_of_a_slot_being_moved() {
         .await
         .expect("the queue's keys move to the target");
 
-    let replica = crate::patient_replica_on::<AskedModule>(crate::redis_config()).await;
+    let replica = crate::patient_replica::<AskedModule>().await;
     let mut started_while_moving = false;
     for _ in 0..100 {
         started_while_moving = !ASKED.of(run).is_empty();

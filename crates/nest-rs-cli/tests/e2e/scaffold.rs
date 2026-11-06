@@ -317,25 +317,16 @@ async fn the_profile_s_store_opens_and_holds_a_key() {
 }
 "#;
 
-/// A table for each shape of key `g migration create_<x>` reads off a `Model`,
-/// the three replacing what `g entity` wrote.
-const KEY_SHAPES: [(&str, &str, &str, &str); 3] = [
+/// A table for each shape of key `g migration create_<table>s` reads off a `Model`,
+/// the three replacing what `g entity <table>s` wrote.
+const KEY_SHAPES: [(&str, &str); 3] = [
+    ("counter", "    #[sea_orm(primary_key)]\n    pub id: i32,\n"),
     (
-        "counter.rs",
-        "counter",
-        "create_counters",
-        "    #[sea_orm(primary_key)]\n    pub id: i32,\n",
-    ),
-    (
-        "badge.rs",
         "badge",
-        "create_badges",
         "    #[sea_orm(primary_key, auto_increment = false)]\n    pub id: Uuid,\n",
     ),
     (
-        "membership.rs",
         "membership",
-        "create_memberships",
         "    #[sea_orm(primary_key, auto_increment = false)]\n    pub ledger_id: Uuid,\n    \
          #[sea_orm(primary_key, auto_increment = false)]\n    pub badge_id: Uuid,\n",
     ),
@@ -493,15 +484,19 @@ fn the_tutorial_reaches_a_protected_endpoint_as_written() {
         .expect("the policy is writable");
 
     nestrs(&workspace, &["g", "feature", "ledgers"], &[]);
-    for entity in ["counters", "badges", "memberships"] {
-        let target = format!("ledgers/{entity}");
+    for (table, _) in KEY_SHAPES {
+        let target = format!("ledgers/{table}s");
         nestrs(&workspace, &["g", "entity", &target], &[]);
     }
     let entities = workspace.join("crates/features/src/ledgers/entities");
-    for (file, table, migration, key) in KEY_SHAPES {
-        std::fs::write(entities.join(file), keyed_entity(table, key))
-            .expect("the entity is writable");
-        nestrs(&workspace, &["g", "migration", migration], &[]);
+    for (table, key) in KEY_SHAPES {
+        std::fs::write(
+            entities.join(format!("{table}.rs")),
+            keyed_entity(table, key),
+        )
+        .expect("the entity is writable");
+        let migration = format!("create_{table}s");
+        nestrs(&workspace, &["g", "migration", &migration], &[]);
     }
 
     let suite = workspace.join("apps/blog/tests/e2e");
@@ -544,10 +539,9 @@ fn the_tutorial_reaches_a_protected_endpoint_as_written() {
         ("SECRET_KEY", "nestrs"),
     ]
     .map(|(key, value)| (nest_rs_config::var_name("storage", key), value));
-    let store: Vec<(&str, &str)> = store
-        .iter()
-        .map(|(name, value)| (name.as_str(), *value))
-        .collect();
+    let store = store
+        .each_ref()
+        .map(|(name, value)| (name.as_str(), *value));
     let run = cargo(&workspace, &["test", "-p", "blog", "--test", "e2e"], &store)
         .unwrap_or_else(|err| panic!("{err}"));
     let printed = format!(

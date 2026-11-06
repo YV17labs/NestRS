@@ -222,13 +222,9 @@ mod tests {
             nest_rs_core::error_message(&refused).contains("check_http"),
             "the chain the edge files says the edit: {refused:?}"
         );
-        assert!(
-            logs.find(
-                "nest_rs::http",
-                "a guard read the HTTP request of a unit with no HTTP view"
-            )
-            .is_empty(),
-            "the edge's line is the denial's one line"
+        logs.expect_none(
+            "nest_rs::http",
+            "a guard read the HTTP request of a unit with no HTTP view",
         );
     }
 }

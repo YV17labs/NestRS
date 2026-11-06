@@ -1,6 +1,5 @@
-use std::process::Command;
-
 use features::audio::{AudioConfig, SEED_OPEN, TARGET};
+use features::testing::assert_passes_under_profile;
 use nest_rs::config::{Environment, Surface};
 use nest_rs::testing::{LogCapture, load_project_env};
 
@@ -31,21 +30,7 @@ fn the_seed_follows_whether_this_process_is_deployed() {
 #[test]
 fn a_deployment_and_an_undeclared_process_seed_nothing() {
     for profile in [Some("production"), Some("staging"), None] {
-        let mut probe = Command::new(std::env::current_exe().expect("the suite's own binary"));
-        probe.args(["--exact", PROBE]);
-        match profile {
-            Some(profile) => probe.env(Environment::var_name(), profile),
-            None => probe.env_remove(Environment::var_name()),
-        };
-
-        let ran = probe
-            .output()
-            .expect("the probe runs in a process of its own");
-        let said = String::from_utf8_lossy(&ran.stdout);
-        assert!(
-            ran.status.success() && said.contains("1 passed"),
-            "{profile:?} seeds: {said}"
-        );
+        assert_passes_under_profile(PROBE, profile);
     }
 }
 
@@ -75,20 +60,6 @@ fn a_deployment_opening_the_seed_is_told_at_warn() {
         Some("development"),
         None,
     ] {
-        let mut probe = Command::new(std::env::current_exe().expect("the suite's own binary"));
-        probe.args(["--exact", OPENING_PROBE]);
-        match profile {
-            Some(profile) => probe.env(Environment::var_name(), profile),
-            None => probe.env_remove(Environment::var_name()),
-        };
-
-        let ran = probe
-            .output()
-            .expect("the probe runs in a process of its own");
-        let said = String::from_utf8_lossy(&ran.stdout);
-        assert!(
-            ran.status.success() && said.contains("1 passed"),
-            "{profile:?}: {said}"
-        );
+        assert_passes_under_profile(OPENING_PROBE, profile);
     }
 }

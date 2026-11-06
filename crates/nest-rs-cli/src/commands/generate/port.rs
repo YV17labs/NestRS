@@ -9,6 +9,7 @@ use syn::{ImplItem, Item, Type, UseTree, Visibility};
 
 use super::support::list_dir;
 use crate::error::{CliResult, read_if_exists};
+use crate::naming::Names;
 
 /// A port's `CrudService`, whose API decides what an adapter may call.
 pub(super) struct CrudPort {
@@ -29,9 +30,9 @@ pub(super) struct Port {
 }
 
 impl Port {
-    /// Read the port `snake` at `root`, whose service is `named` when it holds
-    /// several.
-    pub(super) fn read(root: &Path, snake: &str, named: &str) -> CliResult<Self> {
+    /// Read the port `names` at `root`; of several services, the one named for
+    /// it, else the first by file name.
+    pub(super) fn read(root: &Path, names: &Names) -> CliResult<Self> {
         let flat = parse(&root.join("mod.rs"))?.and_then(|index| flat_entity(&index));
         let mut files = vec![root.join("service.rs")];
         files.extend(
@@ -41,27 +42,25 @@ impl Port {
         );
         let mut found = Vec::new();
         for file in files {
-            if let Some(source) = parse(&file)? {
-                found.extend(crud_impls(&source).into_iter().map(|implemented| {
-                    let entity = implemented
+            let Some(source) = parse(&file)? else {
+                continue;
+            };
+            for implemented in crud_impls(&source) {
+                found.push(CrudPort {
+                    service: implemented.service,
+                    file: file.clone(),
+                    entity: implemented
                         .entity
-                        .and_then(|named| origin(&source, &named))
-                        .and_then(|origin| origin.file(snake, flat.as_deref()))
-                        .map(|relative| root.join(relative));
-                    CrudPort {
-                        service: implemented.service,
-                        file: file.clone(),
-                        entity,
-                    }
-                }));
+                        .and_then(|named| {
+                            entity_file(&source, &named, &names.snake, flat.as_deref())
+                        })
+                        .map(|relative| root.join(relative)),
+                });
             }
         }
-        let named_for_the_port = found.iter().position(|crud| crud.service == named);
-        let crud = match named_for_the_port {
-            Some(at) => Some(found.swap_remove(at)),
-            None if found.is_empty() => None,
-            None => Some(found.swap_remove(0)),
-        };
+        let named = names.service();
+        let at = found.iter().position(|crud| crud.service == named);
+        let crud = found.into_iter().nth(at.unwrap_or(0));
         let has_entity = crud.is_some() || flat.is_some() || root.join("entity.rs").is_file();
         Ok(Self { crud, has_entity })
     }
@@ -168,51 +167,40 @@ fn leaves(source: &syn::File) -> Vec<Leaf> {
     out
 }
 
-/// Where a source reads an entity from: a module path, and the item's name there.
-struct Origin {
-    path: Vec<String>,
-    item: String,
+/// The file the entity `named` in `source` lands in, relative to the port `snake`:
+/// `flat` when its path reaches the port's own `Entity`, which `mod.rs` re-exports.
+fn entity_file(
+    source: &syn::File,
+    named: &[String],
+    snake: &str,
+    flat: Option<&Path>,
+) -> Option<PathBuf> {
+    let (path, item) = origin(source, named)?;
+    module_file(&path).or_else(|| {
+        let the_port = path.iter().all(|word| word == "super")
+            || matches!(path.as_slice(), [root, port] if root == "crate" && port == snake);
+        flat.filter(|_| item == "Entity" && the_port)
+            .map(Path::to_path_buf)
+    })
 }
 
-impl Origin {
-    /// The file it lands in, relative to the port: `flat` when the path reaches
-    /// the port's own `Entity`, which its `mod.rs` re-exports.
-    fn file(&self, snake: &str, flat: Option<&Path>) -> Option<PathBuf> {
-        module_file(&self.path).or_else(|| {
-            let the_port = self.path.iter().all(|word| word == "super")
-                || matches!(self.path.as_slice(), [root, port] if root == "crate" && port == snake);
-            (self.item == "Entity" && the_port)
-                .then(|| flat.map(Path::to_path_buf))
-                .flatten()
-        })
-    }
-}
-
-/// Where `source` reads the entity `named` from: `named`'s own path, or the `use`
-/// binding its one word, or else a glob, which names no word.
-fn origin(source: &syn::File, named: &[String]) -> Option<Origin> {
+/// The module path `source` reads the entity `named` from, and the item's name
+/// there: `named`'s own path, or the `use` binding its one word, or else a glob,
+/// which names no word.
+fn origin(source: &syn::File, named: &[String]) -> Option<(Vec<String>, String)> {
     let (item, path) = named.split_last()?;
     if !path.is_empty() {
-        return Some(Origin {
-            path: path.to_vec(),
-            item: item.clone(),
-        });
+        return Some((path.to_vec(), item.clone()));
     }
     let leaves = leaves(source);
     if let Some(leaf) = leaves.iter().find(|leaf| leaf.binds.as_ref() == Some(item)) {
-        return Some(Origin {
-            path: leaf.path.clone(),
-            item: leaf.item.clone()?,
-        });
+        return Some((leaf.path.clone(), leaf.item.clone()?));
     }
     leaves
         .iter()
         .find(|leaf| leaf.binds.is_none() && module_file(&leaf.path).is_some())
         .or_else(|| leaves.iter().find(|leaf| leaf.binds.is_none()))
-        .map(|leaf| Origin {
-            path: leaf.path.clone(),
-            item: item.clone(),
-        })
+        .map(|leaf| (leaf.path.clone(), item.clone()))
 }
 
 /// The file a module path inside a port lands in: `entity.rs`, or
@@ -232,8 +220,7 @@ fn module_file(path: &[String]) -> Option<PathBuf> {
 fn flat_entity(index: &syn::File) -> Option<PathBuf> {
     leaves(index)
         .into_iter()
-        .filter(|leaf| leaf.public)
-        .filter(|leaf| leaf.binds.is_none() || leaf.binds.as_deref() == Some("Entity"))
+        .filter(|leaf| leaf.public && leaf.binds.as_deref().is_none_or(|word| word == "Entity"))
         .find_map(|leaf| module_file(&leaf.path))
 }
 
@@ -252,8 +239,7 @@ mod tests {
         let implemented = crud_impls(&source).into_iter().next().expect("an impl");
         let entity = implemented
             .entity
-            .and_then(|named| origin(&source, &named))
-            .and_then(|origin| origin.file("posts", Some(Path::new("entity.rs"))));
+            .and_then(|named| entity_file(&source, &named, "posts", Some(Path::new("entity.rs"))));
         (implemented.service, entity)
     }
 

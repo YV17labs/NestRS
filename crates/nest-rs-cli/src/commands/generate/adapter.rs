@@ -66,17 +66,16 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
 
     let tmodule = names.module_for(transport);
     let is_graphql = transport == Transport::Graphql;
-    let port = Port::read(&feature_root, &names.snake, &names.service())?;
+    let port = Port::read(&feature_root, &names)?;
     let crud_port = port.crud.is_some();
     // What an operation's posture names: the port's entity, or the capability
     // a port with none declares, written once by the first adapter gating on it.
     let gated_operation = matches!(transport, Transport::Graphql | Transport::Mcp);
-    let port_entity = port.has_entity;
     // Named for its kind, never its type: a port named by its own singular would
     // hold `blog/blog.rs`, a module of its own name.
     let subject_file = feature_root.join("subject.rs");
-    let writes_subject = gated_operation && !port_entity && !subject_file.exists();
-    let mut r = adapter_renderer(&names, transport, crud_port, port_entity);
+    let writes_subject = gated_operation && !port.has_entity && !subject_file.exists();
+    let mut r = adapter_renderer(&names, transport, crud_port, port.has_entity);
     if let Some(crud) = &port.crud {
         r = r.with("service", crud.service.clone());
     }
@@ -171,7 +170,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
             Some(entity) => {
                 s.edit(entity, ensure_expose_graphql());
             }
-            None => unflagged = Some(crud.file.clone()),
+            None => unflagged = Some(&crud.file),
         }
     }
     if scaffolded_auth {
@@ -255,7 +254,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         authz,
         grant,
     );
-    if let Some(service) = &unflagged {
+    if let Some(service) = unflagged {
         println!(
             "  {} names an entity this run could not follow to its file: add \
              `#[expose(graphql)]` to it, which the `#[crud]` resolver needs.",

@@ -1041,7 +1041,7 @@ struct Replica {
 /// [`LEASE`] and draining within [`WINDOW`]. The app is leaked: the transport
 /// borrows the container it owns, the way a process would hold it.
 async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
-    replica_of::<M>(HeadlessApp::builder()).await
+    replica_of::<M>(brisk(HeadlessApp::builder())).await
 }
 
 /// [`replica`], reaching Redis as `redis` says whatever the environment says:
@@ -1049,13 +1049,7 @@ async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
 /// the hermetic-test hatch, for a suite that needs a database or a user of its
 /// own while `<PREFIX>_REDIS__URL` points every other one at the shared database.
 async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
-    replica_of::<M>(HeadlessApp::builder().provide(redis)).await
-}
-
-async fn replica_of<M: nest_rs_core::Module + 'static>(
-    builder: nest_rs_testing::TestAppBuilder,
-) -> Replica {
-    started::<M>(brisk(builder)).await
+    replica_of::<M>(brisk(HeadlessApp::builder().provide(redis))).await
 }
 
 /// [`replica_on`] on the queue's default lease and the connection's default
@@ -1064,7 +1058,7 @@ async fn replica_of<M: nest_rs_core::Module + 'static>(
 /// at-least-once allows, and one stalled past [`BUDGET`] sees a push refused, the
 /// behaviour right both times. Only a test about a lapse runs on [`LEASE`].
 async fn patient_replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
-    started::<M>(
+    replica_of::<M>(
         HeadlessApp::builder()
             .provide(at_default_budget(redis))
             .provide(RedisQueueConfig::default())
@@ -1075,8 +1069,13 @@ async fn patient_replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfi
     .await
 }
 
+/// [`patient_replica_on`] the suite's Valkey.
+async fn patient_replica<M: nest_rs_core::Module + 'static>() -> Replica {
+    patient_replica_on::<M>(redis_config()).await
+}
+
 /// The worker app `M` booted from `builder` as it stands, its worker started.
-async fn started<M: nest_rs_core::Module + 'static>(
+async fn replica_of<M: nest_rs_core::Module + 'static>(
     builder: nest_rs_testing::TestAppBuilder,
 ) -> Replica {
     let (app, producer) = booted::<M>(builder).await;

@@ -11,7 +11,7 @@ use nest_rs_core::module;
 use nest_rs_health::HealthModule;
 use nest_rs_http::StatusCode;
 use nest_rs_redis::RedisModule;
-use nest_rs_testing::{TestApp, wait_for};
+use nest_rs_testing::{TestApp, TestJson, wait_for};
 
 use crate::{at_default_budget, redis_config};
 
@@ -21,6 +21,19 @@ use crate::{at_default_budget, redis_config};
 ])]
 struct Probed;
 
+/// That `report` lists `indicator` in `bucket`, reading `status`.
+fn assert_reads(report: &TestJson, bucket: &str, indicator: &str, status: &str) {
+    report
+        .value()
+        .object()
+        .get(bucket)
+        .object()
+        .get(indicator)
+        .object()
+        .get("status")
+        .assert_string(status);
+}
+
 #[tokio::test]
 async fn the_default_instance_answers_the_readiness_and_startup_probes_as_redis() {
     let app = TestApp::for_module::<Probed>()
@@ -29,15 +42,7 @@ async fn the_default_instance_answers_the_readiness_and_startup_probes_as_redis(
     for probe in ["/health/ready", "/health/startup"] {
         let answer = app.http().get(probe).send().await;
         answer.assert_status_is_ok();
-        let body = answer.json().await;
-        body.value()
-            .object()
-            .get("info")
-            .object()
-            .get("redis")
-            .object()
-            .get("status")
-            .assert_string("up");
+        assert_reads(&answer.json().await, "info", "redis", "up");
     }
 }
 
@@ -60,15 +65,7 @@ pub(crate) async fn assert_down_naming_redis_and_alive(app: &TestApp) {
         if answer.0.status() != StatusCode::SERVICE_UNAVAILABLE {
             return false;
         }
-        let body = answer.json().await;
-        body.value()
-            .object()
-            .get("error")
-            .object()
-            .get("redis")
-            .object()
-            .get("status")
-            .assert_string("down");
+        assert_reads(&answer.json().await, "error", "redis", "down");
         true
     })
     .await;
@@ -140,22 +137,9 @@ mod standalone {
         for probe in ["/health/ready", "/health/startup"] {
             let answer = app.http().get(probe).send().await;
             answer.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-            let body = answer.json().await;
-            let report = body.value().object();
-            report
-                .get("error")
-                .object()
-                .get("redis:cache")
-                .object()
-                .get("status")
-                .assert_string("down");
-            report
-                .get("info")
-                .object()
-                .get("redis")
-                .object()
-                .get("status")
-                .assert_string("up");
+            let report = answer.json().await;
+            assert_reads(&report, "error", "redis:cache", "down");
+            assert_reads(&report, "info", "redis", "up");
         }
         app.http()
             .get("/health/live")

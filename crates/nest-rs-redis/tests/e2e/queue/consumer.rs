@@ -147,7 +147,7 @@ async fn a_job_that_ended_leaves_no_record_but_its_dead_letter() {
     let queue = <EndQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::patient_replica_on::<EndModule>(crate::redis_config()).await;
+    let replica = crate::patient_replica::<EndModule>().await;
     let unique = |key: &str| nest_rs_queue::PushOptions::default().with_unique(key);
     replica
         .producer
@@ -509,7 +509,7 @@ async fn cancellation_while_an_attempt_runs_is_refused_and_the_job_runs_to_its_e
     let queue = <HeldQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::patient_replica_on::<HeldModule>(crate::redis_config()).await;
+    let replica = crate::patient_replica::<HeldModule>().await;
     let receipt = replica
         .producer
         .push(HeldQueue, HeldCommand { run })
@@ -790,7 +790,7 @@ async fn a_dead_letter_filed_back_as_the_page_prints_runs_once_more() {
     let queue = <RefiledQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::patient_replica_on::<RefiledModule>(crate::redis_config()).await;
+    let replica = crate::patient_replica::<RefiledModule>().await;
     replica
         .producer
         .push(RefiledQueue, RefiledCommand { run })
@@ -1008,7 +1008,7 @@ async fn a_held_back_job_whose_record_went_is_said_and_let_go() {
     let queue = <LostQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::patient_replica_on::<LostModule>(crate::redis_config()).await;
+    let replica = crate::patient_replica::<LostModule>().await;
     let unique = || nest_rs_queue::PushOptions::default().with_unique("lost");
     let held = replica
         .producer
@@ -1175,7 +1175,7 @@ async fn a_queue_runs_on_after_its_scripts_are_flushed() {
     let queue = <FlushedQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::patient_replica_on::<FlushedModule>(crate::redis_config()).await;
+    let replica = crate::patient_replica::<FlushedModule>().await;
     let _: () = redis::cmd("SCRIPT")
         .arg("FLUSH")
         .query_async(&mut crate::connect().await)

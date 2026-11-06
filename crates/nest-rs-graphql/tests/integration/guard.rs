@@ -816,13 +816,9 @@ mod request_decided {
                 "the edge's line says the edit: {denial:?}"
             );
         }
-        assert!(
-            logs.find(
-                "nest_rs::http",
-                "a guard read the HTTP request of a unit with no HTTP view"
-            )
-            .is_empty(),
-            "one denial files one line"
+        logs.expect_none(
+            "nest_rs::http",
+            "a guard read the HTTP request of a unit with no HTTP view",
         );
     }
 }

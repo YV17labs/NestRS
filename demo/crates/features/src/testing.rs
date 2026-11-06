@@ -1,7 +1,8 @@
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs::config::Config;
+use nest_rs::config::{Config, Environment};
 use nest_rs::core::Container;
 use nest_rs::http::header;
 use nest_rs::redis::{RedisConfig, RedisConnection};
@@ -58,6 +59,25 @@ pub fn connection(container: &Container) -> Arc<DatabaseConnection> {
     container
         .get::<DatabaseConnection>()
         .expect("the app's pool is its throwaway database")
+}
+
+#[track_caller]
+pub fn assert_passes_under_profile(test: &str, profile: Option<&str>) {
+    let mut probe = Command::new(std::env::current_exe().expect("the suite's own binary"));
+    probe.args(["--exact", test]);
+    match profile {
+        Some(profile) => probe.env(Environment::var_name(), profile),
+        None => probe.env_remove(Environment::var_name()),
+    };
+    let ran = probe
+        .output()
+        .expect("the probe runs in a process of its own");
+    let said = String::from_utf8_lossy(&ran.stdout);
+    assert!(
+        ran.status.success() && said.contains("1 passed"),
+        "{test} under {profile:?}: {said}{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
 }
 
 pub async fn assert_a_probe_reads_no_credential(app: &TestApp) {

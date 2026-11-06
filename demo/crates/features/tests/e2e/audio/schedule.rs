@@ -1,4 +1,3 @@
-use std::process::Command;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -7,7 +6,7 @@ use anyhow::Result;
 use features::audio::{
     AudioConfig, AudioQueue, AudioScheduleModule, SEED_OPEN, TARGET, TranscodeCommand,
 };
-use features::testing::{RedisDatabase, delete_transcode};
+use features::testing::{RedisDatabase, assert_passes_under_profile, delete_transcode};
 use nest_rs::config::{Environment, Surface};
 use nest_rs::core::{injectable, module};
 use nest_rs::queue::{QueueWorker, processor};
@@ -70,17 +69,7 @@ struct CountingWorkerHarness;
 #[test]
 fn the_every_5s_audio_task_fires_and_lands_on_the_queue_where_a_deployment_opened_it() {
     load_project_env();
-    let ran = Command::new(std::env::current_exe().expect("the suite's own binary"))
-        .args(["--exact", DEPLOYED_TICK])
-        .env(Environment::var_name(), "production")
-        .output()
-        .expect("the probe runs in a process of its own");
-    let said = String::from_utf8_lossy(&ran.stdout);
-    assert!(
-        ran.status.success() && said.contains("1 passed"),
-        "{said}{}",
-        String::from_utf8_lossy(&ran.stderr)
-    );
+    assert_passes_under_profile(DEPLOYED_TICK, Some("production"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -137,8 +126,7 @@ async fn a_deployed_tick_seeds_through_what_says_the_seed_is_open() {
         "the #[every(\"5s\")] task must fire and its command must be consumed \
          from the queue within {deadline:?}",
     );
-    let said = logs.find(TARGET, SEED_OPEN);
-    assert_eq!(said.len(), 1, "{said:?}");
-    assert_eq!(said[0].level, "warn");
-    assert_eq!(said[0].field("environment").as_deref(), Some("production"));
+    let said = logs.expect_one(TARGET, SEED_OPEN);
+    assert_eq!(said.level, "warn");
+    assert_eq!(said.field("environment").as_deref(), Some("production"));
 }

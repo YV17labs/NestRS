@@ -314,7 +314,7 @@ impl SeaOrmConfig {
 /// reached over no network, a sidecar proxy's common shape.
 pub(crate) fn warn_when_open(options: &PgConnectOptions) {
     if matches!(options.get_ssl_mode(), PgSslMode::Disable)
-        && options.get_socket().is_none()
+        && crate::module::socket(options).is_none()
         && !is_loopback(options.get_host())
         && let Some(environment) = Surface::Open.opened_in_deployment()
     {
@@ -485,6 +485,38 @@ mod tests {
             warn_when_open(&probe);
             let line = logs.expect_one(crate::target::ORM, PLAINTEXT_OPEN);
             assert_eq!(line.field("endpoint").as_deref(), Some("db.internal:5432"));
+            Ok(())
+        });
+    }
+
+    /// libpq's `PGHOST` and `PGPORT` name what a URL leaves out, and read as sqlx
+    /// dials them: a directory is a socket, as the URL's own `host=` is.
+    #[test]
+    fn pghost_reaches_the_line_as_what_it_dials() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::Environment::var_name(), "production");
+            jail.set_env("PGPORT", "5433");
+            for (host, endpoint) in [
+                ("/run/postgresql", None),
+                ("127.0.0.1", None),
+                ("db.internal", Some("db.internal:5433")),
+            ] {
+                jail.set_env("PGHOST", host);
+                let logs = nest_rs_testing::LogCapture::install();
+                let probe = pinned("postgres:///app?sslmode=disable")
+                    .probe_options()
+                    .expect("a URL");
+                warn_when_open(&probe);
+                let lines = logs.find(crate::target::ORM, PLAINTEXT_OPEN);
+                assert_eq!(
+                    lines
+                        .iter()
+                        .filter_map(|line| line.field("endpoint"))
+                        .collect::<Vec<_>>(),
+                    endpoint.map(str::to_owned).into_iter().collect::<Vec<_>>(),
+                    "{host}",
+                );
+            }
             Ok(())
         });
     }

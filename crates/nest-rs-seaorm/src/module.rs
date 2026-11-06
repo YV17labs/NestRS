@@ -1,4 +1,5 @@
 use std::any::TypeId;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -399,10 +400,19 @@ fn unproved(
 /// The host and port `options` dial — or their socket — never the URL, which
 /// carries the password.
 pub(crate) fn endpoint(options: &PgConnectOptions) -> String {
-    match options.get_socket() {
+    match socket(options) {
         Some(socket) => socket.display().to_string(),
         None => format!("{}:{}", options.get_host(), options.get_port()),
     }
+}
+
+/// The socket `options` dial, as sqlx reads it: the one a URL's `host=` names,
+/// or a host starting with `/`, where `PGHOST` and sqlx's default put theirs.
+pub(crate) fn socket(options: &PgConnectOptions) -> Option<&Path> {
+    options.get_socket().map(PathBuf::as_path).or_else(|| {
+        let host = options.get_host();
+        host.starts_with('/').then(|| Path::new(host))
+    })
 }
 
 #[cfg(test)]
@@ -464,6 +474,20 @@ mod tests {
             logs.expect_one(crate::target::ORM, crate::config::PLAINTEXT_OPEN);
             Ok(())
         });
+    }
+
+    /// A socket reads as its path whichever option names it: sqlx dials a host
+    /// starting with `/` as one, which is where `PGHOST` and its default put it.
+    #[test]
+    fn the_endpoint_reads_a_socket_as_its_path_however_it_is_named() {
+        let options = PgConnectOptions::new_without_pgpass().port(5433);
+        for socket in [
+            options.clone().host("/run/postgresql"),
+            options.clone().socket("/run/postgresql"),
+        ] {
+            assert_eq!(endpoint(&socket), "/run/postgresql");
+        }
+        assert_eq!(endpoint(&options.host("db")), "db:5433");
     }
 
     #[tokio::test]

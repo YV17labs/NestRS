@@ -33,6 +33,8 @@ shape. Held by each driver's unit tests.
   never connect, so a connection a tool opens itself from them says nothing: the
   open is the tool's, and so is what it says of it. A limit named, not a gap in
   the framework's own opens.
+- **A socket is what sqlx dials as one**: a URL's `host=`, or a host starting with
+  `/`, where `PGHOST` and sqlx's default put theirs.
 
 **Forks, decided by the values:**
 

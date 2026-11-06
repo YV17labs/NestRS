@@ -80,7 +80,8 @@ its edge runs that family, and anywhere else it is a compile error that says
 why — never a layer that silently never runs. The WebSocket `#[on_connect]` /
 `#[on_disconnect]` hooks run outside any site: they refuse a `#[meta]` (no layer
 runs around a hook to read it), a guard (the upgrade's guards admitted the
-socket) and a pipe (a hook has no payload), and run no interceptor or exception
+socket), a pipe (a hook has no payload) and a posture (no mask shapes what a hook
+sends, so it reads nothing a grant guards), and run no interceptor or exception
 filter yet.
 
 | Attribute | HTTP | GraphQL | WebSockets | MCP | Queue, schedule, events | Hooks, indicators |

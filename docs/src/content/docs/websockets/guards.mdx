@@ -73,9 +73,9 @@ the page — and the CORS layer's `403` files its one `warn` on
 
 Because the connection is captured **after** connection-level guards,
 anything those guards attach (the principal, an ambient ability, the tenant)
-is carried into every message and connection hook on the connection — no seam
-to bind — and each runs as a unit of work of its own, on an executor the
-gateway opens for it. Without that capture, a per-message guard like
+is carried into every message and connection hook on the connection, the ability
+staying off a hook's reads — no seam to bind — and each runs as a unit of work of
+its own, on an executor the gateway opens for it. Without that capture, a per-message guard like
 `AuthzGuard` — whose `check` reads the ambient ability and fails closed —
 would see `None` once the upgrade request had unwound.
 

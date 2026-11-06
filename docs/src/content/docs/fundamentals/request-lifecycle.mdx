@@ -86,7 +86,7 @@ run:
 | [Job](/queue/#layers-around-a-job), [tick](/schedule/#layers-around-a-tick), [listener call](/events/dispatch/#layers-around-a-listener-call) | 1 to 3, 5 to 7 | no caller, so no guard stage; the decorator's `timeout` is its deadline |
 
 A WebSocket `#[on_connect]` or `#[on_disconnect]` hook carries what the
-upgrade's guards attached and runs no layer yet.
+upgrade's guards attached, the ability withheld from its reads, and runs no layer yet.
 
 Global guards are **pooled** globally but **execute** in each site's guard
 stage, after routing, because a guard reads the site's declarations —

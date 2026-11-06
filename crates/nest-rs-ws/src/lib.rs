@@ -153,8 +153,9 @@
 //!
 //! The connection loop runs after the upgrade completes, under what the
 //! upgrade carried into a [`Connection`](nest_rs_core::Continuation::Connection):
-//! its trace, its actor, the ability its guards attached and every value that
-//! crosses reach each hook and message, never its scope or its transaction.
+//! its trace, its actor and every value that crosses reach each hook and message,
+//! the ability its guards attached each message's reads alone, since no mask shapes
+//! what a hook sends, and never its scope or its transaction.
 //! Each message and each connection hook is a unit of work of its own, run
 //! through the bound `nest_rs_database::UnitOfWork` and cut at its deadline: a
 //! message commits unless it fails — an error frame, however a layer answered

@@ -128,9 +128,9 @@ impl AmbientValue for Deadline {
     }
 }
 
-/// Ambient on a routed unit whose reply no response mask shapes: an ability its
-/// guards attached is withheld from the reads a mask would have scoped, so such
-/// a route reads nothing.
+/// Ambient on a unit whose reply no response mask shapes, a route or a connection
+/// hook: an ability its guards attached is withheld from the reads a mask would have
+/// scoped, so such a unit reads nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnmaskedReply;
 

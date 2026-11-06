@@ -9,11 +9,11 @@ use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_database::{ExecutorScope, current_executor_scope};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_seaorm::__private::{SeaOrmExecutor, current_executor};
-use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs_seaorm::{Repo, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::ws::WsApp;
 use nest_rs_ws::{WsModule, gateway, messages};
-use sea_orm::ConnectionTrait;
+use sea_orm::{ActiveValue::Set, ConnectionTrait};
 use serde_json::json;
 
 /// What `inspect` reads: a message naming no read reads under no ability.
@@ -97,6 +97,86 @@ impl UnitGateway {
 
 static CONNECTED_WITH_ABILITY: AtomicBool = AtomicBool::new(false);
 
+/// A row a connection hook reaches for through `Repo`.
+mod hook_row {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "ws_unit_hook_rows")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id: i32,
+        pub label: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// The ability the upgrade attached grants the row whole, so what a hook meets is the
+/// hook's own bar and no missing grant.
+#[injectable]
+#[derive(Default)]
+struct GrantingRows;
+
+impl Layer for GrantingRows {}
+
+#[async_trait]
+impl Guard for GrantingRows {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let mut ability = AbilityBuilder::new();
+        ability.can(Action::Read, hook_row::Entity);
+        ability.can(Action::Update, hook_row::Entity);
+        let ability = ability.build().expect("two grants build");
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(ability));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for GrantingRows {}
+
+/// What the hook's read found and how its by-id write ended.
+static HOOK_REPO: std::sync::Mutex<Option<(usize, bool)>> = std::sync::Mutex::new(None);
+
+#[gateway(path = "/ws/unit/connect-repo")]
+#[use_guards(GrantingRows)]
+pub(crate) struct ConnectRepoGateway;
+
+#[messages]
+impl ConnectRepoGateway {
+    #[subscribe_message("ping")]
+    #[public]
+    async fn ping(&self) -> String {
+        "pong".to_owned()
+    }
+
+    #[on_connect]
+    async fn joined(&self) {
+        let found = Repo::<hook_row::Entity>::all()
+            .await
+            .expect("the read runs");
+        let written = Repo::<hook_row::Entity>::update(hook_row::ActiveModel {
+            id: Set(1),
+            label: Set("rewritten".to_owned()),
+        })
+        .await;
+        *HOOK_REPO.lock().expect("no test poisons it") = Some((
+            found.len(),
+            matches!(written, Err(sea_orm::DbErr::RecordNotUpdated)),
+        ));
+    }
+}
+
 #[gateway(path = "/ws/unit/connect-writes")]
 #[use_guards(Granting)]
 pub(crate) struct ConnectWritesGateway;
@@ -144,7 +224,14 @@ impl ConnectPanicsGateway {
         SeaOrmDatabaseModule,
         WsModule,
     ],
-    providers = [Granting, UnitGateway, ConnectWritesGateway, ConnectPanicsGateway],
+    providers = [
+        Granting,
+        GrantingRows,
+        UnitGateway,
+        ConnectWritesGateway,
+        ConnectPanicsGateway,
+        ConnectRepoGateway,
+    ],
 )]
 struct UnitModule;
 
@@ -254,6 +341,54 @@ async fn a_connect_hook_writes_in_a_unit_of_its_own_and_reads_under_no_ability()
         crate::harness::committed_rows(&conn, "ws_unit_connect_commit").await,
         1,
         "a hook that ran to its end commits what it wrote",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// A hook's read answers nothing and its by-id write touches nothing, whatever the
+/// ability the upgrade attached grants: no mask shapes what it sends.
+#[tokio::test]
+async fn a_connect_hooks_repo_reads_no_row_and_writes_none() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let conn = crate::harness::connect().await;
+    crate::harness::setup_shared_table(
+        &conn,
+        "ws_unit_hook_rows",
+        "CREATE TABLE IF NOT EXISTS ws_unit_hook_rows (id INT PRIMARY KEY, label TEXT NOT NULL);
+         INSERT INTO ws_unit_hook_rows (id, label) VALUES (1, 'seeded')
+         ON CONFLICT (id) DO UPDATE SET label = 'seeded';",
+    )
+    .await;
+    let app = boot().await;
+
+    let mut socket = app.socket("/ws/unit/connect-repo").connect().await;
+    socket.send("ping", json!(null)).await;
+    assert_eq!(socket.next_envelope().await["data"], "pong");
+
+    assert_eq!(
+        *HOOK_REPO.lock().expect("no test poisons it"),
+        Some((0, true)),
+        "no row read, and the by-id write met no row",
+    );
+    let label = conn
+        .query_one_raw(sea_orm::Statement::from_string(
+            conn.get_database_backend(),
+            "SELECT label FROM ws_unit_hook_rows WHERE id = 1",
+        ))
+        .await
+        .expect("the read runs")
+        .expect("the seeded row stands")
+        .try_get::<String>("", "label")
+        .expect("a label");
+    assert_eq!(label, "seeded", "the write touched nothing");
+    assert!(
+        !logs
+            .find(
+                nest_rs_seaorm::target::ORM,
+                "no ambient Ability outside a worker job — denying all rows",
+            )
+            .is_empty(),
+        "the read says why it answered nothing",
     );
     app.shutdown().await.expect("the transport stops cleanly");
 }

@@ -173,7 +173,8 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   A test counting a job's runs and about no lapse boots on the queue's default
   lease and the connection's default budget (`patient_replica_on`): on the suite's
   one-second lease a stalled runner sees the job run again, which at-least-once
-  allows, and a `== 1` there promises more than the contract.
+  allows, and a `== 1` there promises more than the contract. The queue kit's
+  cases take their backend's one lease, since several wait it out.
   An administration command reaches every node it concerns — `CLIENT KILL` ids
   and `ACL` users are per server — never one the client picks.
 

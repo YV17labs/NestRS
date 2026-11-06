@@ -1056,7 +1056,8 @@ async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Re
 /// budget, for a test counting a job's runs and lapsing none: a runner stalled
 /// past [`LEASE`] between a delivery and its settle sees it run again, as
 /// at-least-once allows, and one stalled past [`BUDGET`] sees a push refused, the
-/// behaviour right both times. Only a test about a lapse runs on [`LEASE`].
+/// behaviour right both times. A test about a lapse or a renewal, or counting no
+/// run, stays on [`LEASE`].
 async fn patient_replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
     replica_of::<M>(
         HeadlessApp::builder()

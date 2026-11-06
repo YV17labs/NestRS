@@ -362,8 +362,8 @@ async fn a_throttle_caps_starts_per_window_across_replicas() {
     let queue = <PacedQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let first = crate::replica::<PacedModule>().await;
-    let second = crate::replica::<PacedModule>().await;
+    let first = crate::patient_replica::<PacedModule>().await;
+    let second = crate::patient_replica::<PacedModule>().await;
     for _ in 0..6 {
         first
             .producer
@@ -440,7 +440,7 @@ async fn a_throttle_window_in_its_last_millisecond_opens_the_next() {
     let queue = <BriskQueue as nest_rs_queue::Queue>::NAME;
     crate::forget(queue).await;
     let run = crate::this_run();
-    let replica = crate::replica::<BriskModule>().await;
+    let replica = crate::patient_replica::<BriskModule>().await;
     let jobs = 300;
     replica
         .producer
@@ -597,7 +597,8 @@ async fn the_group_is_made_again_after_its_stream_went_and_a_stopped_worker_leav
     );
     let run = crate::this_run();
     let replica =
-        crate::replica_on::<PlainModule>(crate::redis_config_on(crate::DB_BLOCKED_READ)).await;
+        crate::patient_replica_on::<PlainModule>(crate::redis_config_on(crate::DB_BLOCKED_READ))
+            .await;
     replica
         .producer
         .push(PlainQueue, PlainCommand { run })
@@ -1092,7 +1093,8 @@ struct LongModule;
 /// An entry deleted by hand while a delivery holds it — no script deletes one
 /// still pending — is gone with its job: the renewal that meets it says so,
 /// naming the entry, rather than losing it in silence, and a cancel lets go of
-/// the job it leaves held.
+/// the job it leaves held. On the suite's second, since a renewal is what meets the
+/// entry, and this counts no run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_entry_deleted_while_delivered_is_said() {
     let logs = nest_rs_testing::LogCapture::install_global();
@@ -1105,7 +1107,7 @@ async fn an_entry_deleted_while_delivered_is_said() {
         .push(LongQueue, LongCommand { run })
         .await
         .expect("enqueue");
-    crate::wait_until(Duration::from_secs(10), || LONG.of(run).len() == 1).await;
+    crate::wait_until(Duration::from_secs(10), || !LONG.of(run).is_empty()).await;
     let pending: Vec<(String, String, u64, u64)> = redis::cmd("XPENDING")
         .arg(crate::key_of(queue, "jobs"))
         .arg(GROUP)
@@ -1238,7 +1240,8 @@ fn paged_redis() -> nest_rs_redis::RedisConfig {
 /// the second. One look hands what it takes over in one receive, so its jobs
 /// start together, while the next look comes after a blocking read of its own:
 /// the two starts are told apart by the gap between them, never by when the
-/// test happened to look.
+/// test happened to look. On a lease of its own, since the two lapse by their
+/// `IDLE`, and the suite's second would lapse the ten thousand running as well.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_look_for_lapsed_leases_reads_one_page_and_the_next_reads_on() {
     let queue = <PagedQueue as nest_rs_queue::Queue>::NAME;

@@ -62,7 +62,7 @@ async fn a_queue_runs_over_a_redis_speaking_tls_every_connection_verified() {
         .await
         .expect("an empty database to start on");
     let run = crate::this_run();
-    let replica = crate::replica_on::<SealedModule>(crate::redis_config_on(db)).await;
+    let replica = crate::patient_replica_on::<SealedModule>(crate::redis_config_on(db)).await;
     replica
         .producer
         .push(SealedQueue, SealedCommand { run })

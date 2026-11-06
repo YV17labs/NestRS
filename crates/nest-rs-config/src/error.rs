@@ -7,8 +7,9 @@ use nest_rs_core::DecodeError;
 use thiserror::Error;
 use validator::{ValidationErrors, ValidationErrorsKind};
 
-/// A configuration load failure.
-#[derive(Debug, Error)]
+/// A configuration load failure. Every reader, a `{:?}` and a `main` returning one
+/// among them, reads its sentence.
+#[derive(Error)]
 #[non_exhaustive]
 pub enum ConfigError {
     /// A value refused, naming the offending variable.
@@ -170,6 +171,14 @@ pub enum ConfigError {
         #[source]
         source: std::io::Error,
     },
+}
+
+// By hand: a derived `Debug` writes `Validation`'s `ValidationErrors`, the value
+// each rule refused among its parameters.
+impl std::fmt::Debug for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 impl ConfigError {
@@ -487,6 +496,25 @@ mod tests {
     }
 
     /// A field read whole — `#[config(json)]` — is set by its one variable,
+    /// `validator`'s `Debug` lists each rule's parameters, the value it refused
+    /// among them: a config's `{:?}`, an `unwrap` of one and a `main` returning one
+    /// print the sentence.
+    #[test]
+    fn no_reader_of_a_validation_failure_prints_the_value_it_refused() {
+        let mut rule = validator::ValidationError::new("length");
+        rule.add_param("value".into(), &"zzqx-value");
+        let mut errors = ValidationErrors::new();
+        errors.add("key", rule);
+        let refused = ConfigError::validation("kiln", errors);
+
+        let printed = nest_rs_testing::printed(&refused);
+        assert!(!printed.contains("zzqx-value"), "{printed}");
+        assert!(
+            printed.contains(&line("kiln", "key", "KEY", "length")),
+            "{printed}"
+        );
+    }
+
     /// whatever inside it failed; a vocabulary's member keeps its own.
     #[test]
     fn a_failure_inside_a_field_read_whole_names_that_fields_variable() {

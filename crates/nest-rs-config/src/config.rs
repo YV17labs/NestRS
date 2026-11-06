@@ -129,7 +129,8 @@ fn resolve_under<C: Config>(namespace: Cow<'static, str>, pinned: Option<C>) -> 
 /// writes from the struct, each key its field's name: the struct is the env
 /// contract of a feature, and no field is reachable from code alone. A config
 /// whose fields depend on each other writes it by hand, under
-/// `#[config(from_env = "manual")]`.
+/// `#[config(from_env = "manual")]`, as a generic one does, whose bounds the derive
+/// does not write.
 ///
 /// # The deployment can always override, per field
 ///

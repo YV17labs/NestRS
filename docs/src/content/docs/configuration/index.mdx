@@ -464,7 +464,8 @@ key off its field keeps the contract where the fields are:
   config's own `Default` — for every field alike.
 - An unreadable value fails loudly, naming the variable, never quoting it.
 - What a type cannot say is said on the field, in one of three keys, and a
-  config whose fields depend on each other writes its overlay itself —
+  config whose fields depend on each other, or a generic config, whose bounds
+  the derive does not write, writes its overlay itself —
   [Advanced configuration](/configuration/advanced/).
 
 It is no serde deserializer over the environment either: that would read

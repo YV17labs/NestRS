@@ -89,7 +89,8 @@ pub use tls::{ClientTls, TlsIdentity, TlsNames, TlsSetting};
 /// value set in code reads its key and path, never types them. On the struct,
 /// `validate = "manual"` leaves the `Validate` derive to a hand-written impl, and
 /// `from_env = "manual"` the whole `impl Config`, for an overlay whose fields
-/// depend on each other.
+/// depend on each other, or a generic config's, whose bounds the derive does not
+/// write.
 ///
 /// ```
 /// use std::time::Duration;

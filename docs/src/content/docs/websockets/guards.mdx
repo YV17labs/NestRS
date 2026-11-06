@@ -79,6 +79,10 @@ gateway opens for it. Without that capture, a per-message guard like
 `AuthzGuard` — whose `check` reads the ambient ability and fails closed —
 would see `None` once the upgrade request had unwound.
 
+No mask shapes what a connection hook sends, so its reads run under no ability, as on
+any unit no mask shapes: a `Repo` read or write there fails closed, while the principal
+stays readable. Read what a client should see in a message whose posture names it.
+
 ## Per-message: the envelope gate
 
 A per-message guard runs every time the envelope's `event` matches a

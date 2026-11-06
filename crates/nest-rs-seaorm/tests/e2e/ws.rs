@@ -237,7 +237,7 @@ async fn a_message_whose_commit_the_database_refuses_is_answered_with_an_error()
 }
 
 #[tokio::test]
-async fn a_connect_hook_writes_in_a_unit_of_its_own_under_the_upgrade_ability() {
+async fn a_connect_hook_writes_in_a_unit_of_its_own_and_reads_under_no_ability() {
     let conn = crate::harness::connect().await;
     crate::harness::fresh_table(&conn, "ws_unit_connect_commit").await;
     let app = boot().await;
@@ -247,8 +247,8 @@ async fn a_connect_hook_writes_in_a_unit_of_its_own_under_the_upgrade_ability() 
     assert_eq!(socket.next_envelope().await["data"], "pong");
 
     assert!(
-        CONNECTED_WITH_ABILITY.load(Ordering::SeqCst),
-        "the hook runs under the ability the upgrade attached",
+        !CONNECTED_WITH_ABILITY.load(Ordering::SeqCst),
+        "no mask shapes what a hook sends, so the ability the upgrade attached stays off it",
     );
     assert_eq!(
         crate::harness::committed_rows(&conn, "ws_unit_connect_commit").await,

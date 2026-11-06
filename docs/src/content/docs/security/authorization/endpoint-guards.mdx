@@ -217,9 +217,9 @@ pub struct UsersWsModule;
 ```
 
 The ability the upgrade's guards attach crosses the connection into every
-message and connection hook, and the gateway runs each as a unit of work of its
-own — a transaction opened on its first query, committed unless the reply is
-an error frame — with no shared state across messages.
+message and stays off a connection hook's reads, which no mask shapes. The gateway
+runs each as a unit of work of its own — a transaction opened on its first query,
+committed unless the reply is an error frame — with no shared state across messages.
 
 The gateway struct binds the real guards; because the upgrade is an HTTP `GET`,
 they run once on it, after the browser origin is checked, and the access graph

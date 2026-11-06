@@ -72,7 +72,8 @@ pub trait Gateway: Send + Sync + 'static {
     /// Runs once when a socket connects, after the upgrade guards pass. One
     /// that panics, or outlasts its deadline, leaves the connection set up
     /// halfway, so the socket is not served: it is closed with RFC 6455
-    /// §7.4.1's 1011 Internal Error.
+    /// §7.4.1's 1011 Internal Error. No mask shapes what it sends, so the ability
+    /// the upgrade attached stays off its reads, as off [`on_disconnect`](Self::on_disconnect)'s.
     async fn on_connect(&self, client: &WsClient) {
         let _ = client;
     }
@@ -666,7 +667,13 @@ async fn under_connection<F: Future<Output = ()> + Send>(
     };
     let deadline = timeout.map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
     let spec = unit_spec(unit, deadline.map(|(_, at)| at));
-    let body = nest_rs_core::panic::contain(hook).map(HookEnd::from);
+    // No mask shapes what a hook sends, so the ability the upgrade attached stays off
+    // its reads, as on any such unit.
+    let body = nest_rs_core::with_ambient(
+        Arc::new(nest_rs_core::__private::UnmaskedReply),
+        nest_rs_core::panic::contain(hook),
+    )
+    .map(HookEnd::from);
     // The body alone is cut: the unit settles outside it, so a commit never is.
     let cut = async move {
         match deadline {

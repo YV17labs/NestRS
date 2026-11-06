@@ -82,3 +82,20 @@ That was never so of a relation, whose batch masked, and answered `INTERNAL` und
 narrow grant; and it is closed for a `#[field_resolver]` answering a wire type, both by
 the entry of this date in `mask-provenance.md`. A visitor's nested read still answers
 nothing, for the reason above.
+
+## 2026-11-06 — a connection hook is such a unit
+
+The owner's mandate of 2026-11-05 ("on ne veut pas d'angle mort"). Run first: `current_ability()`
+in `#[on_connect]` and `#[on_disconnect]` answered the ability the upgrade attached, so a hook
+read scoped rows with no mask between them and `client.emit`, and the rule's "every edge" named
+only a hand-written `ServerHandler` as an exception. **A hook withholds it too**, attached around
+the hook's body and nothing else, so the socket's messages keep it. No caller reads there: the
+demo's hooks count connections, and the live suite's write through the executor.
+
+The hook attaches the marker whatever it carries, not through `withhold_from_reads`: it has no
+stage to read, and it runs once per connection, where the marker is nothing beside the socket.
+
+**The consequence named:** a by-id write through `Repo` in a hook is barred with its read, as on
+any unit no mask shapes, and `masked_reply` there answers `NoAmbientAbility`. A hook's system
+write is `Repo::insert_unscoped`, a visible line; a hook wanting to read under the caller's rules
+is a key to add later, with no break, once a caller asks.

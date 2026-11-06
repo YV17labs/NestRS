@@ -166,7 +166,8 @@ guard, filter or interceptor loop of its own.
    posture: what it answers masks by the entity its type names (`data-layer.md`).
    **A unit no mask shapes withholds the ability from its
    reads, on every edge, whatever its posture says** (`UnmaskedReply`): a bare
-   `#[public]`, a covered unit stating none, a `#[subject]`'s, a route, a stream.
+   `#[public]`, a covered unit stating none, a `#[subject]`'s, a route, a stream, a
+   WS connection hook.
    `unmasked` keeps the ability and leaves the mask to the body, and so does a
    hand-written MCP `ServerHandler`, which declares no unit and writes no posture: it
    reads under a principal's ability, a visitor's reading nothing, and calls
@@ -462,8 +463,8 @@ adds no line to the root, and writing it is the visible opening.
 stage) and `#[interceptor(stage = unit)]`, and one `dispatch`. HTTP, a GraphQL
 field, a WS message, an MCP operation, a job's attempt, a tick and a listener
 call run on it. A WS connection hook is a unit with no site yet: it carries
-what the upgrade attached and runs no layer, so a `#[meta]` beside it, which
-nothing would read, is refused with the rest.
+what the upgrade attached, the ability withheld from its reads, and runs no layer,
+so a `#[meta]` beside it, which nothing would read, is refused with the rest.
 
 **A GraphQL root field is a unit nested in its `/graphql` request**
 (`graphql.field`, inside its operation's unit of work): its site folds the

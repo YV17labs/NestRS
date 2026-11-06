@@ -177,7 +177,7 @@ no transaction at all.
 **The ability** is what `AbilityGuard` attaches (`cx.attach`): ambient for the
 rest of the unit once its guard stage passed. A route no response mask shapes,
 an `#[sse]` stream and a route gated on a `#[subject]` among them, runs under
-the `UnmaskedReply` marker its guard stage attaches, and
+the `UnmaskedReply` marker its guard stage attaches, as a WS connection hook does, and
 `current_ability` withholds the ability there, so a read the mask would have
 scoped fails closed, as a write does before its hook — and `nest-rs-http` knows
 nothing of authz or the ORM

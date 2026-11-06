@@ -105,7 +105,8 @@ depths cooperate:
   the request carries runs under it: the dataloader batches a resolver
   triggers, and a tool across rmcp's own task.
 - **WebSockets** — the gateway's upgrade guards attach it, and the
-  connection carries it into every message and connection hook.
+  connection carries it into every message. No mask shapes what a connection
+  hook sends, so it stays off a hook's reads.
 
 A handler's reads see it where its posture names what it reads:
 `#[authorize(Action, Entity)]` or `#[public(Action, Entity)]`, whose mask shapes

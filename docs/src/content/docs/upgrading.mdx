@@ -1827,6 +1827,11 @@ lists what the boot, a log or the wire shows when one is missed.
   no selection to acquit them. **A subscription item that is a list** is masked row by
   row, where it passed unmasked. Grant the columns, or answer the object type.
 - **`use_guards_global`, `use_pipes_global`, `use_interceptors_global` or
+- **A WebSocket `#[on_connect]` or `#[on_disconnect]` going through `Repo`** fails closed,
+  a read and a by-id write alike, and `current_ability()` answers `None` there: no mask
+  shapes what a hook sends, so the ability the upgrade attached stays off its reads. The
+  principal stays readable. Read what a client should see in a message whose posture names
+  it; a hook's system write is `Repo::insert_unscoped`, a visible line.
   `use_exception_filters_global` left in `main`** fails to compile (`no method
   named use_guards_global found for struct AppBuilder`): list the pool in the
   module `main` boots. Listed by a feature's module instead, the boot refuses:

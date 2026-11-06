@@ -213,8 +213,8 @@ tenant is dropped inside a unit served for another.
   `#[inject]`, and the boot checks that its module reaches it.
 - Reading the ambient context is not deciding: a service may read who the
   caller is, but an authorization decision belongs in a guard.
-- A WebSocket connection hook carries what the upgrade's guards attached and
-  runs no layer of its own.
+- A WebSocket connection hook carries what the upgrade's guards attached, the
+  ability withheld from its reads, and runs no layer of its own.
 
 ## Going further
 

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::{AbilityBuilder, Action, Read};
+use nest_rs_authz::{AbilityBuilder, Action, Read, current_ability};
 use nest_rs_core::input;
 // `WsError` is the handler error only because it is `Display` and in scope.
 use nest_rs_ws::{Gateway, WsClient, WsError, gateway, messages};
@@ -321,4 +321,75 @@ async fn a_relational_denial_keeps_every_row_the_read_admitted() {
         body.contains(r#""id":1"#) && body.contains(r#""id":2"#),
         "{body}"
     );
+}
+
+/// What each connection hook of [`HookGateway`] read, by the ability it held.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct HookReads {
+    connect: std::sync::OnceLock<bool>,
+    disconnect: std::sync::OnceLock<bool>,
+}
+
+#[gateway(path = "/ws/hooks")]
+#[use_guards(super::RoleUpgrade)]
+struct HookGateway {
+    #[inject]
+    reads: Arc<HookReads>,
+}
+
+#[messages]
+impl HookGateway {
+    #[on_connect]
+    async fn joined(&self) {
+        let _ = self.reads.connect.set(current_ability().is_some());
+    }
+
+    #[on_disconnect]
+    async fn left(&self) {
+        let _ = self.reads.disconnect.set(current_ability().is_some());
+    }
+
+    #[subscribe_message("reads")]
+    #[authorize(Read, widget::Entity)]
+    async fn reads(&self) -> Result<bool, WsError> {
+        Ok(current_ability().is_some())
+    }
+}
+
+#[nest_rs_core::module(
+    imports = [nest_rs_ws::WsModule],
+    providers = [super::RoleUpgrade, HookReads, HookGateway],
+)]
+struct HookModule;
+
+/// A hook answers no reply a mask could shape, so what it reads ships as it stands:
+/// the ability the upgrade attached is withheld from it, as from any such unit, and
+/// the socket's messages keep it.
+#[tokio::test]
+async fn a_connection_hook_reads_nothing_a_grant_guards() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<HookModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+    let reads = app
+        .container()
+        .get::<HookReads>()
+        .expect("a provider of the app");
+
+    let frame = super::message_as(&app, "/ws/hooks", Some("admin"), "reads").await;
+    assert_eq!(frame["data"], true, "a message keeps it: {frame}");
+
+    nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+        reads.disconnect.get().is_some()
+    })
+    .await;
+    assert_eq!(reads.connect.get(), Some(&false), "the connect hook read");
+    assert_eq!(
+        reads.disconnect.get(),
+        Some(&false),
+        "the disconnect hook read"
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
 }

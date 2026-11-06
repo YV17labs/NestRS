@@ -1,0 +1,318 @@
+# TODO — what remains open on 7.0
+
+This file is the hand-off: an agent or a contributor who opens the repository
+cold continues from here. It lists every gap left after the 7.0 foundation
+work, how each was established, and what closing it takes. Remove a line when
+it closes, citing the commit that closed it.
+
+**State, 2026-11-06, `release/7.0` at `94b8eccfa`.** Everything planned is
+merged. Green on that commit or the one just before it: `just ci` (6,679
+tests, 11 skipped), the demo gate (lint, 111 unit, 152 e2e), the docs build,
+the rustdoc sweep of every feature alone with warnings denied (144 of 144),
+the five demo apps run and `curl`ed, the framework's Valkey Sentinel and
+Cluster e2e suites, the demo's five binaries on Sentinel and on Cluster, the
+demo image build and the Helm chart (`helm lint`, `helm template`). Nothing
+is pushed, tagged or published.
+
+## How to pick this up
+
+Read `CLAUDE.md` first. Then these rules hold for every item below:
+
+1. **The developer first.** A fix must keep everyday code easy: secure with
+   nothing to think about, and fast. A fix that makes a developer's ordinary
+   code harder is not taken; keep the security by another spelling, or leave
+   the item open here with the reason.
+2. **A bug needs its proof before any work.** Each item says how it was
+   established. **seen**: a run showed it. **read**: read off the code by
+   someone who ran nothing — a suspicion. Reproduce a *read* item first, with
+   a failing test or an observed run. If it does not reproduce, do not fix it:
+   say so here and drop it.
+3. **No blind spot.** A gap that stays is written here with what closing it
+   takes. A limit written only in a docs page or a decision is a limit hidden.
+4. **Small and verified.** One branch per subject (`<type>/<slug>`), signed
+   commits, `release/7.0` moved by fast-forward only, after `just ci` and the
+   demo gate are green on the branch's tip.
+
+Where things run: the services live in the dev container (`.devcontainer/`).
+From the host, with the dev container started:
+
+```bash
+docker compose -f .devcontainer/compose/base.yml exec -T dev bash -lc 'flock /tmp/nestrs-live.lock just ci'
+docker compose -f .devcontainer/compose/base.yml exec -T dev bash -lc \
+  'cargo build --locked -p nest-rs-cli && export PATH=$CARGO_TARGET_DIR/debug:$PATH \
+   && cd demo && just lint && just test unit && flock /tmp/nestrs-live.lock just test e2e'
+docker compose -f .devcontainer/compose/base.yml exec -T -w /workspaces/nestrs/docs dev bash -lc 'npm ci && npm run build'
+```
+
+Valkey Sentinel and Cluster, and Postgres with mutual TLS, are dev container
+environments of their own (`CLAUDE.md`, *Testing*).
+
+## 1. Before publishing 7.0
+
+- **The x86_64 lint has not run since 2026-10-29** (`5655dc34`). CI's lint
+  jobs build on x86_64, where type sizes differ from aarch64 (one red was
+  invisible on aarch64 once). Close: run CI's lint (clippy with warnings
+  denied, `cargo hack`, both rustdoc passes, the demo's clippy) on x86_64, in
+  an amd64 container or on the first CI run.
+- **The performance guard has not run in full since 2026-10-23** (`3290e995`;
+  per-branch measures stopped on 2026-10-30), though much has moved on the hot
+  path since. Close: the harness in `bench/` on a quiet machine, the tip
+  against the base twice, within the larger noise plus 5 % rps or 10 % p99.
+  Figures are relative, never for publication.
+- **The first CI run after the push** is the only proof of a fresh
+  `create-bucket.sh`, the dev-services action's `/etc/hosts` mapping, and the
+  default stacks on x86_64.
+- **Postgres mutual TLS never ran live**: `nest-rs-seaorm`'s two `mutual_tls`
+  tests. Close: open the `postgres-mutual-tls` dev container environment, set
+  `postgres := "mutual-tls"` in `test.just`, `just test e2e`.
+- **The demo image was built and its binaries started, never booted against
+  live services**, and `migrate up` never applied a migration from it: the
+  distroless image trusts no development authority. Close: run it on the
+  compose network with a certificate bundle mounted.
+- **`async-graphql = "=7.2"`'s floor, 7.2.0, never built**: every lockfile
+  holds 7.2.1. Close: a minimal-versions resolution.
+
+## 2. Open decisions, each with the recommended answer
+
+Nothing waits on them; the recommendation holds until someone decides
+otherwise.
+
+1. **Judge a loaded row on its `Model` before wire conversion** (reopens
+   `mask-provenance` for loaded rows). Recommended: not for 7.0; it needs a
+   reply type carrying the models through every edge. Section 3 may settle it.
+2. **Serve as nullable, in GraphQL, a field a grant may mask**, rather than
+   requiring an `Option` column. Recommended: yes, as an opt-in key on the
+   field's `#[expose]` in a 7.x minor, the column keeping its `NOT NULL`.
+3. **A grant cuts a row's columns, never the link a relation follows**:
+   `posts { author { id } }` answers though `.fields` withholds `author_id`.
+   Recommended: keep for 7.0, documented (`response-masking.mdx`); refusing it
+   breaks `orgs { users { name } }` for the demo's member.
+4. **A body reading a row by hand can answer a withheld column as a scalar**:
+   `writers.load_one(id).await?.map(|row| row.email)`. Recommended: keep for
+   7.0, documented; closing it is section 3's work.
+5. **The demo's roots list no `GlobalGuards` pool.** The boot refuses a unit
+   with no identifying or authorizing guard, but a route under a weaker guard
+   of the right phase boots without `AuthnGuard`. Recommended: keep the demo
+   without a pool; one line per root puts it back, and brings back the
+   probes' `503` during an authentication outage.
+6. **A GraphQL argument costs `rows × value` of memory** with no credential:
+   1,037 MiB for a 1 MiB body over 1,000 rows (**seen**). A
+   `#[graphql(validator(max_length = …))]` bounds it (36 MiB). Recommended:
+   ship with that remedy documented, and report upstream that
+   `Context::var_value` clones.
+
+## 3. Field-level authorization — the main design left
+
+**Today.** Rows are filtered in SQL. Columns are masked on the reply: each
+edge reads the answer back into a `Model`, judges it and cuts what the grant
+withholds.
+
+**Openings that remain (seen).**
+- Four shapes ship what they hold: a scalar the body builds; a scalar or a map
+  column of an object; a `#[serde(flatten)]` beside a `#[field_resolver]` of
+  that type; a renamed column read under its resolver's name.
+- A body answering a scalar off a loaded row (decision 4 above).
+- A row type with no `#[expose]` crosses a wire through a derive; with the
+  `graphql` feature off, `SimpleObject` or `#[Object]` on a row compiles and
+  answers a hidden column. Close: a probe per edge refusing a `ModelTrait`.
+- A guard refusal on a `#[field_resolver]` files one line per parent row, up
+  to the complexity limit.
+
+**Candidate designs, to decide before any code.**
+- **A value-less cell.** `Repo` reads whole rows; each exposed column of a
+  wire row is a `Masked<T>` judged on the whole `Model` at conversion, and a
+  withheld cell holds no value. Measured on the mask step alone: 0.23 to
+  0.30 µs per row against 1.14 to 1.19 µs today; end to end the gain is small
+  (about 1.11 ms to 1.03 ms per request at an assumed 1 ms read, not measured
+  on a server). It closes most shapes by value. A review found what must
+  change first:
+  - a row read for another caller must not be trusted: the row carries its
+    reader, is not `Clone`, a push carries a `Model`, and `#[subscription]`
+    judges items itself;
+  - the schema must stay true: only a column declared nullable may be
+    withheld (otherwise OpenAPI's and MCP's `required` lie, and one withheld
+    non-null cell nulls a whole GraphQL list);
+  - rows must not `Deref` to the `Model` (the demo reads `row.title` under an
+    edge), a named `into_model()` instead;
+  - it must open nothing new on HTTP or `#[sse]`;
+  - a write-only token's reply keeps the key; a refused row ships no `{}`;
+  - a cell names its column only where the field resolves.
+- **Declared columns as plain `Option<T>`** (Hasura's shape): no cell, no
+  stamp, honest schema, about the cost of no mask. It loses the refusal of a
+  row read for another caller, and a body reads `None` where the cell said
+  `FORBIDDEN`.
+
+**How to decide.** Prototype both on the real `#[expose]` and a real GraphQL
+extension; measure what each changes in the demo's everyday code and the cost
+end to end; decide by rule 1, then security, then performance. **Semver:** if
+7.0 is published first, this is an 8.0 or an opt-in.
+
+## 4. Known gaps by area
+
+**Weak proofs and flaky tests**
+- The Cluster slot-move test fails under a stall over about a second, through
+  the suite's admin connections (3 of 10 runs under deliberate stalls). Close:
+  `bare_client` with a connect timeout wider than a stall. *seen*
+- A lapsed lease counts a job twice at a one-second lease (none at the
+  default); whether it caused the original flaky soak is not shown. *seen*
+- `GATED` and the queue kit's Redis cases count exact attempts on
+  `RedisKit`'s lease, so a runner stalled over a second can fail one. Close: a
+  longer lease offered by `KitBackend`. *read*
+- The Valkey `HELLO` race is forced by no test on a real connection. *seen*
+- A command blocked elsewhere still waits its whole budget. Close: a change in
+  `redis`, upstream. *read*
+- `RustFS` answered `404 NoSuchKey` to a first `PUT` twice; cause not found.
+  Close: a reproduction against RustFS. *seen*
+- nextest `LEAK` marks on passing tests, under load, on macOS only. *read*
+- Each commit's own tree is not rebuilt after a rebase; only the head is
+  gated. *read*
+- Several assertions were never seen red alone (a `compile_fail,E0308` on an
+  order key, the guards suite's `404` and `405`, seaorm's listener e2e). *read*
+
+**Authorization, posture, mask** (beyond section 3)
+- Raw SQL in a `Repo` filter is held by clippy's `disallowed-methods` only: a
+  project without that `clippy.toml` compiles a fragment that widens a filter;
+  a `sea_query::Enum` literal by full path or a hand-written `Iden` passes
+  clippy. *seen*
+- No test reads through `Repo::scoped(Manage)` on Postgres or reaches a
+  `bind` under `Manage`. *read*
+- A subgraph whose guards identify no one publishes its SDL (on purpose for a
+  private network). Close: refuse `federation: true` with no identifying
+  guard, which breaks that case. *seen*
+- `AbilityGuard` alone at a unit under `#[authorize]` boots and answers `401`
+  on every call. *read*
+- `cannot(Read)` beside `can(Manage)`: settled (a `Manage` site needs every
+  action); `missing_scopes` at a `Manage` site may name more than the
+  smallest set. *read*
+
+**HTTP and CORS**
+- A proxy appending to the caller's `Forwarded` line a quoted value starting
+  with a separator still closes the caller's quote. Close: the proxy strips
+  the caller's line, as `extractors.mdx` asks. *seen*
+- `0.0.0.0/1` plus `128.0.0.0/1` trusts all of IPv4; a range pinned in a
+  `#[module]` panics on a typo. *read*
+- A `#[public]` route requiring `Ambient<P>` behind a rejected token answers
+  `401`, absent from its document. *seen*
+- `413` on a route with no body, hyper's connection refusals, and a bare
+  `ProblemDetails` documented `2XX` are in no document. *read*
+
+**GraphQL**
+- A nullable object a directive empties answers `null` (async-graphql would
+  answer `{}`). *seen*
+- What a type condition leaves of an object is not read, and can hide another
+  selection's answer. *seen*
+- A repeated root field's refusal reads by response key and refuses one
+  document too many. *seen*
+- A required variable sent `null` is refused only where its position refuses
+  it. *seen*
+- A `Context` read by hand in a body is not checked at boot. *read*
+
+**WebSocket and MCP**
+- A frame over `max_message_bytes`, closed `1009`, runs no layer and files no
+  `ws.message`. *read*
+- A failure swapped by an interceptor then answered by a filter keeps the
+  first one's class. *read*
+- A vanished peer is not simulated; the server sends no Ping, so a peer gone
+  without a close holds its socket until the connection's maximum age. *read*
+
+**Auth**
+- A social provider needing `access_type` or `prompt` has no seam. *read*
+- Scopes of `OAuthClientConfig` and of the providers are not held to RFC 6749
+  §3.3's grammar. *read*
+- Only `sub` is held to its JSON type when signing; `client_id: u64` passes.
+  Close: the same check per claim. *read*
+- The demo's user tokens name no `client_id`. Close: an authorization-code
+  grant with PKCE for the first-party login. *read*
+- DPoP and mTLS-bound tokens are refused, not verified. *seen*
+
+**Data, queue, storage, health**
+- A storage key with every policy removed answers `AccessDenied`, which reads
+  like least privilege. *read*
+- No jitter above a requested `Retry-After`, and no Redis run sees a job held
+  by `with_retry_after`. *read*
+- The CLI reads a `CrudService` only in `service.rs` and `services/`;
+  `nestrs lint` skips a file that does not parse. *read*
+- Generated processors, scheduled tasks and listeners are neither compiled
+  nor booted by the CLI's replay; the scaffold's `compose.yml` runs nowhere.
+  *read*
+
+**Configuration and telemetry**
+- Several boot refusals are read, not run (`dyn OccurrenceLock`,
+  `dyn OutboxStore`, `dyn UnitOfWork`, `Jobs` beside a reached module). Close:
+  one fixture per port. *read*
+- The new plaintext `warn` lines (`redis://`, `sslmode=disable`, OTLP
+  `http://`) were seen by unit tests only, never on a live plaintext server.
+  *read*
+- `PGSSLROOTCERT` stands behind the system's authorities when the URL names
+  no `sslrootcert`, and fails closed on a private authority. *read*
+
+**Operator lines**
+- `http.request`, `ws.message` and `mcp.operation` name no `host` nor
+  `method`; some mask refusals name no unit; an error's `Display` can still
+  quote a path. *read*
+- A caller selecting N refused fields files up to N lines, bounded by the
+  complexity limit. *read*
+
+**Docs, bench, tooling**
+- The benchmark figures are 4.0.0's, dated as such on every page. Close: the
+  runbook in `bench/` on a dedicated Linux host. *read*
+- Windows is not proven: no job compiles `way_down.rs`'s `not(unix)` branch.
+  *read*
+- The chart refuses only a missing database at install; the other keys at
+  each app's boot. Its shared Secret hands every app the OAuth clients and
+  social secrets. *seen*
+- Five docs pages exceed the 300-line budget (`guards.mdx`,
+  `http/configuration.mdx`, `cli/index.mdx`, `testing/e2e.mdx`,
+  `schedule/index.mdx`). Close: split each.
+- No CI job builds the demo image, so nothing holds its Dockerfile between
+  runs. Close: a job on `release/**`, at the CI minutes it costs.
+- Copies left: the "line written once" guard eight times, the site emitter
+  five times, spec vectors six times; `impl Layer for X {}` beside
+  `#[derive(Layer)]` in about 260 fixtures.
+- Other errors keep a raw serde, validator or driver link that a `{:?}` would
+  print (`QueueError::Serialize` and the like). Close: the sweep `ServiceError`
+  had, crate by crate, each held by `printed`.
+- Per-request trace and span ids are minted from `Uuid` with no `fast-rng`;
+  cost never measured.
+
+## 5. Additive features for 7.x (no caller yet)
+
+Each can land later without a break: an MCP `SessionStore` shipped with the
+framework; an opening on `#[gateway]` for a visitor or push-only gateway; a
+scoped `#[sse]` stream; a public tenant seam outside a request; `OPTIONS *`;
+one percent-decoder; computed response headers in OpenAPI; a cursor key
+accessor; a backend-fed subscription stream; RFC 8705 / DPoP; client
+authentication `none`, `client_secret_jwt`, `private_key_jwt`, the TLS
+methods; RFC 7009 revocation and RFC 7662 introspection; `Repo::restore`;
+`App::run_task`; public `ResourceBinding`; `nestrs generate guard` and
+`interceptor`; a public `RetiredKey`; bench tiers beyond HTTP; a lease port;
+named storage disks; `ModuleRef`; `AppLifecycle::spawn`; ETag / If-Match;
+client TLS reload; WebSocket keep-alive pings.
+
+## 6. Limits kept on purpose
+
+Each is recorded in `.claude/decisions/` with its reason, re-read and still
+holding: real-clock budgets where only real time tells two outcomes apart;
+`Repo::delete` sending its statement under a class denial; CORS refusing an
+unlisted same-origin request; a hand-written `HttpRoutes` route validating
+nothing unasked; dataloaders off the operation's transaction; no layer on a
+hand-written MCP `ServerHandler`; `CrudService` noticed at its first query;
+a visitor's nested read answering nothing.
+
+## 7. Upstream
+
+To report (nothing filed yet): rmcp (session-restore waiters answer `404`
+instead of `503`; positional reads of `JsonRpcResponse`); sqlx-core 0.9
+(`close_hard` never returns on a quiet TLS connection); sea-orm
+(`TryInsert::exec_with_returning` answers `RecordNotFound` where `Conflicted`
+is documented); async-graphql 7.2.1 (an errored field omitted from `data`;
+an interface field's error with no `path`; a field selected twice runs its
+writes twice; `Context::var_value` clones); redis-rs (`PipelineSink` loses a
+read error with nothing in flight); sse-stream 0.2.6 (keep-alive on std's
+clock).
+
+Known limits whose cause is upstream: `RUSTSEC-2026-0253` (lru through
+async-graphql 7.2.1) ignored until async-graphql 8 is final; a statement cut
+mid-flight is not cancelled (sqlx keeps the backend pid private); a presigned
+`PUT` binds its type, not its length (object_store); `parking_lot` 0.12 and
+0.13 both in the lockfiles.

@@ -177,4 +177,9 @@ new job, as `JobProducer::enqueue` states and the queue kit holds. So the tests
 moving a slot, and every test of the suite counting a job's runs and about no
 lapse, now run on the default lease and the default budget
 (`patient_replica_on`), and only a test about a lapse runs on the second. A `== 1`
-is then a promise that holds: a second run left is a defect to find.
+is then a promise that holds: a second run left is a defect to find. Run on the
+Cluster, a runner stalled 1.5 s at a time ran two jobs twice at the one-second lease
+with the handler held 5 ms past its count, one reclaimed under the same `backend_id`
+and one handed back after its attempt was cut, and ran none twice at the default
+lease under the same stalls, so a lapsed lease is a cause of that count, though the
+soak's own log is gone and the handler as committed did not double in 22 such runs.

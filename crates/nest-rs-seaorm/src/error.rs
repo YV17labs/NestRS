@@ -10,7 +10,6 @@ use std::borrow::Cow;
 use std::error::Error;
 
 use nest_rs_core::__private::OpaqueCause;
-use nest_rs_core::DecodeError;
 use nest_rs_database::AtomicError;
 use sea_orm::sqlx::error::DatabaseError;
 use sea_orm::sqlx::postgres::PgDatabaseError;
@@ -34,7 +33,7 @@ pub(crate) enum UnwiredBind {
 
 /// Failure modes shared by every service method. The business variants carry a
 /// client-facing message and map to their 4xx; the opaque ones (`Db`,
-/// `Internal`, `Masking`) answer a constant on every edge and keep their cause,
+/// `Internal`) answer a constant on every edge and keep their cause,
 /// said through [`error_message`](fn@nest_rs_core::error_message), for the
 /// operator's line.
 #[derive(Debug, Clone, thiserror::Error)]
@@ -52,15 +51,6 @@ pub enum ServiceError {
     /// `tracing`, said by its SQLSTATE; the wire sees a generic message.
     #[error("database error")]
     Db(#[source] DbErr),
-    /// Response masking could not reconcile a loaded row into its wire DTO: a
-    /// 500. The decode failure is kept as its [`DecodeError`] report, never
-    /// serde's sentence, which quotes the row's values.
-    #[error("response masking failed")]
-    #[non_exhaustive]
-    Masking {
-        /// What did not decode, without the value.
-        source: DecodeError,
-    },
     /// A well-formed request the service rejects on business grounds (empty
     /// body, non-positive amount). Maps to **422**; the message is client-facing.
     #[error("{0}")]
@@ -164,14 +154,6 @@ impl ServiceError {
     /// `warn`, where any other `Db` is a `500`.
     fn is_unavailable(&self) -> bool {
         matches!(self, Self::Db(err) if DbOutcome::of(err) == DbOutcome::Unavailable)
-    }
-}
-
-/// A response mask's decode failure, said without the row's values. Reached
-/// through the crate's `__private`.
-pub fn masking(failure: &serde_json::Error) -> ServiceError {
-    ServiceError::Masking {
-        source: DecodeError::new(failure),
     }
 }
 
@@ -414,7 +396,7 @@ fn said_server(server: &(dyn DatabaseError + 'static)) -> String {
 /// What every edge answers for a `ServiceError`, HTTP included: a business
 /// variant's problem, its sentence as the detail and a validation failure's
 /// field map as `errors`; a cancelled statement's `503` and its wait; `None`
-/// for any other `Db`, `Masking` and `Internal`, which the edge answers
+/// for any other `Db` and `Internal`, which the edge answers
 /// opaquely, logging the cause.
 impl nest_rs_core::ToProblem for ServiceError {
     fn to_problem(&self) -> Option<nest_rs_core::Problem> {
@@ -427,7 +409,7 @@ impl nest_rs_core::ToProblem for ServiceError {
             Self::Forbidden(_) => Problem::new(403, code::FORBIDDEN),
             Self::NotFound(_) => Problem::new(404, code::NOT_FOUND),
             Self::Db(_) if self.is_unavailable() => unavailable(),
-            Self::Db(_) | Self::Masking { .. } | Self::Internal { .. } => return None,
+            Self::Db(_) | Self::Internal { .. } => return None,
         };
         let problem = problem.with_detail(self.to_string());
         Some(match self.field_errors() {
@@ -785,12 +767,9 @@ mod http {
         #[test]
         fn a_variant_rendered_for_the_edge_files_nothing_of_its_own() {
             let logs = nest_rs_testing::LogCapture::install();
-            let failure =
-                serde_json::from_str::<u64>(r#""secret-value""#).expect_err("a string is no u64");
             for error in [
                 ServiceError::Db(crate::error::tests::bad_uuid()),
                 ServiceError::Db(crate::error::tests::cancelled_statement()),
-                crate::error::masking(&failure),
                 ServiceError::internal("could not sign the export"),
                 ServiceError::not_found("no such widget"),
             ] {
@@ -1641,7 +1620,7 @@ pub(crate) mod tests {
     }
 
     /// Each opaque failure whose chain holds an upstream's decode failure.
-    pub(super) fn opaque_over_a_decode_failure() -> [ServiceError; 3] {
+    pub(super) fn opaque_over_a_decode_failure() -> [ServiceError; 2] {
         let upstream =
             || serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
         [
@@ -1650,7 +1629,6 @@ pub(crate) mod tests {
                 "the upstream reply did not decode",
                 anyhow::Error::from(upstream()).context("reading the reply"),
             ),
-            masking(&upstream()),
         ]
     }
 
@@ -1667,7 +1645,7 @@ pub(crate) mod tests {
             assert_eq!(frame.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
         }
         let filed = logs.find(nest_rs_ws::TARGET, "websocket message failed");
-        assert_eq!(filed.len(), 3, "{:#?}", logs.events());
+        assert_eq!(filed.len(), 2, "{:#?}", logs.events());
         for event in filed {
             let said = event.field("error").unwrap_or_default();
             assert!(said.contains("expected u64"), "{said}");
@@ -1685,7 +1663,6 @@ pub(crate) mod tests {
                 "the upstream reply did not decode",
                 anyhow::Error::from(quoting()).context("reading the reply"),
             ),
-            masking(&quoting()),
         ] {
             let said = error_message(&err);
             assert!(!said.contains("sk_live"), "{said}");
@@ -1777,7 +1754,6 @@ pub(crate) mod tests {
         );
         for opaque in [
             ServiceError::Db(DbErr::Custom("relation \"posts\" does not exist".into())),
-            masking(&serde_json::from_str::<u64>(r#""row 7""#).expect_err("not a number")),
             ServiceError::internal("hash failed"),
         ] {
             assert_eq!(opaque.to_problem(), None, "{opaque:?}");

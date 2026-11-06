@@ -251,13 +251,6 @@ impl LedgerController {
         )))
     }
 
-    #[get("/masking")]
-    #[public]
-    async fn masking(&self) -> Result<String, ServiceError> {
-        let failure = serde_json::from_str::<u64>(r#""secret-123""#).expect_err("not a number");
-        Err(nest_rs_seaorm::__private::masking(&failure))
-    }
-
     #[get("/internal")]
     #[public]
     async fn internal(&self) -> Result<String, ServiceError> {
@@ -316,13 +309,6 @@ async fn a_service_error_a_route_answers_opaquely_is_filed_once_by_the_edge() {
             "error",
             "request failed",
             "22P02",
-        ),
-        (
-            "/ledger/masking",
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "error",
-            "request failed",
-            "response masking failed: invalid type: a string, expected u64",
         ),
         (
             "/ledger/internal",

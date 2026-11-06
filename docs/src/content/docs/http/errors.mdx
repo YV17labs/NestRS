@@ -217,8 +217,8 @@ the right tool for the leftovers — never the goal.
 Everything above decides how an error is *shaped*. `Opaque` decides whether
 the client sees it at all.
 
-`ServiceError` is wire-safe by construction — its `Masking` and `Internal`
-variants, and a `Db` one but for a statement Postgres cancelled at its bound (the
+`ServiceError` is wire-safe by construction — its `Internal` variant, and a `Db`
+one but for a statement Postgres cancelled at its bound (the
 [table below](#framework-errors-carry-their-own-mapping)), answer a `500` whose `code` is `INTERNAL`, with no
 `detail`, and display no cause, even wrapped in an error of yours; its log
 line says the database's failure by its SQLSTATE, never by the server's

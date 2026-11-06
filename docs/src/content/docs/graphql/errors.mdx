@@ -196,7 +196,7 @@ A service method the feature writes returns `Result<T, ServiceError>` — a
 `CrudService` read answers `DbErr`, which converts into no edge's error, so the method
 says `.map_err(ServiceError::from)` — and `ServiceError` implements `ToProblem`: `NotFound` answers `NOT_FOUND`, `Conflict` `CONFLICT`,
 `Forbidden` `FORBIDDEN`, `Invalid` and `Validation` `INVALID_ARGUMENT`, each with
-its own sentence, a validation failure's fields under `extensions.errors`; `Db`, `Masking` and `Internal` answer opaquely, their cause
+its own sentence, a validation failure's fields under `extensions.errors`; `Db` and `Internal` answer opaquely, their cause
 filed at `error` — but for a statement Postgres cancelled at its bound, a `Db` answering
 `"service unavailable"` under `UNAVAILABLE`, with its `retryAfterSeconds` when the bound
 gives one, its cause at `warn`. A resolver returns such a method's result as it is:

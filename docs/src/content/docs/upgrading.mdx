@@ -605,7 +605,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | `.opaque()` over a borrowed error, or one that is only `Display` | an owned `std::error::Error` that converts into `Box<dyn Error + Send + Sync>`: it logs the whole chain; `JobError::retry` / `abort`, `WsReply::from_handler_error` and `OccurrenceLockError::new` take the same |
    | `ServiceError::internal(format!("password hashing failed: {e}"))` | `ServiceError::internal_because("password hashing failed", e)` |
    | `ServiceError::internal(&reason)`, `reason` a local `String` or a borrowed `&str` | `ServiceError::internal(reason.clone())` or `.to_owned()`: the detail is `'static`; a `String` or a `&'static str` passes unchanged |
-   | `ServiceError::Internal(msg)` / `ServiceError::Masking(msg)` built or matched | `ServiceError::internal(msg)`; match `ServiceError::Internal { .. }` and `Masking { .. }` (which no framework path builds), the detail read as `err.source()`'s `Display` |
+   | `ServiceError::Internal(msg)` built or matched | `ServiceError::internal(msg)`; match `ServiceError::Internal { .. }`, the detail read as `err.source()`'s `Display` |
+   | `ServiceError::Masking(msg)` built or matched | nothing: the variant is gone, as no path built it. A mask's failure is the edge's opaque answer, and a failure of your own is `ServiceError::internal(msg)` |
    | `AuthError::Failed(format!("…: {e}"))`, `AuthError::Failed(msg)` | `AuthError::failed_because("…", e)`, `AuthError::failed(msg)` |
    | `AuthError::Unavailable(detail)` or `AuthError::Unavailable { detail, retry_after }` built | `AuthError::unavailable(detail, retry_after)`, or `AuthError::unavailable_because(detail, retry_after, e)` |
    | `match err { AuthError::Failed(msg) => … }`, `AuthError::Unavailable { detail, retry_after }` matched | `AuthError::Failed { .. }`, `AuthError::Unavailable { retry_after, .. }`, the detail read as `err.source()`'s `Display` or the chain as `nest_rs::core::error_message(&err)` |
@@ -1809,7 +1810,6 @@ lists what the boot, a log or the wire shows when one is missed.
   the entity, an `id` no key can hold, answers `INTERNAL` where 6.x served it, and an
   answer to a visitor on a rule only a read could decide reads `null` or is refused. Answer
   a DTO of your own.
-- **A `Json<Wire>` scalar, at a root or as a subscription item,** answers `FORBIDDEN`
 - **A `#[field_resolver]` answering a wire type where no ability is attached** answers
   `INTERNAL` with one `no_ambient_ability` line, as a root and a relation do, where it
   served every column. Attach the ability at `/graphql`'s request, or answer a DTO of your
@@ -1823,15 +1823,16 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A `#[field_resolver]` answering `&'static Wire`, `&'static [Wire]` or `Weak<Wire>`,**
   however deep it sits, does not compile, naming the shape, where it shipped what a grant
   withholds. Answer the row by value, or behind an `Arc`.
+- **A `Json<Wire>` scalar, at a root or as a subscription item,** answers `FORBIDDEN`
   naming every column the grant takes, or drops the item, where it shipped whole: it has
   no selection to acquit them. **A subscription item that is a list** is masked row by
   row, where it passed unmasked. Grant the columns, or answer the object type.
-- **`use_guards_global`, `use_pipes_global`, `use_interceptors_global` or
 - **A WebSocket `#[on_connect]` or `#[on_disconnect]` going through `Repo`** fails closed,
   a read and a by-id write alike, and `current_ability()` answers `None` there: no mask
   shapes what a hook sends, so the ability the upgrade attached stays off its reads. The
   principal stays readable. Read what a client should see in a message whose posture names
   it; a hook's system write is `Repo::insert_unscoped`, a visible line.
+- **`use_guards_global`, `use_pipes_global`, `use_interceptors_global` or
   `use_exception_filters_global` left in `main`** fails to compile (`no method
   named use_guards_global found for struct AppBuilder`): list the pool in the
   module `main` boots. Listed by a feature's module instead, the boot refuses:

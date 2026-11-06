@@ -115,7 +115,6 @@ pub mod __private {
 
     pub use crate::bind::resource_bind;
     pub use crate::config::DEFAULT_STATEMENT_TIMEOUT;
-    pub use crate::error::masking;
     #[cfg(feature = "graphql")]
     pub use crate::error::{graphql_crud_error, graphql_crud_write_error};
     #[cfg(feature = "http")]

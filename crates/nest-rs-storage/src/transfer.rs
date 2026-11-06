@@ -82,10 +82,7 @@ impl Transfer {
                 Err(_) => stalled(self.read_timeout, self.store.backend),
             };
             if let Err(error) = self.resume(stopped).await {
-                let failed = StorageError::Get {
-                    store: self.store.shown.clone(),
-                    source: Box::new(error),
-                };
+                let failed = StorageError::download(&self.store.shown, &error);
                 return Some((Err(failed), None));
             }
         }
@@ -100,7 +97,7 @@ impl Transfer {
         };
         tracing::warn!(
             target: crate::TARGET,
-            key = self.path.as_ref(),
+            store = %self.store.shown,
             error = %nest_rs_core::error_message(&stopped),
             "download resumed where its body stopped",
         );
@@ -230,6 +227,61 @@ mod tests {
         ) -> object_store::Result<()> {
             self.0.copy_opts(from, to, options).await
         }
+    }
+
+    /// A body breaking under a key that holds a user's input: neither the line
+    /// saying the resume nor the download's failure quotes it, or the URI.
+    #[tokio::test]
+    async fn a_resumed_download_says_nothing_of_its_key() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let store = Arc::new(FenceIgnoring(InMemory::new()));
+        let path = Path::from("users/zzqx-ada/avatar.png");
+        store
+            .put(&path, PutPayload::from(vec![1_u8; 100]))
+            .await
+            .expect("the first version");
+        let GetResult {
+            meta,
+            range,
+            attributes,
+            extensions,
+            ..
+        } = store.get(&path).await.expect("the first answer");
+        let broken = futures_util::stream::iter([Err(object_store::Error::Generic {
+            store: "test",
+            source: format!("Error performing GET https://s3/bucket/{path}").into(),
+        })])
+        .boxed();
+        let first = GetResult {
+            payload: GetResultPayload::Stream(broken),
+            meta,
+            range,
+            attributes,
+            extensions,
+        };
+        store
+            .put(&path, PutPayload::from(vec![2_u8; 100]))
+            .await
+            .expect("a version written while the first is read");
+
+        let read: Vec<Result<Bytes>> = download(
+            Arc::new(Store::over(store)),
+            path,
+            first,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .collect()
+        .await;
+        let refused = read
+            .into_iter()
+            .find_map(std::result::Result::err)
+            .expect("the rest of another version is refused");
+        let printed = nest_rs_testing::printed(&refused);
+        assert!(!printed.contains("zzqx"), "{printed}");
+        let resumed = logs.expect_one(crate::TARGET, "download resumed where its body stopped");
+        assert_eq!(resumed.field("store").as_deref(), Some("memory:///"));
+        assert!(!resumed.quotes("zzqx"), "{:?}", resumed.fields);
     }
 
     #[tokio::test]

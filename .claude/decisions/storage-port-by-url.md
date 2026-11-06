@@ -121,3 +121,32 @@ for a rejected key reads as a policy's refusal until its code joins the list. A
 call's error keeps object_store's as its source, by contract, so a `{:?}` of it
 still quotes the request's URI, the key among it, and a document other than a
 `401`'s or a `403`'s; only `error_message` says it without them.
+
+## 2026-11-06 — a call's error holds the sentence too
+
+The limit above is closed, and the contract it kept is what moved. A call's error
+held object_store's as its source, and a test holding a marked key showed what that
+prints: the object's path in a `{:?}`, the request's URI in each of the chain's
+`Display`s, and a document other than a `401`'s or a `403`'s, whoever read the error
+but `error_message`. Those errors now hold the sentence `error_message` says, as a
+refused boot's already did. `downcast_ref::<object_store::Error>()` goes with it:
+`source()` is what every chain reader walks, so no spelling keeps the library's error
+there and out of their print. Its one everyday use, telling a key holding nothing
+from a failure, is a variant, `StorageError::NotFound`, which takes no
+`object_store` line in a manifest. `Init` still holds what the builder refused: no
+key or request exists yet, and a test holding a marked URL, endpoint, secret and
+material shows it quotes none.
+
+**Refused:**
+
+- **A wrapper holding object_store's error behind a redacting `Debug`, with an
+  accessor to reach it.** It keeps a downcast nobody writes, at the price of an
+  error holding the value and a manifest line on a private dependency.
+- **A kind enum mirroring object_store's variants.** No caller decides on a
+  `PermissionDenied` or a `Precondition`: an operator reads them in the sentence.
+
+The lines follow: `key` leaves the abandoned upload's and the resumed download's,
+which name the `store` and carry the trace. The operator who must reconcile a
+dangling upload lists the bucket's incomplete uploads (S3's `ListMultipartUploads`)
+or leaves them to its lifecycle rule; object_store could never list them anyway.
+

@@ -6,7 +6,7 @@ use futures_util::{Stream, StreamExt, stream};
 use nest_rs::core::{error_message, injectable};
 use nest_rs::queue::Jobs;
 use nest_rs::redis::RedisConnection;
-use nest_rs::storage::{SignedPut, Storage};
+use nest_rs::storage::{SignedPut, Storage, StorageError};
 use uuid::Uuid;
 
 use super::command::{AUDIO_QUEUE, AudioQueue, TranscodeCommand};
@@ -123,16 +123,14 @@ impl AudioService {
         Option<impl Stream<Item = std::io::Result<Bytes>> + Send + 'static + use<>>,
         AudioError,
     > {
-        let key = Self::derived_key(file);
-        if self.storage.head(&key).await?.is_none() {
-            return Ok(None);
-        }
-        let stream = self
-            .storage
-            .get_stream(&key)
-            .await?
-            .map(|chunk| chunk.map_err(std::io::Error::other));
-        Ok(Some(stream))
+        let stream = match self.storage.get_stream(&Self::derived_key(file)).await {
+            Ok(stream) => stream,
+            Err(StorageError::NotFound { .. }) => return Ok(None),
+            Err(failed) => return Err(failed.into()),
+        };
+        Ok(Some(
+            stream.map(|chunk| chunk.map_err(std::io::Error::other)),
+        ))
     }
 
     pub async fn result_ready(&self, file: Uuid) -> Result<bool, AudioError> {

@@ -174,7 +174,7 @@ impl Store {
             Err(Attempt::Refused(refused)) => Err(refused),
             Err(Attempt::Failed(error)) => Err(StorageError::List {
                 store: self.shown.clone(),
-                source: Box::new(error),
+                source: SaidFailure::of(&error),
             }),
         }
     }
@@ -375,7 +375,7 @@ async fn proved(probe: &Probe, budget: Duration, shown: &str) -> Result<()> {
         Err(Unproved::Spent { last, .. }) => Err(StorageError::Unreachable {
             store: shown.to_owned(),
             budget,
-            source: last.map(|error| Box::new(SaidFailure::of(&error)) as _),
+            source: last.map(|error| SaidFailure::of(&error)),
         }),
     }
 }
@@ -431,7 +431,7 @@ fn classify(
     Err(Attempt::Refused(StorageError::Refused {
         store: shown.to_owned(),
         reason,
-        source: Box::new(SaidFailure::of(&error)),
+        source: SaidFailure::of(&error),
     }))
 }
 
@@ -1256,8 +1256,8 @@ mod tests {
         }
     }
 
-    /// A call's chain keeps object_store's own error as its source, so what the
-    /// store echoes never reaches it.
+    /// object_store's own error, the one a call's sentence is read off, meets no
+    /// document to quote: what the store echoes never reaches it.
     #[tokio::test]
     async fn a_refused_call_holds_nothing_of_the_stores_document() {
         let authority = nest_rs_testing::TestAuthority::new();

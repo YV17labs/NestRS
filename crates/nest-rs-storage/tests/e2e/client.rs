@@ -19,37 +19,29 @@ const DISCARDED: &str = "discarded the parts of an interrupted multipart upload"
 const DANGLING: &str = "multipart upload left dangling parts";
 const CANCELLED: &str = "multipart upload was cancelled mid-flight; discarding its parts";
 
-/// The `nest_rs::storage` events a call emitted, as `(message, key)` — the
-/// abort's only witness, since `object_store` cannot list multipart uploads.
+/// The messages of the `nest_rs::storage` events a call emitted — the abort's
+/// only witness, since `object_store` cannot list multipart uploads.
 #[derive(Clone, Default)]
-struct Events(Arc<Mutex<Vec<(String, String)>>>);
+struct Events(Arc<Mutex<Vec<String>>>);
 
 impl Events {
-    /// The keys `message` was emitted for, in order.
-    fn keys_for(&self, message: &str) -> Vec<String> {
+    /// How many times `message` was emitted.
+    fn count_of(&self, message: &str) -> usize {
         self.0
             .lock()
             .expect("events")
             .iter()
-            .filter(|(emitted, _)| emitted == message)
-            .map(|(_, key)| key.clone())
-            .collect()
+            .filter(|emitted| *emitted == message)
+            .count()
     }
 }
 
 #[derive(Default)]
 struct Captured {
     message: String,
-    key: String,
 }
 
 impl Visit for Captured {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "key" {
-            self.key = value.to_owned();
-        }
-    }
-
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         // `message` is a `fmt::Arguments`, whose `Debug` is its `Display`.
         if field.name() == "message" {
@@ -65,10 +57,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Events {
         }
         let mut captured = Captured::default();
         event.record(&mut captured);
-        self.0
-            .lock()
-            .expect("events")
-            .push((captured.message, captured.key));
+        self.0.lock().expect("events").push(captured.message);
     }
 }
 
@@ -286,6 +275,30 @@ async fn put_stream_uploads_in_parts_and_keeps_the_content_type() {
     s.delete(&empty_key).await.expect("delete empty");
 }
 
+/// What the store itself answers for a key holding nothing, whichever call reads
+/// it, and no failure quotes the key.
+#[tokio::test]
+async fn a_download_of_no_object_answers_not_found_quoting_no_key() {
+    let s = storage().await;
+    let key = unique("zzqx-absent.mp3");
+
+    let missing = s.get_bytes(&key).await.expect_err("no object there");
+    assert!(
+        matches!(missing, StorageError::NotFound { .. }),
+        "{missing}"
+    );
+    let printed = nest_rs_testing::printed(&missing);
+    assert!(!printed.contains("zzqx"), "{printed}");
+
+    let Err(missing) = s.get_stream(&key).await else {
+        panic!("no object there")
+    };
+    assert!(
+        matches!(missing, StorageError::NotFound { .. }),
+        "{missing}"
+    );
+}
+
 #[tokio::test]
 async fn a_failing_source_surfaces_its_own_error_and_leaves_no_object_or_parts_behind() {
     let s = storage().await;
@@ -338,15 +351,11 @@ async fn a_failing_source_surfaces_its_own_error_and_leaves_no_object_or_parts_b
     );
 
     assert_eq!(
-        events.keys_for(DISCARDED),
-        vec![key.clone()],
+        events.count_of(DISCARDED),
+        1,
         "the interrupted upload's parts were not aborted",
     );
-    assert!(
-        events.keys_for(DANGLING).is_empty(),
-        "the abort itself failed: {:?}",
-        events.keys_for(DANGLING),
-    );
+    assert_eq!(events.count_of(DANGLING), 0, "the abort itself failed");
     eprintln!("put_stream(failing source) {key} -> {err}, parts discarded");
 }
 
@@ -375,7 +384,7 @@ async fn a_successful_streamed_upload_discards_nothing() {
     let info = s.head(&key).await.expect("head").expect("object present");
     assert_eq!(info.byte_size, expected as u64);
     assert!(
-        events.keys_for(DISCARDED).is_empty() && events.keys_for(DANGLING).is_empty(),
+        events.count_of(DISCARDED) == 0 && events.count_of(DANGLING) == 0,
         "a completed upload aborted nothing",
     );
 
@@ -470,26 +479,18 @@ async fn a_cancelled_upload_discards_its_parts_instead_of_leaving_them_billed() 
         // The abort runs on a detached task: wait for its outcome, within the
         // budget that bounds it, before the capture guard is dropped.
         nest_rs_testing::wait_until(config().operation_timeout + Duration::from_secs(1), || {
-            !events.keys_for(DISCARDED).is_empty() || !events.keys_for(DANGLING).is_empty()
+            events.count_of(DISCARDED) > 0 || events.count_of(DANGLING) > 0
         })
         .await;
     }
 
+    assert_eq!(events.count_of(CANCELLED), 1, "a cancelled upload says so");
     assert_eq!(
-        events.keys_for(CANCELLED),
-        vec![key.clone()],
-        "a cancelled upload says so, naming the key an operator would need",
-    );
-    assert_eq!(
-        events.keys_for(DISCARDED),
-        vec![key.clone()],
+        events.count_of(DISCARDED),
+        1,
         "and its parts are discarded rather than left for a lifecycle rule",
     );
-    assert!(
-        events.keys_for(DANGLING).is_empty(),
-        "the abort itself failed: {:?}",
-        events.keys_for(DANGLING),
-    );
+    assert_eq!(events.count_of(DANGLING), 0, "the abort itself failed");
 
     assert!(
         s.head(&key).await.expect("head").is_none(),

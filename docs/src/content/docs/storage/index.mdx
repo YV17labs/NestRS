@@ -278,12 +278,14 @@ where that is decided — see
 an error the client is owed no word of, answered with `.opaque()?` and its
 chain filed at `error`. Its sentences
 name the store and the operation, never a key: a key often carries user input,
-so the chain object_store's own errors add is said by their kind, without the
-key or the URL they quote. The library's error stays the source, read with
-`downcast_ref::<object_store::Error>()`, but for a refused boot, which keeps that
-sentence alone: a `main` returning it prints each link as it is. No error holds
-the document of a `401` or a `403`, which echoes the key and the request signed.
-A `StorageError` converts into
+so what object_store's own errors add is said by their kind, without the key,
+the URL or the store's document they quote. The error holds that sentence and
+nothing below it, so a `{:?}`, an `anyhow` report or a `main` returning it prints
+no more than `error_message` says, and no line on `nest_rs::storage` names a key:
+each names the store, and the trace names the call. The one failure a caller
+decides on is its own variant: a download of a key holding nothing answers
+`StorageError::NotFound`, where `head` answers `None` and `delete` succeeds. A
+`StorageError` converts into
 `std::io::Error`, so a `get_stream` feeds a streamed response body directly.
 
 ## Configuration

@@ -174,7 +174,7 @@ async fn a_download_broken_past_the_retries_is_resumed_and_says_so() {
         "download resumed where its body stopped",
     );
     assert_eq!(resumed.level, "warn");
-    assert_eq!(resumed.field("key").as_deref(), Some(key.as_str()));
+    assert!(!resumed.quotes(&key), "{:?}", resumed.fields);
     assert!(
         resumed
             .field("error")

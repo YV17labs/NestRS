@@ -16,7 +16,7 @@ use object_store::{
 };
 
 use crate::config::StorageConfig;
-use crate::error::{CallTimedOut, Exchange, Result, StorageError};
+use crate::error::{CallTimedOut, Exchange, Result, SaidFailure, StorageError};
 use crate::store::{Store, witnessed};
 use crate::transfer::download;
 
@@ -152,7 +152,7 @@ impl Storage {
             .map_err(|source| StorageError::Presign {
                 method: method.clone(),
                 store: self.store.shown.clone(),
-                source: Box::new(source),
+                source: SaidFailure::of(&source),
             })?;
         Ok(PresignedRequest {
             url: url.into(),
@@ -214,7 +214,7 @@ impl Storage {
             Err(object_store::Error::NotFound { .. }) => Ok(None),
             Err(e) => Err(StorageError::Head {
                 store: self.store.shown.clone(),
-                source: Box::new(e),
+                source: SaidFailure::of(&e),
             }),
         }
     }
@@ -260,10 +260,7 @@ impl Storage {
         let first = self
             .answered(self.store.objects.get(&path))
             .await
-            .map_err(|source| StorageError::Get {
-                store: self.store.shown.clone(),
-                source: Box::new(source),
-            })?;
+            .map_err(|error| StorageError::download(&self.store.shown, &error))?;
         let size = first.range.end - first.range.start;
         Ok((
             size,
@@ -319,7 +316,7 @@ impl Storage {
             }),
             Err(e) => Err(StorageError::List {
                 store: store.shown.clone(),
-                source: Box::new(e),
+                source: SaidFailure::of(&e),
             }),
         })
     }
@@ -375,9 +372,8 @@ impl Storage {
             )
             .await
             .map_err(|e| self.put_failed(e))?,
-            key,
+            Arc::clone(&self.store),
             self.config.operation_timeout,
-            self.store.backend,
         );
 
         let mut stream = std::pin::pin!(stream);
@@ -432,7 +428,7 @@ impl Storage {
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(e) => Err(StorageError::Delete {
                 store: self.store.shown.clone(),
-                source: Box::new(e),
+                source: SaidFailure::of(&e),
             }),
         }
     }
@@ -441,7 +437,7 @@ impl Storage {
     fn put_failed(&self, error: object_store::Error) -> StorageError {
         StorageError::Put {
             store: self.store.shown.clone(),
-            source: Box::new(error),
+            source: SaidFailure::of(&error),
         }
     }
 
@@ -483,10 +479,11 @@ pub(crate) async fn bounded<F: Future>(
 /// orphaned parts until a lifecycle rule sweeps them.
 ///
 /// `Drop` cannot await, so it hands the abort to a detached, best-effort task
-/// and says so at `warn`, naming the key.
+/// and says so at `warn`, naming the store.
 struct UploadGuard {
     upload: Option<Box<dyn MultipartUpload>>,
-    key: String,
+    /// The store the upload goes to.
+    store: Arc<Store>,
     /// The unit of work that opened the upload, so the detached abort carries
     /// its `trace_id`. Captured at `new`: a dropped future may not drop on the
     /// task that owned it.
@@ -494,23 +491,15 @@ struct UploadGuard {
     /// How long the abort waits for the store, as every other call of the
     /// upload does.
     budget: Duration,
-    /// The backend the upload goes to.
-    backend: &'static str,
 }
 
 impl UploadGuard {
-    fn new(
-        upload: Box<dyn MultipartUpload>,
-        key: &str,
-        budget: Duration,
-        backend: &'static str,
-    ) -> Self {
+    fn new(upload: Box<dyn MultipartUpload>, store: Arc<Store>, budget: Duration) -> Self {
         Self {
             upload: Some(upload),
-            key: key.to_owned(),
+            store,
             context: TaskContext::current(),
             budget,
-            backend,
         }
     }
 
@@ -529,7 +518,7 @@ impl UploadGuard {
     /// before returning.
     async fn abort(&mut self) {
         if let Some(mut upload) = self.upload.take() {
-            abort_upload(&mut upload, &self.key, self.budget, self.backend).await;
+            abort_upload(&mut upload, &self.store, self.budget).await;
         }
     }
 
@@ -544,22 +533,22 @@ impl Drop for UploadGuard {
         let Some(mut upload) = self.upload.take() else {
             return;
         };
-        let key = std::mem::take(&mut self.key);
+        let store = Arc::clone(&self.store);
         let context = self.context.clone();
-        let (budget, backend) = (self.budget, self.backend);
+        let budget = self.budget;
         // A `Drop` cannot prove it runs in a runtime, and panicking while
         // unwinding would replace a billing leak with a crash.
         let runtime = tokio::runtime::Handle::try_current();
         context.span().in_scope(|| {
             tracing::warn!(
                 target: crate::TARGET,
-                key = key.as_str(),
+                store = %store.shown,
                 "multipart upload was cancelled mid-flight; discarding its parts",
             );
             if runtime.is_err() {
                 tracing::warn!(
                     target: crate::TARGET,
-                    key = key.as_str(),
+                    store = %store.shown,
                     "no runtime is available to discard them; they are left for the store's \
                      lifecycle rule",
                 );
@@ -567,7 +556,7 @@ impl Drop for UploadGuard {
         });
         if let Ok(handle) = runtime {
             handle.spawn(context.carry(async move {
-                abort_upload(&mut upload, &key, budget, backend).await;
+                abort_upload(&mut upload, &store, budget).await;
             }));
         }
     }
@@ -577,24 +566,19 @@ impl Drop for UploadGuard {
 ///
 /// Both outcomes are logged: `object_store` cannot list multipart uploads, so
 /// the event is the only trace of whether the parts were discarded.
-async fn abort_upload(
-    upload: &mut Box<dyn MultipartUpload>,
-    key: &str,
-    budget: Duration,
-    backend: &'static str,
-) {
-    match bounded(budget, backend, upload.abort())
+async fn abort_upload(upload: &mut Box<dyn MultipartUpload>, store: &Store, budget: Duration) {
+    match bounded(budget, store.backend, upload.abort())
         .await
         .and_then(|aborted| aborted)
     {
         Ok(()) => tracing::debug!(
             target: crate::TARGET,
-            key,
+            store = %store.shown,
             "discarded the parts of an interrupted multipart upload",
         ),
         Err(error) => tracing::warn!(
             target: crate::TARGET,
-            key,
+            store = %store.shown,
             error = %nest_rs_core::error_message(&error),
             "multipart upload left dangling parts",
         ),
@@ -749,6 +733,11 @@ mod tests {
         )
     }
 
+    /// A store an upload's lines can name, holding nothing.
+    fn in_memory() -> Arc<Store> {
+        Arc::new(Store::over(Arc::new(object_store::memory::InMemory::new())))
+    }
+
     /// A multipart upload that talks to nothing but records whether it was
     /// aborted.
     #[derive(Debug)]
@@ -778,9 +767,8 @@ mod tests {
             let aborted = Arc::new(AtomicBool::new(false));
             drop(UploadGuard::new(
                 Box::new(NeverUploaded(Arc::clone(&aborted))),
-                "uploads/abandoned",
+                in_memory(),
                 Duration::from_secs(1),
-                "s3",
             ));
             assert!(
                 !aborted.load(Ordering::SeqCst),
@@ -801,10 +789,9 @@ mod tests {
             );
             assert_eq!(leaked.level, "warn");
             assert_eq!(
-                leaked.field("key").as_deref(),
-                Some("uploads/abandoned"),
-                "the key is the whole content of the line — without it nothing \
-                 can be reconciled against the bucket: {:?}",
+                leaked.field("store").as_deref(),
+                Some("memory:///"),
+                "the store is where an operator lists what was left: {:?}",
                 leaked.fields,
             );
         });
@@ -817,9 +804,8 @@ mod tests {
         let aborted = Arc::new(AtomicBool::new(false));
         drop(UploadGuard::new(
             Box::new(NeverUploaded(Arc::clone(&aborted))),
-            "uploads/cancelled",
+            in_memory(),
             Duration::from_secs(1),
-            "s3",
         ));
         // The abort is spawned: yield, bounded, until it lands.
         for _ in 0..100 {
@@ -1322,6 +1308,208 @@ mod tests {
             chain.contains("could not connect: Connection refused"),
             "{chain}"
         );
+    }
+
+    /// A key as an app's may be, holding its user's input, and what marks it in
+    /// anything that prints.
+    const MARKED_KEY: &str = "users/zzqx-ada/avatar.png";
+    const MARK: &str = "zzqx";
+
+    /// The failure of every call addressing [`MARKED_KEY`] on `storage`, none
+    /// succeeding.
+    async fn every_call_failing(storage: &Storage) -> Vec<StorageError> {
+        use futures_util::StreamExt as _;
+
+        let source = futures_util::stream::once(async { Ok(Bytes::from_static(b"body")) });
+        let listed = {
+            let mut listing = std::pin::pin!(storage.list(MARKED_KEY));
+            listing.next().await
+        };
+        vec![
+            storage.head(MARKED_KEY).await.expect_err("head"),
+            storage.get_bytes(MARKED_KEY).await.expect_err("get_bytes"),
+            storage
+                .put_bytes(MARKED_KEY, "body", "text/plain")
+                .await
+                .expect_err("put_bytes"),
+            storage
+                .put_stream(MARKED_KEY, "text/plain", source)
+                .await
+                .expect_err("put_stream"),
+            storage.delete(MARKED_KEY).await.expect_err("delete"),
+            listed.expect("an answer").expect_err("list"),
+        ]
+    }
+
+    /// What reqwest and object_store quote of a request they could not send: its
+    /// URI, the key among it.
+    #[tokio::test]
+    async fn no_call_a_store_never_answered_prints_the_key_or_the_uri() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("a port nothing listens on once its listener is dropped");
+        let logs = nest_rs_testing::LogCapture::install();
+        let storage = Storage::unproved(StorageConfig {
+            operation_timeout: Duration::from_millis(200),
+            ..s3_at(&format!("http://{closed}"), Surface::Open)
+        });
+        for failed in every_call_failing(&storage).await {
+            let printed = nest_rs_testing::printed(&failed);
+            assert!(printed.contains("could not connect"), "{printed}");
+            assert!(!printed.contains(MARK), "{printed}");
+        }
+        assert_no_line_quotes(&logs, MARK);
+    }
+
+    /// No line of any target, object_store's and reqwest's among them, quotes
+    /// `text`.
+    fn assert_no_line_quotes(logs: &nest_rs_testing::LogCapture, text: &str) {
+        for event in logs.events() {
+            assert!(!event.quotes(text), "{event:#?}");
+        }
+    }
+
+    /// A store answering every request with `status` and a document naming the
+    /// key it was asked for, as S3's do, over plain HTTP.
+    async fn store_answering_with_the_key(status: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local listener");
+        let addr = listener.local_addr().expect("a bound address");
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match socket.read(&mut buf).await {
+                            Ok(read) if read > 0 => request.extend_from_slice(&buf[..read]),
+                            _ => return,
+                        }
+                    }
+                    let document = format!("<Error><Key>{MARKED_KEY}</Key></Error>");
+                    let answer = format!(
+                        "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n\
+                         {document}",
+                        document.len()
+                    );
+                    socket.write_all(answer.as_bytes()).await.ok();
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// What object_store quotes of an answer it took for a failure: the request's
+    /// URI, the object's path, and the document.
+    #[tokio::test]
+    async fn no_call_a_store_refused_prints_the_key_the_uri_or_the_document() {
+        let logs = nest_rs_testing::LogCapture::install();
+        for status in ["400 Bad Request", "500 Internal Server Error"] {
+            let endpoint = store_answering_with_the_key(status).await;
+            let storage = Storage::unproved(StorageConfig {
+                operation_timeout: Duration::from_millis(200),
+                ..s3_at(&endpoint, Surface::Open)
+            });
+            for failed in every_call_failing(&storage).await {
+                let printed = nest_rs_testing::printed(&failed);
+                for quoted in [MARK, "<Error>"] {
+                    assert!(!printed.contains(quoted), "{status}, {quoted}: {printed}");
+                }
+            }
+        }
+        assert_no_line_quotes(&logs, MARK);
+    }
+
+    /// A boot refusing what a deployment wrote quotes none of it: a credential in
+    /// the URL or the endpoint, what a URL holds beyond its bucket, material no
+    /// client could read.
+    #[tokio::test]
+    async fn no_refused_config_prints_what_it_holds() {
+        use nest_rs_config::{ClientTls, Material, TlsIdentity};
+
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|listener| listener.local_addr())
+            .expect("a port nothing listens on once its listener is dropped");
+        let open_at = || s3_at(&format!("https://{closed}"), Surface::Closed);
+        let garbled = format!("-----BEGIN PRIVATE KEY-----\n{MARK}\n-----END PRIVATE KEY-----\n");
+        let configs = [
+            StorageConfig {
+                url: format!("s3://app:{MARK}@bucket"),
+                ..open_at()
+            },
+            StorageConfig {
+                url: format!("s3://bucket?secret={MARK}"),
+                ..open_at()
+            },
+            StorageConfig {
+                url: format!("s3://[{MARK}"),
+                ..open_at()
+            },
+            StorageConfig {
+                endpoint: Some(format!("https://app:{MARK}@{closed}")),
+                operation_timeout: Duration::from_millis(200),
+                ..open_at()
+            },
+            StorageConfig {
+                endpoint: Some(format!("http://app:{MARK}@{closed}")),
+                ..open_at()
+            },
+            StorageConfig {
+                secret_key: MARK.into(),
+                operation_timeout: Duration::from_millis(200),
+                ..open_at()
+            },
+            StorageConfig {
+                tls: ClientTls::new(Some(Material::inline(garbled.clone())), None),
+                ..open_at()
+            },
+            StorageConfig {
+                tls: ClientTls::new(
+                    None,
+                    Some(TlsIdentity::new(
+                        Material::inline(garbled.clone()),
+                        Material::inline(garbled.clone()),
+                    )),
+                ),
+                ..open_at()
+            },
+        ];
+        for config in configs {
+            let Err(refused) = Storage::connect(&config).await else {
+                panic!("{config:?}: nothing to open");
+            };
+            let printed = nest_rs_testing::printed(&refused);
+            assert!(!printed.contains(MARK), "{printed}");
+        }
+    }
+
+    /// A download of nothing is the failure a caller decides on, and it says so
+    /// without the path object_store's sentence quotes, whichever backend answers.
+    #[tokio::test]
+    async fn a_download_of_no_object_prints_nothing_of_its_key() {
+        nest_rs_testing::load_project_env();
+        let memory = Storage::connect(&StorageConfig {
+            url: "memory:///".into(),
+            ..StorageConfig::default()
+        })
+        .await
+        .expect("memory opens");
+        let s3 = Storage::unproved(s3_at(
+            &store_answering_with_the_key("404 Not Found").await,
+            Surface::Open,
+        ));
+        for storage in [memory, s3] {
+            let missing = storage
+                .get_bytes(MARKED_KEY)
+                .await
+                .expect_err("no object there");
+            let printed = nest_rs_testing::printed(&missing);
+            assert!(!printed.contains(MARK), "{printed}");
+            assert!(!printed.contains("<Error>"), "{printed}");
+        }
     }
 
     /// How one exchange with an S3 double ends.

@@ -1,6 +1,6 @@
 //! Typed errors for the [`Storage`](crate::Storage) client, and how
-//! [`error_message`](fn@nest_rs_core::error_message) says object_store's own
-//! without the key or the URL its sentences quote.
+//! object_store's own are said without the key or the URL their sentences quote:
+//! a call's error holds that sentence, never the library's.
 
 use std::error::Error;
 use std::time::Duration;
@@ -12,14 +12,17 @@ use thiserror::Error;
 
 use crate::config::StorageConfig;
 
-/// An error object_store or the configuration handed over, boxed so its
-/// library's release is never this crate's API: a caller reads it through
-/// [`source`](Error::source) and `downcast_ref`.
+/// What lies beneath a failure, boxed so no library's release is this crate's
+/// API: what the store answered, as a [`SaidFailure`], or what refused the
+/// configuration.
 type Source = Box<dyn Error + Send + Sync>;
 
 /// A storage failure, tagged by what produced it. Each sentence names the
 /// store — its URL's scheme, bucket and prefix, and an S3 endpoint, shown
-/// without credentials — and never a key.
+/// without credentials — and never a key; `Display`, `Debug` and every link of
+/// the chain hold neither a key nor a request's URI, so printing one quotes
+/// nothing, whoever prints it. [`PutSource`](Self::PutSource) alone hands back an
+/// error that is not the store's: the caller's own stream's.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum StorageError {
@@ -50,10 +53,7 @@ pub enum StorageError {
         store: String,
         /// What to change, naming the variables.
         reason: String,
-        /// What the store answered, as
-        /// [`error_message`](fn@nest_rs_core::error_message) says it, and never
-        /// object_store's own error: a `main` returning this refusal prints each
-        /// link as it is.
+        /// What the store answered, said by its kind.
         #[source]
         source: Source,
     },
@@ -64,10 +64,8 @@ pub enum StorageError {
         store: String,
         /// The budget the proof was held to.
         budget: Duration,
-        /// The last attempt's failure, if one ended before the budget did, as
-        /// [`error_message`](fn@nest_rs_core::error_message) says it, and never
-        /// object_store's own error: a `main` returning this refusal prints each
-        /// link as it is.
+        /// The last attempt's failure, if one ended before the budget did, said
+        /// by its kind.
         #[source]
         source: Option<Source>,
     },
@@ -95,7 +93,7 @@ pub enum StorageError {
         method: Method,
         /// The store, as its sentences show it.
         store: String,
-        /// The underlying signing failure.
+        /// The signing failure, said by its kind.
         #[source]
         source: Source,
     },
@@ -104,16 +102,24 @@ pub enum StorageError {
     Head {
         /// The store, as its sentences show it.
         store: String,
-        /// What the store answered.
+        /// What the store answered, said by its kind.
         #[source]
         source: Source,
+    },
+    /// A download named a key holding no object, the failure a caller decides
+    /// on: [`head`](crate::Storage::head) answers it as `None`, and
+    /// [`delete`](crate::Storage::delete) as a success.
+    #[error("no object at that key in the object store {store}")]
+    NotFound {
+        /// The store, as its sentences show it.
+        store: String,
     },
     /// Downloading an object's bytes failed.
     #[error("failed to download an object from the object store {store}")]
     Get {
         /// The store, as its sentences show it.
         store: String,
-        /// What the store answered.
+        /// What the store answered, said by its kind.
         #[source]
         source: Source,
     },
@@ -122,7 +128,7 @@ pub enum StorageError {
     List {
         /// The store, as its sentences show it.
         store: String,
-        /// What the store answered.
+        /// What the store answered, said by its kind.
         #[source]
         source: Source,
     },
@@ -131,7 +137,7 @@ pub enum StorageError {
     Put {
         /// The store, as its sentences show it.
         store: String,
-        /// What the store answered.
+        /// What the store answered, said by its kind.
         #[source]
         source: Source,
     },
@@ -144,7 +150,7 @@ pub enum StorageError {
     Delete {
         /// The store, as its sentences show it.
         store: String,
-        /// What the store answered.
+        /// What the store answered, said by its kind.
         #[source]
         source: Source,
     },
@@ -161,18 +167,35 @@ impl From<StorageError> for std::io::Error {
 /// Result alias for storage operations.
 pub type Result<T> = std::result::Result<T, StorageError>;
 
-/// What a refused boot keeps of object_store's error: the sentence
-/// [`error_message`](fn@nest_rs_core::error_message) says it in. A `main`
-/// returning the refusal prints each link's own `Display`, and object_store's
-/// quote the request's URI and whatever document the store answered.
+impl StorageError {
+    /// What a download of `store` met: no object at the key, or what `error` says.
+    pub(crate) fn download(store: &str, error: &object_store::Error) -> Self {
+        match error {
+            object_store::Error::NotFound { .. } => Self::NotFound {
+                store: store.to_owned(),
+            },
+            _ => Self::Get {
+                store: store.to_owned(),
+                source: SaidFailure::of(error),
+            },
+        }
+    }
+}
+
+/// What every error keeps of object_store's: the sentence
+/// [`error_message`](fn@nest_rs_core::error_message) says it in, and nothing
+/// below it. Every reader of a chain but that one prints each link's own
+/// `Display` or `Debug` — a `main` returning it, an `anyhow` report, a `{:?}` —
+/// and object_store's quote the object's path, the request's URI and whatever
+/// document the store answered.
 #[derive(Debug, Error)]
 #[error("{0}")]
 pub(crate) struct SaidFailure(String);
 
 impl SaidFailure {
-    /// `error`, as its chain says it.
-    pub(crate) fn of(error: &object_store::Error) -> Self {
-        Self(nest_rs_core::error_message(error))
+    /// `error`, as its chain says it, ready to be a [`StorageError`]'s source.
+    pub(crate) fn of(error: &object_store::Error) -> Source {
+        Box::new(Self(nest_rs_core::error_message(error)))
     }
 }
 
@@ -346,37 +369,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_failure_keeps_its_source_reachable_by_its_type() {
-        let refused = StorageError::Get {
-            store: "s3://media".into(),
-            source: Box::new(object_store::Error::NotFound {
+    fn no_object_is_the_failure_a_caller_decides_on_and_it_holds_no_key() {
+        let missing = StorageError::download(
+            "s3://media",
+            &object_store::Error::NotFound {
                 path: "users/ada@example.com/avatar.png".into(),
                 source: "absent".into(),
-            }),
-        };
-        let source = refused.source().expect("the store's error is the source");
-        assert!(
-            source.downcast_ref::<object_store::Error>().is_some(),
-            "{source:?}"
+            },
         );
+        assert!(
+            matches!(missing, StorageError::NotFound { .. }),
+            "{missing}"
+        );
+        assert_eq!(
+            nest_rs_core::error_message(&missing),
+            "no object at that key in the object store s3://media"
+        );
+        let printed = nest_rs_testing::printed(&missing);
+        assert!(!printed.contains("ada@example.com"), "{printed}");
     }
 
     #[test]
     fn a_chain_says_the_store_and_what_it_answered_never_the_key() {
         let key = "users/ada@example.com/avatar.png";
-        let refused = StorageError::Get {
-            store: "s3://media".into(),
-            source: Box::new(object_store::Error::NotFound {
+        let refused = StorageError::download(
+            "s3://media",
+            &object_store::Error::PermissionDenied {
                 path: key.into(),
-                source: "absent".into(),
-            }),
-        };
-        let chain = nest_rs_core::error_message(&refused);
-        assert_eq!(
-            chain,
-            "failed to download an object from the object store s3://media: no object at that key"
+                source: "denied".into(),
+            },
         );
-        assert!(!chain.contains("ada@example.com"), "{chain}");
+        assert_eq!(
+            nest_rs_core::error_message(&refused),
+            "failed to download an object from the object store s3://media: the store refused \
+             the credentials permission"
+        );
+        let printed = nest_rs_testing::printed(&refused);
+        assert!(!printed.contains("ada@example.com"), "{printed}");
     }
 
     #[test]
@@ -404,7 +433,7 @@ mod tests {
     fn a_generic_failure_says_its_store_and_the_io_error_below() {
         let refused = StorageError::Put {
             store: "s3://media".into(),
-            source: Box::new(object_store::Error::Generic {
+            source: SaidFailure::of(&object_store::Error::Generic {
                 store: "S3",
                 source: Box::new(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,

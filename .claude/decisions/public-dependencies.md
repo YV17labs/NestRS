@@ -162,3 +162,12 @@ is sea-orm's documentation on those methods, each carrying its own sentence.
 The entry of 2026-10-27 names tokio, object_store and sqlx's futures-intrusive as
 what still requires parking_lot 0.12. figment 0.10 does as well (`Cargo.lock`), so
 all four must move before the duplicate leaves the tree.
+
+## 2026-11-06 — object_store's errors are no source
+
+The object_store row above says its errors are boxed sources of `StorageError`, read
+with `downcast_ref`. They no longer are: a call's error holds the sentence saying
+them (`storage-port-by-url.md`, this date), so object_store is private with nothing
+of it reachable, and `Init`'s boxed source is what refused the configuration, not a
+contract to read.
+

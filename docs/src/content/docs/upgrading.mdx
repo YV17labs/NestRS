@@ -917,7 +917,9 @@ lists what the boot, a log or the wire shows when one is missed.
     | `storage.bucket_name()` | `storage.url()`, the URL shown without credentials |
     | `StorageConfig { bucket: "media".into(), endpoint: "https://…".into(), .. }` | `StorageConfig { url: "s3://media".into(), endpoint: Some("https://…".into()), .. }`; `endpoint: None` is AWS |
     | `storage.list(prefix)?` | `storage.list(prefix)`, the stream itself |
-    | `StorageError::Get(e)` and its siblings, `e` an `object_store::Error` | `StorageError::Get { store, source }`, `source` boxed: `source.downcast_ref::<object_store::Error>()` |
+    | `StorageError::Get(e)` and its siblings, `e` an `object_store::Error` | `StorageError::Get { store, source }`, whose `source` says the failure by its kind and holds no `object_store::Error`: `error_message` reads it |
+    | `matches!(e, object_store::Error::NotFound { .. })` on a download | `matches!(e, StorageError::NotFound { .. })`, no `object_store` in your manifest |
+    | a line on `nest_rs::storage` filtered by its `key` field | the field is gone: each names its `store`, and `trace_id` the call |
     | `StorageError::Presign { method: String, .. }` | `method` is an `http::Method` |
     | `ObjectMetadata { byte_size }` / `ObjectEntry { .. }` built by hand | both are `#[non_exhaustive]`: read them, never build them; `byte_size` is `u64` |
     | `let url: String = storage.presign_put(&key, ttl).await?` | `let put = storage.presign_put(&key, &SignedPut::new("audio/mpeg"), ttl).await?`, then hand the client `put.url`, `put.method` and `put.headers`, which it sends verbatim |

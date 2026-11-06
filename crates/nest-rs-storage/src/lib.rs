@@ -106,13 +106,12 @@
 //!
 //! ## What an error says
 //!
-//! A [`StorageError`] names the store and the operation, never a key, and
-//! keeps object_store's error as its source; its chain, through
-//! [`error_message`](fn@nest_rs_core::error_message), says object_store's links
-//! by their kind, without the key or the URL their own sentences quote. A refused
-//! boot keeps that sentence alone, since a `main` returning it prints each link as
-//! it is, and no error holds the document of a `401` or a `403`, which echoes the
-//! key and the request signed.
+//! A [`StorageError`] names the store and the operation, never a key. Beneath it
+//! lies object_store's error as [`error_message`](fn@nest_rs_core::error_message)
+//! says it, by its kind, and nothing else: a `{:?}` or a `main` returning it prints
+//! each link as it is, and object_store's own quote the object's path, the request's
+//! URI and the store's document. A download of a key holding nothing is
+//! [`StorageError::NotFound`], the failure a caller decides on.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]

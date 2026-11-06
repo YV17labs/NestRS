@@ -84,6 +84,39 @@ async fn get(client: &Client, path: &str) -> (StatusCode, String) {
     (status, resp.0.into_body().into_string().await.unwrap())
 }
 
+/// A denial's `path` is the template its request matched, so a self-mount says
+/// each template it registers, once, however many methods answer there.
+#[tokio::test]
+async fn a_self_mount_files_one_line_per_template_it_registers() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let _client = table(|routes| {
+        routes.route(Method::GET, "/files", crate::answering("list"));
+        routes.route(Method::POST, "/files", crate::answering("add"));
+        routes.route(Method::GET, "/files/{*name}", crate::answering("read"));
+    })
+    .await;
+
+    let lines = logs.find(nest_rs_http::target::ROUTES, "mounted endpoint");
+    let said: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            (
+                line.field("surface"),
+                line.field("host"),
+                line.field("path"),
+            )
+        })
+        .collect();
+    let one = |path: &str| {
+        (
+            Some("probe".to_owned()),
+            Some("Mounts".to_owned()),
+            Some(path.to_owned()),
+        )
+    };
+    assert_eq!(said, [one("/files"), one("/files/{*name}")]);
+}
+
 #[tokio::test]
 async fn static_wins_over_a_parameter_and_a_parameter_over_a_catch_all() {
     let client = table(|routes| {

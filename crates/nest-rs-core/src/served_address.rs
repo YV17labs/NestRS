@@ -21,9 +21,8 @@
 pub struct ServedAddress<'a> {
     /// The HTTP method of a request, as the conventions or a route spell it.
     pub verb: Option<&'a str>,
-    /// The route template a request matched, under the app's prefix; on a
-    /// self-mount the one it matched, `/files/{*name}` where its mount's line says
-    /// `/files`.
+    /// The route template a request matched, under the app's prefix, as its
+    /// `mounted` or `mounted endpoint` line says it.
     pub path: Option<&'a str>,
     /// The kind of operation a GraphQL field runs under: `query`, `mutation`
     /// or `subscription`.

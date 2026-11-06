@@ -224,5 +224,5 @@ async fn the_boot_lines_name_the_paths_served_under_the_prefix() {
     .await
     .expect("the table mounts");
     let endpoint = logs.expect_one(nest_rs_http::target::ROUTES, "mounted endpoint");
-    assert_eq!(endpoint.field("path").as_deref(), Some("/api"));
+    assert_eq!(endpoint.field("path").as_deref(), Some("/api/probe"));
 }

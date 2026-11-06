@@ -174,6 +174,22 @@ async fn a_request_the_fallback_answers_is_named_for_its_mount() {
     }
 }
 
+/// What a fallback answers is named for its mount's catch-all, and its boot line
+/// says that template and the host a line on such a request names.
+#[tokio::test]
+async fn a_fallback_says_the_template_its_requests_are_named_for() {
+    #[module(providers = [AssetsFallback])]
+    struct AssetsModule;
+
+    let logs = LogCapture::install();
+    let _served = crate::boot::<AssetsModule>().await;
+
+    let mounted = logs.expect_one(nest_rs_http::target::ROUTES, "mounted endpoint");
+    assert_eq!(mounted.field("surface").as_deref(), Some("fallback"));
+    assert_eq!(mounted.field("host").as_deref(), Some("HttpModule"));
+    assert_eq!(mounted.field("path").as_deref(), Some("/assets/{*path}"));
+}
+
 #[tokio::test]
 async fn the_fallback_is_handed_the_request_whole() {
     let client = crate::boot::<AppModule>().await;

@@ -441,30 +441,64 @@ impl VersionedDoorController {
 )]
 struct HeaderVersionedDoorModule;
 
-/// Under a version a header selects, `/v2` is where the route mounts, not what
-/// a client calls: its `mounted` line says the path called and `version` apart,
-/// and a denial, as the route's operation line does, says the template it
-/// matched. `host`, `method` and `verb` join the two.
-#[tokio::test]
-async fn a_denial_under_a_header_version_names_the_template_it_matched() {
-    let logs = LogCapture::install();
-    let app = booted::<HeaderVersionedDoorModule>().await;
+#[module(
+    imports = [HttpModule::for_root(HttpConfig {
+        versioning: ApiVersioning::Uri,
+        ..HttpConfig::default()
+    })],
+    providers = [DeclaredDoor, VersionedDoorController, GlobalGuards<(DeclaredDoor,)>],
+)]
+struct UriVersionedDoorModule;
 
-    app.http()
-        .get("/door/versioned")
-        .header(DEFAULT_VERSION_HEADER, "2")
-        .send()
-        .await
-        .assert_status(StatusCode::FORBIDDEN);
+/// A denial under `M`'s version strategy, reached by `request`: its `path` is
+/// where the route mounts, which its `mounted` line says too, with the version
+/// a field of its own. The operation line says the same `verb` and `path`.
+async fn assert_a_versioned_denial_joins_its_mount<M: Module + 'static>(
+    logs: &LogCapture,
+    path: &str,
+    version_header: Option<&str>,
+) {
+    let app = booted::<M>().await;
+    let request = app.http().get(path);
+    let request = match version_header {
+        Some(version) => request.header(DEFAULT_VERSION_HEADER, version),
+        None => request,
+    };
+    request.send().await.assert_status(StatusCode::FORBIDDEN);
 
     let line = logs.expect_one(ACME, "guard denied the request");
     assert_eq!(line.field("path").as_deref(), Some("/v2/door/versioned"));
     let mounted = logs.expect_one(nest_rs_http::target::ROUTES, "mounted");
-    assert_eq!(mounted.field("path").as_deref(), Some("/door/versioned"));
     assert_eq!(mounted.field("version").as_deref(), Some("2"));
-    for join in ["host", "method", "verb"] {
+    for join in ["host", "method", "verb", "path"] {
         assert_eq!(line.field(join), mounted.field(join), "{join}");
     }
+}
+
+/// Under a version a header selects, the denial and the `mounted` line both say
+/// where the route mounts.
+#[tokio::test]
+async fn a_denial_under_a_header_version_joins_its_mount() {
+    let logs = LogCapture::install();
+    assert_a_versioned_denial_joins_its_mount::<HeaderVersionedDoorModule>(
+        &logs,
+        "/door/versioned",
+        Some("2"),
+    )
+    .await;
+}
+
+/// Under a version the path carries, the same two lines say the same, and the
+/// version is a field there too.
+#[tokio::test]
+async fn a_denial_under_a_uri_version_joins_its_mount() {
+    let logs = LogCapture::install();
+    assert_a_versioned_denial_joins_its_mount::<UriVersionedDoorModule>(
+        &logs,
+        "/v2/door/versioned",
+        None,
+    )
+    .await;
 }
 
 /// A method only the client chose reaches no line: `/mcp` takes every method,

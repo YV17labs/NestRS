@@ -191,6 +191,11 @@ impl Fallback {
         }
     }
 
+    /// The catch-all a request it answers is named for.
+    pub(crate) fn template(&self) -> &str {
+        &self.template
+    }
+
     fn answers(&self, path: &str) -> bool {
         is_under(path, &self.path) && !self.claims.claim(path)
     }

@@ -1148,10 +1148,12 @@ mod self_mount {
         assert_eq!(
             event.field("path").as_deref(),
             Some("/files/{*name}"),
-            "the template it matched, which the mount's line does not say: {:?}",
+            "the template it matched: {:?}",
             event.fields,
         );
         let mounted = logs.expect_one("nest_rs::routes", "mounted endpoint");
-        assert_eq!(mounted.field("path").as_deref(), Some("/files"));
+        for join in ["host", "path"] {
+            assert_eq!(event.field(join), mounted.field(join), "{join}");
+        }
     }
 }

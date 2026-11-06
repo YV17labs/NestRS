@@ -39,7 +39,7 @@ they cannot drift:
 
 ```bash frame="terminal"
 $ nestrs run dev api
-INFO nest_rs::routes: mounted host="PostsV1Controller" method="list" verb="GET" path="/v1/posts"
+INFO nest_rs::routes: mounted host="PostsV1Controller" method="list" verb="GET" path="/v1/posts" version="1"
 ```
 
 The version string is opaque — `"1"`, `"2"`, `"beta"` all work; the
@@ -145,12 +145,13 @@ nestrs run dev api
 
 Under the last two the version is resolved **per request**, in front of routing,
 and folded into the path the controller already mounts at — so one route table
-serves every strategy. The boot log follows the caller, not the mount: it prints
-the address a client uses and carries the version as its own field.
+serves every strategy. The boot log says where the route mounts under every
+strategy, as a denial and the `http.request` line do, so all three join on one
+`path`, and carries the version as its own field.
 
 ```bash frame="terminal"
 $ NESTRS_HTTP__VERSIONING=header nestrs run dev api
-INFO nest_rs::routes: mounted host="PostsV1Controller" method="list" verb="GET" path="/posts" version="1"
+INFO nest_rs::routes: mounted host="PostsV1Controller" method="list" verb="GET" path="/v1/posts" version="1"
 ```
 
 Six behaviours worth knowing before you switch:

@@ -203,6 +203,12 @@ impl HttpRoutes {
         self.refused.take().map_or(Ok(()), Err)
     }
 
+    /// The templates the self-mounts registered so far, as written (no global
+    /// prefix), each once, in registration order.
+    pub(crate) fn self_mounted(&self) -> &[String] {
+        &self.self_mounted
+    }
+
     /// The templates the self-mounts registered, as written (no global
     /// prefix), each once: the addresses a version selector serves as sent.
     pub(crate) fn take_self_mounted(&mut self) -> Vec<String> {

@@ -1989,7 +1989,12 @@ lists what the boot, a log or the wire shows when one is missed.
   graphql operations run unguarded` — reads `no guard at the request` on
   `nest_rs::layers`, with `surface`, `path`, `then` and `hint`; GraphQL's sat on
   `nest_rs::graphql`, and `graphql operations gated` is gone. `mounted endpoint` says
-  `surface` where it said `kind`.
+  `surface` where it said `kind`, adds `host`, and is filed once per template a surface
+  registers, so a filter expecting one line per surface or a surface's bare path reads
+  the template instead.
+- **A log filter on a versioned route's `mounted` line** under `header` or `media_type`
+  versioning reads where the route mounts: `path="/v2/users"` where it read `/users`, as
+  a denial and the request's line do. `version` is on the line under the URI strategy too.
 - **A bounded duration outside its range** — a zero lease, a drain window
   above an hour, a body-read gap at `0`, a request or message timeout past 3600
   — fails the boot naming the variable and why the bound is there, whether the

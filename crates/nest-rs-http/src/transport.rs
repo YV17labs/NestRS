@@ -295,23 +295,21 @@ fn mount_fallback(
              answers",
         );
     }
-    tracing::info!(
-        target: crate::target::ROUTES,
-        surface = "fallback",
-        path = meta.path(),
-        "mounted endpoint",
-    );
     let endpoint = SiteEndpoint::new(
         &FALLBACK,
         Arc::clone(chains),
         None,
         EndpointTail::new(meta.build(container), chains),
     );
-    Ok(Fallback::new(
-        meta.path().to_owned(),
-        claims,
-        BoxEndpoint::new(endpoint),
-    ))
+    let fallback = Fallback::new(meta.path().to_owned(), claims, BoxEndpoint::new(endpoint));
+    tracing::info!(
+        target: crate::target::ROUTES,
+        surface = "fallback",
+        host = FALLBACK.host_name(),
+        path = fallback.template(),
+        "mounted endpoint",
+    );
+    Ok(fallback)
 }
 
 /// What a controller's hand-registered entry is put behind: the site every such
@@ -539,19 +537,13 @@ impl Transport for HttpTransport {
                         false => unversioned_routes.push(path.clone()),
                     }
                     claim_route(&mut route_owner, &template, controller, r.handler())?;
-                    // Under a non-URI strategy `/v{n}` is where the route mounts, not
-                    // what a client calls, so the version is logged as its own field.
-                    let (logged, version) = match &self.version_selector {
-                        Some(_) => (join_path(d.meta.path(), r.path()), version),
-                        None => (path.clone(), None),
-                    };
                     tracing::info!(
                         target: crate::target::ROUTES,
                         host = controller,
                         method = r.handler(),
                         verb = r.method().as_str(),
-                        path = routes.served(&logged).as_str(),
-                        version = version,
+                        path = routes.served(&path).as_str(),
+                        version,
                         "mounted",
                     );
                     served.push((
@@ -656,12 +648,6 @@ impl Transport for HttpTransport {
                 )?;
             }
             let served = routes.served(d.meta.path());
-            tracing::info!(
-                target: crate::target::ROUTES,
-                surface = d.meta.label(),
-                path = served.as_str(),
-                "mounted endpoint",
-            );
             if let Some(work) = d.meta.detached() {
                 self.detached.push((d.meta.path().to_owned(), work.clone()));
             }
@@ -726,8 +712,20 @@ impl Transport for HttpTransport {
                 None => Arc::new(in_site),
             };
             routes.for_self_mount(format!("the {owner}"), templates, Some(wrap));
+            let earlier = routes.self_mounted().len();
             d.meta.mount(container, &mut routes);
             routes.settle()?;
+            // One line per template it registered: a denial's `path` is the one
+            // its request matched.
+            for template in &routes.self_mounted()[earlier..] {
+                tracing::info!(
+                    target: crate::target::ROUTES,
+                    surface = d.meta.label(),
+                    host = handler.host_name(),
+                    path = routes.served(template).as_str(),
+                    "mounted endpoint",
+                );
+            }
         }
         check_declarations_reached(container, &carried)?;
         if !unguarded_mounts.is_empty() {

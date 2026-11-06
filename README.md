@@ -5,7 +5,7 @@
 <p align="center">
   <strong>The Rust framework for modular, scalable backends.</strong><br>
   You write the business logic; the framework carries the rest — modules, decorators and dependency injection over a native core.<br>
-  <sub>~25× less memory · ~23× faster cold starts · ×4 the throughput of NestJS, core for core — measured on a byte-identical contract, <a href="bench/">reproducible from the repo</a>.</sub>
+  <sub>~25× less memory · ~23× faster cold starts · ×4 the throughput of NestJS, core for core — measured on NestRS 4.0.0 with a byte-identical contract, <a href="bench/">harness in the repo</a>.</sub>
 </p>
 
 <p align="center">
@@ -60,9 +60,9 @@ binaries share the code and the database, hand work over through the queue,
 and each scales on its own signal, with no generated RPC between them.
 [The architecture, drawn →](https://nestrs.dev/why/#a-modular-monolith-deployed-per-workload)
 
-The numbers behind the tagline — against the same hello-world service in
-NestJS 11, idiomatic on both sides, byte-identical HTTP contract,
-conformance-gated: NestRS runs in **~25× less memory** (single-digit MB
+The numbers behind the tagline, measured 2026-07-25 on NestRS 4.0.0 — against
+the same hello-world service in NestJS 11, idiomatic on both sides, byte-identical
+HTTP contract, conformance-gated: NestRS runs in **~25× less memory** (single-digit MB
 against ~200 MB), cold-starts **~23× faster** (milliseconds against near half
 a second), and — core for core, each server pinned to a single CPU — serves
 **×4.2 the throughput of NestJS on Express** (its default) — **×2.5 its best
@@ -71,8 +71,9 @@ Node adds ~200 MB of process per core; one NestRS binary takes every core in
 a single single-digit-MB process.
 Where the Express service needs three boxes, one NestRS binary carries the
 load. Those figures come from a **4-core / 8 GB Docker VM** — virtualized,
-so they are a floor, not a ceiling. The harness lives in [`bench/`](bench/) —
-`cd bench && just bench` reproduces every figure on your own hardware.
+so they are a floor, not a ceiling. The harness lives in [`bench/`](bench/) and
+has since moved its contestants to NestJS 12, and the next published run replaces
+these figures; `cd bench && just bench` runs its protocol on your own hardware.
 
 Try it on your machine:
 

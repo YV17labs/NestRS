@@ -1,12 +1,12 @@
 ---
 title: Benchmarks
-description: "How NestRS is measured against NestJS 12 on Express and Fastify — the contract, the protocol, and how to reproduce every figure."
+description: "How NestRS is measured against NestJS 12 on Express and Fastify — the contract, the protocol, and how to run them on your hardware."
 ---
 
 NestRS is measured against **idiomatic NestJS 12 on both adapters** — Fastify
 (its best case) and Express (its default) — serving a **byte-identical HTTP
 contract** at the same stack depth. The harness ships in the repository; one
-command reproduces the table below on your hardware.
+command runs its protocol on your hardware.
 
 ```bash
 git clone https://github.com/YV17labs/NestRS && cd NestRS/bench

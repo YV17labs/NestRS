@@ -30,9 +30,9 @@ We chose Rust for what it gives, and these values order every trade-off:
    boundary, honest APIs (`Type::new(deps)`), enums over string states,
    newtypes for meaning, parsing at the edge, no `serde_json::Value`
    passthrough, every wait the framework owns bounded (`container.md`).
-3. **Performance** — raw speed, close to the machine, measured against Node,
-   PHP and Go backends: work moves to compile time (macros) rather than per
-   request, and the hot path pays for nothing it does not use.
+3. **Performance** — raw speed, close to the machine, measured against NestJS on
+   Node (`bench/`): work moves to compile time (macros) rather than per request,
+   and the hot path pays for nothing it does not use.
 4. **Elegance** — what a human understands at a glance. Standard names
    (`naming.md`, `architecture.md`); one responsibility per module, service and
    file, so each thing has exactly one place to be found; one way to do a thing.

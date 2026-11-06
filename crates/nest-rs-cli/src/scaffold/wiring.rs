@@ -106,19 +106,29 @@ fn insert_module_import(lines: &mut Vec<String>, use_line: &str, ident: &str) ->
     changed
 }
 
+/// The first and last line of an entity's **struct-level** attribute: its own
+/// `#[expose(` starts a line at column 0, while every field-level one is indented.
+fn expose_span(content: &str) -> Option<(usize, usize)> {
+    let at = content.lines().position(|l| l.starts_with("#[expose("))?;
+    let end = content
+        .lines()
+        .skip(at)
+        .position(|l| l.trim_end().ends_with(")]"))?;
+    Some((at, at + end))
+}
+
+/// Whether `content` holds the attribute [`ensure_expose_graphql`] flags, which a
+/// transform leaving a file unchanged would not tell from its being flagged already.
+pub(crate) fn declares_expose(content: &str) -> bool {
+    expose_span(content).is_some()
+}
+
 /// Turn on `#[expose(graphql)]` for an entity that does not carry it, so a
 /// resolver can name it as its output type.
-///
-/// Anchored on the **struct-level** attribute: the entity's own `#[expose(`
-/// starts a line at column 0, while every field-level one is indented.
 pub(crate) fn ensure_expose_graphql() -> Transform {
     Box::new(move |content: &str| {
+        let (at, end) = expose_span(content)?;
         let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
-        let at = lines.iter().position(|l| l.starts_with("#[expose("))?;
-        let end = lines[at..]
-            .iter()
-            .position(|l| l.trim_end().ends_with(")]"))
-            .map(|offset| at + offset)?;
         if lines[at..=end].iter().any(|l| {
             l.split(|c: char| !c.is_alphanumeric())
                 .any(|w| w == "graphql")

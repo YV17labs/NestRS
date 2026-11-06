@@ -14,7 +14,7 @@
 //! for a port with none — so no generated operation is open by default: the
 //! workspace gets its auth adapter first when it has none.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::auth;
 use super::cargo::{
@@ -22,14 +22,15 @@ use super::cargo::{
     graphql_port_deps,
 };
 use super::migration::{OUTBOX_MIGRATION, queue_framework_entry};
-use super::port::Port;
+use super::port::{CrudPort, Port};
 use super::support::{Import, Wiring, data_layer, finish, wire_into_app, wiring_lines};
 use crate::commands::resolve_start;
 use crate::context::Context;
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::{Names, Transport, command_file};
 use crate::scaffold::{
-    Renderer, Scaffold, Transform, ensure_expose_graphql, ensure_lines, ensure_module_imports, rel,
+    Renderer, Scaffold, Transform, declares_expose, ensure_expose_graphql, ensure_lines,
+    ensure_module_imports, rel,
 };
 use crate::templates::adapter;
 
@@ -160,18 +161,10 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     if let Some(authz) = authz {
         deps.extend(authz.deps);
     }
-    // `#[expose(graphql)]` makes the entity the port's `CrudService` names a GraphQL
-    // object; one its source leads to no file for is the next step's, since an `edit`
-    // on a missing path fails the whole transaction.
     let mut unflagged = None;
     if is_graphql && let Some(crud) = &port.crud {
         deps.extend(graphql_port_deps());
-        match crud.entity.as_ref().filter(|entity| entity.is_file()) {
-            Some(entity) => {
-                s.edit(entity, ensure_expose_graphql());
-            }
-            None => unflagged = Some(&crud.file),
-        }
+        unflagged = flag_entity(&mut s, crud, &ws.root)?;
     }
     if scaffolded_auth {
         deps.extend(auth_deps());
@@ -253,14 +246,8 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         },
         authz,
         grant,
+        unflagged.as_deref(),
     );
-    if let Some(service) = unflagged {
-        println!(
-            "  {} names an entity this run could not follow to its file: add \
-             `#[expose(graphql)]` to it, which the `#[crud]` resolver needs.",
-            rel(service, &ws.root)
-        );
-    }
     if outbox {
         println!(
             "  The outbox's migration (`{}`) is registered in crates/migrations: its \
@@ -273,6 +260,30 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         auth::print_bootstrapped(secrets);
     }
     Ok(())
+}
+
+/// Queue `#[expose(graphql)]`, which makes the entity `crud` names a GraphQL object;
+/// when it cannot take it, what the next step says of why: an `edit` on a missing
+/// path would fail the whole transaction, and one finding no attribute writes nothing.
+fn flag_entity(s: &mut Scaffold, crud: &CrudPort, base: &Path) -> CliResult<Option<String>> {
+    let source = match &crud.entity {
+        Some(entity) => read_if_exists(entity)?,
+        None => None,
+    };
+    let (Some(entity), Some(source)) = (&crud.entity, source) else {
+        return Ok(Some(format!(
+            "{} names an entity this run could not follow to its file",
+            rel(&crud.file, base)
+        )));
+    };
+    if !declares_expose(&source) {
+        return Ok(Some(format!(
+            "{} holds no `#[expose(...)]` for this run to flag",
+            rel(entity, base)
+        )));
+    }
+    s.edit(entity, ensure_expose_graphql());
+    Ok(None)
 }
 
 /// What an adapter for `transport` over `names`' port is written with: the
@@ -378,6 +389,7 @@ fn print_next_steps(
     placed: Placed<'_>,
     authz: Option<&'static auth::AuthzAdapter>,
     grant: Option<Grant>,
+    unflagged: Option<&str>,
 ) {
     println!();
     println!("Next steps:");
@@ -405,6 +417,12 @@ fn print_next_steps(
              `ab.can(nest_rs::authz::Action::Manage, {entity});` grants them all."
         ),
         None => {}
+    }
+    if let Some(why) = unflagged {
+        println!(
+            "  {why}: add `#[expose(graphql)]` to the entity, which the `#[crud]` resolver \
+             needs."
+        );
     }
     if let Some(authz) = authz {
         println!();

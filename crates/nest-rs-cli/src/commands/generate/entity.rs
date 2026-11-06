@@ -307,13 +307,13 @@ fn existing_stem(entity_rs: &Path) -> CliResult<Option<String>> {
 /// no entity, declares `name`: a lone entity's glob re-export of its wire type
 /// would then lose to the subject's explicit one, with no error.
 fn subject_declares(root: &Path, name: &str) -> CliResult<bool> {
-    Ok(read_if_exists(&root.join("subject.rs"))?
-        .and_then(|source| syn::parse_file(&source).ok())
-        .is_some_and(|file| {
+    Ok(
+        super::port::parse(&root.join("subject.rs"))?.is_some_and(|file| {
             file.items
                 .iter()
                 .any(|item| matches!(item, syn::Item::Struct(s) if s.ident == name))
-        }))
+        }),
+    )
 }
 
 fn print_next_steps(

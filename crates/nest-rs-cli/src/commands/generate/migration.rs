@@ -378,7 +378,9 @@ fn entity_declaring(ws: &NestrsWorkspace, table: &str) -> CliResult<Declared> {
         for file in files {
             if let Some(source) = read_if_exists(&file)?
                 && table_name(&source).as_deref() == Some(table)
-                && let Some(model) = read_model(&source)
+                && let Some(model) = read_model(
+                    &syn::parse_file(&source).map_err(CliError::invalid_port_file(&file))?,
+                )
             {
                 found.push((file, model));
             }

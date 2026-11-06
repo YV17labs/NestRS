@@ -134,6 +134,16 @@ pub enum CliError {
     #[error("{0}")]
     InvalidFeatureName(String),
 
+    /// A port's file `syn` does not read: what it would have said of the port cannot
+    /// be told from its absence, so a generator writes nothing over a guess.
+    #[error("cannot read the port off `{}`, line {line}", path.display())]
+    InvalidPortFile {
+        path: PathBuf,
+        line: usize,
+        #[source]
+        source: syn::Error,
+    },
+
     /// A migration's name, or the table a migration, a resource or an entity
     /// writes, taking the framework's `nestrs_` prefix for a migration the
     /// framework does not ship.
@@ -186,6 +196,16 @@ impl CliError {
         move |source| Self::File {
             action,
             path: path.to_path_buf(),
+            source,
+        }
+    }
+
+    /// The [`CliError::InvalidPortFile`] `syn`'s refusal of `path` becomes, for a
+    /// `map_err`.
+    pub(crate) fn invalid_port_file(path: &Path) -> impl FnOnce(syn::Error) -> Self {
+        move |source| Self::InvalidPortFile {
+            path: path.to_path_buf(),
+            line: source.span().start().line,
             source,
         }
     }

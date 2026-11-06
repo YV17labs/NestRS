@@ -49,11 +49,12 @@ generated GraphQL operation or MCP tool is gated on its port's entity or the
 by `architecture.md`), so an opening is always the developer's line, never the
 generator's. **What a port holds is read off its source, in every shape
 `architecture.md` allows**: its `CrudService` in `service.rs` or `services/`, the
-file its `type Entity` leads to (`entity.rs`, `entities/<stem>.rs`), a flat
-`Entity` from `mod.rs`; one the source leads nowhere is the run's next step, never
-a skip in silence. A grant a next step prints names its subject by the path
-`authz/ability.rs` resolves. `g entity` retires a subject holding the entity's
-name, which its re-export would shadow, while it is what the generator wrote —
+file of the port its `type Entity` leads to (`entity.rs`, `entities/<stem>.rs`), a
+flat `Entity` from `mod.rs`; what the source leads nowhere, or to no attribute to
+flag, is the run's next step, and a source that does not parse refuses the run by
+its line, never a skip in silence. A grant a next step prints names its subject by
+the path `authz/ability.rs` resolves. `g entity` retires a subject holding the
+entity's name, which its re-export would shadow, while it is what the generator wrote —
 the operations gated on it re-gated on the entity, which fails closed, and
 their grant printed, never written — and refuses, naming the file, one edited
 beyond that. Prose the framework compiles into behaviour is still an argument

@@ -541,9 +541,8 @@ pub(crate) fn table_name(source: &str) -> Option<String> {
 /// The columns an entity's `pub struct Model` declares, each field read off
 /// its Rust type and its `#[sea_orm(…)]`, and the key's default off the
 /// `#[expose]` over it; a relation or an ignored field is no column. `None`
-/// when the source declares no `Model`.
-pub(crate) fn read_model(source: &str) -> Option<ModelColumns> {
-    let file = syn::parse_file(source).ok()?;
+/// when the file declares no `Model`.
+pub(crate) fn read_model(file: &syn::File) -> Option<ModelColumns> {
     let model = file.items.iter().find_map(|item| match item {
         Item::Struct(s) if s.ident == "Model" => Some(s),
         _ => None,
@@ -903,7 +902,7 @@ mod tests {
             .with("columns", fields(&columns))
             .render(crate::templates::resource::ENTITY);
 
-        let read = read_model(&entity).expect("a Model");
+        let read = read_model_of(&entity);
 
         assert_eq!(read.table, Table::around(&columns));
         assert!(read.untyped.is_empty(), "{:?}", read.untyped);
@@ -929,7 +928,7 @@ mod tests {
                 pub cached: String,
             }
         "#;
-        let read = read_model(source).expect("a Model");
+        let read = read_model_of(source);
         assert_eq!(read.table.columns.len(), 1, "{:?}", read.table);
         assert_eq!(
             read.untyped,
@@ -949,9 +948,14 @@ mod tests {
             ]
         );
     }
+
+    fn read_model_of(source: &str) -> ModelColumns {
+        read_model(&syn::parse_file(source).expect("the source parses")).expect("a Model")
+    }
+
     /// The builder `g migration` writes off `model`, over the enum `Widget`.
     fn builder_of(model: &str) -> (String, Vec<Untyped>) {
-        let read = read_model(model).expect("a Model");
+        let read = read_model_of(model);
         (read.table.builder("Widget", false), read.untyped)
     }
 

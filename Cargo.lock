@@ -2710,6 +2710,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-seaorm",
+ "proc-macro2",
  "sea-orm-migration",
  "serde_json",
  "syn 3.0.9",

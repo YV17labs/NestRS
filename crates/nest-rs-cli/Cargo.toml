@@ -34,6 +34,9 @@ getrandom.workspace = true
 # Rust's own parser: a `pub struct` inside a template string is what a text scan
 # counts and a parser does not, and this crate ships such a string.
 syn.workspace = true
+# `span-locations`: the line a refused port file is named by, which syn's error
+# carries only through proc-macro2's span.
+proc-macro2 = { workspace = true, features = ["span-locations"] }
 thiserror.workspace = true
 toml_edit.workspace = true
 

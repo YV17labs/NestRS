@@ -3,8 +3,8 @@
 //! names, and the wiring into feature and app.
 
 use crate::harness::{
-    assigned, run_ok, scaffolded_var, write_fake_app, write_fake_migrations_crate,
-    write_fake_workspace,
+    assigned, files_under, run_err, run_ok, scaffolded_var, write_fake_app,
+    write_fake_migrations_crate, write_fake_workspace,
 };
 use std::fs;
 use std::process::Command;
@@ -1292,6 +1292,22 @@ fn generate_graphql_flags_the_entity_its_crud_service_names_inside_a_folder() {
     assert!(!port.join("subject.rs").exists());
 }
 
+/// The line of a run's next steps naming the `graphql` flag: under `Next steps:`,
+/// above what the authz adapter's rationale says.
+fn the_flag_s_next_step(printed: &str) -> &str {
+    let step = printed
+        .lines()
+        .find(|line| line.contains("#[expose(graphql)]"))
+        .unwrap_or_else(|| panic!("the run names the flag: {printed}"));
+    let at = printed.find(step).unwrap();
+    let steps = printed.find("Next steps:").unwrap();
+    assert!(steps < at, "under `Next steps:`: {printed}");
+    if let Some(rationale) = printed.find("Also created") {
+        assert!(at < rationale, "above the rationale: {printed}");
+    }
+    step
+}
+
 /// A `CrudService` whose entity the generator cannot follow to a file is not
 /// skipped in silence: the run says what the developer writes.
 #[test]
@@ -1310,10 +1326,98 @@ fn generate_graphql_names_the_flag_it_could_not_write() {
 
     let printed = run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
 
-    assert!(
-        printed.contains("#[expose(graphql)]") && printed.contains("service.rs"),
-        "the run names the flag and the file it read: {printed}"
+    let step = the_flag_s_next_step(&printed);
+    assert!(step.contains("posts/service.rs"), "{step}");
+}
+
+/// An adapter flags inside its own port: a `CrudService` over another port's entity
+/// lands on no file of either, and the run says what the developer writes.
+#[test]
+fn generate_graphql_over_another_port_s_entity_flags_neither_port() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "resource", "comments", "-p", path]);
+    let features = dir.path().join("crates/features/src");
+    let service = features.join("comments/service.rs");
+    let source = fs::read_to_string(&service).unwrap();
+    let renamed = source.replace(
+        "type Entity = Comments;",
+        "type Entity = crate::posts::entity::Entity;",
     );
+    assert_ne!(renamed, source);
+    fs::write(&service, renamed).unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "graphql", "comments", "-p", path]);
+
+    for port in ["comments", "posts"] {
+        let entity = fs::read_to_string(features.join(port).join("entity.rs")).unwrap();
+        assert!(!entity.contains("graphql"), "{port}: {entity}");
+    }
+    let step = the_flag_s_next_step(&printed);
+    assert!(step.contains("comments/service.rs"), "{step}");
+}
+
+/// An entity file holding no `#[expose(` has nothing to flag, which is not its being
+/// flagged already: the first takes the next step, naming the file, and the second
+/// takes none.
+#[test]
+fn generate_graphql_tells_an_entity_with_no_expose_from_one_already_flagged() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    let entity = dir.path().join("crates/features/src/posts/entity.rs");
+    let generated = fs::read_to_string(&entity).unwrap();
+    let flagged = generated.replacen("#[expose(\n", "#[expose(\n    graphql,\n", 1);
+    assert_ne!(flagged, generated);
+    fs::write(&entity, flagged).unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    assert!(!printed.contains("#[expose(graphql)]"), "{printed}");
+
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    let entity = dir.path().join("crates/features/src/posts/entity.rs");
+    let bare = "pub struct Model;\n";
+    fs::write(&entity, bare).unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    assert_eq!(fs::read_to_string(&entity).unwrap(), bare);
+    let step = the_flag_s_next_step(&printed);
+    assert!(step.contains("posts/entity.rs"), "{step}");
+}
+
+/// A port file that does not parse says nothing of what the port holds, so no
+/// adapter is written over a guess: the run names the file and its line, and leaves
+/// the tree as it found it.
+#[test]
+fn an_adapter_refuses_a_port_file_that_does_not_parse() {
+    for broken in ["service.rs", "mod.rs", "services/articles.rs"] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let path = dir.path().to_str().unwrap();
+        run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+        let file = dir.path().join("crates/features/src/posts").join(broken);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let source = fs::read_to_string(&file).unwrap_or_default();
+        let line = source.lines().count() + 1;
+        fs::write(&file, format!("{source}fn half(\n")).unwrap();
+        let before = files_under(dir.path());
+
+        let refused = run_err(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+        assert!(
+            refused.contains(broken) && refused.contains(&format!("line {line}")),
+            "`{broken}`, line {line}: {refused}"
+        );
+        assert_eq!(files_under(dir.path()), before, "a refusal writes nothing");
+    }
 }
 
 /// `architecture.md` allows `services/`: a `CrudService` there reads as one, so

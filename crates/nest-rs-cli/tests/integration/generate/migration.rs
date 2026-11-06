@@ -315,6 +315,35 @@ fn a_field_the_builder_cannot_type_is_named_for_the_developer() {
 
 /// With no entity declaring its table, the create-table skeleton carries the
 /// house columns and leaves the rest to fill.
+/// An entity declaring the table in a file that does not parse is no entity absent:
+/// the run names the file and its line, and writes no skeleton over it.
+#[test]
+fn a_create_migration_refuses_an_entity_that_does_not_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "entity", "posts", "-p", path]);
+    let entity = dir.path().join("crates/features/src/posts/entity.rs");
+    let source = fs::read_to_string(&entity).unwrap();
+    let line = source.lines().count() + 1;
+    fs::write(&entity, format!("{source}fn half(\n")).unwrap();
+    let before = migration_files(dir.path());
+
+    let refused = run_err(dir.path(), &["g", "migration", "create_posts", "-p", path]);
+
+    assert!(
+        refused.contains("posts/entity.rs") && refused.contains(&format!("line {line}")),
+        "line {line}: {refused}"
+    );
+    assert_eq!(
+        migration_files(dir.path()),
+        before,
+        "no skeleton is written"
+    );
+}
+
 #[test]
 fn a_create_migration_with_no_entity_is_the_skeleton() {
     let dir = tempfile::tempdir().unwrap();

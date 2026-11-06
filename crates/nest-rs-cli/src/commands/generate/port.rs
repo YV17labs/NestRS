@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use syn::{ImplItem, Item, Type, UseTree, Visibility};
 
 use super::support::list_dir;
-use crate::error::{CliResult, read_if_exists};
+use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::Names;
 
 /// A port's `CrudService`, whose API decides what an adapter may call.
@@ -33,7 +33,7 @@ impl Port {
     /// Read the port `names` at `root`; of several services, the one named for
     /// it, else the first by file name.
     pub(super) fn read(root: &Path, names: &Names) -> CliResult<Self> {
-        let flat = parse(&root.join("mod.rs"))?.and_then(|index| flat_entity(&index));
+        let flat = parse(&root.join("mod.rs"))?.and_then(|index| flat_entity(&index, &names.snake));
         let mut files = vec![root.join("service.rs")];
         files.extend(
             list_dir(&root.join("services"))?
@@ -66,10 +66,12 @@ impl Port {
     }
 }
 
-/// The source at `path`: `None` when it is absent or does not parse, which the
-/// developer's compiler is the one to report.
-fn parse(path: &Path) -> CliResult<Option<syn::File>> {
-    Ok(read_if_exists(path)?.and_then(|source| syn::parse_file(&source).ok()))
+/// The source at `path`, `None` when it is absent; one that does not parse refuses
+/// the run.
+pub(super) fn parse(path: &Path) -> CliResult<Option<syn::File>> {
+    read_if_exists(path)?
+        .map(|source| syn::parse_file(&source).map_err(CliError::invalid_port_file(path)))
+        .transpose()
 }
 
 /// One `impl CrudService for <service>`, and the path its `type Entity` spells.
@@ -168,18 +170,18 @@ fn leaves(source: &syn::File) -> Vec<Leaf> {
 }
 
 /// The file the entity `named` in `source` lands in, relative to the port `snake`:
-/// `flat` when its path reaches the port's own `Entity`, which `mod.rs` re-exports.
+/// `flat` when its path reaches the port's own `Entity`, which `mod.rs` re-exports,
+/// and none when its path leads out of the port, whose files an adapter alone edits.
 fn entity_file(
     source: &syn::File,
     named: &[String],
     snake: &str,
     flat: Option<&Path>,
 ) -> Option<PathBuf> {
-    let (path, item) = origin(source, named)?;
-    module_file(&path).or_else(|| {
-        let the_port = path.iter().all(|word| word == "super")
-            || matches!(path.as_slice(), [root, port] if root == "crate" && port == snake);
-        flat.filter(|_| item == "Entity" && the_port)
+    let (path, item) = origin(source, named, snake)?;
+    let inside = inside_port(&path, snake)?;
+    module_file(inside).or_else(|| {
+        flat.filter(|_| item == "Entity" && inside.is_empty())
             .map(Path::to_path_buf)
     })
 }
@@ -187,7 +189,7 @@ fn entity_file(
 /// The module path `source` reads the entity `named` from, and the item's name
 /// there: `named`'s own path, or the `use` binding its one word, or else a glob,
 /// which names no word.
-fn origin(source: &syn::File, named: &[String]) -> Option<(Vec<String>, String)> {
+fn origin(source: &syn::File, named: &[String], snake: &str) -> Option<(Vec<String>, String)> {
     let (item, path) = named.split_last()?;
     if !path.is_empty() {
         return Some((path.to_vec(), item.clone()));
@@ -196,32 +198,53 @@ fn origin(source: &syn::File, named: &[String]) -> Option<(Vec<String>, String)>
     if let Some(leaf) = leaves.iter().find(|leaf| leaf.binds.as_ref() == Some(item)) {
         return Some((leaf.path.clone(), leaf.item.clone()?));
     }
-    leaves
-        .iter()
-        .find(|leaf| leaf.binds.is_none() && module_file(&leaf.path).is_some())
-        .or_else(|| leaves.iter().find(|leaf| leaf.binds.is_none()))
+    let globs = || leaves.iter().filter(|leaf| leaf.binds.is_none());
+    globs()
+        .find(|leaf| {
+            inside_port(&leaf.path, snake).is_some_and(|in_it| module_file(in_it).is_some())
+        })
+        .or_else(|| globs().next())
         .map(|leaf| (leaf.path.clone(), item.clone()))
+}
+
+/// What `path`, spelled in a file below the port `snake`, names inside it: what
+/// follows `super…` or `crate::<port>`, and `None` for a path leading out of it.
+fn inside_port<'a>(path: &'a [String], snake: &str) -> Option<&'a [String]> {
+    match path {
+        [root, port, inside @ ..] if root == "crate" && port == snake => Some(inside),
+        [first, ..] if first == "super" => {
+            Some(&path[path.iter().take_while(|word| *word == "super").count()..])
+        }
+        _ => None,
+    }
 }
 
 /// The file a module path inside a port lands in: `entity.rs`, or
 /// `entities/<stem>.rs`.
-fn module_file(path: &[String]) -> Option<PathBuf> {
-    let at = path
-        .iter()
-        .position(|segment| segment == "entity" || segment == "entities")?;
-    if path[at] == "entity" {
-        return Some(PathBuf::from("entity.rs"));
+fn module_file(inside: &[String]) -> Option<PathBuf> {
+    match inside {
+        [module, ..] if module == "entity" => Some(PathBuf::from("entity.rs")),
+        [module, stem, ..] if module == "entities" => {
+            Some(PathBuf::from(format!("entities/{stem}.rs")))
+        }
+        _ => None,
     }
-    Some(PathBuf::from(format!("entities/{}.rs", path.get(at + 1)?)))
 }
 
-/// The file behind a port's flat `Entity`, read off its `mod.rs`: what
-/// `crate::<port>::Entity` names, and `None` when it names nothing.
-fn flat_entity(index: &syn::File) -> Option<PathBuf> {
+/// The file behind a port's flat `Entity`, read off its `mod.rs`, where a child is
+/// named bare, behind `self` or behind `crate::<port>`: what `crate::<port>::Entity`
+/// names, and `None` when it names nothing.
+fn flat_entity(index: &syn::File, snake: &str) -> Option<PathBuf> {
     leaves(index)
         .into_iter()
         .filter(|leaf| leaf.public && leaf.binds.as_deref().is_none_or(|word| word == "Entity"))
-        .find_map(|leaf| module_file(&leaf.path))
+        .find_map(|leaf| {
+            module_file(match leaf.path.as_slice() {
+                [head, inside @ ..] if head == "self" => inside,
+                [root, port, inside @ ..] if root == "crate" && port == snake => inside,
+                path => path,
+            })
+        })
 }
 
 #[cfg(test)]
@@ -293,6 +316,8 @@ mod tests {
             "use super::Entity;\nimpl CrudService for S { type Entity = Entity; }\n",
             "use crate::posts::Entity as Post;\nimpl CrudService for S { type Entity = Post; }\n",
             "use super::*;\nimpl CrudService for S { type Entity = Entity; }\n",
+            "use crate::posts::entity::Entity;\nimpl CrudService for S { type Entity = Entity; }\n",
+            "impl CrudService for S { type Entity = crate::posts::entity::Entity; }\n",
         ] {
             let (_, entity) = crud(source);
             assert_eq!(entity, Some(PathBuf::from("entity.rs")), "{source}");
@@ -304,6 +329,11 @@ mod tests {
         for source in [
             "use other::place::Entity;\nimpl CrudService for S { type Entity = Entity; }\n",
             "use crate::other::Entity;\nimpl CrudService for S { type Entity = Entity; }\n",
+            "use crate::other::entity::Entity;\nimpl CrudService for S { type Entity = Entity; }\n",
+            "use super::other::entity::Entity;\nimpl CrudService for S { type Entity = Entity; }\n",
+            "use crate::other::entities::post::*;\nimpl CrudService for S { type Entity = Entity; }\n",
+            "impl CrudService for S { type Entity = crate::other::entity::Entity; }\n",
+            "impl CrudService for S { type Entity = other::entity::Entity; }\n",
             "impl CrudService for S { type Entity = Entity; }\n",
             "impl CrudService for S {}\n",
         ] {
@@ -329,9 +359,14 @@ mod tests {
                 "pub use entities::post::{Entity, Model};\n",
                 "entities/post.rs",
             ),
+            ("pub use self::entity::*;\n", "entity.rs"),
+            (
+                "pub use crate::posts::entities::post::*;\n",
+                "entities/post.rs",
+            ),
         ] {
             assert_eq!(
-                flat_entity(&file(index)),
+                flat_entity(&file(index), "posts"),
                 Some(PathBuf::from(expected)),
                 "{index}"
             );
@@ -344,8 +379,11 @@ mod tests {
             "mod entities;\npub use entities::post;\n",
             "use entities::post::*;\n",
             "pub use service::*;\n",
+            "pub use other::entity::*;\n",
+            "pub use super::other::entity::Entity;\n",
+            "pub use crate::other::entities::post::*;\n",
         ] {
-            assert_eq!(flat_entity(&file(index)), None, "{index}");
+            assert_eq!(flat_entity(&file(index), "posts"), None, "{index}");
         }
     }
 }

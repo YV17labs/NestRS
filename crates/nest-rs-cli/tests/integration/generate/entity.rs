@@ -286,6 +286,30 @@ fn generate_entity_retires_the_subject_the_generators_wrote() {
     );
 }
 
+/// A `subject.rs` that does not parse says nothing of the name it holds, so no entity
+/// is written over a guess: the run names the file and its line.
+#[test]
+fn generate_entity_refuses_a_subject_that_does_not_parse() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+    let subject = dir.path().join("crates/features/src/posts/subject.rs");
+    let source = fs::read_to_string(&subject).unwrap();
+    let line = source.lines().count() + 1;
+    fs::write(&subject, format!("{source}fn half(\n")).unwrap();
+    let before = files_under(dir.path());
+
+    let refused = run_err(dir.path(), &["g", "entity", "posts", "-p", path]);
+
+    assert!(
+        refused.contains("subject.rs") && refused.contains(&format!("line {line}")),
+        "line {line}: {refused}"
+    );
+    assert_eq!(files_under(dir.path()), before, "a refusal writes nothing");
+}
+
 /// A subject or a posture edited beyond what the generator wrote is the
 /// developer's: `g entity` refuses, naming the file, and writes nothing. An
 /// entity of another name joins the port beside its subject.

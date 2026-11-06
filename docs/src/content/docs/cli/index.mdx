@@ -273,7 +273,8 @@ nestrs g auth
 # key's default; any other name writes the create-table skeleton to fill. A
 # name registered already, or a table a registered `create_` migration creates
 # (`create_post` after `create_posts`), is refused: the next change to a table
-# takes a name of its own.
+# takes a name of its own. An entity declaring the table in a file that does
+# not parse is refused too, by its line.
 nestrs g migration create_comments
 nestrs g migration add_status_to_posts
 
@@ -411,8 +412,10 @@ controller together.
 An adapter generated afterwards reads the same shape. `g mcp` and `g graphql` gate
 on `crate::posts::Entity`, the first entity, and write no `#[subject]` beside it;
 `g graphql` adds the `graphql` flag to the entity your `CrudService` names, wherever
-it moved to. When the service's source leads to no file, the run says so in its next
-steps, and the flag is yours to add.
+it moved to. When the service's source leads to no file of the port, or that file
+holds no `#[expose(...)]`, the run says so in its next steps, and the flag is yours
+to add. A port file that does not parse refuses the run, naming its line, with
+nothing written.
 
 ### `g graphql` over a resource carries the same guarantee
 

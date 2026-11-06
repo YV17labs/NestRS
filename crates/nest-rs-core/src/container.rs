@@ -230,7 +230,7 @@ const DYN_BINDING_REMEDY: &str =
 
 #[derive(Clone)]
 pub(crate) struct MetaEntry {
-    pub(crate) provider_type_id: Option<TypeId>,
+    pub(crate) host_type_id: Option<TypeId>,
     pub(crate) meta: AnyArc,
 }
 
@@ -354,7 +354,7 @@ impl Container {
         self.metadata
             .values()
             .flatten()
-            .filter_map(|entry| entry.provider_type_id)
+            .filter_map(|entry| entry.host_type_id)
             .collect()
     }
 
@@ -837,7 +837,7 @@ impl ContainerBuilder {
             .entry(TypeId::of::<M>())
             .or_default()
             .push(MetaEntry {
-                provider_type_id: Some(TypeId::of::<P>()),
+                host_type_id: Some(TypeId::of::<P>()),
                 meta: Arc::new(meta),
             });
         self
@@ -861,7 +861,7 @@ impl ContainerBuilder {
             .entry(TypeId::of::<M>())
             .or_default()
             .push(MetaEntry {
-                provider_type_id: None,
+                host_type_id: None,
                 meta: Arc::new(meta),
             });
         self
@@ -2336,13 +2336,13 @@ mod tests {
     }
 
     #[test]
-    fn attach_meta_records_provider_type_id() {
+    fn attach_meta_records_host_type_id() {
         let container = Container::builder()
             .attach_meta::<Host, _>(Marker("hi"))
             .build()
             .expect("the container builds");
         let entries = container.metadata_entries(TypeId::of::<Marker>()).unwrap();
-        assert_eq!(entries[0].provider_type_id, Some(TypeId::of::<Host>()));
+        assert_eq!(entries[0].host_type_id, Some(TypeId::of::<Host>()));
     }
 
     #[test]
@@ -2352,7 +2352,7 @@ mod tests {
             .build()
             .expect("the container builds");
         let entries = container.metadata_entries(TypeId::of::<Marker>()).unwrap();
-        assert_eq!(entries[0].provider_type_id, None);
+        assert_eq!(entries[0].host_type_id, None);
     }
 
     #[test]

@@ -142,8 +142,8 @@ pub(crate) mod __private {
     pub struct LifecycleHook {
         /// The phase this hook runs in.
         pub phase: LifecyclePhase,
-        /// The host provider's name, for the lines naming the hook.
-        pub provider: &'static str,
+        /// The host's name, for the lines naming the hook.
+        pub host: &'static str,
         /// The hook method's name, for the lines naming the hook.
         pub method: &'static str,
         /// The method's position among its `impl`'s hooks, the order a host's
@@ -154,7 +154,7 @@ pub(crate) mod __private {
         pub origin: &'static str,
         /// The host provider's type, which ranks the hook in the run order
         /// and is read by [`inert_host`](crate::inert_host).
-        pub provider_type_id: fn() -> TypeId,
+        pub host_type_id: fn() -> TypeId,
         /// Whether this hook's provider is resolvable in the assembled container;
         /// a hook that self-gates inside `run` passes `|_| true`.
         pub present: fn(&Container) -> bool,
@@ -194,7 +194,7 @@ fn hooks_for(phase: LifecyclePhase, container: &Container) -> Vec<&'static Lifec
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Host {
     Unranked {
-        provider: &'static str,
+        host: &'static str,
         origin: &'static str,
         id: TypeId,
     },
@@ -212,16 +212,16 @@ fn sort_hooks(
     let mut first_origin: HashMap<TypeId, &'static str> = HashMap::new();
     for hook in hooks.iter() {
         first_origin
-            .entry((hook.provider_type_id)())
+            .entry((hook.host_type_id)())
             .and_modify(|origin| *origin = (*origin).min(hook.origin))
             .or_insert(hook.origin);
     }
     let host = |hook: &LifecycleHook| {
-        let id = (hook.provider_type_id)();
+        let id = (hook.host_type_id)();
         match order.and_then(|order| order.rank(id)) {
             Some(rank) => Host::Ranked(rank),
             None => Host::Unranked {
-                provider: hook.provider,
+                host: hook.host,
                 origin: first_origin[&id],
                 id,
             },
@@ -242,10 +242,10 @@ fn report_inert_hook(container: &Container, hook: &LifecycleHook, phase: Lifecyc
         target: crate::target::LIFECYCLE,
         what: "lifecycle hook",
         origin: hook.origin,
-        host: (hook.provider_type_id)(),
+        host: (hook.host_type_id)(),
         container: container,
         phase = phase.as_str(),
-        host = hook.provider,
+        host = hook.host,
         method = hook.method,
     );
 }
@@ -278,7 +278,7 @@ impl HookUnit {
             crate::unit::HOOK,
             &correlation,
             phase = phase.as_str(),
-            host = hook.provider,
+            host = hook.host,
             method = hook.method,
             origin = hook.origin,
         );
@@ -353,7 +353,7 @@ impl HookLine<'_> {
                 outcome: outcome,
                 started: self.started,
                 phase = phase.as_str(),
-                host = hook.provider,
+                host = hook.host,
                 method = hook.method,
                 origin = hook.origin,
             );
@@ -384,7 +384,7 @@ pub(crate) async fn run_phase(
         }
         let step = BootStep::InitHook {
             phase,
-            provider: hook.provider,
+            host: hook.host,
             method: hook.method,
             origin: hook.origin,
         };
@@ -403,7 +403,7 @@ pub(crate) async fn run_phase(
                         payload.as_ref(),
                         "lifecycle hook panicked; the boot is aborted",
                         phase = phase.as_str(),
-                        host = hook.provider,
+                        host = hook.host,
                         method = hook.method,
                         origin = hook.origin,
                     );
@@ -429,7 +429,7 @@ pub(crate) async fn run_phase_lenient(
             report_inert_hook(container, hook, phase);
             continue;
         }
-        crate::way_down::hook(phase, hook.provider, hook.method, hook.origin);
+        crate::way_down::hook(phase, hook.host, hook.method, hook.origin);
         let unit = HookUnit::open(phase, hook);
         let started = Instant::now();
         // `timeout_at` polls the hook before its timer, so past the deadline
@@ -445,7 +445,7 @@ pub(crate) async fn run_phase_lenient(
             Ok(Ok(Err(err))) => tracing::error!(
                 target: crate::target::LIFECYCLE,
                 phase = phase.as_str(),
-                host = hook.provider,
+                host = hook.host,
                 method = hook.method,
                 origin = hook.origin,
                 error = %crate::error_message(&*err),
@@ -456,14 +456,14 @@ pub(crate) async fn run_phase_lenient(
                 payload.as_ref(),
                 "shutdown hook panicked, and the hooks after it still run",
                 phase = phase.as_str(),
-                host = hook.provider,
+                host = hook.host,
                 method = hook.method,
                 origin = hook.origin,
             ),
             Err(_) => tracing::warn!(
                 target: crate::target::LIFECYCLE,
                 phase = phase.as_str(),
-                host = hook.provider,
+                host = hook.host,
                 method = hook.method,
                 origin = hook.origin,
                 waited_ms = millis(started.elapsed()),
@@ -518,11 +518,11 @@ mod tests {
     inventory::submit! {
         LifecycleHook {
             phase: LifecyclePhase::OnModuleInit,
-            provider: "Probe",
+            host: "Probe",
             method: "touch",
             declaration_index: 0,
             origin: module_path!(),
-            provider_type_id: TypeId::of::<Probe>,
+            host_type_id: TypeId::of::<Probe>,
             present: |container| container.get::<Probe>().is_some(),
             run: run_touch,
         }
@@ -574,11 +574,11 @@ mod tests {
     inventory::submit! {
         LifecycleHook {
             phase: LifecyclePhase::BeforeApplicationShutdown,
-            provider: "Unreachable",
+            host: "Unreachable",
             method: "never",
             declaration_index: 0,
             origin: module_path!(),
-            provider_type_id: TypeId::of::<Unreachable>,
+            host_type_id: TypeId::of::<Unreachable>,
             present: |_| false,
             run: run_unreachable,
         }
@@ -592,34 +592,34 @@ mod tests {
     }
 
     fn hook(
-        provider: &'static str,
+        host: &'static str,
         method: &'static str,
         declaration_index: usize,
-        provider_type_id: fn() -> TypeId,
+        host_type_id: fn() -> TypeId,
     ) -> &'static LifecycleHook {
         hook_in(
             module_path!(),
-            provider,
+            host,
             method,
             declaration_index,
-            provider_type_id,
+            host_type_id,
         )
     }
 
     fn hook_in(
         origin: &'static str,
-        provider: &'static str,
+        host: &'static str,
         method: &'static str,
         declaration_index: usize,
-        provider_type_id: fn() -> TypeId,
+        host_type_id: fn() -> TypeId,
     ) -> &'static LifecycleHook {
         Box::leak(Box::new(LifecycleHook {
             phase: LifecyclePhase::OnModuleInit,
-            provider,
+            host,
             method,
             declaration_index,
             origin,
-            provider_type_id,
+            host_type_id,
             present: |_| true,
             run: noop,
         }))

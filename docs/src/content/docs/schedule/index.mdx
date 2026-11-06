@@ -441,9 +441,9 @@ job wherever it runs, while an API and a worker that each declare their own
 `MaintenanceTasks::sweep` in their own crates have two, and never claim each
 other's occurrences through the Redis they share. Moving the job's module inside
 its crate keeps it, so a refactor ships without a second job. Two jobs under one
-`Provider::method` in one app fail its boot, naming where each was declared,
-because the lines a job files carry its provider and method and could not tell
-the two apart.
+`Host::method` in one app fail its boot, naming where each was declared,
+because the lines a job files carry its host and method and could not tell the
+two apart.
 
 **Renaming the type, the method or the crate starts a new job.** Through the
 rolling deploy that ships the rename, the replicas still running the old build
@@ -519,7 +519,7 @@ lapsed by then.
 ### The keys
 
 ```text
-nestrs:schedule:claims:<crate>:<provider>:<method>:<instant_ms>
+nestrs:schedule:claims:<crate>:<host>:<method>:<instant_ms>
 ```
 
 The identity is a level per `::` — a pinned `key`'s levels in its place — and a

@@ -126,3 +126,7 @@ version)` are gone, as `OpenTelemetryConfig`'s went (above): a field is set one 
 a literal over its base, so it joins the configurations this decision lists and a new
 field stays a minor (`semver-7x.md`, this date). No environment twin came with it:
 `edges.md` still holds that identity travels in `for_root`'s value.
+
+**2026-11-06 — `provider_type_id()` is `host_type_id()`.** The accessors above keep the
+shape this decision chose; the word followed the lines, which say `host`, before the
+semver page froze it.

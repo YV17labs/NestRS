@@ -10,7 +10,7 @@ use crate::EventBus;
 pub struct ListenerMethod {
     origin: &'static str,
     name: &'static str,
-    provider_type_id: fn() -> TypeId,
+    host_type_id: fn() -> TypeId,
     declaration_index: usize,
     wire: fn(&Container, &EventBus) -> anyhow::Result<()>,
 }
@@ -22,7 +22,7 @@ impl ListenerMethod {
         self.origin
     }
 
-    /// `Provider::method`, as a boot refusal names the listener; a line says
+    /// `Host::method`, as a boot refusal names the listener; a line says
     /// the host and the method apart.
     pub const fn name(&self) -> &'static str {
         self.name
@@ -43,8 +43,8 @@ impl ListenerMethod {
     /// `TypeId` of the host provider, which a reader gates on
     /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) as the boot
     /// does.
-    pub fn provider_type_id(&self) -> TypeId {
-        (self.provider_type_id)()
+    pub fn host_type_id(&self) -> TypeId {
+        (self.host_type_id)()
     }
 
     /// Position of this method within its own `#[listeners]` block; with the
@@ -68,14 +68,14 @@ impl ListenerMethod {
 pub const fn listener_method(
     origin: &'static str,
     name: &'static str,
-    provider_type_id: fn() -> TypeId,
+    host_type_id: fn() -> TypeId,
     declaration_index: usize,
     wire: fn(&Container, &EventBus) -> anyhow::Result<()>,
 ) -> ListenerMethod {
     ListenerMethod {
         origin,
         name,
-        provider_type_id,
+        host_type_id,
         declaration_index,
         wire,
     }

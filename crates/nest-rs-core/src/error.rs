@@ -2108,7 +2108,7 @@ mod boot_refusal_tests {
             cause: crate::StopCause::Terminate,
             step: crate::BootStep::InitHook {
                 phase: crate::LifecyclePhase::OnModuleInit,
-                provider: "CacheWarmer",
+                host: "CacheWarmer",
                 method: "warm",
                 origin: "app::cache",
             },

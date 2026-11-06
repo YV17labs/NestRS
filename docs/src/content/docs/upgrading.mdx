@@ -246,9 +246,11 @@ lists what the boot, a log or the wire shows when one is missed.
    | `Correlation::mint()` | `Correlation::minted(None)` |
    | `TlsConfig`, `CorsConfig`, `SecurityHeadersConfig` | `HttpTls`, `HttpCors`, `HttpSecurityHeaders` |
    | `method.retries`, `method.queue` on a `ProcessMethod` | `method.options().retries()`, `method.queue()` |
-   | `entry.provider`, `entry.method`, `entry.replicas` on a `ScheduledMethod` (likewise `ListenerMethod`, `HealthIndicator`, `SocialProviderEntry`) | `entry.provider()`, `entry.method()`, `entry.replicas()` |
+   | `entry.provider`, `entry.method`, `entry.replicas` on a `ScheduledMethod` (likewise `ListenerMethod`, `HealthIndicator`, `SocialProviderEntry`) | `entry.host()`, `entry.method()`, `entry.replicas()` |
+   | `entry.provider_type_id()`, `Discovered`'s `provider_type_id`, `CronJobMeta::provider()` | `entry.host_type_id()`, `host_type_id`, `CronJobMeta::host()` |
+   | `BootStep::InitHook { provider, .. }` | `BootStep::InitHook { host, .. }` |
    | `entry.run`, `entry.wire`, `entry.build`, `entry.declaration_index`, `entry.provider_type_name` or `entry.module` on a registry entry | none: only the boot runs a discovered entry |
-   | a `CronJobMeta { … }` registered by hand | `CronJobMeta::new(module_path!(), provider, method, trigger, run)`, then `.with_timeout(…)`, `.with_transaction(TransactionPolicy::Pool)`, `.with_replicas(Replicas::One)`, `.with_key(…)` for each field you set away from its default |
+   | a `CronJobMeta { … }` registered by hand | `CronJobMeta::new(module_path!(), host, method, trigger, run)`, then `.with_timeout(…)`, `.with_transaction(TransactionPolicy::Pool)`, `.with_replicas(Replicas::One)`, `.with_key(…)` for each field you set away from its default |
    | `Bound { count, why }` | `Bound::new(count, why)` |
    | `let _otel = OpenTelemetry::init("api")?;` | `let _otel = OpenTelemetry::init()?;` — the service is the binary's name and version |
    | `OpenTelemetryModule` in the root's `imports` | delete it: `main`'s `let _otel = OpenTelemetry::init()?;` is the whole wiring; the module stays only where a provider injects `Arc<Metrics>` |

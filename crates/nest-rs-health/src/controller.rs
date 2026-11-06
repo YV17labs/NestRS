@@ -59,7 +59,7 @@ pub(crate) fn report_prefixed_probe_paths(container: &Container) {
     let Some(meta) = discovery
         .meta::<HttpControllerMeta>()
         .into_iter()
-        .find(|d| d.provider_type_id == Some(TypeId::of::<HealthController>()))
+        .find(|d| d.host_type_id == Some(TypeId::of::<HealthController>()))
         .map(|d| d.meta)
     else {
         return;

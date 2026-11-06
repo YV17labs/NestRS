@@ -371,17 +371,17 @@ pub fn unresolved_host(host: &str) -> anyhow::Error {
 /// ```
 /// # use std::any::TypeId;
 /// # use nest_rs_core::{Container, report_inert_host};
-/// # struct Entry { origin: &'static str, provider: &'static str, method: &'static str, provider_type_id: fn() -> TypeId }
+/// # struct Entry { origin: &'static str, host: &'static str, method: &'static str, host_type_id: fn() -> TypeId }
 /// # struct Reports;
-/// # let entry = Entry { origin: "my_app::reports", provider: "Reports", method: "nightly", provider_type_id: TypeId::of::<Reports> };
+/// # let entry = Entry { origin: "my_app::reports", host: "Reports", method: "nightly", host_type_id: TypeId::of::<Reports> };
 /// # let container = &Container::default();
 /// report_inert_host!(
 ///     target: nest_rs_core::target::LIFECYCLE,
 ///     what: "scheduled method",
 ///     origin: entry.origin,
-///     host: (entry.provider_type_id)(),
+///     host: (entry.host_type_id)(),
 ///     container: container,
-///     provider = entry.provider,
+///     host = entry.host,
 ///     method = entry.method,
 /// );
 /// ```

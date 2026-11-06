@@ -76,7 +76,7 @@ pub mod __private {
 /// }
 ///
 /// let jobs: Vec<&ScheduledMethod> = nest_rs_core::inventory::iter::<ScheduledMethod>()
-///     .filter(|job| job.provider() == "ReportTasks")
+///     .filter(|job| job.host() == "ReportTasks")
 ///     .collect();
 /// assert!(jobs.iter().any(|job| job.method() == "nightly"
 ///     && job.replicas() == Replicas::Each

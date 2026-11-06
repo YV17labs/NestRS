@@ -33,7 +33,7 @@ impl<'a> Discovery<'a> {
                             .ok()
                             .map(|meta| Discovered {
                                 meta,
-                                provider_type_id: entry.provider_type_id,
+                                host_type_id: entry.host_type_id,
                             })
                     })
                     .collect()
@@ -51,5 +51,5 @@ pub struct Discovered<M> {
     pub meta: Arc<M>,
     /// `TypeId` of the host provider when the metadata is host-bound (a scanner
     /// resolves the live provider through it); `None` for free-standing metadata.
-    pub provider_type_id: Option<TypeId>,
+    pub host_type_id: Option<TypeId>,
 }

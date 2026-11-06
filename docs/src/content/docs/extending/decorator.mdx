@@ -115,7 +115,7 @@ use std::any::TypeId;
 pub struct AuditedEntry {
     pub topic: &'static str,
     pub origin: &'static str,
-    pub provider_type_id: fn() -> TypeId,
+    pub host_type_id: fn() -> TypeId,
 }
 
 nest_rs::core::inventory::collect!(AuditedEntry);
@@ -156,7 +156,7 @@ fn wire(container: &Container) -> anyhow::Result<()> {
         return Ok(());
     };
     for entry in inventory::iter::<AuditedEntry>() {
-        let host = (entry.provider_type_id)();
+        let host = (entry.host_type_id)();
         if !reachable.reaches(host) {
             nest_rs::core::report_inert_host!(
                 target: crate::TARGET,

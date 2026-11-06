@@ -274,7 +274,7 @@ declare_scheduled_settlement!(false);
 #[test]
 fn a_transactional_fragment_is_read_the_same_wherever_the_key_sits() {
     let entries = nest_rs_core::inventory::iter::<nest_rs_schedule::ScheduledMethod>()
-        .filter(|m| m.provider_type_id() == std::any::TypeId::of::<FragmentTasks>())
+        .filter(|m| m.host_type_id() == std::any::TypeId::of::<FragmentTasks>())
         .filter(|m| m.transaction() == nest_rs_database::TransactionPolicy::Pool)
         .count();
     assert_eq!(
@@ -338,7 +338,7 @@ impl r#yield {
 fn a_compiled_out_trigger_submits_nothing_and_a_typed_receiver_is_scheduled() {
     let mut methods: Vec<&str> =
         nest_rs_core::inventory::iter::<nest_rs_schedule::ScheduledMethod>()
-            .filter(|m| m.provider_type_id() == std::any::TypeId::of::<ShapedTasks>())
+            .filter(|m| m.host_type_id() == std::any::TypeId::of::<ShapedTasks>())
             .map(|m| m.method())
             .collect();
     methods.sort_unstable();
@@ -348,8 +348,8 @@ fn a_compiled_out_trigger_submits_nothing_and_a_typed_receiver_is_scheduled() {
         "a raw identifier is labelled by its name"
     );
     let raw_hosts: Vec<&str> = nest_rs_core::inventory::iter::<nest_rs_schedule::ScheduledMethod>()
-        .filter(|m| m.provider_type_id() == std::any::TypeId::of::<r#yield>())
-        .map(|m| m.provider())
+        .filter(|m| m.host_type_id() == std::any::TypeId::of::<r#yield>())
+        .map(|m| m.host())
         .collect();
     assert_eq!(raw_hosts, ["yield"], "a raw host is labelled by its name");
 }

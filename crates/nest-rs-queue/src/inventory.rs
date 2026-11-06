@@ -53,7 +53,7 @@ pub struct ProcessMethod {
     name: &'static str,
     queue: &'static str,
     options: ProcessOptions,
-    provider_type_id: fn() -> TypeId,
+    host_type_id: fn() -> TypeId,
     site: &'static Site,
     handler: JobHandler,
 }
@@ -66,7 +66,7 @@ impl ProcessMethod {
         self.origin
     }
 
-    /// `Provider::method`, as a boot refusal names the method and a layer reads
+    /// `Host::method`, as a boot refusal names the method and a layer reads
     /// it ([`QueueView::processor`](crate::QueueView::processor)); a line says
     /// `host` and `method` apart.
     pub const fn name(&self) -> &'static str {
@@ -86,8 +86,8 @@ impl ProcessMethod {
     /// `TypeId` of the host provider, which a reader gates on
     /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) as the
     /// worker does.
-    pub fn provider_type_id(&self) -> TypeId {
-        (self.provider_type_id)()
+    pub fn host_type_id(&self) -> TypeId {
+        (self.host_type_id)()
     }
 
     /// The dispatch site its decorator declared: its handler and the layers
@@ -108,7 +108,7 @@ pub const fn process_method(
     name: &'static str,
     queue: &'static str,
     options: ProcessOptions,
-    provider_type_id: fn() -> TypeId,
+    host_type_id: fn() -> TypeId,
     site: &'static Site,
     handler: JobHandler,
 ) -> ProcessMethod {
@@ -117,7 +117,7 @@ pub const fn process_method(
         name,
         queue,
         options,
-        provider_type_id,
+        host_type_id,
         site,
         handler,
     }

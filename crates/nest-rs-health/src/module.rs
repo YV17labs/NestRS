@@ -58,7 +58,7 @@ fn serves_probes(container: &Container) -> bool {
 fn indicator_hosts() -> Vec<(&'static str, TypeId)> {
     nest_rs_core::inventory::iter::<HealthIndicator>()
         .filter_map(|indicator| {
-            let host = indicator.provider_type_id();
+            let host = indicator.host_type_id();
             let listed = nest_rs_core::inventory::iter::<ModuleDescriptor>()
                 .flat_map(|module| module.providers)
                 .find(|provider| (provider.provider)() == host)?;

@@ -89,8 +89,8 @@ pub enum BootStep {
     InitHook {
         /// The init phase it runs in.
         phase: LifecyclePhase,
-        /// The host provider's name.
-        provider: &'static str,
+        /// The host's name.
+        host: &'static str,
         /// The hook method's name.
         method: &'static str,
         /// `module_path!()` at the `#[hooks]` site.
@@ -109,12 +109,12 @@ impl std::fmt::Display for BootStep {
             Self::Listen { transport } => write!(f, "the `listen` of transport `{transport}`"),
             Self::InitHook {
                 phase,
-                provider,
+                host,
                 method,
                 origin,
             } => write!(
                 f,
-                "the `{}` hook `{provider}::{method}` in `{origin}`",
+                "the `{}` hook `{host}::{method}` in `{origin}`",
                 phase.attribute()
             ),
         }
@@ -281,7 +281,7 @@ impl App {
         tracing::warn!(
             target: crate::target::LIFECYCLE,
             phase = failed.hook.phase.as_str(),
-            host = failed.hook.provider,
+            host = failed.hook.host,
             method = failed.hook.method,
             origin = failed.hook.origin,
             "the boot failed after init hooks ran: running the shutdown hooks",

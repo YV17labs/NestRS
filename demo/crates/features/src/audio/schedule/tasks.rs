@@ -58,9 +58,7 @@ mod tests {
     fn the_transcode_seed_fires_once_per_occurrence_and_the_heartbeat_on_each_replica() {
         let replicas = |method: &str| {
             nest_rs::core::inventory::iter::<ScheduledMethod>()
-                .find(|m| {
-                    m.provider_type_id() == TypeId::of::<AudioTasks>() && m.method() == method
-                })
+                .find(|m| m.host_type_id() == TypeId::of::<AudioTasks>() && m.method() == method)
                 .map(|m| m.replicas())
         };
         assert_eq!(replicas("enqueue_transcode"), Some(Replicas::One));

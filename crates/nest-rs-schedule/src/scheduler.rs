@@ -111,14 +111,14 @@ static ATTACHED_SITE: Site = declare_site(
 #[derive(Clone, Copy)]
 pub(crate) struct JobId {
     origin: &'static str,
-    provider: &'static str,
+    host: &'static str,
     method: &'static str,
     key: Option<&'static str>,
 }
 
 impl std::fmt::Display for JobId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}::{}", self.provider, self.method)
+        write!(f, "{}::{}", self.host, self.method)
     }
 }
 
@@ -132,7 +132,7 @@ impl JobId {
     fn levels(&self) -> Vec<&'static str> {
         match self.key {
             Some(key) => key.split("::").collect(),
-            None => vec![crate_of(self.origin), self.provider, self.method],
+            None => vec![crate_of(self.origin), self.host, self.method],
         }
     }
 
@@ -175,7 +175,7 @@ impl JobId {
         if let Some(key) = self.key {
             return (!is_key(key)).then(|| format!("{key:?} is not a job key: {KEY_RULE}"));
         }
-        [("host", self.provider), ("method", self.method)]
+        [("host", self.host), ("method", self.method)]
             .into_iter()
             .find(|(_, level)| broken(level))
             .map(|(part, level)| {
@@ -272,7 +272,7 @@ impl Scheduler {
     fn resolve(meta: &Arc<CronJobMeta>, site: &'static Site) -> Result<Job> {
         let id = JobId {
             origin: meta.origin,
-            provider: meta.provider,
+            host: meta.host,
             method: meta.method,
             key: meta.key,
         };
@@ -355,21 +355,21 @@ impl Transport for Scheduler {
             .collect::<Result<Vec<_>>>()?;
         let reachable = ReachableProviders::of(container, "scheduled method")?;
         for entry in inventory::iter::<ScheduledMethod>() {
-            if !reachable.reaches(entry.provider_type_id()) {
+            if !reachable.reaches(entry.host_type_id()) {
                 ::nest_rs_core::report_inert_host!(
                     target: crate::TARGET,
                     what: "scheduled method",
                     origin: entry.origin(),
-                    host: entry.provider_type_id(),
+                    host: entry.host_type_id(),
                     container: container,
-                    host = entry.provider(),
+                    host = entry.host(),
                     method = entry.method(),
                 );
                 continue;
             }
             let synthesized = Arc::new(CronJobMeta {
                 origin: entry.origin(),
-                provider: entry.provider(),
+                host: entry.host(),
                 method: entry.method(),
                 trigger: entry.trigger(),
                 run: entry.run(),
@@ -381,7 +381,7 @@ impl Transport for Scheduler {
             jobs.push(Scheduler::resolve(&synthesized, entry.site())?);
         }
 
-        // Two jobs under one `Provider::method` would file lines nobody can tell
+        // Two jobs under one `Host::method` would file lines nobody can tell
         // apart.
         refuse_shared_names(&jobs.iter().map(Job::id).collect::<Vec<_>>())?;
         // Two jobs firing once under one identity would split its occurrences.
@@ -425,7 +425,7 @@ impl Transport for Scheduler {
             match job {
                 Job::Interval { id, period, .. } => tracing::info!(
                     target: crate::TARGET,
-                    host = id.provider,
+                    host = id.host,
                     method = id.method,
                     trigger = "every",
                     interval_ms = period.as_millis() as u64,
@@ -435,7 +435,7 @@ impl Transport for Scheduler {
                 ),
                 Job::Timeout { id, delay, .. } => tracing::info!(
                     target: crate::TARGET,
-                    host = id.provider,
+                    host = id.host,
                     method = id.method,
                     trigger = "after",
                     delay_ms = delay.as_millis() as u64,
@@ -444,7 +444,7 @@ impl Transport for Scheduler {
                 ),
                 Job::Cron { id, tz, .. } => tracing::info!(
                     target: crate::TARGET,
-                    host = id.provider,
+                    host = id.host,
                     method = id.method,
                     trigger = "cron",
                     timezone = tz.as_ref().and_then(TimeZone::iana_name).unwrap_or("UTC"),
@@ -540,7 +540,7 @@ fn loop_ended(
                 target: crate::TARGET,
                 payload.as_ref(),
                 "scheduled job stopped: its schedule panicked, and the job will not run again",
-                host = id.map(|id| id.provider),
+                host = id.map(|id| id.host),
                 method = id.map(|id| id.method),
             );
         }
@@ -549,7 +549,7 @@ fn loop_ended(
             if !stopping {
                 tracing::debug!(
                     target: crate::TARGET,
-                    host = id.map(|id| id.provider),
+                    host = id.map(|id| id.host),
                     method = id.map(|id| id.method),
                     error = %nest_rs_core::error_message(&cancelled),
                     "scheduled job cancelled with its runtime",
@@ -608,7 +608,7 @@ async fn stop(
     }
 }
 
-/// The jobs whose loops still run, as `Provider::method`, in a stable order.
+/// The jobs whose loops still run, as `Host::method`, in a stable order.
 fn running_jobs(spawned: &HashMap<tokio::task::Id, JobId>) -> String {
     let mut jobs: Vec<String> = spawned.values().map(JobId::to_string).collect();
     jobs.sort();
@@ -732,7 +732,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                 let Some(target) = next_occurrence(&schedule, &zone, last) else {
                     tracing::warn!(
                         target: crate::TARGET,
-                        host = id.provider,
+                        host = id.host,
                         method = id.method,
                         "cron job has no future occurrence; it will not run again",
                     );
@@ -1025,7 +1025,7 @@ async fn bounded<T>(
 fn report_skipped(id: JobId, from_ms: u64, now_ms: u64, overrun: &Overrun) {
     tracing::warn!(
         target: crate::TARGET,
-        host = id.provider,
+        host = id.host,
         method = id.method,
         occurrence = from_ms,
         skipped = overrun.count,
@@ -1035,7 +1035,7 @@ fn report_skipped(id: JobId, from_ms: u64, now_ms: u64, overrun: &Overrun) {
     );
 }
 
-/// Refuse two jobs sharing one `Provider::method`, naming where each was
+/// Refuse two jobs sharing one `Host::method`, naming where each was
 /// declared.
 ///
 /// About the reader of the logs, not the lock: that is
@@ -1145,7 +1145,7 @@ impl TickLine {
             span: &self.span,
             outcome: outcome,
             started: self.started,
-            host = self.id.provider,
+            host = self.id.host,
             method = self.id.method,
             replicas = self.replicas.as_str(),
             occurrence = self.occurrence,
@@ -1187,7 +1187,7 @@ impl Runner {
         if let Some(late_ms) = reached_after_hold(epoch_millis(wall_clock()), instant_ms, hold_ms) {
             tracing::warn!(
                 target: crate::TARGET,
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 occurrence = instant_ms,
                 late_ms,
@@ -1215,7 +1215,7 @@ impl Runner {
                     Bounded::Stale => {
                         tracing::warn!(
                             target: crate::TARGET,
-                            host = id.provider,
+                            host = id.host,
                             method = id.method,
                             occurrence = instant_ms,
                             waited_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
@@ -1228,7 +1228,7 @@ impl Runner {
                     Bounded::Cancelled => {
                         tracing::warn!(
                             target: crate::TARGET,
-                            host = id.provider,
+                            host = id.host,
                             method = id.method,
                             occurrence = instant_ms,
                             waited_ms =
@@ -1243,7 +1243,7 @@ impl Runner {
                             target: crate::TARGET,
                             &*payload,
                             "occurrence skipped: its lock panicked while claiming it",
-                            host = id.provider,
+                            host = id.host,
                             method = id.method,
                             occurrence = instant_ms,
                         );
@@ -1264,7 +1264,7 @@ impl Runner {
                 {
                     tracing::warn!(
                         target: crate::TARGET,
-                        host = id.provider,
+                        host = id.host,
                         method = id.method,
                         occurrence = instant_ms,
                         late_ms,
@@ -1279,14 +1279,14 @@ impl Runner {
             }
             Ok(OccurrenceClaim::ClaimedElsewhere) => tracing::debug!(
                 target: crate::TARGET,
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 occurrence = instant_ms,
                 "occurrence claimed by another replica",
             ),
             Err(error) => tracing::warn!(
                 target: crate::TARGET,
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 occurrence = instant_ms,
                 error = %nest_rs_core::error_message(&error),
@@ -1331,7 +1331,7 @@ impl Runner {
         if abandoned > 0 {
             tracing::warn!(
                 target: crate::TARGET,
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 occurrence = from_ms,
                 abandoned,
@@ -1349,7 +1349,7 @@ impl Runner {
         if abandoned > 0 {
             tracing::warn!(
                 target: crate::TARGET,
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 occurrence = from_ms,
                 abandoned,
@@ -1366,7 +1366,7 @@ impl Runner {
                 target: crate::TARGET,
                 &**payload,
                 "occurrence lock panicked answering whether an overrun occurrence was claimed",
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 occurrence = from_ms,
             );
@@ -1378,7 +1378,7 @@ impl Runner {
         }) {
             tracing::warn!(
                 target: crate::TARGET,
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 occurrence = from_ms,
                 error = %nest_rs_core::error_message(error),
@@ -1399,7 +1399,7 @@ impl Runner {
         if skipped == 0 && unanswered == 0 && unchecked == 0 {
             tracing::debug!(
                 target: crate::TARGET,
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 occurrence = from_ms,
                 overrun = overrun.count,
@@ -1410,7 +1410,7 @@ impl Runner {
         }
         tracing::warn!(
             target: crate::TARGET,
-            host = id.provider,
+            host = id.host,
             method = id.method,
             occurrence = from_ms,
             skipped,
@@ -1429,7 +1429,7 @@ impl Runner {
         let span = nest_rs_core::operation_span!(
             crate::unit::TICK,
             &correlation,
-            host = id.provider,
+            host = id.host,
             method = id.method,
             occurrence,
         );
@@ -1453,7 +1453,7 @@ impl Runner {
                 line.file(nest_rs_core::operation_log::ERROR);
                 tracing::error!(
                     target: crate::TARGET,
-                    host = id.provider,
+                    host = id.host,
                     method = id.method,
                     error = %refused,
                     "scheduled job failed",
@@ -1497,7 +1497,7 @@ impl Runner {
         match outcome {
             Ok(Ok(_)) if !tail.ran => tracing::debug!(
                 target: crate::TARGET,
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 "scheduled job skipped by a layer",
             ),
@@ -1511,7 +1511,7 @@ impl Runner {
             {
                 tracing::warn!(
                     target: crate::TARGET,
-                    host = id.provider,
+                    host = id.host,
                     method = id.method,
                     error = %nest_rs_core::error_message(failure.error()),
                     "scheduled job failed; a layer answered it",
@@ -1519,7 +1519,7 @@ impl Runner {
             }
             Ok(Err(failure)) => tracing::error!(
                 target: crate::TARGET,
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 error = %nest_rs_core::error_message(failure.error()),
                 retryable = failure
@@ -1532,7 +1532,7 @@ impl Runner {
                 target: crate::TARGET,
                 panic.as_ref(),
                 "scheduled job panicked; the schedule continues",
-                host = id.provider,
+                host = id.host,
                 method = id.method,
                 // `panic.as_ref()`, never `&panic`: the box is itself `Any`, so every
                 // downcast inside `panic_message` would miss.
@@ -1601,7 +1601,7 @@ mod tests {
             handle.id(),
             JobId {
                 origin: module_path!(),
-                provider: "BlockingHost",
+                host: "BlockingHost",
                 method: "blocks",
                 key: None,
             },
@@ -1710,7 +1710,7 @@ mod tests {
         };
         let id = JobId {
             origin: "features::tasks",
-            provider: "OverrunTasks",
+            host: "OverrunTasks",
             method: "sweep",
             key: None,
         };
@@ -1778,7 +1778,7 @@ mod tests {
         };
         let id = JobId {
             origin: "features::tasks",
-            provider: "StalledTasks",
+            host: "StalledTasks",
             method: "sweep",
             key: None,
         };
@@ -1866,7 +1866,7 @@ mod tests {
     fn cron_in(tz: &'static str) -> Arc<CronJobMeta> {
         Arc::new(CronJobMeta {
             origin: "features::tasks",
-            provider: "ReportTasks",
+            host: "ReportTasks",
             method: "send",
             trigger: Trigger::Cron {
                 expr: "0 0 9 * * *",
@@ -1953,7 +1953,7 @@ mod tests {
         };
         let id = JobId {
             origin: "features::tasks",
-            provider: "SlowTasks",
+            host: "SlowTasks",
             method: "sweep",
             key: None,
         };
@@ -2085,7 +2085,7 @@ mod tests {
         };
         let id = JobId {
             origin: "features::tasks",
-            provider: "EagerTasks",
+            host: "EagerTasks",
             method: "sweep",
             key: None,
         };
@@ -2152,7 +2152,7 @@ mod tests {
         };
         let id = JobId {
             origin: "features::tasks",
-            provider: "HungTasks",
+            host: "HungTasks",
             method: "sweep",
             key: None,
         };
@@ -2205,7 +2205,7 @@ mod tests {
         };
         let id = JobId {
             origin: "features::tasks",
-            provider: "HungTasks",
+            host: "HungTasks",
             method: "sweep",
             key: None,
         };
@@ -2254,7 +2254,7 @@ mod tests {
         let job = Job::Interval {
             id: JobId {
                 origin: "features::tasks",
-                provider: "HungTasks",
+                host: "HungTasks",
                 method: "sweep",
                 key: None,
             },
@@ -2337,7 +2337,7 @@ mod tests {
         };
         let id = JobId {
             origin: "features::tasks",
-            provider: "LeavingTasks",
+            host: "LeavingTasks",
             method: "sweep",
             key: None,
         };
@@ -2386,7 +2386,7 @@ mod tests {
         };
         let id = JobId {
             origin: "features::tasks",
-            provider: "HungTasks",
+            host: "HungTasks",
             method: "sweep",
             key: None,
         };
@@ -2582,7 +2582,7 @@ mod tests {
     fn jobs_sharing_a_name_are_named_by_site_and_counted() {
         let job = |origin, method| JobId {
             origin,
-            provider: "Tasks",
+            host: "Tasks",
             method,
             key: None,
         };
@@ -2607,7 +2607,7 @@ mod tests {
     fn a_jobs_identity_is_its_crate_its_type_and_its_method() {
         let api = JobId {
             origin: "api::maintenance::schedule::tasks",
-            provider: "MaintenanceTasks",
+            host: "MaintenanceTasks",
             method: "sweep",
             key: None,
         };
@@ -2643,13 +2643,13 @@ mod tests {
     fn a_key_pins_the_identity_the_job_had_before_a_rename() {
         let before = JobId {
             origin: "billing::schedule::tasks",
-            provider: "InvoiceTasks",
+            host: "InvoiceTasks",
             method: "close_day",
             key: None,
         };
         let renamed = JobId {
             origin: "ledger::schedule::tasks",
-            provider: "LedgerTasks",
+            host: "LedgerTasks",
             method: "close",
             key: None,
         };
@@ -2680,9 +2680,9 @@ mod tests {
 
     #[test]
     fn a_level_that_is_empty_or_carries_a_colon_cannot_identify_a_job() {
-        let job = |origin, provider, method, key| JobId {
+        let job = |origin, host, method, key| JobId {
             origin,
-            provider,
+            host,
             method,
             key,
         };
@@ -2730,13 +2730,13 @@ mod tests {
     fn jobs_firing_once_under_one_identity_are_refused_naming_each() {
         let pinning = JobId {
             origin: "features::billing::schedule::tasks",
-            provider: "LedgerTasks",
+            host: "LedgerTasks",
             method: "close",
             key: Some("features::InvoiceTasks::close_day"),
         };
         let deriving = JobId {
             origin: "features::invoices::schedule::tasks",
-            provider: "InvoiceTasks",
+            host: "InvoiceTasks",
             method: "close_day",
             key: None,
         };

@@ -172,7 +172,7 @@ pub struct HealthIndicator {
     origin: &'static str,
     name: &'static str,
     kind: ProbeKind,
-    provider_type_id: fn() -> TypeId,
+    host_type_id: fn() -> TypeId,
     run: IndicatorRun,
 }
 
@@ -195,8 +195,8 @@ impl HealthIndicator {
     /// `TypeId` of the owning provider, which a reader gates on
     /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) as the probe
     /// does.
-    pub fn provider_type_id(&self) -> TypeId {
-        (self.provider_type_id)()
+    pub fn host_type_id(&self) -> TypeId {
+        (self.host_type_id)()
     }
 
     /// Resolves the owning provider and runs the check method.
@@ -211,14 +211,14 @@ pub const fn health_indicator(
     origin: &'static str,
     name: &'static str,
     kind: ProbeKind,
-    provider_type_id: fn() -> TypeId,
+    host_type_id: fn() -> TypeId,
     run: IndicatorRun,
 ) -> HealthIndicator {
     HealthIndicator {
         origin,
         name,
         kind,
-        provider_type_id,
+        host_type_id,
         run,
     }
 }

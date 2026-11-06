@@ -90,7 +90,7 @@ pub(crate) const INDICATORS: &str = "indicator";
 /// gated by construction, since only an imported module registers.
 pub(crate) fn wired(container: &Container, reachable: &ReachableProviders) -> Vec<Indicator> {
     inventory::iter::<HealthIndicator>()
-        .filter(|entry| reachable.reaches(entry.provider_type_id()))
+        .filter(|entry| reachable.reaches(entry.host_type_id()))
         .map(Indicator::from)
         .chain(
             Discovery::new(container)
@@ -270,7 +270,7 @@ pub(crate) fn check_names<'a>(
 /// skips in silence.
 fn report_unreachable_indicators(container: &Container, reachable: &ReachableProviders) {
     for entry in inventory::iter::<HealthIndicator>() {
-        if !reachable.reaches(entry.provider_type_id()) {
+        if !reachable.reaches(entry.host_type_id()) {
             report_inert_indicator(container, entry);
         }
     }
@@ -283,7 +283,7 @@ fn report_inert_indicator(container: &Container, entry: &HealthIndicator) {
         target: crate::TARGET,
         what: "indicator",
         origin: entry.origin(),
-        host: entry.provider_type_id(),
+        host: entry.host_type_id(),
         container: container,
         indicator = entry.name(),
         kind = entry.kind().as_str(),

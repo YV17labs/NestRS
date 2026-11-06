@@ -95,12 +95,12 @@ pub(crate) fn reachable(
     let reachable = ReachableProviders::of(container, "#[process] method")?;
     let mut methods: Vec<&'static ProcessMethod> = Vec::new();
     for entry in nest_rs_core::inventory::iter::<ProcessMethod>() {
-        if !reachable.reaches(entry.provider_type_id()) {
+        if !reachable.reaches(entry.host_type_id()) {
             ::nest_rs_core::report_inert_host!(
                 target: TARGET,
                 what: "#[process] method",
                 origin: entry.origin(),
-                host: entry.provider_type_id(),
+                host: entry.host_type_id(),
                 container: container,
                 host = entry.site().handler().host_name(),
                 method = entry.site().handler().method(),

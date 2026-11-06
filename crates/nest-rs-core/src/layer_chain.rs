@@ -487,7 +487,7 @@ pub(crate) mod __private {
         let declared = Discovery::new(container).meta::<GlobalPool<L>>();
         if let Some(composition) = container.get::<Composition>() {
             for found in &declared {
-                let Some(provider) = found.provider_type_id else {
+                let Some(provider) = found.host_type_id else {
                     continue;
                 };
                 let declaration = crate::type_name::shorten(found.meta.declared_by);

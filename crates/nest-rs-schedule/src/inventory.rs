@@ -55,7 +55,7 @@ pub type RunFn =
 /// ```
 pub struct CronJobMeta {
     pub(crate) origin: &'static str,
-    pub(crate) provider: &'static str,
+    pub(crate) host: &'static str,
     pub(crate) method: &'static str,
     pub(crate) trigger: Trigger,
     pub(crate) run: RunFn,
@@ -66,21 +66,21 @@ pub struct CronJobMeta {
 }
 
 impl CronJobMeta {
-    /// The job `run` that `provider`'s `method`, declared in `origin`
+    /// The job `run` that `host`'s `method`, declared in `origin`
     /// (`module_path!()`), fires on `trigger`: cut after
     /// [`JOB_TIMEOUT`](nest_rs_core::JOB_TIMEOUT), its data-layer work one
     /// transaction per run, fired on every replica, its identity derived from
     /// its crate, host and method.
     pub const fn new(
         origin: &'static str,
-        provider: &'static str,
+        host: &'static str,
         method: &'static str,
         trigger: Trigger,
         run: RunFn,
     ) -> Self {
         Self {
             origin,
-            provider,
+            host,
             method,
             trigger,
             run,
@@ -124,8 +124,8 @@ impl CronJobMeta {
     }
 
     /// The host struct, e.g. `"AudioTasks"`.
-    pub const fn provider(&self) -> &'static str {
-        self.provider
+    pub const fn host(&self) -> &'static str {
+        self.host
     }
 
     /// The scheduled method, e.g. `"heartbeat"`.
@@ -181,9 +181,9 @@ pub struct ScheduledMethod {
 )]
 pub struct ScheduledMethodParts {
     pub origin: &'static str,
-    pub provider: &'static str,
+    pub host: &'static str,
     pub method: &'static str,
-    pub provider_type_id: fn() -> TypeId,
+    pub host_type_id: fn() -> TypeId,
     pub trigger: Trigger,
     pub run: RunFn,
     pub timeout: Duration,
@@ -207,8 +207,8 @@ impl ScheduledMethod {
     }
 
     /// The host struct, e.g. `"AudioTasks"`.
-    pub const fn provider(&self) -> &'static str {
-        self.parts.provider
+    pub const fn host(&self) -> &'static str {
+        self.parts.host
     }
 
     /// The scheduled method, e.g. `"heartbeat"`.
@@ -219,8 +219,8 @@ impl ScheduledMethod {
     /// `TypeId::of::<Provider>()`, which a reader gates on
     /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) as the
     /// scheduler does.
-    pub fn provider_type_id(&self) -> TypeId {
-        (self.parts.provider_type_id)()
+    pub fn host_type_id(&self) -> TypeId {
+        (self.parts.host_type_id)()
     }
 
     /// When this job fires.

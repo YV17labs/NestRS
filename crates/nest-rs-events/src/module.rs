@@ -44,11 +44,11 @@ impl Module for EventsModule {
 nest_rs_core::inventory::submit! {
     LifecycleHook {
         phase: LifecyclePhase::OnApplicationBootstrap,
-        provider: "EventsModule",
+        host: "EventsModule",
         method: "report_missing_bus",
         declaration_index: 0,
         origin: module_path!(),
-        provider_type_id: std::any::TypeId::of::<EventsModule>,
+        host_type_id: std::any::TypeId::of::<EventsModule>,
         present: |_| true,
         run: report_missing_bus,
     }
@@ -97,9 +97,7 @@ fn wire_listeners(container: &Container) -> anyhow::Result<()> {
     let mut entries: Vec<&'static ListenerMethod> = inventory::iter::<ListenerMethod>().collect();
     entries.sort_by_cached_key(|entry| {
         (
-            order
-                .as_ref()
-                .map_or(0, |o| o.rank(entry.provider_type_id())),
+            order.as_ref().map_or(0, |o| o.rank(entry.host_type_id())),
             entry.declaration_index(),
             entry.name(),
         )
@@ -111,7 +109,7 @@ fn wire_listeners(container: &Container) -> anyhow::Result<()> {
                 target: crate::TARGET,
                 what: "#[on_event] method",
                 origin: entry.origin(),
-                host: entry.provider_type_id(),
+                host: entry.host_type_id(),
                 container: container,
                 host = entry.host(),
                 method = entry.method(),
@@ -127,7 +125,7 @@ fn wire_listeners(container: &Container) -> anyhow::Result<()> {
 /// Whether this app would wire `entry` — shared by the no-bus report and the
 /// wiring loop so both speak of one population.
 fn is_reachable(reachable: &ReachableProviders, entry: &ListenerMethod) -> bool {
-    reachable.reaches(entry.provider_type_id())
+    reachable.reaches(entry.host_type_id())
 }
 
 fn reachable_listeners(

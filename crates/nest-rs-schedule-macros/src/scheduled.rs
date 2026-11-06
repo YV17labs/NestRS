@@ -159,9 +159,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 ::nest_rs_schedule::__private::scheduled_method(
                     ::nest_rs_schedule::__private::ScheduledMethodParts {
                     origin: ::core::module_path!(),
-                    provider: #provider_name,
+                    host: #provider_name,
                     method: #method_name,
-                    provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
+                    host_type_id: || ::std::any::TypeId::of::<#self_ty>(),
                     trigger: #trigger_tokens,
                     timeout: #timeout_tokens,
                     transaction: #transaction_tokens,

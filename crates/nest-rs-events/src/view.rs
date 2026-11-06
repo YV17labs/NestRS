@@ -46,7 +46,7 @@ impl EventsView {
         self.event
     }
 
-    /// The listener called, as `Provider::method`.
+    /// The listener called, as `Host::method`.
     pub fn listener(&self) -> &'static str {
         self.listener
     }

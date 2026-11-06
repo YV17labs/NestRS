@@ -48,7 +48,7 @@ enum Step {
     /// One shutdown hook.
     Hook {
         phase: LifecyclePhase,
-        provider: &'static str,
+        host: &'static str,
         method: &'static str,
         origin: &'static str,
     },
@@ -78,13 +78,13 @@ pub(crate) fn transports(running: Vec<Arc<str>>) {
 
 pub(crate) fn hook(
     phase: LifecyclePhase,
-    provider: &'static str,
+    host: &'static str,
     method: &'static str,
     origin: &'static str,
 ) {
     set(Step::Hook {
         phase,
-        provider,
+        host,
         method,
         origin,
     });
@@ -129,16 +129,10 @@ fn exit_at_once(signal: Received) -> ! {
             }
             Step::Boot(Some(BootStep::InitHook {
                 phase,
-                provider,
+                host,
                 method,
                 origin,
-            })) => abandoning!(
-                step = "boot",
-                phase = phase.as_str(),
-                host = provider,
-                method,
-                origin
-            ),
+            })) => abandoning!(step = "boot", phase = phase.as_str(), host, method, origin),
             Step::Transports(running) => {
                 abandoning!(
                     step = "transports",
@@ -147,13 +141,13 @@ fn exit_at_once(signal: Received) -> ! {
             }
             Step::Hook {
                 phase,
-                provider,
+                host,
                 method,
                 origin,
             } => abandoning!(
                 step = "shutdown hooks",
                 phase = phase.as_str(),
-                host = provider,
+                host,
                 method,
                 origin
             ),

@@ -64,7 +64,7 @@ impl QueueView {
         &self.attempt
     }
 
-    /// The method running it, as `Provider::method`.
+    /// The method running it, as `Host::method`.
     pub fn processor(&self) -> &'static str {
         self.processor
     }

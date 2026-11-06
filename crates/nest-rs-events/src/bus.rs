@@ -28,7 +28,7 @@ type Answered = Result<(), Box<dyn Error + Send + Sync>>;
 type ListenerFuture = Pin<Box<dyn Future<Output = Answered> + Send>>;
 type ListenerFn = Arc<dyn Fn(BoxedEvent) -> ListenerFuture + Send + Sync>;
 
-/// One registered listener, carrying the `Provider::method` its unit of work is
+/// One registered listener, carrying the `Host::method` its unit of work is
 /// filed under, what its decorator declared of that unit, and the pipeline its
 /// site composed when it was subscribed.
 #[derive(Clone)]

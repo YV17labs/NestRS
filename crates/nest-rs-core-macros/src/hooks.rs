@@ -50,7 +50,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(base) => base,
         Err(err) => return err.to_compile_error().into(),
     };
-    let provider_lit = base.unraw().to_string();
+    let host_lit = base.unraw().to_string();
     let host_check = pair::HOOKS.provider_host_check(&self_ty);
 
     let mut submissions: Vec<TokenStream2> = Vec::new();
@@ -126,11 +126,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_core::__private::LifecycleHook {
                     phase: ::nest_rs_core::LifecyclePhase::#phase_variant,
-                    provider: #provider_lit,
+                    host: #host_lit,
                     method: #method_lit,
                     declaration_index: #declaration_index,
                     origin: ::core::module_path!(),
-                    provider_type_id: ::std::any::TypeId::of::<#self_ty>,
+                    host_type_id: ::std::any::TypeId::of::<#self_ty>,
                     present: |__container| ::std::option::Option::is_some(
                         &::nest_rs_core::Container::get::<#self_ty>(__container),
                     ),

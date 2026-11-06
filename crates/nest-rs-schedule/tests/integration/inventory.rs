@@ -30,7 +30,7 @@ const NOTHING: RunFn = |_container| Box::pin(async { Ok(()) });
 fn declared(method: &str) -> &'static ScheduledMethod {
     nest_rs_core::inventory::iter::<ScheduledMethod>()
         .find(|entry| {
-            entry.provider_type_id() == TypeId::of::<LedgerSweeps>() && entry.method() == method
+            entry.host_type_id() == TypeId::of::<LedgerSweeps>() && entry.method() == method
         })
         .expect("`#[scheduled]` submitted the method")
 }
@@ -79,7 +79,7 @@ fn a_job_built_by_hand_starts_where_a_trigger_without_keys_does() {
     assert_eq!(by_hand.replicas(), close.replicas());
     assert_eq!(by_hand.key(), close.key());
     assert_eq!(
-        (by_hand.origin(), by_hand.provider(), by_hand.method()),
+        (by_hand.origin(), by_hand.host(), by_hand.method()),
         (module_path!(), "LedgerSweeps", "close")
     );
 }

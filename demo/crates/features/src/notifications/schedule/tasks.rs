@@ -34,7 +34,7 @@ mod tests {
     fn the_purge_fires_hourly_on_one_replica() {
         let purge = nest_rs::core::inventory::iter::<ScheduledMethod>()
             .find(|m| {
-                m.provider_type_id() == TypeId::of::<NotificationsTasks>()
+                m.host_type_id() == TypeId::of::<NotificationsTasks>()
                     && m.method() == "purge_expired"
             })
             .expect("NotificationsTasks::purge_expired is discovered");

@@ -143,7 +143,7 @@ async fn a_redis_that_stops_denies_with_one_line_from_the_guard_and_none_from_th
     assert_eq!(said.field("reason").as_deref(), Some("store_failed"));
     assert!(
         said.field("error")
-            .is_some_and(|chain| chain.contains("nest_rs_redis::throttler::store::RedisThrottler")),
+            .is_some_and(|chain| chain.contains("the throttler store `RedisThrottler` failed")),
         "{:?}",
         said.fields,
     );

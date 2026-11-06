@@ -744,7 +744,7 @@ pub(crate) mod __private {
     pub fn report_unresolved(unresolved: &UnresolvedLayerError) {
         tracing::error!(
             target: crate::target::LAYERS,
-            layer = unresolved.layer,
+            layer = crate::type_name::shorten(unresolved.layer),
             site = unresolved.site.as_str(),
             "a layer the site declares is provided by no imported module",
         );

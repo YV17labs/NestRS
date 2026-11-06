@@ -43,6 +43,14 @@ Refused: `kind` holding `entity` and `federation`, as `role` did. On a denial an
 would miss one line of the set; the line's `host` and `method` say which it was, and
 the span keeps `graphql.operation.role`.
 
+A line's value is the operator's word: `Debug` and `type_name` both have a format
+no one promised, and `semver.mdx` freezes what an alert reads. Refused: keeping the
+type path on `entity` for its uniqueness across crates. Two lines on one target held
+two values, and the table is what every read in that crate already said. `event` is
+the type's last segment rather than the path for the same reason, and two events of
+one name in two modules read alike there: their `host` and `method` still tell them
+apart, and `EventsView::event` keeps the path for code comparing it.
+
 A `resource` is what a `#[resource]`'s unit says it matched, carried back through an
 ambient slot on `resources/read` alone, because the URI is the client's and the line
 is filed outside that unit. A hand-written `ServerHandler`'s resource reads `_OTHER`:

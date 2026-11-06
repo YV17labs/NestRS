@@ -383,6 +383,95 @@ async fn the_instance_check_in_sql_refuses_the_row_a_relational_denial_names() {
     .await;
 }
 
+/// A write says which row it touched, and the one SQL refused says which it
+/// refused: `RecordNotUpdated` and a delete of no row read alike to the caller.
+#[tokio::test]
+async fn a_write_line_names_its_row() {
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
+
+    let TwoOrgs {
+        org_a,
+        item_a,
+        item_b,
+        ..
+    } = seed_two_orgs(&conn).await;
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Manage, item::Entity).when(move |p| {
+        p.related::<container::Entity, _>(item::Relation::Container, move |c| {
+            c.eq(container::Column::OrgId, org_a)
+        })
+    });
+    let ability = Arc::new(b.build().expect("valid test ability"));
+    let mine = item::Entity::find_by_id(item_a)
+        .one(&conn)
+        .await
+        .expect("read a")
+        .expect("item a exists");
+    let theirs = item::Entity::find_by_id(item_b)
+        .one(&conn)
+        .await
+        .expect("read b")
+        .expect("item b exists");
+
+    let logs = nest_rs_testing::LogCapture::install();
+    with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
+        install_ability(ability, async {
+            let refused = ItemsService
+                .update(
+                    theirs.clone(),
+                    UpdateItem {
+                        label: "not mine".into(),
+                    },
+                )
+                .await;
+            assert!(
+                matches!(refused, Err(DbErr::RecordNotUpdated)),
+                "{refused:?}"
+            );
+            ItemsService
+                .delete(theirs)
+                .await
+                .expect_err("a row outside the scope is not deleted");
+            ItemsService
+                .update(
+                    mine.clone(),
+                    UpdateItem {
+                        label: "mine".into(),
+                    },
+                )
+                .await
+                .expect("an item in the org updates");
+            ItemsService
+                .delete(mine)
+                .await
+                .expect("an item in the org deletes");
+        })
+        .await;
+    })
+    .await;
+
+    let refusals = logs.find(
+        nest_rs_seaorm::target::ORM,
+        "access denied — row outside the caller's scope",
+    );
+    let refused: Vec<_> = refusals
+        .iter()
+        .map(|line| (line.field("action"), line.field("id")))
+        .collect();
+    assert_eq!(
+        refused,
+        [
+            (Some("update".to_owned()), Some(item_b.to_string())),
+            (Some("delete".to_owned()), Some(item_b.to_string())),
+        ],
+    );
+    for message in ["row updated", "row deleted"] {
+        let served = logs.expect_one(nest_rs_seaorm::target::ORM, message);
+        assert_eq!(served.field("id"), Some(item_a.to_string()), "{message}");
+    }
+}
+
 #[tokio::test]
 async fn create_under_an_out_of_scope_parent_is_rejected() {
     let conn = crate::harness::connect().await;
@@ -393,6 +482,7 @@ async fn create_under_an_out_of_scope_parent_is_rejected() {
     seed_container(&conn, cont_a, org_a).await;
     seed_container(&conn, cont_b, org_b).await;
 
+    let logs = nest_rs_testing::LogCapture::install();
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
         install_ability(items_in_org(org_a), async {
             let ok = ItemsService
@@ -400,8 +490,10 @@ async fn create_under_an_out_of_scope_parent_is_rejected() {
                     container_id: cont_a,
                     label: "mine".into(),
                 })
-                .await;
-            assert!(ok.is_ok(), "in-scope create succeeds: {ok:?}");
+                .await
+                .expect("in-scope create succeeds");
+            let created = logs.expect_one(nest_rs_seaorm::target::ORM, "row created");
+            assert_eq!(created.field("id"), Some(ok.id.to_string()));
 
             let denied = ItemsService
                 .create(CreateItem {

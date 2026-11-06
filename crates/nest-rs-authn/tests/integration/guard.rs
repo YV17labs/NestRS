@@ -161,8 +161,9 @@ async fn public_route_admits_a_rejected_credential_as_anonymous() {
     );
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("reason").as_deref(), Some("invalid_signature"));
-    assert!(
-        event.field("strategy").is_some(),
+    assert_eq!(
+        event.field("strategy").as_deref(),
+        Some("RejectWith"),
         "the event names the strategy that rejected it, got {:?}",
         event.fields,
     );
@@ -457,7 +458,7 @@ fn assert_the_strategy_was_waited_out(logs: &LogCapture) {
     assert_eq!(cause.field("unit").as_deref(), Some("http.request"));
     let chain = cause.field("error").unwrap_or_default();
     assert!(
-        chain.contains(std::any::type_name::<StalledStrategy>()),
+        chain.contains("the strategy `StalledStrategy` did not answer"),
         "the line names the strategy, got {:?}",
         cause.fields,
     );
@@ -527,7 +528,7 @@ async fn a_strategy_that_panics_is_denied_and_said_once() {
     assert_eq!(said[0].level, "error");
     assert_eq!(
         said[0].field("strategy").as_deref(),
-        Some(std::any::type_name::<PanickingStrategy>()),
+        Some("PanickingStrategy"),
     );
     assert_eq!(said[0].field("transport").as_deref(), Some("http"));
     assert_eq!(

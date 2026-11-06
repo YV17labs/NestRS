@@ -659,8 +659,9 @@ async fn a_body_with_no_declared_media_type_fails_closed() {
         assert_eq!(event.field(field).as_deref(), Some(named), "{field}");
     }
     assert!(event.field("host").is_some(), "{:?}", event.fields);
-    assert!(
-        event.field("entity").is_some_and(|e| e.contains("widget")),
+    assert_eq!(
+        event.field("entity").as_deref(),
+        Some("widgets"),
         "the event names the entity the shaper was armed for, got {:?}",
         event.fields,
     );

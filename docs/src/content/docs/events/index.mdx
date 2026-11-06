@@ -256,7 +256,7 @@ As the boot ends, each wired listener files one `mounted` line, target
 `nest_rs::events`, as every edge's unit does:
 
 ```text frame="terminal"
-INFO nest_rs::events: mounted host="PostsListener" method="on_post_published" event="features::posts::event::PostPublishedEvent"
+INFO nest_rs::events: mounted host="PostsListener" method="on_post_published" event="PostPublishedEvent"
 ```
 
 Each listener call then runs as a unit of work of its own, `events.dispatch`,

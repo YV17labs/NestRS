@@ -277,8 +277,9 @@ async fn a_scope_the_document_never_advertises_is_reported_at_warn() {
         event.field("reason").as_deref(),
         Some("scope_not_advertised")
     );
-    assert!(
-        event.field("scopes").is_some_and(|s| s.contains(REQUIRED)),
+    assert_eq!(
+        event.field("scopes").as_deref(),
+        Some(REQUIRED),
         "the event names the scope that is missing from the document, got {:?}",
         event.fields,
     );
@@ -368,10 +369,9 @@ async fn a_scope_outside_the_grammar_leaves_the_attribute_out_and_is_reported() 
         (nest_rs_http::target::HTTP, "warn"),
         "the edge stamped the guard's step-up and said it",
     );
-    assert!(
-        event
-            .field("scopes")
-            .is_some_and(|scopes| scopes.contains(OUTSIDE_THE_GRAMMAR)),
+    assert_eq!(
+        event.field("scopes").as_deref(),
+        Some(OUTSIDE_THE_GRAMMAR),
         "the line names the rule's scopes, got {:?}",
         event.fields,
     );

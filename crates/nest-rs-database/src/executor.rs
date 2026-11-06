@@ -173,6 +173,16 @@ pub enum ExecutorScope {
     Job,
 }
 
+impl ExecutorScope {
+    /// The word a line names this scope by.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Job => "job",
+        }
+    }
+}
+
 /// The executor a unit runs on, the scope it was installed under and the
 /// binding that opened it, as one value of the ambient context.
 struct AmbientExecutor {

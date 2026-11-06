@@ -90,7 +90,7 @@ fn read<T: AmbientValue + Clone>(extensions: &Extensions) -> Result<Ambient<T>, 
     {
         tracing::debug!(
             target: crate::target::HTTP,
-            context_type = std::any::type_name::<T>(),
+            context_type = nest_rs_core::__private::short_type_name::<T>(),
             "public route needs the principal a rejected credential never produced — answering the deferred 401",
         );
         return Err(Absent::Deferred(rejected));
@@ -98,7 +98,7 @@ fn read<T: AmbientValue + Clone>(extensions: &Extensions) -> Result<Ambient<T>, 
     // The type name belongs in the log, never the response body.
     tracing::error!(
         target: crate::target::HTTP,
-        context_type = std::any::type_name::<T>(),
+        context_type = nest_rs_core::__private::short_type_name::<T>(),
         "missing request context — the guard that attaches it did not run on this route",
     );
     Err(Absent::Unwired)
@@ -169,10 +169,9 @@ mod tests {
             "missing request context — the guard that attaches it did not run on this route",
         );
         assert_eq!(event.level, "error");
-        assert!(
-            event
-                .field("context_type")
-                .is_some_and(|t| t.contains("Principal")),
+        assert_eq!(
+            event.field("context_type").as_deref(),
+            Some("Principal"),
             "the event names the context type that never arrived, got {:?}",
             event.fields,
         );

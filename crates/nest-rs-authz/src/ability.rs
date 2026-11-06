@@ -58,7 +58,7 @@ pub(crate) fn warn_mask_failure(
     tracing::warn!(
         target: crate::TARGET,
         entity,
-        action = ?action,
+        action = action.as_str(),
         reason,
         detail,
         transport,
@@ -92,8 +92,8 @@ fn warn_undecidable_on_push<E: EntityTrait>(action: Action) {
     if first {
         tracing::warn!(
             target: crate::TARGET,
-            entity = std::any::type_name::<E>(),
-            action = ?action,
+            entity = E::default().table_name(),
+            action = action.as_str(),
             reason = "undecidable_on_push",
             "an ability rule cannot be decided on a pushed value",
         );
@@ -751,7 +751,7 @@ impl Ability {
             // Fail closed: an empty body, never the unmasked model.
             Err(err) => {
                 warn_mask_failure(
-                    std::any::type_name::<E>(),
+                    E::default().table_name(),
                     action,
                     mask_reason::NOT_SERIALIZABLE,
                     "model did not serialize",

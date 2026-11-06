@@ -314,8 +314,9 @@ async fn a_pooled_guard_refuses_a_reference_before_any_member_answers() {
     assert_eq!(event.field("unit").as_deref(), Some("graphql.field"));
     assert_eq!(event.field("kind").as_deref(), Some("query"));
     assert_eq!(event.field("field").as_deref(), Some("_entities"));
-    assert!(
-        event.field("guard").is_some_and(|g| g.contains("Closed")),
+    assert_eq!(
+        event.field("guard").as_deref(),
+        Some("Closed"),
         "the event names the guard that refused, got {:?}",
         event.fields,
     );

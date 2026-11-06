@@ -175,10 +175,9 @@ async fn resolver_guard_denies_a_non_admin() {
     // A denial answers `200 OK`, so this event is what an operator alerts on.
     let event = logs.expect_one("nest_rs::layers", "guard denied the operation");
     assert_eq!(event.level, "warn");
-    assert!(
-        event
-            .field("guard")
-            .is_some_and(|g| g.contains("RequireAdmin")),
+    assert_eq!(
+        event.field("guard").as_deref(),
+        Some("RequireAdmin"),
         "the event names the guard that refused, got {:?}",
         event.fields,
     );
@@ -579,10 +578,9 @@ mod unresolvable {
             "a layer the site declares is provided by no imported module",
         );
         assert_eq!(event.level, "error");
-        assert!(
-            event
-                .field("layer")
-                .is_some_and(|layer| layer.contains("NeverProvided")),
+        assert_eq!(
+            event.field("layer").as_deref(),
+            Some("NeverProvided"),
             "the line names the layer: {:?}",
             event.fields,
         );

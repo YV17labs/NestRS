@@ -86,6 +86,7 @@ async fn a_soft_deleted_row_is_hidden_from_every_read_and_update_but_with_tombst
     let conn = crate::harness::connect().await;
     let row = seed(&conn).await;
     let id = row.id;
+    let logs = nest_rs_testing::LogCapture::install();
 
     with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
         install_ability(manage(), async {
@@ -93,6 +94,8 @@ async fn a_soft_deleted_row_is_hidden_from_every_read_and_update_but_with_tombst
                 .delete(row.clone())
                 .await
                 .expect("the entity's declaration makes the delete a soft one");
+            let line = logs.expect_one(nest_rs_seaorm::target::ORM, "row soft-deleted");
+            assert_eq!(line.field("id"), Some(id.to_string()));
             assert!(
                 Repo::<gravestone::Entity>::find_by_id(id)
                     .await

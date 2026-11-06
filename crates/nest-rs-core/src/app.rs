@@ -280,7 +280,7 @@ impl App {
         };
         tracing::warn!(
             target: crate::target::LIFECYCLE,
-            phase = ?failed.hook.phase,
+            phase = failed.hook.phase.as_str(),
             host = failed.hook.provider,
             method = failed.hook.method,
             origin = failed.hook.origin,

@@ -1,8 +1,7 @@
 //! HTTP's reading of [`Scoped<T>`]: an `#[injectable(scope = request)]`
 //! provider, from the scope the transport edge installs per request.
 
-use std::any::type_name;
-
+use nest_rs_core::__private::short_type_name;
 use nest_rs_core::Scoped;
 
 use crate::problem::ProblemDetails;
@@ -12,7 +11,7 @@ fn resolve<T: Send + Sync + 'static>() -> Option<Scoped<T>> {
     let Some(scope) = nest_rs_core::current_request_scope() else {
         tracing::error!(
             target: crate::target::HTTP,
-            provider = type_name::<T>(),
+            provider = short_type_name::<T>(),
             "request scope not installed — the transport edge must wrap the route tree",
         );
         return None;
@@ -20,7 +19,7 @@ fn resolve<T: Send + Sync + 'static>() -> Option<Scoped<T>> {
     let Some(provider) = scope.get::<T>() else {
         tracing::error!(
             target: crate::target::HTTP,
-            provider = type_name::<T>(),
+            provider = short_type_name::<T>(),
             "no provider for a request-scoped parameter — add it to a module's providers",
         );
         return None;
@@ -105,10 +104,9 @@ mod tests {
             "no provider for a request-scoped parameter — add it to a module's providers",
         );
         assert_eq!(event.level, "error");
-        assert!(
-            event
-                .field("provider")
-                .is_some_and(|provider| provider.contains("Marker")),
+        assert_eq!(
+            event.field("provider").as_deref(),
+            Some("Marker"),
             "{:?}",
             event.fields,
         );

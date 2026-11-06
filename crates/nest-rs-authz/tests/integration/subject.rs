@@ -314,6 +314,7 @@ async fn a_granted_caller_runs_the_capability_on_every_edge_and_no_mask_touches_
 
 #[tokio::test]
 async fn a_principal_without_the_grant_is_forbidden_on_every_edge_with_no_scope_to_ask_for() {
+    let logs = nest_rs_testing::LogCapture::install();
     let Answers {
         http,
         sse,
@@ -339,6 +340,17 @@ async fn a_principal_without_the_grant_is_forbidden_on_every_edge_with_no_scope_
     assert!(mcp.contains("\"code\":\"FORBIDDEN\""), "MCP: {mcp}");
     assert!(!mcp.contains("export started"), "MCP: {mcp}");
     assert_eq!(ws["data"]["code"], "FORBIDDEN", "WS: {ws}");
+    let denied = logs.find("nest_rs::authz", "authorization denied");
+    assert!(!denied.is_empty());
+    for line in &denied {
+        assert_eq!(
+            line.field("subject").as_deref(),
+            Some("Exporting"),
+            "a capability reads by its ident: {:?}",
+            line.fields,
+        );
+        assert_eq!(line.field("action").as_deref(), Some("manage"));
+    }
 }
 
 #[tokio::test]

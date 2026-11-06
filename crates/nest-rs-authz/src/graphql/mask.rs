@@ -16,7 +16,7 @@ use nest_rs_core::Edge;
 use nest_rs_graphql::__private::{first_in_operation, served_field};
 use nest_rs_graphql::async_graphql::{Context, Error, SelectionField};
 use nest_rs_guards::Denial;
-use sea_orm::{Iterable, PrimaryKeyToColumn};
+use sea_orm::{EntityTrait, Iterable, PrimaryKeyToColumn};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -523,7 +523,7 @@ impl<'c, 'q> MaskedField<'c, 'q> {
 }
 
 /// What a value serializes to, or the fail-closed exit of one that does not.
-fn written<E, O: Serialize>(
+fn written<E: EntityTrait, O: Serialize>(
     field: MaskedField<'_, '_>,
     action: Action,
     value: &O,
@@ -546,7 +546,7 @@ fn selection<'c>(ctx: &'c Context<'_>) -> Vec<&'c str> {
 
 /// Whether the keys the mask stripped refuse `field`: those it selects, or every one
 /// where it selects nothing, a scalar, which serializes whole.
-fn refused_field<E>(
+fn refused_field<E: EntityTrait>(
     field: MaskedField<'_, '_>,
     action: Action,
     removed: &BTreeSet<String>,
@@ -604,7 +604,7 @@ fn page_selection<'c, E: WireModel>(ctx: &'c Context<'_>) -> Vec<&'c str> {
 ///
 /// A key outside the selection set of an object is never serialized, so it cannot
 /// leak; a field with no selection is [`refused_field`]'s to read.
-fn refused_selection<E>(
+fn refused_selection<E: EntityTrait>(
     field: MaskedField<'_, '_>,
     selected: &[&str],
     action: Action,
@@ -621,7 +621,7 @@ fn refused_selection<E>(
     // A tracing field must be a scalar, so the log keeps the joined form; the
     // wire keeps the list.
     let joined = refused.join(",");
-    let subject = std::any::type_name::<E>();
+    let subject = E::default().table_name();
     if field.first_to_file(format_args!("{subject} {action:?} {joined}")) {
         crate::gate::warn_denied(Refusal {
             subject: Some(subject),
@@ -638,14 +638,14 @@ fn refused_selection<E>(
 /// One shape for every fail-closed masking exit: the queryable `warn`, one per field of
 /// an operation however many parents repeat it, plus the opaque client error, which never
 /// names the column or the reason.
-fn mask_failure<E>(
+fn mask_failure<E: EntityTrait>(
     field: MaskedField<'_, '_>,
     action: Action,
     reason: &'static str,
     detail: &'static str,
     err: &serde_json::Error,
 ) -> Error {
-    let subject = std::any::type_name::<E>();
+    let subject = E::default().table_name();
     if field.first_to_file(format_args!("{subject} {action:?} {reason}")) {
         warn_mask_failure(subject, action, reason, detail, field.unit, Some(err));
     }

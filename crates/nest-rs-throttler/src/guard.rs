@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::__private::retry_after_secs;
+use nest_rs_core::__private::{retry_after_secs, shorten};
 use nest_rs_core::{
     Edge, Layer, Unanswered, UnitContext, UnitView, async_trait, injectable, within,
 };
@@ -151,7 +151,7 @@ impl ThrottlerGuard {
                         payload.as_ref(),
                         "throttler store panicked; denying (fail-closed)",
                         transport,
-                        store = name,
+                        store = shorten(name),
                     );
                     (
                         reason::STORE_PANICKED,

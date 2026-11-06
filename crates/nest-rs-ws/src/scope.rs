@@ -58,8 +58,7 @@
 //! rebuilt for each message and shared within that one dispatch; with none in
 //! the app, every message shares one scope, which has nothing to build.
 
-use std::any::type_name;
-
+use nest_rs_core::__private::short_type_name;
 use nest_rs_core::Scoped;
 
 use crate::envelope::{WsError, WsReply};
@@ -71,7 +70,7 @@ pub fn scoped_parameter<T: Send + Sync + 'static>() -> Result<Scoped<T>, WsReply
     let Some(scope) = nest_rs_core::current_request_scope() else {
         tracing::error!(
             target: crate::TARGET,
-            provider = type_name::<T>(),
+            provider = short_type_name::<T>(),
             "request scope not installed — a message's handler ran off its dispatch",
         );
         return Err(opaque());
@@ -81,7 +80,7 @@ pub fn scoped_parameter<T: Send + Sync + 'static>() -> Result<Scoped<T>, WsReply
         None => {
             tracing::error!(
                 target: crate::TARGET,
-                provider = type_name::<T>(),
+                provider = short_type_name::<T>(),
                 "no provider for a request-scoped parameter — add it to a module's providers",
             );
             Err(opaque())
@@ -179,10 +178,9 @@ mod tests {
                 .into_iter()
                 .find(|event| event.target == crate::TARGET && event.level == "error")
                 .expect("the miss is filed");
-            assert!(
-                filed
-                    .field("provider")
-                    .is_some_and(|provider| provider.ends_with("::Hidden")),
+            assert_eq!(
+                filed.field("provider").as_deref(),
+                Some("Hidden"),
                 "{filed:#?}"
             );
         }

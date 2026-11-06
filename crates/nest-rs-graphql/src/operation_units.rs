@@ -745,7 +745,7 @@ impl OperationLine {
         tracing::warn!(
             target: crate::TARGET,
             kind = self.ty,
-            ?timeout,
+            timeout_ms = timeout.as_millis(),
             "graphql operation not answered by the request deadline; it is cut",
         );
     }

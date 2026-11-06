@@ -2608,10 +2608,9 @@ async fn a_per_message_internal_denial_answers_opaquely_and_is_filed_once_on_the
 
     let denied = logs.expect_one(nest_rs_core::target::LAYERS, "guard denied the message");
     assert_eq!(denied.level, "error", "a 500 is a defect");
-    assert!(
-        denied
-            .field("guard")
-            .is_some_and(|guard| guard.contains("LeakyInternalGuard")),
+    assert_eq!(
+        denied.field("guard").as_deref(),
+        Some("LeakyInternalGuard"),
         "{denied:#?}",
     );
     assert_eq!(

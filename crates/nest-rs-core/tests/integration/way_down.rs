@@ -651,10 +651,9 @@ fn a_second_signal_while_a_factory_blocks_its_thread_exits_at_once_naming_its_ty
         .unwrap_or_else(|| panic!("the line naming what it abandons: {printed:#?}"));
     assert!(line.contains(r#""boot""#), "{line}");
     assert!(
-        line.contains("type_name"),
-        "the boot step's own field: {line}"
+        line.contains(r#""type_name":"SlowPool""#),
+        "the boot step's own field, in the short name: {line}"
     );
-    assert!(line.contains("SlowPool"), "{line}");
 }
 
 #[cfg(unix)]

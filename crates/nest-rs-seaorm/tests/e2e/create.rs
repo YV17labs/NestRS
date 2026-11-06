@@ -103,6 +103,8 @@ async fn out_of_scope_create_over_the_pool_executor_persists_nothing() {
         denied.field("entity").as_deref(),
         Some("create_scope_gadgets")
     );
+    assert_eq!(denied.field("id"), Some(id.to_string()));
+    assert_eq!(denied.field("action").as_deref(), Some("create"));
 
     assert!(
         matches!(result, Err(DbErr::RecordNotInserted)),

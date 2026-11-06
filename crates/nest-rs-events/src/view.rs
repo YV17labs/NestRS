@@ -40,7 +40,8 @@ impl EventsView {
         Self { event, listener }
     }
 
-    /// The event's type, as `std::any::type_name` spells it.
+    /// The event's type, as `std::any::type_name` spells it, for code comparing
+    /// it; a line says the last segment.
     pub fn event(&self) -> &'static str {
         self.event
     }

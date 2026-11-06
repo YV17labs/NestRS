@@ -210,9 +210,6 @@ async fn a_service_token_narrowed_to_reading_posts_is_refused_the_transcode_tool
         denied.field("reason").as_deref(),
         Some("insufficient_scope")
     );
-    assert_eq!(
-        denied.field("subject").as_deref(),
-        Some(std::any::type_name::<features::audio::Transcoding>()),
-    );
+    assert_eq!(denied.field("subject").as_deref(), Some("Transcoding"));
     logs.expect_none("nest_rs::layers", "guard denied the operation");
 }

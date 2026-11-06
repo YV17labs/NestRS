@@ -31,6 +31,17 @@ pub enum ProbeKind {
     Startup,
 }
 
+impl ProbeKind {
+    /// The word a line names this probe by.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Liveness => "liveness",
+            Self::Readiness => "readiness",
+            Self::Startup => "startup",
+        }
+    }
+}
+
 /// `up` when the indicator's check returned `Ok`; `down` otherwise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]

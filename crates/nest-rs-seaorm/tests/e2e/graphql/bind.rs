@@ -155,8 +155,9 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
 
     let event = logs.expect_one(nest_rs_seaorm::target::ORM, "by-id access load failed");
     assert_eq!(event.level, "error");
-    assert!(
-        event.field("service").is_some_and(|s| s.contains("Ghosts")),
+    assert_eq!(
+        event.field("service").as_deref(),
+        Some("GhostsService"),
         "the event names the bound service, got {:?}",
         event.fields,
     );

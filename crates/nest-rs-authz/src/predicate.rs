@@ -562,7 +562,7 @@ impl<E: EntityTrait> PredicateBuilder<E> {
         if def.to_tbl.sea_orm_table() != expected.sea_orm_table() {
             tracing::error!(
                 target: crate::TARGET,
-                related = std::any::type_name::<R>(),
+                related = R::default().table_name(),
                 reason = "relation_table_mismatch",
                 "invalid ability relation predicate — denying all rows",
             );
@@ -571,7 +571,7 @@ impl<E: EntityTrait> PredicateBuilder<E> {
         if def.from_col.arity() != 1 || def.to_col.arity() != 1 {
             tracing::error!(
                 target: crate::TARGET,
-                related = std::any::type_name::<R>(),
+                related = R::default().table_name(),
                 reason = "composite_key",
                 "invalid ability relation predicate — denying all rows",
             );

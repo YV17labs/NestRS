@@ -1508,8 +1508,8 @@ async fn a_mutation_past_the_request_deadline_is_cut_inside_its_unit_and_answere
         "the document's name is the client's"
     );
     assert_eq!(
-        cut.field("timeout").as_deref(),
-        Some("1s"),
+        cut.field("timeout_ms").as_deref(),
+        Some("1000"),
         "the budget it ran out of"
     );
     let lines = operation_lines(&logs);

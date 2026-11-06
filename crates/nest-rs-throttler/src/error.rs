@@ -1,5 +1,7 @@
 //! Typed errors for the throttler port.
 
+use nest_rs_core::__private::shorten;
+
 /// Why a [`ThrottlerStore`](crate::ThrottlerStore) could not count a hit: the
 /// store's own failure, kept opaque so this port names no backend.
 ///
@@ -24,7 +26,7 @@ impl ThrottlerStoreError {
 #[non_exhaustive]
 pub(crate) enum UncountedError {
     /// The store answered an error.
-    #[error("the throttler store `{store}` failed")]
+    #[error("the throttler store `{}` failed", shorten(.store))]
     Failed {
         /// The store, as it names itself.
         store: &'static str,
@@ -33,7 +35,7 @@ pub(crate) enum UncountedError {
         error: ThrottlerStoreError,
     },
     /// The store did not answer within the guard's bound.
-    #[error("the throttler store `{store}` did not answer within {waited_ms} ms")]
+    #[error("the throttler store `{}` did not answer within {waited_ms} ms", shorten(.store))]
     Silent {
         /// The store, as it names itself.
         store: &'static str,
@@ -41,7 +43,7 @@ pub(crate) enum UncountedError {
         waited_ms: u64,
     },
     /// The store panicked; the panic is filed on its own line.
-    #[error("the throttler store `{store}` panicked")]
+    #[error("the throttler store `{}` panicked", shorten(.store))]
     Panicked {
         /// The store, as it names itself.
         store: &'static str,
@@ -51,6 +53,19 @@ pub(crate) enum UncountedError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_store_reads_as_it_names_itself_less_any_path() {
+        for (store, said) in [
+            ("memcached", "memcached"),
+            ("a::b::RedisThrottler<c::Cache>", "RedisThrottler<Cache>"),
+        ] {
+            assert_eq!(
+                UncountedError::Panicked { store }.to_string(),
+                format!("the throttler store `{said}` panicked"),
+            );
+        }
+    }
 
     #[test]
     fn the_stores_own_failure_is_the_chain() {

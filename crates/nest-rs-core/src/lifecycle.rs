@@ -76,6 +76,18 @@ pub enum LifecyclePhase {
 }
 
 impl LifecyclePhase {
+    /// The word a line names this phase by, the hook's attribute without its
+    /// brackets (`on_module_destroy`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OnModuleInit => "on_module_init",
+            Self::OnApplicationBootstrap => "on_application_bootstrap",
+            Self::OnModuleDestroy => "on_module_destroy",
+            Self::BeforeApplicationShutdown => "before_application_shutdown",
+            Self::OnApplicationShutdown => "on_application_shutdown",
+        }
+    }
+
     /// The attribute a hook of this phase is written with, `#[on_module_init]`.
     pub(crate) fn attribute(self) -> &'static str {
         match self {
@@ -232,7 +244,7 @@ fn report_inert_hook(container: &Container, hook: &LifecycleHook, phase: Lifecyc
         origin: hook.origin,
         host: (hook.provider_type_id)(),
         container: container,
-        phase = ::tracing::field::debug(phase),
+        phase = phase.as_str(),
         host = hook.provider,
         method = hook.method,
     );
@@ -265,7 +277,7 @@ impl HookUnit {
         let span = crate::operation_span!(
             crate::unit::HOOK,
             &correlation,
-            phase = ?phase,
+            phase = phase.as_str(),
             host = hook.provider,
             method = hook.method,
             origin = hook.origin,
@@ -340,7 +352,7 @@ impl HookLine<'_> {
                 span: span,
                 outcome: outcome,
                 started: self.started,
-                phase = ?phase,
+                phase = phase.as_str(),
                 host = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
@@ -390,7 +402,7 @@ pub(crate) async fn run_phase(
                         target: crate::target::LIFECYCLE,
                         payload.as_ref(),
                         "lifecycle hook panicked; the boot is aborted",
-                        ?phase,
+                        phase = phase.as_str(),
                         host = hook.provider,
                         method = hook.method,
                         origin = hook.origin,
@@ -432,7 +444,7 @@ pub(crate) async fn run_phase_lenient(
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(err))) => tracing::error!(
                 target: crate::target::LIFECYCLE,
-                ?phase,
+                phase = phase.as_str(),
                 host = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
@@ -443,14 +455,14 @@ pub(crate) async fn run_phase_lenient(
                 target: crate::target::LIFECYCLE,
                 payload.as_ref(),
                 "shutdown hook panicked, and the hooks after it still run",
-                ?phase,
+                phase = phase.as_str(),
                 host = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
             ),
             Err(_) => tracing::warn!(
                 target: crate::target::LIFECYCLE,
-                ?phase,
+                phase = phase.as_str(),
                 host = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
@@ -477,6 +489,19 @@ mod tests {
         async fn touch(&self) -> anyhow::Result<()> {
             self.hits.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    #[test]
+    fn a_phase_reads_as_the_attribute_a_hook_writes() {
+        for phase in [
+            LifecyclePhase::OnModuleInit,
+            LifecyclePhase::OnApplicationBootstrap,
+            LifecyclePhase::OnModuleDestroy,
+            LifecyclePhase::BeforeApplicationShutdown,
+            LifecyclePhase::OnApplicationShutdown,
+        ] {
+            assert_eq!(format!("#[{}]", phase.as_str()), phase.attribute());
         }
     }
 
@@ -677,6 +702,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_hook_is_skipped_by_both_runners() {
+        let logs = nest_rs_testing::LogCapture::install();
         let container = Container::builder().build().expect("the container builds");
         run_phase(
             &container,
@@ -691,5 +717,18 @@ mod tests {
             Instant::now() + SHUTDOWN_HOOKS_TIMEOUT,
         )
         .await;
+        let skipped = logs.find(
+            crate::target::LIFECYCLE,
+            "skipped lifecycle hook: no instance of the provider in this app's container",
+        );
+        assert_eq!(skipped.len(), 2, "one per runner: {:#?}", logs.events());
+        for line in skipped {
+            assert_eq!(
+                line.field("phase").as_deref(),
+                Some("before_application_shutdown"),
+                "{:?}",
+                line.fields
+            );
+        }
     }
 }

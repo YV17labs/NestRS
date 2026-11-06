@@ -211,7 +211,7 @@ async fn run_indicators(
                 let unanswered = outcomes.iter().filter(|slot| slot.is_none()).count();
                 tracing::warn!(
                     target: crate::TARGET,
-                    ?kind,
+                    kind = kind.as_str(),
                     deadline_ms = u64::try_from(config.probe_deadline.as_millis()).unwrap_or(u64::MAX),
                     answered = outcomes.len() - unanswered,
                     unanswered,
@@ -286,7 +286,7 @@ fn report_inert_indicator(container: &Container, entry: &HealthIndicator) {
         host: entry.provider_type_id(),
         container: container,
         indicator = entry.name(),
-        kind = ::tracing::field::debug(entry.kind()),
+        kind = entry.kind().as_str(),
     );
 }
 
@@ -305,7 +305,7 @@ async fn run_with_timeout(
             tracing::warn!(
                 target: crate::TARGET,
                 indicator = name,
-                ?kind,
+                kind = kind.as_str(),
                 error = %nest_rs_core::error_message(&*err),
                 "health indicator failed",
             );
@@ -317,7 +317,7 @@ async fn run_with_timeout(
                 payload.as_ref(),
                 "health indicator panicked",
                 indicator = name,
-                kind = ?kind,
+                kind = kind.as_str(),
             );
             (IndicatorStatus::Down, Some(REASON_FAILED.to_owned()))
         }
@@ -325,7 +325,7 @@ async fn run_with_timeout(
             tracing::warn!(
                 target: crate::TARGET,
                 indicator = name,
-                ?kind,
+                kind = kind.as_str(),
                 timeout_ms = timeout.as_millis(),
                 "health indicator timed out",
             );
@@ -360,8 +360,9 @@ mod tests {
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("indicator").as_deref(), Some("hang"));
         assert_eq!(event.field("timeout_ms").as_deref(), Some("10"));
-        assert!(
-            event.field("kind").is_some_and(|k| k.contains("Readiness")),
+        assert_eq!(
+            event.field("kind").as_deref(),
+            Some("readiness"),
             "the event names the probe that hung, got {:?}",
             event.fields,
         );
@@ -396,6 +397,7 @@ mod tests {
         assert_eq!(skipped.len(), 1, "one line: {:#?}", logs.events());
         assert_eq!(skipped[0].level, "debug");
         assert_eq!(skipped[0].field("indicator").as_deref(), Some("db"));
+        assert_eq!(skipped[0].field("kind").as_deref(), Some("readiness"));
         assert_eq!(skipped[0].field("cause").as_deref(), Some("dependency"));
     }
 

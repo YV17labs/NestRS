@@ -66,7 +66,11 @@ around the dispatch, say the coordinates alone and join through them. `method` i
 Rust method wherever a line says it: an HTTP method is
 `verb`, a JSON-RPC one `mcp_method`, and an operation type `kind`. A guard reads as
 an app writes it, and a value an operator sets or a standard names reads in that
-word (`http`, `text`, `sigterm`), never its `Debug`. Held by each edge's line tests.
+word (`http`, `text`, `sigterm`), never its `Debug`, a duration in `_ms`. A Rust type
+reads by what its domain calls it, never its path, whose format `type_name` leaves
+open: an entity by its table, a subject by its table or `#[subject]` ident, an event
+by its type's last segment, any other by its short name (a strategy, a store, a layer,
+`short_type_name`). Held by each edge's line tests.
 
 Two attempts yielding two schemes mean a fact about the domain is missing, not
 a better word: find the fact. A new crate, crate family or edge is proposed

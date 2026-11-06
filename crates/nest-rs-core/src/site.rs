@@ -219,6 +219,17 @@ pub enum Shape {
     Layered,
 }
 
+impl Shape {
+    /// The word a line names this shape by.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bare => "bare",
+            Self::GateOnly => "gate_only",
+            Self::Layered => "layered",
+        }
+    }
+}
+
 /// The layers one site runs on one container, composed once: the unit stage,
 /// the guard stage, the class gate, the exception filters and the handler
 /// stage, each in the order it runs.
@@ -384,7 +395,7 @@ impl UnitChains {
         tracing::trace!(
             target: crate::target::LAYERS,
             site,
-            shape = ?self.shape,
+            shape = self.shape.as_str(),
             unit_stage = joined_names(&self.unit_stage),
             guard_stage = self.guard_stage.is_some(),
             class_gate = self.class_gate.is_some(),
@@ -746,6 +757,7 @@ mod tests {
 
     #[test]
     fn a_site_takes_the_shape_of_what_it_runs() {
+        let logs = nest_rs_testing::LogCapture::install();
         let container = Container::default();
         let bare = composed(
             &container,
@@ -771,6 +783,13 @@ mod tests {
             &declared(SiteLayers::default, GlobalLayers::ALL),
         );
         assert_eq!(layered.shape(), Shape::Layered);
+
+        let said: Vec<_> = logs
+            .find(crate::target::LAYERS, "site composed")
+            .iter()
+            .filter_map(|line| line.field("shape"))
+            .collect();
+        assert_eq!(said, ["bare", "gate_only", "layered"]);
     }
 
     fn binds_an_unprovided_interceptor() -> SiteLayers {

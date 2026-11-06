@@ -97,7 +97,7 @@ pub trait ThrottlerStore: Send + Sync + 'static {
 
     /// The name the guard reports this store under when it cannot count a hit:
     /// an error, silence past [`HIT_TIMEOUT`] or a panic; defaults to the
-    /// implementor's type name.
+    /// implementor's type name, which a line says without its path.
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }

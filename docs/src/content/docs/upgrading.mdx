@@ -2006,6 +2006,16 @@ lists what the boot, a log or the wire shows when one is missed.
   `surface` where it said `kind`, adds `host`, and is filed once per template a surface
   registers, so a filter expecting one line per surface or a surface's bare path reads
   the template instead.
+- **A log filter or an alert on a line's value** reads the operator's word where it read a
+  `Debug` or a type path. `phase="on_module_destroy"` for `OnModuleDestroy`, `action="read"`
+  for `Read`, a probe's `kind="liveness"` for `Liveness`, `scope="request"` for
+  `Some(Request)`, `shape="bare"` for `Bare`; `timeout_ms=1000` for `timeout=1s`. `id` reads
+  the key's bare value, and `allowed_hosts`, `columns` and `scopes` a joined string. `entity` is the table
+  name on every line, `entity="posts"` where `no ambient Ability … denying all rows` said
+  `my_app::posts::Entity`. `subject` is the table or a `#[subject]`'s ident, `event` the
+  type's last segment (`PostPublishedEvent`), `related` the table, and `provider`,
+  `context_type`, `strategy`, `store`, a bound `service`, a stop's `type_name` and an unresolved
+  `layer` a short name.
 - **A log filter on `response masking failed`'s `event`** still matches, on a WebSocket
   message; the line now says `host`, `method` and the unit's coordinates on every edge, and
   `authorization denied` does on a field grant's refusal, so a filter on `tool` or `method`

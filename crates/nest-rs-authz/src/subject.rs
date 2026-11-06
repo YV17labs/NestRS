@@ -39,10 +39,19 @@ pub trait Subject: 'static {
     /// its reply.
     #[doc(hidden)]
     const __ROWS: bool = true;
+
+    /// The word a line names the subject by: an entity's table, or the ident
+    /// `#[subject]` declares.
+    #[doc(hidden)]
+    fn __line_name() -> &'static str;
 }
 
 #[diagnostic::do_not_recommend]
-impl<E: sea_orm::EntityTrait> Subject for E {}
+impl<E: sea_orm::EntityTrait> Subject for E {
+    fn __line_name() -> &'static str {
+        E::default().table_name()
+    }
+}
 
 /// A subject whose rows a rule narrows: a SeaORM entity, which `cannot`,
 /// `when` and `fields` take, and never a capability `#[subject]` declares.

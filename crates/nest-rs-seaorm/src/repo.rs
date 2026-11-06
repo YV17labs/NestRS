@@ -72,9 +72,9 @@ fn denying_for_want_of_an_ability<E: EntityTrait>(action: Action) {
     if visitors_read_unnamed() {
         tracing::warn!(
             target: crate::target::ORM,
-            entity = std::any::type_name::<E>(),
-            ?action,
-            scope = ?current_executor_scope(),
+            entity = E::default().table_name(),
+            action = action.as_str(),
+            scope = current_executor_scope().map(ExecutorScope::as_str),
             hint = "a visitor reads only inside the unit naming its read, #[public(Read, Entity)]: \
                     a nested GraphQL field or a relation's batch names none and takes no posture, \
                     so read it in that unit, or answer it to a caller a token backs",
@@ -84,9 +84,9 @@ fn denying_for_want_of_an_ability<E: EntityTrait>(action: Action) {
     }
     tracing::warn!(
         target: crate::target::ORM,
-        entity = std::any::type_name::<E>(),
-        ?action,
-        scope = ?current_executor_scope(),
+        entity = E::default().table_name(),
+        action = action.as_str(),
+        scope = current_executor_scope().map(ExecutorScope::as_str),
         hint = "bind #[use_guards(AuthnGuard, AuthzGuard)], and declare what this unit reads: \
                 #[authorize(Read, Entity)], or #[public(Read, Entity)] where a caller with no \
                 credential is admitted; a websocket connection hook declares none, so read it \
@@ -152,7 +152,7 @@ impl<E: EntityTrait> Repo<E> {
                  unit of work runs on this path";
             tracing::error!(
                 target: crate::target::ORM,
-                entity = std::any::type_name::<E>(),
+                entity = E::default().table_name(),
                 hint = HINT,
                 "no ambient database executor",
             );
@@ -214,7 +214,7 @@ impl<E: EntityTrait> Repo<E> {
         tracing::trace!(
             target: crate::target::ORM,
             entity = E::default().table_name(),
-            ?action,
+            action = action.as_str(),
             allowed,
             "instance check",
         );
@@ -670,8 +670,9 @@ mod tests {
 
         let event = logs.expect_one(crate::target::ORM, "no ambient database executor");
         assert_eq!(event.level, "error");
-        assert!(
-            event.field("entity").is_some_and(|e| e.contains("widget")),
+        assert_eq!(
+            event.field("entity").as_deref(),
+            Some("widgets"),
             "…against the entity that could not be read: {event:#?}",
         );
         assert!(
@@ -762,11 +763,13 @@ mod tests {
             "no ambient Ability outside a worker job — denying all rows",
         );
         assert_eq!(event.level, "warn");
-        assert!(
-            event.field("entity").is_some_and(|e| e.contains("widget")),
-            "the entity is named: {event:#?}",
+        assert_eq!(
+            event.field("entity").as_deref(),
+            Some("widgets"),
+            "the table is named, as every other line of this target names it: {event:#?}",
         );
-        assert_eq!(event.field("action").as_deref(), Some("Read"));
+        assert_eq!(event.field("action").as_deref(), Some("read"));
+        assert_eq!(event.field("scope").as_deref(), Some("request"));
     }
 
     #[tokio::test]

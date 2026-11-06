@@ -67,7 +67,11 @@ impl RequestDeadline {
     /// honest since nothing it ran committed — said once at `warn`.
     pub fn timed_out(&self) -> Response {
         let timeout = self.0.timeout;
-        tracing::warn!(target: crate::target::HTTP, ?timeout, "request timed out");
+        tracing::warn!(
+            target: crate::target::HTTP,
+            timeout_ms = timeout.as_millis(),
+            "request timed out",
+        );
         timed_out(timeout)
     }
 }

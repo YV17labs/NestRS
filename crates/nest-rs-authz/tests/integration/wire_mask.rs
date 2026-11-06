@@ -128,9 +128,10 @@ async fn one_warn_names_an_undecidable_push_however_many_rows_it_drops() {
         event.field("reason").as_deref(),
         Some("undecidable_on_push")
     );
-    assert_eq!(event.field("action").as_deref(), Some("Read"));
-    assert!(
-        event.field("entity").is_some_and(|e| e.contains("post")),
+    assert_eq!(event.field("action").as_deref(), Some("read"));
+    assert_eq!(
+        event.field("entity").as_deref(),
+        Some("posts"),
         "{:?}",
         event.fields,
     );

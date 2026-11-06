@@ -100,15 +100,14 @@ async fn a_failing_shutdown_hook_is_named_at_error_and_does_not_abort_the_rest()
 
     let event = logs.expect_one(target::LIFECYCLE, "lifecycle hook failed");
     assert_eq!(event.level, "error");
-    assert!(
-        event
-            .field("host")
-            .is_some_and(|p| p.contains("BrokenOnDestroy")),
+    assert_eq!(
+        event.field("host").as_deref(),
+        Some("BrokenOnDestroy"),
         "{:?}",
         event.fields,
     );
     assert_eq!(event.field("method").as_deref(), Some("release"));
-    assert_eq!(event.field("phase").as_deref(), Some("OnModuleDestroy"));
+    assert_eq!(event.field("phase").as_deref(), Some("on_module_destroy"));
     assert!(
         event
             .field("error")
@@ -305,15 +304,14 @@ async fn a_shutdown_hook_that_never_returns_is_abandoned_at_the_budget_and_the_r
     );
     let event = logs.expect_one(target::LIFECYCLE, ABANDONED);
     assert_eq!(event.level, "warn");
-    assert!(
-        event
-            .field("host")
-            .is_some_and(|p| p.contains("StuckOnDestroy")),
+    assert_eq!(
+        event.field("host").as_deref(),
+        Some("StuckOnDestroy"),
         "{:?}",
         event.fields,
     );
     assert_eq!(event.field("method").as_deref(), Some("flush"));
-    assert_eq!(event.field("phase").as_deref(), Some("OnModuleDestroy"));
+    assert_eq!(event.field("phase").as_deref(), Some("on_module_destroy"));
     assert!(
         event
             .field("origin")
@@ -399,11 +397,7 @@ async fn four_stuck_shutdown_hooks_share_one_budget_and_each_is_named() {
     let abandoned: Vec<_> = logs
         .find(target::LIFECYCLE, ABANDONED)
         .into_iter()
-        .filter(|event| {
-            event
-                .field("host")
-                .is_some_and(|p| p.contains("StuckEverywhere"))
-        })
+        .filter(|event| event.field("host").as_deref() == Some("StuckEverywhere"))
         .map(|event| {
             (
                 event.field("method").unwrap_or_default(),
@@ -490,15 +484,14 @@ async fn a_panicking_shutdown_hook_is_named_at_error_and_the_rest_still_run() {
         "shutdown hook panicked, and the hooks after it still run",
     );
     assert_eq!(event.level, "error");
-    assert!(
-        event
-            .field("host")
-            .is_some_and(|p| p.contains("PanicsOnDestroy")),
+    assert_eq!(
+        event.field("host").as_deref(),
+        Some("PanicsOnDestroy"),
         "{:?}",
         event.fields,
     );
     assert_eq!(event.field("method").as_deref(), Some("release"));
-    assert_eq!(event.field("phase").as_deref(), Some("OnModuleDestroy"));
+    assert_eq!(event.field("phase").as_deref(), Some("on_module_destroy"));
     assert_eq!(
         event.field(nest_rs_core::panic::FIELD).as_deref(),
         Some("the pool was already closed"),
@@ -545,7 +538,7 @@ async fn a_panicking_init_hook_aborts_the_boot_with_an_error_naming_it() {
     );
     assert_eq!(event.level, "error");
     assert_eq!(event.field("method").as_deref(), Some("warm"));
-    assert_eq!(event.field("phase").as_deref(), Some("OnModuleInit"));
+    assert_eq!(event.field("phase").as_deref(), Some("on_module_init"));
     assert_eq!(
         event.field(nest_rs_core::panic::FIELD).as_deref(),
         Some("the cache backend refused the warm-up"),
@@ -835,7 +828,7 @@ async fn a_failed_boot_tears_down_within_the_budget_and_returns_the_init_error()
         "the boot failed after init hooks ran: running the shutdown hooks",
     );
     assert_eq!(opening.level, "warn");
-    assert_eq!(opening.field("phase").as_deref(), Some("OnModuleInit"));
+    assert_eq!(opening.field("phase").as_deref(), Some("on_module_init"));
     assert_eq!(opening.field("host").as_deref(), Some("RegistersThenHangs"));
     assert_eq!(opening.field("method").as_deref(), Some("register"));
     assert!(
@@ -1105,7 +1098,7 @@ async fn each_shutdown_hook_files_its_unit_line_in_reverse_host_order() {
 
     let ran: Vec<_> = hook_lines(&logs)
         .into_iter()
-        .filter(|event| event.field("phase").as_deref() == Some("OnModuleDestroy"))
+        .filter(|event| event.field("phase").as_deref() == Some("on_module_destroy"))
         .map(|event| {
             assert_eq!(event.level, "info");
             assert!(
@@ -1163,9 +1156,9 @@ async fn each_hook_files_one_unit_line_naming_it_and_how_it_ended() {
     app.close().await;
 
     for (method, phase, outcome) in [
-        ("open", "OnModuleInit", operation_log::OK),
-        ("reconcile", "OnModuleDestroy", operation_log::ERROR),
-        ("report", "OnApplicationShutdown", operation_log::PANIC),
+        ("open", "on_module_init", operation_log::OK),
+        ("reconcile", "on_module_destroy", operation_log::ERROR),
+        ("report", "on_application_shutdown", operation_log::PANIC),
     ] {
         let line = hook_line(&logs, method);
         assert_eq!(line.level, "info", "{method}");

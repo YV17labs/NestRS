@@ -191,7 +191,7 @@ a dispatched unit names it as its `mounted` line does (`host`, `method`, then th
 edge's coordinates; `http.request`, `ws.message` and `mcp.operation` say the
 coordinates alone), and `method` is the Rust method wherever a line says it; a
 guard reads as an app writes it (`short_type_name`), and a value an operator sets
-or a standard names in that word, never its `Debug` (`naming.md`).
+or a standard names in that word, never its `Debug` or a type path (`naming.md`).
 
 ## Comments
 

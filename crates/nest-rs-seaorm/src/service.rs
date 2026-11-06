@@ -383,12 +383,12 @@ where
             .one()
             .await?
         {
-            tracing::debug!(target: crate::target::ORM, entity, %id, ?action, "access granted");
+            tracing::debug!(target: crate::target::ORM, entity, %id, action = action.as_str(), "access granted");
             return Ok(Access::Found(model));
         }
         let exists = Repo::<Self::Entity>::unscoped_by_id(id).exists().await?;
         if exists {
-            tracing::warn!(target: crate::target::ORM, entity, %id, ?action, "access denied");
+            tracing::warn!(target: crate::target::ORM, entity, %id, action = action.as_str(), "access denied");
             Ok(Access::Denied)
         } else {
             Ok(Access::Missing)
@@ -463,7 +463,7 @@ pub trait Creatable: CrudService {
             tracing::warn!(
                 target: crate::target::ORM,
                 entity,
-                action = ?Action::Create,
+                action = Action::Create.as_str(),
                 "access denied — no row of the entity is in the caller's scope",
             );
             return Err(DbErr::RecordNotInserted);
@@ -505,7 +505,7 @@ fn fill_pinned<E: EntityTrait>(
         }
     }
     if !filled.is_empty() {
-        tracing::debug!(target: crate::target::ORM, entity, columns = ?filled, "create filled from the ability's grants");
+        tracing::debug!(target: crate::target::ORM, entity, columns = filled.join(",").as_str(), "create filled from the ability's grants");
     }
     active
 }
@@ -532,13 +532,13 @@ where
         tracing::warn!(
             target: crate::target::ORM,
             entity,
-            id = ?model_pk::<E>(&model),
-            action = ?Action::Create,
+            id = line_id::<E>(&model),
+            action = Action::Create.as_str(),
             "access denied — row outside the caller's scope",
         );
         return Err(DbErr::RecordNotInserted);
     }
-    tracing::debug!(target: crate::target::ORM, entity, id = ?model_pk::<E>(&model), "row created");
+    tracing::debug!(target: crate::target::ORM, entity, id = line_id::<E>(&model), "row created");
     Ok(model)
 }
 
@@ -563,19 +563,19 @@ pub trait Updatable: CrudService {
         input: Self::Update,
     ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
         let entity = Self::entity_name();
-        let id = model_pk::<Self::Entity>(&model);
+        let id = line_id::<Self::Entity>(&model);
         let active = input.apply_to(model.into_active_model());
         match Repo::<Self::Entity>::update(active).await {
             Ok(updated) => {
-                tracing::debug!(target: crate::target::ORM, entity, ?id, "row updated");
+                tracing::debug!(target: crate::target::ORM, entity, id, "row updated");
                 Ok(updated)
             }
             Err(DbErr::RecordNotUpdated) => {
                 tracing::warn!(
                     target: crate::target::ORM,
                     entity,
-                    ?id,
-                    action = ?Action::Update,
+                    id,
+                    action = Action::Update.as_str(),
                     "access denied — row outside the caller's scope",
                 );
                 Err(DbErr::RecordNotUpdated)
@@ -599,7 +599,7 @@ pub trait Deletable: CrudService {
     /// [`DbErr::RecordNotFound`].
     async fn delete(&self, model: <Self::Entity as EntityTrait>::Model) -> Result<(), DbErr> {
         let entity = Self::entity_name();
-        let id = model_pk::<Self::Entity>(&model);
+        let id = line_id::<Self::Entity>(&model);
         let out_of_scope = || {
             DbErr::RecordNotFound(format!(
                 "{entity} row not found or outside the caller's scope"
@@ -608,15 +608,15 @@ pub trait Deletable: CrudService {
         match crate::soft_delete::tombstone_column::<Self::Entity>() {
             Some(col) => match Repo::<Self::Entity>::soft_delete(model, col).await {
                 Ok(()) => {
-                    tracing::debug!(target: crate::target::ORM, entity, ?id, "row soft-deleted");
+                    tracing::debug!(target: crate::target::ORM, entity, id, "row soft-deleted");
                     Ok(())
                 }
                 Err(DbErr::RecordNotUpdated) => {
                     tracing::warn!(
                         target: crate::target::ORM,
                         entity,
-                        ?id,
-                        action = ?Action::Delete,
+                        id,
+                        action = Action::Delete.as_str(),
                         "access denied — row outside the caller's scope",
                     );
                     Err(out_of_scope())
@@ -629,13 +629,13 @@ pub trait Deletable: CrudService {
                     tracing::warn!(
                         target: crate::target::ORM,
                         entity,
-                        ?id,
-                        action = ?Action::Delete,
+                        id,
+                        action = Action::Delete.as_str(),
                         "access denied — row outside the caller's scope",
                     );
                     return Err(out_of_scope());
                 }
-                tracing::debug!(target: crate::target::ORM, entity, ?id, "row deleted");
+                tracing::debug!(target: crate::target::ORM, entity, id, "row deleted");
                 Ok(())
             }
         }
@@ -648,6 +648,26 @@ fn model_pk<E: EntityTrait>(model: &E::Model) -> Option<sea_orm::Value> {
     use sea_orm::{Iterable, ModelTrait, PrimaryKeyToColumn};
     let pk_col = E::PrimaryKey::iter().next()?.into_column();
     Some(model.get(pk_col))
+}
+
+/// The model's first primary key as a line says it, written only if a line is
+/// filed; absent for a keyless entity.
+fn line_id<E: EntityTrait>(model: &E::Model) -> Option<tracing::field::DisplayValue<LineKey>> {
+    model_pk::<E>(model).map(|key| tracing::field::display(LineKey(key)))
+}
+
+/// A key's bare value, as a by-id line's `%id` prints it; `Value`'s own `Display`
+/// writes SQL, which quotes a `Uuid` and a string.
+struct LineKey(sea_orm::Value);
+
+impl std::fmt::Display for LineKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            sea_orm::Value::Uuid(Some(key)) => key.fmt(f),
+            sea_orm::Value::String(Some(key)) => f.write_str(key),
+            key => key.fmt(f),
+        }
+    }
 }
 
 /// The model's first primary key as a `Uuid`; `None` when the entity has
@@ -725,6 +745,24 @@ mod tests {
             "a value the input carries is the scope check's to judge, never overwritten",
         );
         assert_eq!(filled.id, ActiveValue::NotSet);
+    }
+
+    #[test]
+    fn a_create_says_each_column_it_filled_by_its_name() {
+        let logs = nest_rs_testing::LogCapture::install();
+
+        fill_pinned::<note::Entity>(
+            <note::ActiveModel as Default>::default(),
+            &pinning(Uuid::now_v7(), Uuid::now_v7()),
+            "notes",
+        );
+
+        let line = logs.expect_one(
+            crate::target::ORM,
+            "create filled from the ability's grants",
+        );
+        assert_eq!(line.field("entity").as_deref(), Some("notes"));
+        assert_eq!(line.field("columns").as_deref(), Some("org_id,author_id"));
     }
 
     #[test]
@@ -832,6 +870,79 @@ mod tests {
             "no ambient Ability outside a worker job — denying all rows",
         );
         assert_eq!(said.level, "warn");
-        assert_eq!(said.field("action").as_deref(), Some("Create"));
+        assert_eq!(said.field("action").as_deref(), Some("create"));
+    }
+
+    mod counter {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "counters")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i64,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    struct CountersService;
+
+    impl CrudService for CountersService {
+        type Entity = counter::Entity;
+    }
+
+    struct Touch;
+
+    impl UpdateModel<counter::Entity> for Touch {
+        fn apply_to(self, model: counter::ActiveModel) -> counter::ActiveModel {
+            model
+        }
+    }
+
+    impl Updatable for CountersService {
+        type Update = Touch;
+    }
+
+    #[tokio::test]
+    async fn a_refused_write_names_a_row_keyed_by_no_uuid() {
+        use nest_rs_database::__private::with_request_executor;
+        use sea_orm::DatabaseConnection;
+
+        let logs = nest_rs_testing::LogCapture::install();
+
+        let updated = with_request_executor(
+            crate::executor::SeaOrmExecutor::Pool(DatabaseConnection::default()).into(),
+            CountersService.update(counter::Model { id: 5 }, Touch),
+        )
+        .await;
+
+        assert!(
+            matches!(updated, Err(DbErr::RecordNotUpdated)),
+            "{updated:?}"
+        );
+        let line = logs.expect_one(
+            crate::target::ORM,
+            "access denied — row outside the caller's scope",
+        );
+        assert_eq!(line.field("entity").as_deref(), Some("counters"));
+        assert_eq!(line.field("id").as_deref(), Some("5"));
+        assert_eq!(line.field("action").as_deref(), Some("update"));
+    }
+
+    #[test]
+    fn a_key_reads_as_its_bare_value() {
+        let id = Uuid::now_v7();
+        for (key, word) in [
+            (sea_orm::Value::from(id), id.to_string()),
+            (sea_orm::Value::from(5_i64), "5".to_owned()),
+            (sea_orm::Value::from(7_i32), "7".to_owned()),
+            (sea_orm::Value::from("slug"), "slug".to_owned()),
+        ] {
+            assert_eq!(LineKey(key).to_string(), word);
+        }
     }
 }

@@ -563,10 +563,9 @@ async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_say
         "a layer the site declares is provided by no imported module",
     );
     assert_eq!(event.level, "error");
-    assert!(
-        event
-            .field("layer")
-            .is_some_and(|layer| layer.contains("NeverProvided")),
+    assert_eq!(
+        event.field("layer").as_deref(),
+        Some("NeverProvided"),
         "the line names the layer: {:?}",
         event.fields,
     );

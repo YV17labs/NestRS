@@ -310,7 +310,7 @@ fn assert_the_store_was_waited_out(logs: &LogCapture, unit: &str) {
     assert_eq!(cause.field("unit").as_deref(), Some(unit));
     let chain = cause.field("error").unwrap_or_default();
     assert!(
-        chain.contains(std::any::type_name::<StalledStore>()),
+        chain.contains("the throttler store `StalledStore` did not answer"),
         "the line names the store behind the trait object, got {:?}",
         cause.fields,
     );
@@ -427,7 +427,7 @@ fn assert_the_store_failure_was_said(logs: &LogCapture, unit: &str) {
     assert_eq!(said.field("unit").as_deref(), Some(unit));
     assert!(
         said.field("error")
-            .is_some_and(|error| error.contains(std::any::type_name::<FailingStore>())),
+            .is_some_and(|error| error.contains("the throttler store `FailingStore` failed")),
         "the line names the store behind the trait object, got {:?}",
         said.fields,
     );
@@ -483,7 +483,7 @@ async fn a_store_that_panics_is_refused_for_the_window_and_said_once() {
     assert_eq!(said.field("transport").as_deref(), Some("http"));
     assert_eq!(
         said.field("store").as_deref(),
-        Some(std::any::type_name::<PanickingStore>()),
+        Some("PanickingStore"),
         "the line names the store behind the trait object, got {:?}",
         said.fields,
     );

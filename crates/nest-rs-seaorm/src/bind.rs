@@ -2,9 +2,8 @@
 //! id in its address: the row, through service `S` under the unit's ability.
 //! Each edge says what a refusal answers there.
 
-use std::any::type_name;
-
 use nest_rs_authz::{ActionMarker, current_ability};
+use nest_rs_core::__private::short_type_name;
 use sea_orm::{DbErr, EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
@@ -17,10 +16,7 @@ pub(crate) enum Unbound {
     NotV7,
     /// What the unit needs to load it is missing, which its edge files at
     /// `error`, the service beside it.
-    Unwired {
-        why: UnwiredBind,
-        provider: &'static str,
-    },
+    Unwired { why: UnwiredBind, provider: String },
     /// The service failed reading the row.
     Failed(DbErr),
     /// The row exists and the caller may not have it.
@@ -41,7 +37,7 @@ where
     }
     let unwired = |why| Unbound::Unwired {
         why,
-        provider: type_name::<S>(),
+        provider: short_type_name::<S>(),
     };
     if current_ability().is_none() {
         return Err(unwired(UnwiredBind::Ability));

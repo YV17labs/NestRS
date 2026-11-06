@@ -112,10 +112,9 @@ async fn an_emit_on_a_bus_no_wiring_step_reached_is_dropped_with_a_warn() {
         "event emitted before the listeners were wired: dropped",
     );
     assert_eq!(event.level, "warn");
-    assert!(
-        event
-            .field("event")
-            .is_some_and(|name| name.ends_with("Seeded")),
+    assert_eq!(
+        event.field("event").as_deref(),
+        Some("Seeded"),
         "the line names the event type, got {:?}",
         event.fields,
     );
@@ -234,10 +233,7 @@ async fn a_wired_listener_files_its_mounted_line() {
     assert_eq!(mounted.level, "info");
     assert_eq!(mounted.field("host").as_deref(), Some("SeedListener"));
     assert_eq!(mounted.field("method").as_deref(), Some("on_seeded"));
-    assert_eq!(
-        mounted.field("event").as_deref(),
-        Some(std::any::type_name::<Seeded>())
-    );
+    assert_eq!(mounted.field("event").as_deref(), Some("Seeded"));
 }
 
 /// `event` holds one value for one event, on its mount and each dispatch: a

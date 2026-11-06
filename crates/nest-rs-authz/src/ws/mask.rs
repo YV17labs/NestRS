@@ -135,7 +135,7 @@ where
     E: EntityTrait,
 {
     warn_mask_failure(
-        std::any::type_name::<E>(),
+        E::default().table_name(),
         action,
         reason,
         detail,

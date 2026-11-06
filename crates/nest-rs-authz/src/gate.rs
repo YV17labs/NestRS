@@ -111,7 +111,7 @@ impl<'a> Refusal<'a> {
     pub(crate) fn declaring<A: ActionMarker, S: Subject>(self) -> Self {
         Self {
             action: Some(A::ACTION),
-            subject: Some(std::any::type_name::<S>()),
+            subject: Some(S::__line_name()),
             ..self
         }
     }
@@ -144,8 +144,7 @@ pub(crate) fn warn_denied(refusal: Refusal<'_>) {
         tool = served.tool,
         prompt = served.prompt,
         resource = served.resource,
-        // `Option<Action>` is not a `tracing` value; `field::debug` lets it be absent.
-        action = action.map(tracing::field::debug),
+        action = action.map(Action::as_str),
         subject,
         fields,
         reason,
@@ -180,7 +179,7 @@ pub(crate) fn error_unreached(refusal: Refusal<'_>) {
         tool = served.tool,
         prompt = served.prompt,
         resource = served.resource,
-        action = action.map(tracing::field::debug),
+        action = action.map(Action::as_str),
         subject,
         reason = reason::NO_AMBIENT_ABILITY,
         remedy,
@@ -454,10 +453,7 @@ mod tests {
             line.field("reason").as_deref(),
             Some(reason::NO_CLASS_GRANT)
         );
-        assert_eq!(
-            line.field("subject").as_deref(),
-            Some(std::any::type_name::<Post>())
-        );
+        assert_eq!(line.field("subject").as_deref(), Some("posts"));
     }
 
     /// A grant the token would unlock beside a denial no `when` narrows: the

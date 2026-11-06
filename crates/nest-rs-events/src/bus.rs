@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use futures_util::Stream;
 use nest_rs_core::__private::{
-    Site, Tail, UnitChains, caught_problem, dispatch, new_unit_context, settled,
+    Site, Tail, UnitChains, caught_problem, dispatch, new_unit_context, settled, short_type_name,
 };
 use nest_rs_core::tracing::Instrument;
 use nest_rs_core::{Container, Failure, Handler, Outcome, UnitContext};
@@ -34,6 +34,8 @@ type ListenerFn = Arc<dyn Fn(BoxedEvent) -> ListenerFuture + Send + Sync>;
 #[derive(Clone)]
 struct Listener {
     name: &'static str,
+    /// The event's type as its lines name it.
+    event: Arc<str>,
     /// How the unit settles the listener's data-layer work.
     policy: TransactionPolicy,
     /// How long one call runs before it is cut.
@@ -145,7 +147,7 @@ impl EventBus {
                     Ok(event) => return Some((event, reader)),
                     Err(broadcast::error::RecvError::Lagged(missed)) => tracing::warn!(
                         target: crate::TARGET,
-                        event = std::any::type_name::<E>(),
+                        event = short_type_name::<E>(),
                         missed,
                         "an event stream's reader fell behind",
                     ),
@@ -208,7 +210,7 @@ impl EventBus {
         if !self.wired.load(Ordering::Relaxed) {
             tracing::warn!(
                 target: crate::TARGET,
-                event = std::any::type_name::<E>(),
+                event = short_type_name::<E>(),
                 "event emitted before the listeners were wired: dropped",
             );
             return;
@@ -256,13 +258,13 @@ async fn dispatch_one(
     let span = nest_rs_core::operation_span!(
         crate::unit::DISPATCH,
         &correlation,
-        event = event,
+        event = &*listener.event,
         host = handler.host_name(),
         method = handler.method(),
     );
     let continuation = nest_rs_core::RequestContinuation::new(None, correlation.clone());
     let line = DispatchLine {
-        event,
+        event: &listener.event,
         handler,
         continuation: &continuation,
         span: span.clone(),
@@ -285,7 +287,7 @@ async fn dispatch_one(
                 continuation.enter(|| {
                     tracing::debug!(
                         target: crate::TARGET,
-                        event = event,
+                        event = &*listener.event,
                         host = handler.host_name(),
                         method = handler.method(),
                         "event listener skipped by a layer",
@@ -303,7 +305,7 @@ async fn dispatch_one(
             continuation.enter(|| {
                 tracing::warn!(
                     target: crate::TARGET,
-                    event = event,
+                    event = &*listener.event,
                     host = handler.host_name(),
                     method = handler.method(),
                     error = %nest_rs_core::error_message(failure.error()),
@@ -317,7 +319,7 @@ async fn dispatch_one(
             continuation.enter(|| {
                 tracing::error!(
                     target: crate::TARGET,
-                    event = event,
+                    event = &*listener.event,
                     host = handler.host_name(),
                     method = handler.method(),
                     error = %nest_rs_core::error_message(failure.error()),
@@ -332,7 +334,7 @@ async fn dispatch_one(
                     target: crate::TARGET,
                     payload.as_ref(),
                     "event listener panicked — dispatch continues with the next listener",
-                    event = event,
+                    event = &*listener.event,
                     host = handler.host_name(),
                     method = handler.method(),
                 );
@@ -389,7 +391,7 @@ impl Tail for ListenerTail {
 /// Filed inside the re-entered correlation: a line emitted after the `.await`
 /// otherwise carries no ids.
 struct DispatchLine<'a> {
-    event: &'static str,
+    event: &'a str,
     handler: &'static Handler,
     continuation: &'a nest_rs_core::RequestContinuation,
     span: tracing::Span,
@@ -448,11 +450,12 @@ where
     let chains = site.chains(container)?;
     let unit_of_work = container.get_dyn::<dyn UnitOfWork>();
     let handler = site.handler();
+    let event: Arc<str> = Arc::from(short_type_name::<E>());
     tracing::info!(
         target: crate::TARGET,
         host = handler.host_name(),
         method = handler.method(),
-        event = std::any::type_name::<E>(),
+        event = event.as_ref(),
         "mounted",
     );
     let run: ListenerFn = Arc::new(move |boxed: BoxedEvent| {
@@ -468,6 +471,7 @@ where
     });
     Arc::make_mut(bus.listeners.write().entry(TypeId::of::<E>()).or_default()).push(Listener {
         name,
+        event,
         policy,
         timeout,
         handler,
@@ -601,9 +605,9 @@ mod tests {
             "{:?}",
             said.fields
         );
-        assert!(
-            said.field("event")
-                .is_some_and(|name| name.ends_with("OrderPlaced")),
+        assert_eq!(
+            said.field("event").as_deref(),
+            Some("OrderPlaced"),
             "{:?}",
             said.fields,
         );
@@ -639,10 +643,9 @@ mod tests {
             "event emitted before the listeners were wired: dropped",
         );
         assert_eq!(event.level, "warn");
-        assert!(
-            event
-                .field("event")
-                .is_some_and(|name| name.ends_with("OrderPlaced")),
+        assert_eq!(
+            event.field("event").as_deref(),
+            Some("OrderPlaced"),
             "the line names the event type, got {:?}",
             event.fields,
         );

@@ -44,7 +44,7 @@ pub fn masked_reply<S: WireModel>(action: Action, wire: Value) -> Result<Value, 
         Ok(MaskedWire::Masked(value) | MaskedWire::Passthrough(value)) => Ok(value),
         Err(err) => {
             warn_mask_failure(
-                std::any::type_name::<S>(),
+                S::default().table_name(),
                 action,
                 mask_reason::IRRECONCILABLE,
                 "wire value could not be reconciled with the entity model",

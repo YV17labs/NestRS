@@ -31,6 +31,7 @@ use crate::app::BootStep;
 use crate::app_lifecycle::{AppLifecycle, StopCause};
 use crate::lifecycle::LifecyclePhase;
 use crate::millis::millis;
+use crate::type_name::shorten;
 
 /// Where the way down stands, for the line a signal exiting at once files —
 /// process-wide, as the signals are.
@@ -119,7 +120,7 @@ fn exit_at_once(signal: Received) -> ! {
             Step::Main => before_any_app(signal, code),
             Step::Boot(None) => abandoning!(step = "boot"),
             Step::Boot(Some(BootStep::Factory { type_name } | BootStep::Read { type_name })) => {
-                abandoning!(step = "boot", type_name)
+                abandoning!(step = "boot", type_name = shorten(type_name))
             }
             Step::Boot(Some(
                 BootStep::Configure { transport } | BootStep::Listen { transport },
@@ -131,7 +132,13 @@ fn exit_at_once(signal: Received) -> ! {
                 provider,
                 method,
                 origin,
-            })) => abandoning!(step = "boot", ?phase, host = provider, method, origin),
+            })) => abandoning!(
+                step = "boot",
+                phase = phase.as_str(),
+                host = provider,
+                method,
+                origin
+            ),
             Step::Transports(running) => {
                 abandoning!(
                     step = "transports",
@@ -145,7 +152,7 @@ fn exit_at_once(signal: Received) -> ! {
                 origin,
             } => abandoning!(
                 step = "shutdown hooks",
-                ?phase,
+                phase = phase.as_str(),
                 host = provider,
                 method,
                 origin

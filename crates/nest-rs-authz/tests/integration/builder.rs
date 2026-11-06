@@ -171,11 +171,11 @@ fn a_malformed_grant_also_fails_construction() {
          key — are told apart by this field, got {:?}",
         event.fields,
     );
-    let related = event.field("related").unwrap_or_default();
-    assert!(
-        related.contains("widget") && !related.contains("child"),
-        "…and it names the entity the rule *declared*, not the one it is about: \
-         {related:?}",
+    assert_eq!(
+        event.field("related").as_deref(),
+        Some("widgets"),
+        "…and it names the entity the rule *declared*, not the one it is about: {:?}",
+        event.fields,
     );
 }
 

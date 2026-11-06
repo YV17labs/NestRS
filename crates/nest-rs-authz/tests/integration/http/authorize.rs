@@ -79,8 +79,9 @@ async fn a_route_whose_ability_guard_attached_nothing_says_so_at_error_with_the_
     assert_eq!(event.level, "error");
     assert_eq!(event.field("transport").as_deref(), Some("http"));
     assert_eq!(event.field("reason").as_deref(), Some("no_ambient_ability"));
-    assert!(
-        event.field("subject").is_some_and(|s| s.contains("widget")),
+    assert_eq!(
+        event.field("subject").as_deref(),
+        Some("widgets"),
         "the event names the subject, got {:?}",
         event.fields,
     );

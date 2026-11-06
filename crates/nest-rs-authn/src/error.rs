@@ -12,7 +12,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::__private::OpaqueCause;
+use nest_rs_core::__private::{OpaqueCause, shorten};
 use nest_rs_core::{Problem, ToProblem};
 use nest_rs_http::{HeaderValue, IntoResponse, Response, ResponseError, StatusCode, header};
 
@@ -489,7 +489,7 @@ impl ResponseError for CredentialError {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum UnansweredError {
     /// It did not answer within the guard's bound.
-    #[error("the strategy `{strategy}` did not answer within {waited_ms} ms")]
+    #[error("the strategy `{}` did not answer within {waited_ms} ms", shorten(.strategy))]
     Silent {
         /// The strategy's type.
         strategy: &'static str,
@@ -497,7 +497,7 @@ pub(crate) enum UnansweredError {
         waited_ms: u64,
     },
     /// It panicked; the panic is filed on its own line.
-    #[error("the strategy `{strategy}` panicked")]
+    #[error("the strategy `{}` panicked", shorten(.strategy))]
     Panicked {
         /// The strategy's type.
         strategy: &'static str,

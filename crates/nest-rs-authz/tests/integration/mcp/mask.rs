@@ -358,8 +358,9 @@ async fn a_stripped_required_field_fails_the_operation_closed() {
     ] {
         assert_eq!(event.field(field).as_deref(), Some(named), "{field}");
     }
-    assert!(
-        event.field("subject").is_some_and(|e| e.contains("widget")),
+    assert_eq!(
+        event.field("subject").as_deref(),
+        Some("widgets"),
         "the event names the entity whose mask could not be represented, got {:?}",
         event.fields,
     );

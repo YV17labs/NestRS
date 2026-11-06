@@ -140,7 +140,7 @@ fn an_app_reads_the_mcp_variables_through_its_adapter() {
             for event in resolved {
                 assert_eq!(
                     event.field("allowed_hosts").as_deref(),
-                    Some(r#"["mcp.example.com"]"#),
+                    Some("mcp.example.com"),
                     "each mount runs on the deployment's allowlist",
                 );
             }

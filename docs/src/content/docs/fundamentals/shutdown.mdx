@@ -131,7 +131,7 @@ after one `error` on `nest_rs::app` naming what it abandons (`step` is `boot`,
 waited on):
 
 ```text frame="terminal"
-ERROR nest_rs::app: shutdown signal received on the way down: exiting at once, abandoning what still runs signal="SIGINT" exit_code=130 step="shutdown hooks" phase=OnModuleDestroy host="CacheService" method="flush" origin="api::cache"
+ERROR nest_rs::app: shutdown signal received on the way down: exiting at once, abandoning what still runs signal="SIGINT" exit_code=130 step="shutdown hooks" phase="on_module_destroy" host="CacheService" method="flush" origin="api::cache"
 ```
 
 Nothing runs after that line but the

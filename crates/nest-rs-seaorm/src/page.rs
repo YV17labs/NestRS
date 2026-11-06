@@ -307,7 +307,7 @@ where
     /// primary key, which SeaORM permits (views, raw tables).
     fn keyset_column() -> Result<E::Column, DbErr> {
         let Some(pk) = E::PrimaryKey::iter().next() else {
-            let entity = std::any::type_name::<E>();
+            let entity = E::default().table_name();
             tracing::error!(
                 target: crate::target::ORM,
                 entity,
@@ -523,8 +523,9 @@ mod tests {
             "entity has no primary-key column — keyset pagination requires one",
         );
         assert_eq!(event.level, "error");
-        assert!(
-            event.field("entity").is_some_and(|e| e.contains("keyless")),
+        assert_eq!(
+            event.field("entity").as_deref(),
+            Some("keyless"),
             "the event names the entity, got {:?}",
             event.fields,
         );

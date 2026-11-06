@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
 
-use nest_rs_core::__private::{TenantId, field};
+use nest_rs_core::__private::{TenantId, field, short_type_name, shorten};
 use nest_rs_core::{
     AmbientValue, Container, ContainerBuilder, Discoverable, Layer, Net, Posture,
     ProviderResidency, Unanswered, UnitContext, async_trait, within,
@@ -126,7 +126,6 @@ impl<S: Strategy> AuthnGuard<S> {
 #[async_trait]
 impl<S: Strategy> Guard for AuthnGuard<S> {
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        let strategy = std::any::type_name::<S>();
         let posture = cx.reflector().posture();
         let is_public = posture == Posture::Public;
         match authenticate(&*self.strategy, cx).await? {
@@ -135,17 +134,17 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
             // `#[public]` included, or an outage downgrades every session to anonymous.
             Verdict::Unavailable(denial) => Err(denial),
             Verdict::Refused(AuthError::MissingCredentials) if is_public => {
-                tracing::debug!(target: crate::TARGET, strategy, "anonymous request on a public route");
+                tracing::debug!(target: crate::TARGET, strategy = short_type_name::<S>(), "anonymous request on a public route");
                 Ok(())
             }
             Verdict::Refused(AuthError::MissingCredentials) if posture == Posture::InBand => {
-                tracing::debug!(target: crate::TARGET, strategy, "anonymous request on an in-band endpoint");
+                tracing::debug!(target: crate::TARGET, strategy = short_type_name::<S>(), "anonymous request on an in-band endpoint");
                 Ok(())
             }
             Verdict::Refused(error) if is_public => {
                 tracing::warn!(
                     target: crate::TARGET,
-                    strategy,
+                    strategy = short_type_name::<S>(),
                     reason = error.reason(),
                     error = %nest_rs_core::error_message(&error),
                     "rejected credential on a public route — continuing as anonymous",
@@ -273,7 +272,7 @@ pub async fn authenticate<S: Strategy>(
                         target: crate::TARGET,
                         payload.as_ref(),
                         "strategy panicked; denying (fail-closed)",
-                        strategy = name,
+                        strategy = short_type_name::<S>(),
                         transport = TRANSPORT,
                     );
                     (
@@ -326,7 +325,7 @@ fn attach<P: PrincipalIdentity + AmbientValue>(
         nest_rs_core::__private::set_actor_id(&actor_id);
     }
     // No `actor_id` field: every line carries it off the ambient context.
-    tracing::debug!(target: crate::TARGET, strategy, "authenticated");
+    tracing::debug!(target: crate::TARGET, strategy = shorten(strategy), "authenticated");
     // A principal that is not scope-aware attaches nothing, and the absence is
     // what turns scope gating off.
     if let Some(scopes) = principal.scopes() {

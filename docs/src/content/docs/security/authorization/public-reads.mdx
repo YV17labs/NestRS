@@ -104,7 +104,7 @@ entity, the action and the line to write.
 
 ```text frame="terminal"
 WARN nest_rs::orm: no ambient Ability outside a worker job — denying all rows
-  entity=features::posts::entity::Entity action=Read scope=Some(Request)
+  entity="posts" action="read" scope="request"
   hint="bind #[use_guards(AuthnGuard, AuthzGuard)], and declare what this unit
         reads: #[authorize(Read, Entity)], or #[public(Read, Entity)] where a
         caller with no credential is admitted"

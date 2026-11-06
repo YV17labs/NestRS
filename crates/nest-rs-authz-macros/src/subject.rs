@@ -3,6 +3,7 @@
 use nest_rs_codegen::Grammar;
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::ext::IdentExt as _;
 use syn::{Fields, Item};
 
 /// `#[subject]` takes no argument: a subject is named by its type.
@@ -38,11 +39,16 @@ fn expand(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         ));
     }
     let ident = &item.ident;
+    let named = ident.unraw().to_string();
     Ok(quote! {
         #item
 
         impl ::nest_rs_authz::Subject for #ident {
             const __ROWS: bool = false;
+
+            fn __line_name() -> &'static str {
+                #named
+            }
         }
 
         impl ::nest_rs_authz::__private::SubjectMask for #ident {

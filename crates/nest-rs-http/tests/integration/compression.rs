@@ -206,8 +206,9 @@ async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
 
     let event = logs.expect_one("nest_rs::http", "request timed out");
     assert_eq!(event.level, "warn");
-    assert!(
-        event.field("timeout").is_some_and(|t| t.contains("1s")),
+    assert_eq!(
+        event.field("timeout_ms").as_deref(),
+        Some("1000"),
         "the event names the ceiling that fired, got {:?}",
         event.fields,
     );

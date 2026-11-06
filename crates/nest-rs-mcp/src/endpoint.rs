@@ -126,7 +126,7 @@ impl McpMount {
             // refusal is said at `warn` (`host_refused`).
             tracing::debug!(
                 target: crate::TARGET,
-                allowed_hosts = ?config.allowed_hosts,
+                allowed_hosts = config.allowed_hosts.join(",").as_str(),
                 hint = %format!(
                     "a Host outside this list is refused with 403; set {} to this \
                      deployment's own hostnames",

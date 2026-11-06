@@ -32,13 +32,13 @@ pub fn parse_v7(id: &str) -> Result<Uuid> {
 /// What a load that failed answers: a statement cancelled at its bound the class a
 /// route's answers, and anything else the opaque problem. Logged here: that bare
 /// problem carries no chain for the edge to file.
-fn load_failed(service: &'static str, err: sea_orm::DbErr) -> Error {
+fn load_failed<S>(err: sea_orm::DbErr) -> Error {
     if DbOutcome::of(&err) == DbOutcome::Unavailable {
         return problem_error(&ServiceError::Db(err));
     }
     tracing::error!(
         target: crate::target::ORM,
-        service,
+        service = nest_rs_core::__private::short_type_name::<S>(),
         error = %nest_rs_core::error_message(&err),
         "by-id access load failed",
     );
@@ -67,7 +67,7 @@ where
     let Some(service) = service else {
         tracing::error!(
             target: crate::target::ORM,
-            provider = std::any::type_name::<S>(),
+            provider = nest_rs_core::__private::short_type_name::<S>(),
             "no provider for the bound service — add it to a module's providers",
         );
         return Err(problem_error(&Problem::new(500, code::INTERNAL)));
@@ -77,7 +77,7 @@ where
     match service
         .access(A::ACTION, id)
         .await
-        .map_err(|err| load_failed(std::any::type_name::<S>(), err))?
+        .map_err(load_failed::<S>)?
     {
         Access::Found(model) => Ok(Authorized::new(model)),
         Access::Denied => Err(forbidden()),

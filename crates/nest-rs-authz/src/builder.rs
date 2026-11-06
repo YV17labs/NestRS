@@ -326,9 +326,9 @@ impl<S: Subject, K> Drop for RuleSpec<'_, S, K> {
             if !missing.is_empty() {
                 tracing::debug!(
                     target: crate::TARGET,
-                    action = ?self.action,
-                    subject = std::any::type_name::<S>(),
-                    scopes = ?missing,
+                    action = self.action.as_str(),
+                    subject = S::__line_name(),
+                    scopes = missing.join(" "),
                     reason = "missing_scope",
                     "rule withheld",
                 );

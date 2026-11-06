@@ -83,7 +83,7 @@ pub(crate) fn stamp_insufficient_scope(res: &mut Response, scopes: &[String]) {
     }
     tracing::warn!(
         target: crate::target::HTTP,
-        ?scopes,
+        scopes = scopes.join(" "),
         "a required scope is not a scope-token; the challenge is sent without its scope attribute",
     );
     stamp_bearer_error(res, INSUFFICIENT_SCOPE);
@@ -138,7 +138,7 @@ mod tests {
             );
             let filed = logs.expect_one(crate::target::HTTP, LEFT_OUT);
             assert_eq!(filed.level, "warn");
-            assert_eq!(filed.field("scopes"), Some(format!("{refused:?}")));
+            assert_eq!(filed.field("scopes"), Some(refused.join(" ")));
         }
     }
 

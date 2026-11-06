@@ -136,7 +136,7 @@ where
     let whole_subject = declared > 0 && removed.len() == declared;
     let fields = removed.into_iter().collect::<Vec<_>>().join(",");
     crate::gate::warn_denied(Refusal {
-        subject: Some(std::any::type_name::<E>()),
+        subject: Some(E::default().table_name()),
         action: Some(action),
         // Joined, a tracing field being a scalar; omitted when it is every key.
         fields: (!whole_subject).then_some(&fields),
@@ -214,7 +214,7 @@ where
     E: EntityTrait,
 {
     warn_mask_failure(
-        std::any::type_name::<E>(),
+        E::default().table_name(),
         action,
         reason,
         detail,

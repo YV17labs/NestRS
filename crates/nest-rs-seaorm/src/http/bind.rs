@@ -106,10 +106,9 @@ mod tests {
             "{:?}",
             event.fields,
         );
-        assert!(
-            event
-                .field("provider")
-                .is_some_and(|provider| provider.contains("NotesService")),
+        assert_eq!(
+            event.field("provider").as_deref(),
+            Some("NotesService"),
             "{:?}",
             event.fields,
         );

@@ -21,6 +21,17 @@ pub enum Action {
 }
 
 impl Action {
+    /// The word a line names this action by.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Action::Read => "read",
+            Action::Create => "create",
+            Action::Update => "update",
+            Action::Delete => "delete",
+            Action::Manage => "manage",
+        }
+    }
+
     /// The concrete actions, in the order a refusal names what they lack.
     pub(crate) const CONCRETE: [Action; 4] =
         [Action::Read, Action::Create, Action::Update, Action::Delete];

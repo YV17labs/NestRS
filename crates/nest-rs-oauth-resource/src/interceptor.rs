@@ -124,7 +124,7 @@ impl ResourceChallenge {
             if !unadvertised.is_empty() {
                 tracing::warn!(
                     target: crate::TARGET,
-                    scopes = ?unadvertised,
+                    scopes = unadvertised.join(" "),
                     reason = "scope_not_advertised",
                     "denied for a scope this resource does not advertise — a client following \
                      the metadata document cannot request it",
@@ -137,7 +137,7 @@ impl ResourceChallenge {
         if !required.iter().all(|scope| is_scope_token(scope)) && !carries_step_up(res) {
             tracing::warn!(
                 target: crate::TARGET,
-                scopes = ?required,
+                scopes = required.join(" "),
                 "a required scope is not a scope-token; the challenge is sent without its scope \
                  attribute",
             );

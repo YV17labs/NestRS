@@ -805,10 +805,9 @@ async fn a_listener_answering_an_error_is_filed_with_its_chain_and_the_next_one_
     assert_eq!(failed.level, "error");
     assert_eq!(failed.field("host").as_deref(), Some("FallibleListeners"));
     assert_eq!(failed.field("method").as_deref(), Some("refuses"));
-    assert!(
-        failed
-            .field("event")
-            .is_some_and(|name| name.ends_with("Refused")),
+    assert_eq!(
+        failed.field("event").as_deref(),
+        Some("Refused"),
         "{:?}",
         failed.fields,
     );

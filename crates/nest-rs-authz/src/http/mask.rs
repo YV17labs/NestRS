@@ -24,6 +24,7 @@ use nest_rs_http::__private::ServedRoute;
 use nest_rs_http::{
     Request, Response, ResponseShaping, RouteFuture, RouteResponseShaper, StatusCode, header,
 };
+use sea_orm::EntityTrait;
 use serde_json::Value;
 
 use super::authorize::Authorize;
@@ -178,7 +179,11 @@ fn body_kind(resp: &Response) -> BodyKind {
 ///
 /// Refused unless empty: an armed route's body carries the entity. Emptiness is
 /// read off the size hint, so a streamed body is refused without being buffered.
-fn refuse_unclassifiable<S>(unit: MaskedUnit<'_>, mut resp: Response, action: Action) -> Response {
+fn refuse_unclassifiable<S: EntityTrait>(
+    unit: MaskedUnit<'_>,
+    mut resp: Response,
+    action: Action,
+) -> Response {
     let body = resp.take_body();
     if body.is_empty() {
         resp.set_body(body);
@@ -303,7 +308,7 @@ const MASKING_FAILED_BODY: &str =
 
 /// One shape for every fail-closed masking exit: the queryable `warn` plus the
 /// 500 that ships instead of unmasked data.
-fn mask_failure<S>(
+fn mask_failure<S: EntityTrait>(
     unit: MaskedUnit<'_>,
     action: Action,
     reason: &'static str,
@@ -311,14 +316,7 @@ fn mask_failure<S>(
     err: Option<&(dyn std::error::Error + 'static)>,
     body: &'static str,
 ) -> Response {
-    warn_mask_failure(
-        std::any::type_name::<S>(),
-        action,
-        reason,
-        detail,
-        unit,
-        err,
-    );
+    warn_mask_failure(S::default().table_name(), action, reason, detail, unit, err);
     Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
         .body(body)

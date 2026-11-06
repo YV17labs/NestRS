@@ -828,10 +828,9 @@ mod tests {
         assert_eq!(denial.http_status(), 403);
         assert!(attached::<Tenant>(&req).is_none());
         let event = logs.expect_one("nest_rs::layers", "guard denied the request");
-        assert!(
-            event
-                .field("guard")
-                .is_some_and(|guard| guard.ends_with("TenantGuard")),
+        assert_eq!(
+            event.field("guard").as_deref(),
+            Some("TenantGuard"),
             "the line names the guard that refused, got {:?}",
             event.fields,
         );

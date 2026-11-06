@@ -7,15 +7,32 @@ into a single runtime image, so an app here is a Deployment whose `command`
 names its binary. Adding one is an entry in `apps`, not a template.
 
 ```bash
+openssl genpkey -algorithm ed25519 -out signing.pem
+openssl pkey -in signing.pem -pubout -out verifying.pem
+
 helm install demo demo/charts/demo \
+  --set apps.auth.host=auth.example.com \
+  --set apps.api.host=api.example.com \
+  --set apps.assistant.host=assistant.example.com \
+  --set apps.live.host=live.example.com \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
   --set secrets.REDIS__URL="rediss://redis:6379" \
-  --set secrets.REDIS__TRANSCODES__URL="rediss://cache:6379"
+  --set secrets.REDIS__TRANSCODES__URL="rediss://cache:6379" \
+  --set secrets.STORAGE__ACCESS_KEY="$STORAGE_ACCESS_KEY" \
+  --set secrets.STORAGE__SECRET_KEY="$STORAGE_SECRET_KEY" \
+  --set-file secrets.AUTHN__PRIVATE_KEY=signing.pem \
+  --set-file secrets.AUTHN__PUBLIC_KEY=verifying.pem \
+  --set-file secrets.OAUTH__SERVER__CLIENTS=clients.json
 ```
 
-Those three name a cluster's own services. The apps refuse to boot without the rest
-of the *Required* list in [`values.yaml`](values.yaml): the signing keypair, the
-object store's credentials, `auth`'s registered clients.
+The secrets are the *Required* list in [`values.yaml`](values.yaml): a cluster's own services, the
+object store's credentials, the signing keypair, and `clients.json`, the array of clients
+`auth` registers, each with its `client_id`, `client_secret`, `payload`, `scopes` and
+`resources`. An app refuses to boot without each of them but the signing key: `auth` boots
+without that one, and its token endpoint answers `500`. The hostnames are what the chart
+derives the cross-app URLs from: with none, `auth` refuses a boot with no resource to mint
+for, and `assistant` one with no resource of its own. Social sign-in stays optional: a
+provider is on once a deployment names its `CLIENT_ID` and `CLIENT_SECRET`.
 
 `helm template` renders against the Kubernetes version its Helm was built with,
 which may sit below this chart's floor — pass `--kube-version 1.31.0` when
@@ -48,7 +65,10 @@ sets variables — `.env` is a local convenience the image does not carry.
   signing key, `AUTHN__PRIVATE_KEY`, goes into a Secret of its own that only
   `auth` reads: a resource server holding it could mint a token for any app.
   With `existingSecret`, every app reads yours, so keep the key out of it and
-  hand it to `auth` alone through its `extraEnv`.
+  hand it to `auth` alone through its `extraEnv`. The rest of `secrets` is
+  shared: `auth`'s registered clients and any social secret reach every app, the
+  migration job's copy included, though only `auth` uses them. To keep one from
+  them, leave it out of `secrets` and hand it to `auth` the same way.
 - `apps.<name>.config` — that app's own keys, same spelling, laid over `config`
   for it alone: what `apps/<name>/.env` holds in a local run, which a
   deployment never reads. The api's `HTTP__COMPRESSION` is one.
@@ -63,6 +83,12 @@ app's public origin. The chart derives them from `apps.<name>.host`, so renaming
 a hostname cannot leave half the pair behind. Each app requires its own origin
 as a token's audience, so a token `auth` mints for one app is refused by every
 other (RFC 8707). Anything in `config` still wins.
+
+A social redirect is derived only for a provider whose client id the chart reads, in
+`secrets`, `config` or `apps.auth.config`, since a redirect with no client is a
+half-configured provider, which refuses `auth`'s boot. An id in `existingSecret` or
+`apps.auth.extraEnv`, which the chart does not read, takes
+`SOCIAL__<PROVIDER>__REDIRECT_URL` in `config`.
 
 ## Scaling the queue worker
 

@@ -2199,6 +2199,12 @@ lists what the boot, a log or the wire shows when one is missed.
   process, or declare `<PREFIX>_ENV=development` against the dev container. An app
   of yours modelled on those files moves what authenticates anyone to its
   `.env.development` and `.env.test` the same way.
+- **The demo chart with a social provider's client id in `existingSecret` or
+  `apps.auth.extraEnv`**: since 0.6.0 the chart derives a provider's redirect only from
+  a client id it reads, in `secrets`, `config` or `apps.auth.config`, so `auth` refuses
+  ``social provider `github` is linked but misconfigured``, naming
+  `<PREFIX>_SOCIAL__GITHUB__REDIRECT_URL`. Set `SOCIAL__GITHUB__REDIRECT_URL` in the
+  chart's `config`.
 - **A development-only route kept in a deployment**: an app listing
   `DevelopmentOnlyGuard` refuses its boot unless `<PREFIX>_ENV` declares
   `development` or `test` — `DevelopmentOnlyGuard guards a route only

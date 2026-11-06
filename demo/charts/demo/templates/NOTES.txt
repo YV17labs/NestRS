@@ -17,22 +17,24 @@ No Ingress is enabled. Reach an app directly:
 {{- end }}
 {{- range $app, $_ := .Values.apps }}
 {{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" $ "app" $app)) }}
-{{- if and $.Values.ingress.enabled $cfg.ingress (not $cfg.host) }}
+{{- if and $cfg.ingress (not $cfg.host) }}
 
-  ! apps.{{ $app }}.host is unset, so it has no Ingress — and the cross-app URLs
-    derived from it (issuer, audience, MCP allowed hosts, social redirects) are
-    unset too. Set the hostname rather than pinning those URLs in `config`.
+  ! apps.{{ $app }}.host is unset, so it has no Ingress — and whichever cross-app
+    URLs derive from it (issuer, audience, sign-in resources, MCP allowed hosts,
+    social redirects) are unset too. `auth` refuses a boot with no resource (no
+    app's hostname), `assistant` one with no resource of its own or no issuer
+    (`apps.auth.host`). Set the hostname rather than pinning those URLs in `config`.
 {{- end }}
 {{- end }}
 {{- $worker := fromYaml (include "demo.appConfig" (dict "ctx" . "app" "worker")) }}
 {{- if $worker.keda.enabled }}
 
-The queue worker scales on Redis list length. Two facts to keep in view:
+The queue worker scales on each queue's stream length. Two facts to keep in view:
 
-  - a worker start puts its peers' in-flight jobs back on the queue; a lease
-    makes that second delivery wait out the first, so a scale-up mostly delays
-    them — the queue is at-least-once, so keep handlers idempotent
-  - at zero replicas nothing moves a retry or a delayed job onto the list the
+  - a scale-up moves no peer's jobs: a job changes hands only once the lease of
+    the worker holding it lapsed — the queue is at-least-once, so keep handlers
+    idempotent
+  - at zero replicas nothing moves a retry or a delayed job onto the stream the
     trigger reads, nor recovers a dead pod's jobs, which is why
     minReplicaCount defaults to 1
 {{- else if $worker.autoscaling.enabled }}

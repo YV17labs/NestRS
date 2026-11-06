@@ -113,7 +113,10 @@ minted a token for, the social redirect URIs — and every one of them is the
 same string as some app's public origin. Deriving them is what keeps a rename of
 one hostname from silently breaking the pair. The audience is no shared setting:
 each app requires its own (`demo.env`), and the assistant's MCP endpoint admits
-its resource's host by itself.
+its resource's host by itself. A social redirect is derived only for a provider
+whose client id the chart reads, in `secrets`, `config` or `apps.auth.config`: on
+its own a redirect is a half-configured provider, which refuses `auth`'s boot, and
+the chart does not read an `existingSecret` or an `extraEnv`.
 
 `.Values.config` is laid over the result, so any of these can still be pinned.
 */}}
@@ -124,8 +127,14 @@ its resource's host by itself.
 {{- if $auth -}}
 {{- $_ := set $derived "AUTHN__ISSUER" $auth -}}
 {{- $_ := set $derived "OAUTH__RESOURCE__AUTHORIZATION_SERVERS" $auth -}}
-{{- $_ := set $derived "SOCIAL__GITHUB__REDIRECT_URL" (printf "%s/social/github/callback" $auth) -}}
-{{- $_ := set $derived "SOCIAL__GOOGLE__REDIRECT_URL" (printf "%s/social/google/callback" $auth) -}}
+{{- $authConfig := (fromYaml (include "demo.appConfig" (dict "ctx" $ "app" "auth"))).config -}}
+{{- $readable := merge (dict) (default dict $.Values.secrets) (default dict $.Values.config) (default dict $authConfig) -}}
+{{- range $provider := list "github" "google" -}}
+{{- $namespace := printf "SOCIAL__%s" (upper $provider) -}}
+{{- if index $readable (printf "%s__CLIENT_ID" $namespace) -}}
+{{- $_ := set $derived (printf "%s__REDIRECT_URL" $namespace) (printf "%s/social/%s/callback" $auth $provider) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- if $assistant -}}
 {{- $_ := set $derived "OAUTH__RESOURCE__RESOURCE" $assistant -}}

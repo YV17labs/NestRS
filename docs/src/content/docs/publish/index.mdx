@@ -63,16 +63,40 @@ builds it, and the chart under
 deploys it.
 
 ```bash
+openssl genpkey -algorithm ed25519 -out signing.pem
+openssl pkey -in signing.pem -pubout -out verifying.pem
+
 helm install demo demo/charts/demo \
+  --set apps.auth.host=auth.example.com \
+  --set apps.api.host=api.example.com \
+  --set apps.assistant.host=assistant.example.com \
+  --set apps.live.host=live.example.com \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
   --set secrets.REDIS__URL="rediss://redis:6379" \
-  --set secrets.REDIS__TRANSCODES__URL="rediss://cache:6379"
+  --set secrets.REDIS__TRANSCODES__URL="rediss://cache:6379" \
+  --set secrets.STORAGE__ACCESS_KEY="$STORAGE_ACCESS_KEY" \
+  --set secrets.STORAGE__SECRET_KEY="$STORAGE_SECRET_KEY" \
+  --set-file secrets.AUTHN__PRIVATE_KEY=signing.pem \
+  --set-file secrets.AUTHN__PUBLIC_KEY=verifying.pem \
+  --set-file secrets.OAUTH__SERVER__CLIENTS=clients.json
 ```
 
-Those three name a cluster's own services. The apps refuse to boot without the rest
-of the *Required* list in
-[`values.yaml`](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo/values.yaml):
-the signing keypair, the object store's credentials, `auth`'s registered clients.
+The secrets are the *Required* list in [`values.yaml`](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo/values.yaml): a cluster's own services, the
+object store's credentials, the signing keypair, and `clients.json`, the array of clients
+`auth` registers, each with its `client_id`, `client_secret`, `payload`, `scopes` and
+`resources`. An app refuses to boot without each of them but the signing key: `auth` boots
+without that one, and its token endpoint answers `500`. The hostnames are what the chart
+derives the cross-app URLs from: with none, `auth` refuses a boot with no resource to mint
+for, and `assistant` one with no resource of its own. Social sign-in stays optional: a
+provider is on once a deployment names its `CLIENT_ID` and `CLIENT_SECRET`.
+
+Only the signing key has a Secret of its own, which `auth` alone reads. The rest of
+`secrets` sits in the one every app reads, the migration job's copy included, so `auth`'s
+registered clients and any social secret reach `api`, `live`, `assistant` and `worker`,
+which never use them. To keep one from them, leave it out of `secrets` and hand it to `auth`
+alone, from a Secret of your own, through its `extraEnv`. A social provider's client id is no
+secret: kept in `config`, it keeps the redirect the chart derives; handed over too, it takes
+`SOCIAL__<PROVIDER>__REDIRECT_URL` in `config`.
 
 Every app is declared in one map, and `kind` says what it becomes in the
 cluster. Migrations are an app like the others — the same image, another binary

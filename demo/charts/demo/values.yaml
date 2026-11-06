@@ -55,13 +55,23 @@ config:
 #   AUTHN__PRIVATE_KEY       PEM, Ed25519 — generate your own, never the repo's;
 #                            written into a Secret of its own that only `auth`
 #                            reads (with `existingSecret`, keep it out of yours
-#                            and hand it to `auth` alone through its `extraEnv`)
+#                            and hand it to `auth` alone through its `extraEnv`);
+#                            `auth` boots without it, its token endpoint answering 500
 #   AUTHN__PUBLIC_KEY        PEM, its matching half
 #   STORAGE__ACCESS_KEY      the object store's access key id
 #   STORAGE__SECRET_KEY      and its secret
 #   OAUTH__SERVER__CLIENTS   JSON array, the clients `auth`'s token endpoint
 #                            registers; an empty registry refuses `auth`'s boot
-# Optional: SOCIAL__GITHUB__CLIENT_ID / __CLIENT_SECRET, SOCIAL__GOOGLE__*
+# Also required, under `apps`: the `host` of `auth`, `api`, `assistant` and `live`.
+#
+# Optional: SOCIAL__GITHUB__CLIENT_ID / __CLIENT_SECRET, SOCIAL__GOOGLE__*. A
+# provider is on once it names its CLIENT_ID here, in `config` or in
+# `apps.auth.config`, the chart deriving its redirect from `apps.auth.host`. An id
+# in `existingSecret` or `apps.auth.extraEnv`, which the chart does not read, takes
+# SOCIAL__<PROVIDER>__REDIRECT_URL in `config` too.
+#
+# All but the signing key sit in one Secret every app reads, the migration job's
+# copy included: the clients and the social secrets reach apps that never use them.
 secrets: {}
 
 # Name of a Secret you manage yourself. Set it and `secrets` must stay empty:
@@ -168,8 +178,10 @@ defaults:
 #        local-run convenience
 # `host` public hostname. Also what the chart derives the cross-app URLs from
 #        (issuer, each app's own audience, the assistant's resource, the
-#        resources a sign-in may name, social redirect URLs) — set them rather
-#        than copying those URLs into `config` by hand.
+#        resources a sign-in may name, the redirect of each social provider whose
+#        client id it reads) — set them rather than copying those URLs into `config`
+#        by hand. `auth` refuses a boot with no resource, `assistant` one with no
+#        resource of its own or no issuer (`auth`'s `host`).
 # `config` this app's own settings, spelled like the top-level `config` and laid
 #        over it for this app alone — what `apps/<app>/.env` holds locally
 apps:

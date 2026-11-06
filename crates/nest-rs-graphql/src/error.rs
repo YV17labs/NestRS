@@ -33,6 +33,8 @@ use nest_rs_core::{DecodeError, Failure, Problem, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 
+use crate::redact::unheld_data;
+
 /// The extension member carrying field-level validation errors — the name
 /// every other transport uses for them.
 pub const FIELD_ERRORS_EXTENSION: &str = "errors";
@@ -57,9 +59,10 @@ fn answering(mut error: Error, status: u16) -> Error {
 
 /// An error a GraphQL unit answers with, read for what its span records.
 pub(crate) trait AnsweredError {
-    /// Whether it answers a failure of the server's own, a `5xx`'s class. Any
-    /// other — a client's class, the edge's own error as a body built it, what
-    /// validation refused — is one the caller's request earned.
+    /// Whether it answers a failure of the server's own, a `5xx`'s class, a
+    /// type its context does not hold among them, which its response answers
+    /// opaquely. Any other — a client's class, the edge's own error as a body
+    /// built it, what validation refused — is one the caller's request earned.
     fn failed_the_server(&self) -> bool;
 }
 
@@ -68,12 +71,13 @@ impl AnsweredError for Error {
         self.source
             .as_ref()
             .is_some_and(|source| source.is::<ServerFailed>())
+            || unheld_data(&self.message).is_some()
     }
 }
 
 impl AnsweredError for ServerError {
     fn failed_the_server(&self) -> bool {
-        self.source::<ServerFailed>().is_some()
+        self.source::<ServerFailed>().is_some() || unheld_data(&self.message).is_some()
     }
 }
 
@@ -439,6 +443,27 @@ mod tests {
 
     fn extensions(err: &Error) -> serde_json::Value {
         serde_json::to_value(&err.extensions).expect("extensions serialize")
+    }
+
+    /// A field reads its error before the response answers it opaquely, a
+    /// federation field as a `ServerError`: each reads the server's failure.
+    #[test]
+    fn a_type_a_context_does_not_hold_fails_the_server_before_it_is_redacted() {
+        let unheld = Error::new("Data `the_crate::Shelf` does not exist.");
+        assert!(unheld.failed_the_server());
+        assert!(
+            unheld
+                .into_server_error(async_graphql::Pos::default())
+                .failed_the_server()
+        );
+
+        let deliberate = Error::new("Data `the archive` is on the way.");
+        assert!(!deliberate.failed_the_server());
+        assert!(
+            !deliberate
+                .into_server_error(async_graphql::Pos::default())
+                .failed_the_server()
+        );
     }
 
     /// What an unavailable dependency's refusal said of it stays on the server;

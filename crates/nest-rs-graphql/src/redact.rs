@@ -59,6 +59,11 @@ fn redacted(mut response: Response) -> Response {
 /// How `Context::data`'s refusal reads, the Rust type's path between the two.
 const NO_DATA: (&str, &str) = ("Data `", "` does not exist.");
 
+/// The Rust type `message` names, when it is `Context::data`'s refusal.
+pub(crate) fn unheld_data(message: &str) -> Option<&str> {
+    message.strip_prefix(NO_DATA.0)?.strip_suffix(NO_DATA.1)
+}
+
 /// How async-graphql's refusal of an unknown `operationName` opens, the
 /// `operationName` following it.
 const UNKNOWN_OPERATION_QUOTED: &str = "Unknown operation named \"";
@@ -70,16 +75,13 @@ const UNKNOWN_OPERATION: &str = "Unknown operation named by operationName";
 /// anyhow chain; any other source is read by serde's wording alone.
 fn redact(error: &mut ServerError) {
     if error.source.is_none() {
-        if let Some(data) = error
-            .message
-            .strip_prefix(NO_DATA.0)
-            .and_then(|rest| rest.strip_suffix(NO_DATA.1))
-        {
+        if let Some(data) = unheld_data(&error.message) {
             let opaque = opaque_error(&UnheldData {
                 data: data.to_owned(),
             });
             error.message = opaque.message;
             error.extensions = opaque.extensions;
+            error.source = opaque.source;
             return;
         }
         if error.path.is_empty() && error.message.starts_with(UNKNOWN_OPERATION_QUOTED) {

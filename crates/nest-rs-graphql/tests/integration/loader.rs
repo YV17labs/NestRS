@@ -1057,6 +1057,31 @@ mod hand_read {
         );
     }
 
+    /// What no caller could have earned: the opaque answer is the server's own
+    /// failure on every span that reads it, field and operation alike.
+    #[tokio::test]
+    async fn a_type_a_context_does_not_hold_records_the_servers_failure_on_its_spans() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<BottleApp>()
+            .await
+            .expect("the boot cannot read a body");
+
+        crate::graphql_answer(&app, "{ bottle(id: 1) }").await;
+
+        let span_of = |unit: &str| {
+            logs.spans()
+                .into_iter()
+                .find(|span| span.name == unit)
+                .unwrap_or_else(|| panic!("the span of `{unit}`"))
+        };
+        for unit in [
+            nest_rs_graphql::unit::OPERATION.name(),
+            nest_rs_graphql::unit::FIELD.name(),
+        ] {
+            crate::assert_span_records(&span_of(unit), nest_rs_core::operation_log::ERROR);
+        }
+    }
+
     /// A deliberate error that only looks like it opens the same way is left
     /// as built.
     #[tokio::test]
@@ -1076,6 +1101,7 @@ mod hand_read {
         #[module(imports = [GraphqlModule], providers = [DeliberateResolver])]
         struct DeliberateApp;
 
+        let logs = LogCapture::install();
         let app = TestApp::for_module::<DeliberateApp>()
             .await
             .expect("the schema boots");
@@ -1086,5 +1112,11 @@ mod hand_read {
             body["errors"][0]["message"], "Data `the archive` is on the way.",
             "{body}",
         );
+        for span in logs.spans().iter().filter(|span| {
+            span.name == nest_rs_graphql::unit::OPERATION.name()
+                || span.name == nest_rs_graphql::unit::FIELD.name()
+        }) {
+            crate::assert_span_records_no_error(span);
+        }
     }
 }

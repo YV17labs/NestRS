@@ -802,25 +802,28 @@ mod request_decided {
             );
         }
 
-        let viewless = logs.expect_one(
-            "nest_rs::http",
-            "a guard read the HTTP request of a unit with no HTTP view",
-        );
-        assert_eq!(viewless.level, "error");
-        assert_eq!(viewless.field("guard").as_deref(), Some("KeyAtTheUnit"));
-        assert!(
-            viewless
-                .field("hint")
-                .is_some_and(|hint| hint.contains("decide the request in `check_http`")),
-            "{viewless:?}"
-        );
         let denials = logs.find("nest_rs::layers", "guard denied the operation");
         assert_eq!(denials.len(), 2, "each refused field is filed");
         for denial in denials {
             assert_eq!(denial.level, "error");
             assert_eq!(denial.field("status").as_deref(), Some("500"));
             assert_eq!(denial.field("unit").as_deref(), Some("graphql.field"));
+            assert_eq!(denial.field("guard").as_deref(), Some("KeyAtTheUnit"));
+            assert!(
+                denial
+                    .field("error")
+                    .is_some_and(|chain| chain.contains("decide the request in `check_http`")),
+                "the edge's line says the edit: {denial:?}"
+            );
         }
+        assert!(
+            logs.find(
+                "nest_rs::http",
+                "a guard read the HTTP request of a unit with no HTTP view"
+            )
+            .is_empty(),
+            "one denial files one line"
+        );
     }
 }
 

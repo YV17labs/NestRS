@@ -1,8 +1,5 @@
 //! [`HttpView`], the HTTP edge's view of the request it dispatches.
 
-use std::collections::HashSet;
-use std::sync::{LazyLock, Mutex, PoisonError};
-
 use nest_rs_core::__private::new_unit_context;
 use nest_rs_core::{Handler, ServedAddress, Settled, UnitContext, UnitView};
 use nest_rs_guards::Denial;
@@ -106,14 +103,12 @@ impl HttpView {
     }
 
     /// The HTTP view of `cx`, or an opaque [`Denial::internal`] when an HTTP
-    /// entry ran on a unit with no HTTP view — a framework wiring defect, never
-    /// a client's doing, logged at `error` once per site.
+    /// entry ran on a unit with no HTTP view — a wiring defect, never a client's
+    /// doing — whose source says the edit, on the line the edge files for it.
     pub fn of<'c>(cx: &'c mut UnitContext<'_>) -> Result<&'c mut HttpView, Denial> {
-        if cx.switch_to::<HttpView>().is_none() {
-            report_viewless(cx);
-        }
         cx.switch_to_mut::<HttpView>().ok_or_else(|| {
             Denial::internal("an HTTP check ran on a unit the HTTP edge did not dispatch")
+                .with_source(VIEWLESS_HINT)
         })
     }
 
@@ -181,30 +176,6 @@ const VIEWLESS_HINT: &str = "decide the request in `check_http`, and admit in `c
      `check` runs on each unit of every edge — a GraphQL field, a WebSocket message, an MCP \
      operation — and `check_http` on the HTTP request that carries them";
 
-/// Say once per site that an HTTP entry ran on a unit with no HTTP view.
-fn report_viewless(cx: &UnitContext<'_>) {
-    static REPORTED: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(Default::default);
-    let site = std::ptr::from_ref(cx.handler()) as usize;
-    // A poisoned set repeats the line, which beats a defect said nowhere.
-    let first = REPORTED
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(site);
-    if first {
-        let guard =
-            nest_rs_core::__private::running_layer(cx).map(nest_rs_core::__private::shorten);
-        tracing::error!(
-            target: crate::target::HTTP,
-            guard = guard.as_deref(),
-            unit = cx.unit().name(),
-            host = cx.handler().host_name(),
-            method = cx.handler().method(),
-            hint = VIEWLESS_HINT,
-            "a guard read the HTTP request of a unit with no HTTP view",
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
@@ -241,25 +212,23 @@ mod tests {
     }
 
     #[test]
-    fn a_unit_with_another_view_is_refused_opaquely_and_said_once() {
+    fn a_unit_with_another_view_is_refused_opaquely_with_the_edit_on_its_source() {
         let logs = nest_rs_testing::LogCapture::install();
         let mut view = Socket;
         let mut cx = new_unit_context(&ROUTE, &mut view, None, None);
-        for _ in 0..2 {
-            let refused = HttpView::of(&mut cx).err().expect("no HTTP view");
-            assert_eq!(refused.http_status(), 500);
-        }
-        let event = logs.expect_one(
-            "nest_rs::http",
-            "a guard read the HTTP request of a unit with no HTTP view",
-        );
-        assert_eq!(event.level, "error");
-        assert_eq!(event.field("method").as_deref(), Some("route"));
+        let refused = HttpView::of(&mut cx).err().expect("no HTTP view");
+        assert_eq!(refused.http_status(), 500);
         assert!(
-            event
-                .field("hint")
-                .is_some_and(|hint| hint.contains("check_http")),
-            "{event:?}"
+            nest_rs_core::error_message(&refused).contains("check_http"),
+            "the chain the edge files says the edit: {refused:?}"
+        );
+        assert!(
+            logs.find(
+                "nest_rs::http",
+                "a guard read the HTTP request of a unit with no HTTP view"
+            )
+            .is_empty(),
+            "the edge's line is the denial's one line"
         );
     }
 }

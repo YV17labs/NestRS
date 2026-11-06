@@ -1148,16 +1148,21 @@ mod graphql {
             "{body}"
         );
 
-        let viewless = logs.expect_one(
-            "nest_rs::http",
-            "a guard read the HTTP request of a unit with no HTTP view",
-        );
-        assert_eq!(viewless.field("guard").as_deref(), Some("RouterKeyInCheck"));
+        let denial = logs.expect_one("nest_rs::layers", "guard denied the federation field");
+        assert_eq!(denial.field("guard").as_deref(), Some("RouterKeyInCheck"));
         assert!(
-            viewless
-                .field("hint")
-                .is_some_and(|hint| hint.contains("decide the request in `check_http`")),
-            "{viewless:?}",
+            denial
+                .field("error")
+                .is_some_and(|chain| chain.contains("decide the request in `check_http`")),
+            "the edge's line says the edit: {denial:?}",
+        );
+        assert!(
+            logs.find(
+                "nest_rs::http",
+                "a guard read the HTTP request of a unit with no HTTP view"
+            )
+            .is_empty(),
+            "one denial files one line"
         );
     }
 

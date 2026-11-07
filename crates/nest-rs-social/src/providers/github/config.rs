@@ -97,8 +97,8 @@ impl std::fmt::Debug for GithubSocialConfig {
 
 impl SocialProviderConfig for GithubSocialConfig {
     /// `scopes` and `authorization_parameters` alone do not count as
-    /// configuration — neither names an app, so a
-    /// deployment that sets only scopes still has no GitHub app to talk to.
+    /// configuration — neither names an app, so a deployment that sets only
+    /// them still has no GitHub app to talk to.
     fn is_unconfigured(&self) -> bool {
         self.client_id.is_empty()
             && self.client_secret.expose_secret().is_empty()

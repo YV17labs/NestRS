@@ -596,8 +596,9 @@ impl JwtService {
     /// The token carries the stamps [`sign`](Self::sign) does but the
     /// audience. Errors on a blank `resource`, on `claims` naming an `aud` of
     /// their own, no subject or a registered claim of another JSON type, on a
-    /// verify-only service, or on a serialization failure. Which resources a caller may be
-    /// minted a token for is the issuer's to decide before it calls this.
+    /// verify-only service, or on a serialization failure. Which resources a
+    /// caller may be minted a token for is the issuer's to decide before it
+    /// calls this.
     pub fn sign_for<C: Serialize + PrincipalIdentity>(
         &self,
         resource: &str,

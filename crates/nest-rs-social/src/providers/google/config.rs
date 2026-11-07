@@ -97,8 +97,8 @@ impl std::fmt::Debug for GoogleSocialConfig {
 
 impl SocialProviderConfig for GoogleSocialConfig {
     /// `scopes` and `authorization_parameters` alone do not count as
-    /// configuration — neither names an app, so a
-    /// deployment that sets only scopes still has no Google app to talk to.
+    /// configuration — neither names an app, so a deployment that sets only
+    /// them still has no Google app to talk to.
     fn is_unconfigured(&self) -> bool {
         self.client_id.is_empty()
             && self.client_secret.expose_secret().is_empty()

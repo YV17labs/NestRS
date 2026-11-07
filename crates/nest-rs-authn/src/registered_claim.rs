@@ -10,7 +10,7 @@ use crate::error::SignError;
 /// token, with the JSON type its specification gives it and the section saying
 /// so.
 #[derive(Clone, Copy)]
-pub(crate) struct RegisteredClaim {
+struct RegisteredClaim {
     name: &'static str,
     shape: Shape,
     specified_by: &'static str,
@@ -66,11 +66,10 @@ impl RegisteredClaim {
     /// Whether `value` is of this claim's JSON type.
     fn holds(self, value: &Value) -> bool {
         match (self.shape, value) {
-            (Shape::String, Value::String(_)) => true,
+            (Shape::String | Shape::Audience, Value::String(_)) => true,
             (Shape::NumericDate, Value::Number(seconds)) => {
                 seconds.as_f64().is_some_and(|seconds| seconds >= 0.0)
             }
-            (Shape::Audience, Value::String(_)) => true,
             (Shape::Audience | Shape::Strings, Value::Array(items)) => {
                 items.iter().all(Value::is_string)
             }

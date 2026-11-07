@@ -175,7 +175,7 @@ impl<'de> Deserialize<'de> for AuthorizationParameters {
             }
 
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-                let mut parameters = Vec::with_capacity(map.size_hint().unwrap_or_default());
+                let mut parameters = Vec::new();
                 while let Some(parameter) = map.next_entry::<String, String>()? {
                     parameters.push(parameter);
                 }

@@ -133,13 +133,13 @@ struct Transaction {
 /// The redirect URI's query as §4.1.2 and §4.1.2.1 name its parameters; any
 /// other is ignored.
 #[derive(Default)]
-struct AuthorizationParameters {
+struct CallbackQuery {
     code: Option<String>,
     state: Option<String>,
     error: Option<String>,
 }
 
-impl AuthorizationParameters {
+impl CallbackQuery {
     /// `query` read once per parameter, since §3.1 forbids sending one twice:
     /// a repeat is refused naming the parameter, never a value.
     fn parse(query: &str) -> Result<Self, AuthError> {
@@ -714,7 +714,7 @@ impl OAuthClient {
         transaction: &str,
         query: &str,
     ) -> Result<AuthorizationResponse, AuthError> {
-        let parameters = AuthorizationParameters::parse(query)?;
+        let parameters = CallbackQuery::parse(query)?;
         let state = parameters
             .state
             .ok_or_else(|| AuthError::failed("OAuth callback missing state"))?;
@@ -1320,7 +1320,7 @@ mod tests {
                 "error",
             ),
         ] {
-            let Err(refused) = AuthorizationParameters::parse(query) else {
+            let Err(refused) = CallbackQuery::parse(query) else {
                 panic!("{query}: a repeat is refused");
             };
             let said = nest_rs_core::error_message(&refused);
@@ -1331,7 +1331,7 @@ mod tests {
 
     #[test]
     fn the_query_is_read_decoded_and_any_other_parameter_ignored() {
-        let parameters = AuthorizationParameters::parse(
+        let parameters = CallbackQuery::parse(
             "iss=https%3A%2F%2Fprovider.example&code=a%2Fb+c&state=s%3D&error_description=x",
         )
         .expect("parses");

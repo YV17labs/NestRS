@@ -55,7 +55,7 @@ pub struct OAuthClientConfig {
     pub userinfo_url: String,
     /// Scopes requested at authorization; empty by default. Each is an RFC 6749
     /// §3.3 `scope-token`, so the request's space-joined list names the scopes
-    /// listed: one holding a space, a `"`, a `\\` or anything but printable
+    /// listed: one holding a space, a `"`, a `\` or anything but printable
     /// ASCII fails the boot.
     #[validate(custom(function = "scope_tokens"))]
     pub scopes: Vec<String>,

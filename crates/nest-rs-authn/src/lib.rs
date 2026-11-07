@@ -44,6 +44,7 @@ mod jwks;
 mod module;
 mod password;
 mod principal;
+mod registered_claim;
 pub mod scope;
 mod service;
 mod strategies;

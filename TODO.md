@@ -217,8 +217,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 - A social provider needing `access_type` or `prompt` has no seam. *read*
 - Scopes of `OAuthClientConfig` and of the providers are not held to RFC 6749
   §3.3's grammar. *read*
-- Only `sub` is held to its JSON type when signing; `client_id: u64` passes.
-  Close: the same check per claim. *read*
 - The demo's user tokens name no `client_id`. Close: an authorization-code
   grant with PKCE for the first-party login. *read*
 - DPoP and mTLS-bound tokens are refused, not verified. *seen*

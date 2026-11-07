@@ -196,7 +196,12 @@ a `sub` that is no string, since
 [RFC 7519 §4.1.2](https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.2) makes
 it one and a verifier reading one refuses anything else: an integer id is written as
 its decimal string, which `#[principal(actor)]` on a field of another name does for
-you. A test forging such a token, to prove your verifier refuses it, hands it to
+you. Every claim the specifications register is held the same way, the `SignError`
+naming it: `iss`, `jti`, `client_id` and `acr` are strings; `exp`, `nbf`, `iat` and
+`auth_time` are NumericDates, a JSON number of seconds since the epoch; `aud` is a
+string or an array of them, `amr` an array of strings, and `scope` the list RFC 6749
+§3.3 writes, scope tokens each separated by one space, or empty when the token grants
+none. A registered claim your claims serialize as `null` is left out of the token. A test forging such a token, to prove your verifier refuses it, hands it to
 [`TestApp::bearer`](/tutorial/testing/), which signs what it is given.
 
 The demo's machine tokens name their `client_id`. Its user tokens name none,

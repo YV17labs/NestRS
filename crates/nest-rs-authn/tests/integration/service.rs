@@ -1071,3 +1071,162 @@ fn claims_that_are_no_json_object_are_refused() {
         assert!(said.contains("no JSON object"), "{said}");
     }
 }
+
+/// Claims carrying, beside a good actor, whatever `claim` holds.
+#[derive(Serialize, PrincipalIdentity)]
+struct CarriesAClaim {
+    #[principal(actor)]
+    sub: String,
+    #[serde(flatten)]
+    claim: serde_json::Map<String, serde_json::Value>,
+}
+
+fn carrying(claim: &str, value: serde_json::Value) -> CarriesAClaim {
+    CarriesAClaim {
+        sub: "alice".into(),
+        claim: serde_json::Map::from_iter([(claim.to_owned(), value)]),
+    }
+}
+
+/// RFC 7519 §4.1 types each claim it registers, and RFC 9068 §2.2 the ones it
+/// adds (`client_id`, `scope` through RFC 8693 §4, `auth_time`, `acr`, `amr`
+/// through OpenID Connect Core §2): a verifier reading one as its type refuses
+/// anything else, so the signer mints none of another type, on either path,
+/// naming the claim and quoting nothing the claims hold.
+#[test]
+fn a_registered_claim_of_another_json_type_mints_no_token() {
+    use serde_json::json;
+
+    let jwt = service("registered-types");
+    let not_a_string = [
+        json!(4242),
+        json!(true),
+        json!({ "v": "never-shown" }),
+        json!(["never-shown"]),
+    ];
+    let not_a_date = [
+        json!("never-shown"),
+        json!(true),
+        json!({}),
+        json!([4242]),
+        json!(-4242),
+    ];
+    let refused: Vec<(&str, Vec<serde_json::Value>)> = vec![
+        ("client_id", not_a_string.to_vec()),
+        ("iss", not_a_string.to_vec()),
+        ("jti", not_a_string.to_vec()),
+        ("acr", not_a_string.to_vec()),
+        ("exp", not_a_date.to_vec()),
+        ("nbf", not_a_date.to_vec()),
+        ("iat", not_a_date.to_vec()),
+        ("auth_time", not_a_date.to_vec()),
+        (
+            "aud",
+            vec![
+                json!(4242),
+                json!(true),
+                json!({}),
+                json!([4242]),
+                json!(["a", 4242]),
+            ],
+        ),
+        (
+            "amr",
+            vec![json!("never-shown"), json!(4242), json!({}), json!([4242])],
+        ),
+        (
+            "scope",
+            vec![
+                json!(4242),
+                json!(["never-shown"]),
+                json!("never-shown  posts:read"),
+                json!(" never-shown"),
+                json!("never-shown "),
+                json!("never\"shown"),
+                json!("never\\shown"),
+                json!("never-shown\tposts:read"),
+            ],
+        ),
+    ];
+    for (claim, values) in refused {
+        for value in values {
+            let claims = carrying(claim, value.clone());
+            for minted in [
+                jwt.sign(&claims),
+                jwt.sign_for("https://api.example", &claims),
+            ] {
+                let said = nest_rs_core::error_message(
+                    &minted.expect_err(&format!("minted `{claim}`: {value}")),
+                );
+                assert!(
+                    said.contains(&format!("the claims' `{claim}` is no ")),
+                    "{value}: {said}"
+                );
+                for quoted in ["never", "4242"] {
+                    assert!(!said.contains(quoted), "{value}: {said}");
+                }
+            }
+        }
+    }
+}
+
+/// What each specification allows passes as written: a StringOrURI, an
+/// audience of one or several, a NumericDate integral or not, the scope list
+/// in RFC 6749 §3.3's grammar — empty when the token grants none.
+#[test]
+fn a_registered_claim_of_its_json_type_is_kept_as_written() {
+    use serde_json::json;
+
+    let jwt = service("registered-kept");
+    let later = in_an_hour();
+    for (claim, value) in [
+        ("iss", json!("https://issuer.example")),
+        ("jti", json!("a-token-of-its-own")),
+        ("client_id", json!("ci")),
+        ("acr", json!("urn:mace:incommon:iap:silver")),
+        ("exp", json!(later)),
+        ("exp", json!(later as f64 + 0.5)),
+        ("nbf", json!(0)),
+        ("iat", json!(later)),
+        ("auth_time", json!(1_700_000_000)),
+        ("aud", json!("https://api.example")),
+        ("aud", json!(["https://api.example", "https://mcp.example"])),
+        ("amr", json!(["pwd", "mfa"])),
+        ("amr", json!([])),
+        ("scope", json!("posts:read posts:write")),
+        ("scope", json!("")),
+    ] {
+        let token = jwt.sign(&carrying(claim, value.clone())).expect("signs");
+        assert_eq!(payload(&token)[claim], value, "{claim}");
+    }
+}
+
+/// A registered claim the claims serialize as `null` names nothing, so the
+/// token leaves it out rather than carry a value its verifier reads as none or
+/// refuses.
+#[test]
+fn a_registered_claim_serialized_as_null_is_absent() {
+    let jwt = service("registered-null");
+    for claim in ["client_id", "acr", "amr", "auth_time", "scope", "nbf"] {
+        let token = jwt
+            .sign(&carrying(claim, serde_json::Value::Null))
+            .expect("signs");
+        assert!(
+            payload(&token).get(claim).is_none(),
+            "{claim}: {}",
+            payload(&token)
+        );
+    }
+}
+
+/// A flow's handshake carries registered claims too, held to the same types.
+#[test]
+fn a_handshake_carrying_a_registered_claim_of_another_type_is_refused() {
+    let jwt = service("handshake-types");
+    let refused = jwt.sign_handshake(
+        "oauth-tx",
+        &serde_json::json!({ "exp": jwt.expiry_in(600), "iss": 4242 }),
+    );
+    let said = nest_rs_core::error_message(&refused.expect_err("minted a numeric `iss`"));
+    assert!(said.contains("the claims' `iss` is no "), "{said}");
+}

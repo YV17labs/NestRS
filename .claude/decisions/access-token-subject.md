@@ -151,3 +151,33 @@ and one an issuer only signs gains a derive and an attribute.
   the other, so only a hand-written impl can disagree, and it says so visibly.
 - **`client_id` stays `Option`**: the 2026-10-25 entry's gap, the demo's user tokens naming
   none, is unchanged, and the JWT page now says so.
+
+## 2026-11-07 — every registered claim is held to its JSON type, as `sub` is
+
+The 2026-11-05 entry held `sub` to RFC 7519 §4.1.2's string and left the rest as written:
+`client_id: u64` and `iss: u64` minted, and a verifier reading either as its type refused the
+token, the defect that entry closed for `sub`. Seen run (`client_id: 4242` and `iss: 4242` both
+signed). Settled by the owner's mandate of 2026-11-07, which covers the break.
+
+**The signer holds each claim RFC 7519 §4.1 registers, and each RFC 9068 §2.2 adds, to the JSON
+type its specification gives it**, on `sign`, `sign_for` and `sign_handshake`, refusing with a
+`SignError` that names the claim and quotes nothing: `iss`, `sub`, `jti`, `client_id` (RFC 8693
+§4.3) and `acr` strings; `exp`, `nbf`, `iat` and `auth_time` NumericDates, never negative, as
+the verifier this crate pairs with reads none before the epoch; `aud` a string or an array of
+them; `amr` an array of strings; `scope` (RFC 8693 §4.2) RFC 6749 §3.3's list. The table is one
+private type, `RegisteredClaim`, so the next registered claim is one row.
+
+- **`scope` accepts the empty string**, which `scope::space_delimited` writes for an empty list
+  and every reader takes for a token granting nothing; §3.3's grammar needs one token, but
+  refusing it would turn a client registered with no scope into a `500` at its first token.
+  Dropping it instead is refused: a hand-written principal reading an absent `scope` as `None`
+  would widen a token granting nothing into one no scoped rule applies to.
+- **A registered claim serialized as `null` is left out**, as the five the signer stamps already
+  were: a `null` names nothing, and a verifier reading the claim as its type refuses it.
+- **Refused: rewriting a claim into its type** (a number into its decimal string): a claim the
+  claims carry is never overwritten, and the type would disagree with the token it mints.
+- **Refused: holding a value beyond its JSON type** — a StringOrURI holding a `:` to be a URI,
+  `amr` to RFC 8176's registry: RFC 7519 §4.1 leaves the value to the application, and the
+  verifier's refusal this entry closes is of the type alone. `roles`, `groups` and `entitlements`
+  (RFC 9068 §2.2.3.1) are left out: RFC 7643's multi-valued attributes fix no one JSON shape.
+- `sign_unchecked`, a suite's forger, still signs what it is given.

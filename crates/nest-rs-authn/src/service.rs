@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::algorithm::{Family, algorithms_of};
 use crate::error::{AuthError, SignError};
 use crate::jwks::Jwks;
+use crate::registered_claim::held_to_their_types;
 use crate::{Algorithm, PrincipalIdentity};
 use nest_rs_config::ClientTls;
 
@@ -560,16 +561,20 @@ impl JwtService {
 
     /// Sign `claims` into a compact JWT this service mints for itself. Errors
     /// on a verify-only service (no encoding key), on claims naming no subject
-    /// or a `sub` that is no string, or on a serialization failure.
+    /// or holding a registered claim of another JSON type, or on a
+    /// serialization failure.
     ///
     /// The token carries what the signer owns of RFC 9068 §2.2's required set
     /// — `iat`, `exp` this service's lifetime after it, a fresh `jti`, and the
     /// configured `aud` and `iss` — beside `claims`, which name the rest:
     /// `sub`, their [`actor_id`](PrincipalIdentity::actor_id) when they carry no
     /// such claim or a blank one, and `client_id`. A claim `claims` already
-    /// carry is never overwritten, so a `sub` of another JSON type, which RFC
-    /// 7519 §4.1.2 does not allow, mints nothing, as do claims naming no subject,
-    /// and a type that is no principal does not compile. A token for another
+    /// carry is never overwritten, so one RFC 7519 §4.1 or RFC 9068 §2.2
+    /// registers holding another JSON type than its specification gives it — a
+    /// `client_id` or an `iss` that is no string, an `exp` that is no
+    /// NumericDate, a `scope` outside RFC 6749 §3.3's grammar — mints nothing,
+    /// as do claims naming no subject; one they hold as `null` is left out, and
+    /// a type that is no principal does not compile. A token for another
     /// resource is [`sign_for`](Self::sign_for)'s.
     ///
     /// ```compile_fail,E0277
@@ -590,8 +595,8 @@ impl JwtService {
     ///
     /// The token carries the stamps [`sign`](Self::sign) does but the
     /// audience. Errors on a blank `resource`, on `claims` naming an `aud` of
-    /// their own, no subject or a `sub` that is no string, on a verify-only
-    /// service, or on a serialization failure. Which resources a caller may be
+    /// their own, no subject or a registered claim of another JSON type, on a
+    /// verify-only service, or on a serialization failure. Which resources a caller may be
     /// minted a token for is the issuer's to decide before it calls this.
     pub fn sign_for<C: Serialize + PrincipalIdentity>(
         &self,
@@ -765,7 +770,8 @@ impl JwtService {
     ///
     /// The token carries the stamps [`sign`](Self::sign) does but `exp`, which
     /// `claims` name themselves with [`expiry_in`](Self::expiry_in): claims
-    /// carrying none are refused rather than given the access-token lifetime.
+    /// carrying none are refused rather than given the access-token lifetime,
+    /// and their registered claims are held to their JSON types as `sign`'s are.
     pub fn sign_handshake<C: Serialize>(
         &self,
         purpose: &str,
@@ -774,7 +780,13 @@ impl JwtService {
         let signer = self.signer()?;
         let mut header = signer.header.clone();
         header.typ = Some(handshake_typ(purpose));
-        self.encode_with(signer, &header, payload_of(claims)?, None, Lifetime::Claims)
+        self.encode_with(
+            signer,
+            &header,
+            typed_payload_of(claims)?,
+            None,
+            Lifetime::Claims,
+        )
     }
 
     /// Verify a handshake token minted by [`sign_handshake`](Self::sign_handshake)
@@ -838,22 +850,27 @@ fn payload_of<C: Serialize>(claims: &C) -> Result<Map<String, Value>, SignError>
     }
 }
 
-/// `claims` as an access token's payload, its `sub` theirs or, when they carry
-/// none, their actor: RFC 9068 §2.2 requires one, a string by RFC 7519 §4.1.2,
-/// and a blank one names no one.
+/// [`payload_of`], every registered claim it carries held to its JSON type and
+/// one it holds as `null` left out.
+fn typed_payload_of<C: Serialize>(claims: &C) -> Result<Map<String, Value>, SignError> {
+    let mut payload = payload_of(claims)?;
+    held_to_their_types(&mut payload)?;
+    Ok(payload)
+}
+
+/// `claims` as an access token's payload, each registered claim held to its
+/// JSON type, its `sub` theirs or, when they carry none, their actor: RFC 9068
+/// §2.2 requires one, a string by RFC 7519 §4.1.2, and a blank one names no one.
 fn naming_its_subject<C: Serialize + PrincipalIdentity>(
     claims: &C,
 ) -> Result<Map<String, Value>, SignError> {
-    let mut payload = payload_of(claims)?;
-    match payload.get("sub") {
-        Some(Value::String(sub)) if !sub.trim().is_empty() => return Ok(payload),
-        None | Some(Value::Null | Value::String(_)) => {}
-        Some(_) => {
-            return Err(SignError::new(
-                "the claims' `sub` is no string: RFC 7519 §4.1.2 makes it one, and a verifier \
-                 reading one refuses anything else",
-            ));
-        }
+    let mut payload = typed_payload_of(claims)?;
+    if payload
+        .get("sub")
+        .and_then(Value::as_str)
+        .is_some_and(|sub| !sub.trim().is_empty())
+    {
+        return Ok(payload);
     }
     let Some(actor) = claims.actor_id().filter(|actor| !actor.trim().is_empty()) else {
         return Err(SignError::new(

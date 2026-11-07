@@ -2315,6 +2315,13 @@ lists what the boot, a log or the wire shows when one is missed.
   token with no `sub` no verifier could attribute. So does a `sub` that is no string
   (`sub: u64`, RFC 7519 §4.1.2), where it minted one a verifier reading a string
   refuses: hold the id as a string, or under another name with `#[principal(actor)]`.
+- **`sign`, `sign_for` or `sign_handshake` on claims holding a registered claim of
+  another JSON type** — `client_id: u64`, `iss: u64`, an `exp` that is a string or
+  negative, an `aud` of numbers, an `amr` that is no array of strings, a `scope` that is
+  an array or breaks RFC 6749 §3.3's grammar — answers a `SignError` naming the claim,
+  where it minted a token a verifier reading that claim refuses. Hold a client id as a
+  string; write `scope` with `nest_rs::authn::scope::space_delimited`. A registered
+  claim serialized as `null` is now left out of the token, where it went out `null`.
 - **A signing failure** answers the opaque `500`, where it answered `401` with a
   `Bearer` challenge: a client retrying with another credential now stops, and the
   chain is on `nest_rs::http` at `error`.

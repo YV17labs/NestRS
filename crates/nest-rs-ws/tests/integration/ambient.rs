@@ -145,3 +145,101 @@ async fn an_unattached_ctx_answers_opaquely_and_files_its_type() {
     );
     app.shutdown().await.expect("shuts down");
 }
+
+mod needed_principal {
+    //! A `#[public]` message reading as an `Ambient<P>` the principal a guard of
+    //! its chain produces: a caller that guard admitted without one answers
+    //! `UNAUTHENTICATED`, filed as that guard's denial, never the wiring error an
+    //! unattached value is.
+
+    use nest_rs_core::{
+        Ambient, AmbientValue, Layer, UnitContext, async_trait, code, injectable, module,
+    };
+    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
+    use nest_rs_testing::{LogCapture, TestApp};
+    use nest_rs_ws::{WsModule, WsView, gateway, messages};
+
+    use super::{Caller, CallerGuard};
+
+    /// Who the message's credential names.
+    #[derive(Clone)]
+    struct Named(String);
+
+    impl AmbientValue for Named {}
+
+    /// Identifies a caller the upgrade named and admits one it did not, as a
+    /// guard reading a credential the message carries would.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Identifies;
+
+    #[async_trait]
+    impl Guard for Identifies {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        fn produced_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<Named>())
+        }
+
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let caller = cx.require::<Caller>()?;
+            if caller.0 != "anonymous" {
+                let named = Named(caller.0.clone());
+                cx.attach(named);
+            }
+            Ok(())
+        }
+    }
+
+    impl GuardFor<WsView> for Identifies {}
+
+    #[gateway(path = "/named")]
+    #[use_guards(CallerGuard)]
+    struct NamedGateway;
+
+    #[messages]
+    impl NamedGateway {
+        #[subscribe_message("named")]
+        #[public]
+        #[use_guards(Identifies)]
+        async fn named(&self, named: Ambient<Named>) -> String {
+            named.into_inner().0
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [CallerGuard, Identifies, NamedGateway])]
+    struct NamedModule;
+
+    #[tokio::test]
+    async fn a_public_message_reading_its_principal_refuses_an_unidentified_caller() {
+        let app = TestApp::builder()
+            .module::<NamedModule>()
+            .build_ws()
+            .await
+            .expect("boots");
+        let mut named = app.socket("/named").header("x-name", "ada").connect().await;
+        named.send("named", serde_json::Value::Null).await;
+        assert_eq!(named.next_envelope().await["data"], "ada");
+
+        let logs = LogCapture::install();
+        let mut anonymous = app.socket("/named").connect().await;
+        anonymous.send("named", serde_json::Value::Null).await;
+        let envelope = anonymous.next_envelope().await;
+        assert_eq!(
+            envelope["data"]["code"],
+            code::UNAUTHENTICATED.as_str(),
+            "{envelope}"
+        );
+        let denial = logs.expect_one("nest_rs::layers", "guard denied the message");
+        assert_eq!(denial.level, "warn");
+        assert_eq!(denial.field("guard").as_deref(), Some("Identifies"));
+        assert!(
+            logs.find(nest_rs_ws::TARGET, "websocket message failed")
+                .is_empty(),
+            "an unidentified caller is no wiring error",
+        );
+        app.shutdown().await.expect("shuts down");
+    }
+}

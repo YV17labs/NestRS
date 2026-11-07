@@ -1,14 +1,17 @@
 //! The in-band guard stage: each guard's [`Guard::check`] on a unit an in-band
-//! edge carries, then the posture's class gate on the same unit.
+//! edge carries, then the principal its handler needs, then the posture's class
+//! gate on the same unit.
 
+use std::any::TypeId;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_core::__private::{ClassGate, ResolvedLayer, withhold_from_reads};
+use nest_rs_core::__private::{ClassGate, ResolvedLayer, carries, withhold_from_reads};
 use nest_rs_core::{AmbientValue, Continuation, UnitContext};
 
-use crate::denial::{by_cause, denial_of};
+use crate::denial::{anonymous_denial, by_cause, denial_of};
 use crate::line::file_denial;
+use crate::validate::produces;
 use crate::{Denial, Guard};
 
 /// Why a guard stage refused its unit.
@@ -58,6 +61,60 @@ impl Refused {
     }
 }
 
+/// A principal a `#[public]` unit's handler reads as an `Ambient`, beside the
+/// guard of its chain or its request that produces it
+/// ([`Guard::produced_principal`]): absent once the guards passed, that guard
+/// admitted the caller without one, and the caller's `401` is the unit's, filed
+/// as that guard's denial, on every edge.
+#[derive(Clone)]
+pub struct NeededPrincipal {
+    principal: TypeId,
+    guard: ResolvedLayer<dyn Guard>,
+}
+
+impl NeededPrincipal {
+    /// The first of the `ambient` types a handler reads that a guard of `guards`
+    /// produces as its principal, beside the first such guard.
+    pub fn of<'g, I>(ambient: &[TypeId], guards: I) -> Option<Self>
+    where
+        I: IntoIterator<Item = &'g ResolvedLayer<dyn Guard>>,
+        I::IntoIter: Clone,
+    {
+        let guards = guards.into_iter();
+        ambient.iter().find_map(|principal| {
+            let guard = guards.clone().find(|entry| produces(entry, *principal))?;
+            Some(Self {
+                principal: *principal,
+                guard: guard.clone(),
+            })
+        })
+    }
+
+    /// The guard producing the principal, which a refusal and a document name.
+    pub fn guard(&self) -> &ResolvedLayer<dyn Guard> {
+        &self.guard
+    }
+
+    /// The refusal of the unit `cx` describes, its guards having admitted it
+    /// without the principal: the `401` `earned` says a credential set aside on
+    /// its way to it earned, else the caller's own.
+    pub fn refused(
+        &self,
+        cx: &UnitContext<'_>,
+        earned: impl FnOnce(TypeId) -> Option<Denial>,
+    ) -> Option<Refused> {
+        if carries(cx, self.principal) {
+            return None;
+        }
+        let denial = earned(self.principal).unwrap_or_else(anonymous_denial);
+        Some(Refused::by(
+            self.guard.name,
+            self.guard.layer.as_ref(),
+            denial,
+        ))
+    }
+}
+
 /// Ambient on a unit whose in-band units refusing their caller must mark it —
 /// the HTTP request carrying a GraphQL or an MCP operation — so a layer around
 /// that unit tells a refusal its status line does not show: `Server-Timing`
@@ -85,12 +142,14 @@ impl AmbientValue for RefusalMark {
 }
 
 /// Run every guard of `chain` on the unit `cx` describes through
-/// [`Guard::check`], in order, then the posture's class `gate`, leaving what
-/// they attached on `cx` for the pipeline to install once its guard stage
-/// passed, `withheld` from the unit's reads where no mask shapes its reply. The
-/// first refusal stops them.
+/// [`Guard::check`], in order, then refuse a caller they admitted without the
+/// `needed` principal, then the posture's class `gate`, leaving what they
+/// attached on `cx` for the pipeline to install once its guard stage passed,
+/// `withheld` from the unit's reads where no mask shapes its reply. The first
+/// refusal stops them.
 pub async fn check_guards(
     chain: &[ResolvedLayer<dyn Guard>],
+    needed: Option<&NeededPrincipal>,
     gate: Option<ClassGate>,
     withheld: bool,
     cx: &mut UnitContext<'_>,
@@ -103,6 +162,10 @@ pub async fn check_guards(
             .check(cx)
             .await
             .map_err(|denial| Refused::by(entry.name, guard, denial))?;
+    }
+    // In band, a credential the request could not verify refused it there.
+    if let Some(refused) = needed.and_then(|needed| needed.refused(cx, |_| None)) {
+        return Err(refused);
     }
     if let Some(gate) = gate {
         gate(cx).map_err(|refused| Refused::Filed(denial_of(&refused)))?;

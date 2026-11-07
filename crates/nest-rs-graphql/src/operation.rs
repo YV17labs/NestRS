@@ -18,12 +18,13 @@ use nest_rs_core::__private::{
     report_unresolved, settled,
 };
 use nest_rs_core::{
-    Container, Failure, Handler, Outcome, Problem, ServedAddress, UnitContext, UnresolvedLayerError,
+    Container, Failure, Handler, Outcome, Posture, Problem, ServedAddress, UnitContext,
+    UnresolvedLayerError,
 };
 use nest_rs_core::{anyhow, code};
 use nest_rs_guards::__private::{
-    GlobalBucket, GuardSpec, RefusalMark, SiteChainSources, carried_stage_idle, check_guards,
-    compose_site_chain, validate_carried_chain, validate_gate_reached,
+    GlobalBucket, GuardSpec, NeededPrincipal, RefusalMark, SiteChainSources, carried_stage_idle,
+    check_guards, compose_site_chain, validate_carried_chain, validate_gate_reached,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::carried_request_chain;
@@ -109,14 +110,21 @@ pub struct FieldGuards {
     pub withheld: bool,
     /// The posture declares a class gate, which reads the ability a guard attached.
     pub class_gated: bool,
+    /// What the field's `Ambient<T>` parameters read, by type.
+    pub ambient: Vec<TypeId>,
 }
 
-/// The guard stage of the field `declared` describes: the app-wide pool where
-/// the site folds it, the resolver's guards and the method's, each once, each
-/// running its `check` on the field — `None` when it runs none and has nothing to
-/// withhold.
+/// The guard stage of the field `declared` describes, whose handler is
+/// `handler`: the app-wide pool where the site folds it, the resolver's guards
+/// and the method's, each once, each running its `check` on the field — `None`
+/// when it runs none, needs no principal and has nothing to withhold.
+///
+/// A `#[public]` field, or a `#[field_resolver]`, which takes its root's posture,
+/// reading as an `Ambient<P>` the principal a guard of its chain or its request
+/// produces refuses a caller they admitted without it.
 pub fn field_guard_stage(
     container: &Container,
+    handler: &Handler,
     declared: FieldGuards,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
     let FieldGuards {
@@ -127,6 +135,7 @@ pub fn field_guard_stage(
         label,
         withheld,
         class_gated,
+        ambient,
     } = declared;
     let sources = SiteChainSources {
         provider: host,
@@ -142,11 +151,21 @@ pub fn field_guard_stage(
     if class_gated {
         validate_gate_reached(label, &chain, request_chain).map_err(anyhow::Error::msg)?;
     }
-    if carried_stage_idle(&chain, withheld, request_chain).map_err(anyhow::Error::msg)? {
+    let public = handler.posture() == Posture::Public || site == GraphqlSite::Field;
+    let needed = if public && !ambient.is_empty() {
+        let request = request_chain().map_err(anyhow::Error::msg)?;
+        NeededPrincipal::of(&ambient, chain.iter().chain(&request))
+    } else {
+        None
+    };
+    if needed.is_none()
+        && carried_stage_idle(&chain, withheld, request_chain).map_err(anyhow::Error::msg)?
+    {
         return Ok(None);
     }
     Ok(Some(Arc::new(FieldGuardStage {
         guards: chain,
+        needed,
         denied: DENIED_OPERATION,
         withheld,
     })))
@@ -156,6 +175,7 @@ pub fn field_guard_stage(
 /// [`check`](Guard::check) on the field, read through [`GraphqlView`].
 pub(crate) struct FieldGuardStage {
     guards: Vec<ResolvedLayer<dyn Guard>>,
+    needed: Option<NeededPrincipal>,
     denied: &'static str,
     withheld: bool,
 }
@@ -176,6 +196,7 @@ impl FieldGuardStage {
         (!guards.is_empty()).then(|| {
             Arc::new(Self {
                 guards,
+                needed: None,
                 denied,
                 withheld: false,
             }) as Arc<dyn GuardStage>
@@ -186,7 +207,7 @@ impl FieldGuardStage {
 impl GuardStage for FieldGuardStage {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
-            check_guards(&self.guards, None, self.withheld, cx)
+            check_guards(&self.guards, self.needed.as_ref(), None, self.withheld, cx)
                 .await
                 .map_err(|refused| Failure::from(refused.into_denial(self.denied, cx)))
         })
@@ -629,6 +650,7 @@ mod tests {
     fn a_field_with_nothing_to_withhold_pays_for_no_stage() {
         let stage = field_guard_stage(
             &Container::default(),
+            &FIELD,
             FieldGuards {
                 host: Vec::new(),
                 method: Vec::new(),
@@ -637,6 +659,7 @@ mod tests {
                 label: "query field",
                 withheld: true,
                 class_gated: false,
+                ambient: Vec::new(),
             },
         )
         .expect("no guard to resolve");

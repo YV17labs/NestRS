@@ -127,7 +127,7 @@ pub mod __private {
         GuardSpec, global_guards_active, guard, resolve_global_chain, resolve_global_guards,
     };
     pub use crate::scope::is_scope_token;
-    pub use crate::stage::{RefusalMark, Refused, check_guards};
+    pub use crate::stage::{NeededPrincipal, RefusalMark, Refused, check_guards};
     pub use crate::validate::{
         boot_validate_guards, carried_stage_idle, host_chain, identifies, identifying_guard,
         produces, validate_carried_chain, validate_gate_reached, validate_guard_chain,

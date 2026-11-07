@@ -15,7 +15,7 @@ use nest_rs_core::__private::{
 use nest_rs_core::LayerSite;
 use nest_rs_core::{Container, Handler, Posture};
 use nest_rs_guards::__private::{
-    GuardSpec, boot_validate_guards, produces, resolve_global_guards, validate_gate_reached,
+    GuardSpec, NeededPrincipal, boot_validate_guards, resolve_global_guards, validate_gate_reached,
     validate_route_chain,
 };
 use nest_rs_guards::Guard;
@@ -25,7 +25,7 @@ use crate::body_pipes::BodyPipes;
 use crate::deprecation::deprecated_route;
 use crate::endpoint::BoxEndpoint;
 use crate::error::{Result, RouteError};
-use crate::guard_stage::{HttpGuardStage, NeededPrincipal, StageKind};
+use crate::guard_stage::{HttpGuardStage, StageKind};
 use crate::location::caller_path;
 use crate::request::Request;
 use crate::response::Response;
@@ -187,24 +187,9 @@ pub fn route_guard_stage(
     }
     log_effective_chain(&label, "guards", &chain);
     let needed = (handler.posture() == Posture::Public)
-        .then(|| needed_principal(&chain, &declared.ambient))
+        .then(|| NeededPrincipal::of(&declared.ambient, &chain))
         .flatten();
     stage(chain, needed, declared.gates, declared.masked)
-}
-
-/// The first of the `ambient` types a handler reads that a guard of `chain`
-/// produces as its principal, and where that guard stands.
-fn needed_principal(
-    chain: &[ResolvedLayer<dyn Guard>],
-    ambient: &[TypeId],
-) -> Option<NeededPrincipal> {
-    ambient.iter().find_map(|principal| {
-        let guard = chain.iter().position(|entry| produces(entry, *principal))?;
-        Some(NeededPrincipal {
-            principal: *principal,
-            guard,
-        })
-    })
 }
 
 /// The stage running `chain`, refusing a caller it admitted without the

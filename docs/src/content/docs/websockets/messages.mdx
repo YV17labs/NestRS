@@ -75,7 +75,9 @@ The macro reads five things from the signature:
 - **The request-scoped providers** — each `Scoped<T>` argument, resolved from
   the message's own scope (below).
 - **What a guard attached** — each `Ambient<T>` argument, read from what the
-  upgrade's guards and the message's own attached, as a route reads it.
+  upgrade's guards and the message's own attached, as a route reads it; a
+  `#[public]` message reading the principal a guard of its chain produces
+  refuses a caller that guard did not identify `UNAUTHENTICATED`.
 - **The return type** — drives the reply, per the contract below.
 
 A `&WsClient` parameter is the [per-connection handle](/websockets/rooms/);

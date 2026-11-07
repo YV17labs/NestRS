@@ -201,3 +201,163 @@ async fn an_unattached_ctx_answers_opaquely_and_files_its_type() {
         line.fields,
     );
 }
+
+mod needed_principal {
+    //! A `#[public]` field, or a `#[field_resolver]` under one, reading as an
+    //! `Ambient<P>` the principal a guard produces: a caller that guard admitted
+    //! without one answers `UNAUTHENTICATED`, filed as that guard's denial, never
+    //! the wiring error an unattached value is, whether the guard runs at the
+    //! field or only at the `/graphql` request.
+
+    use nest_rs_core::{
+        Ambient, AmbientValue, Layer, UnitContext, async_trait, code, injectable, module,
+    };
+    use nest_rs_graphql::async_graphql::SimpleObject;
+    use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
+    use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, GuardPhase, PrincipalClaim};
+    use nest_rs_http::{EndpointGuards, HttpView};
+    use nest_rs_testing::{LogCapture, TestApp};
+    use serde_json::{Value, json};
+
+    /// Who the request's credential names.
+    #[derive(Clone)]
+    struct Named(String);
+
+    impl AmbientValue for Named {}
+
+    /// Identifies a caller naming itself and admits one that does not, as an
+    /// authentication guard admits an anonymous `/graphql` request in band.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Identifies;
+
+    #[async_trait]
+    impl Guard for Identifies {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        fn produced_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<Named>())
+        }
+
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            if let Some(name) = HttpView::of(cx)?.request().header("x-name") {
+                let named = Named(name.to_owned());
+                cx.attach(named);
+            }
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for Identifies {}
+
+    #[derive(SimpleObject)]
+    #[graphql(complex)]
+    struct Badge {
+        number: i32,
+    }
+
+    #[resolver]
+    struct NamedResolver;
+
+    #[operations]
+    impl NamedResolver {
+        #[query]
+        #[public]
+        async fn named(&self, named: Ambient<Named>) -> String {
+            named.into_inner().0
+        }
+
+        #[query]
+        #[public]
+        async fn badge(&self) -> Badge {
+            Badge { number: 7 }
+        }
+
+        #[field_resolver]
+        async fn holder(&self, parent: &Badge, named: Ambient<Named>) -> String {
+            format!("{} {}", parent.number, named.into_inner().0)
+        }
+    }
+
+    #[module(imports = [GraphqlModule], providers = [Identifies, NamedResolver])]
+    struct NamedModule;
+
+    /// The guard in the app's pool: it runs at the request and at each root field.
+    #[module(imports = [NamedModule], providers = [GlobalGuards<(Identifies,)>])]
+    struct PooledApp;
+
+    /// The guard at the `/graphql` request alone: no field's chain holds it.
+    #[module(
+        imports = [NamedModule],
+        providers = [EndpointGuards<GraphqlView, (Identifies,)>],
+    )]
+    struct EndpointApp;
+
+    async fn ask(app: &TestApp, query: &str, name: Option<&str>) -> Value {
+        let mut request = app.http().post("/graphql");
+        if let Some(name) = name {
+            request = request.header("x-name", name);
+        }
+        let resp = request.body_json(&json!({ "query": query })).send().await;
+        resp.json().await.value().deserialize()
+    }
+
+    /// `query` asked by `ada` and anonymously on `app`: the first reads her
+    /// name off `path`, the second is refused there as an unidentified caller.
+    async fn refused_unnamed(app: TestApp, query: &str, path: &[&str], named: &str) {
+        let answered = ask(&app, query, Some("ada")).await;
+        let read = path
+            .iter()
+            .fold(&answered["data"], |read, segment| &read[segment]);
+        assert_eq!(read, named, "{query}: {answered}");
+
+        let logs = LogCapture::install();
+        let anonymous = ask(&app, query, None).await;
+        assert_eq!(
+            anonymous["errors"][0]["extensions"]["code"],
+            code::UNAUTHENTICATED.as_str(),
+            "{query}: {anonymous}",
+        );
+        assert_eq!(anonymous["errors"][0]["path"], json!(path), "{anonymous}");
+        let denial = logs.expect_one("nest_rs::layers", "guard denied the operation");
+        assert_eq!(denial.level, "warn");
+        assert_eq!(denial.field("guard").as_deref(), Some("Identifies"));
+        assert!(
+            logs.find("nest_rs::graphql", "graphql operation failed")
+                .is_empty(),
+            "an unidentified caller is no wiring error",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_public_field_reading_its_principal_refuses_an_unidentified_caller() {
+        for app in [
+            TestApp::for_module::<PooledApp>().await,
+            TestApp::for_module::<EndpointApp>().await,
+        ] {
+            refused_unnamed(app.expect("boots"), "{ named }", &["named"], "ada").await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_field_resolver_under_a_public_field_refuses_an_unidentified_caller() {
+        for app in [
+            TestApp::for_module::<PooledApp>().await,
+            TestApp::for_module::<EndpointApp>().await,
+        ] {
+            refused_unnamed(
+                app.expect("boots"),
+                "{ badge { holder } }",
+                &["badge", "holder"],
+                "7 ada",
+            )
+            .await;
+        }
+    }
+}

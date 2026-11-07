@@ -307,8 +307,9 @@ impl PostsResolver {
 verified (see [Endpoint guards](/security/authorization/endpoint-guards/)) and
 refuses a token naming no user. A `#[public]` operation also admits
 anonymous callers, for whom no guard attached any: it reads
-`nest_rs::core::ambient::<Claims>()` and decides, as `greeting` does. A
-`Ambient<Claims>` there would answer every anonymous call with the internal error.
+`nest_rs::core::ambient::<Claims>()` and decides, as `greeting` does. An
+`Ambient<Claims>` there serves an identified caller alone: an anonymous call is
+refused `UNAUTHENTICATED`, filed as the denial of the guard that attaches the claims.
 
 ## Returning a `Result`
 

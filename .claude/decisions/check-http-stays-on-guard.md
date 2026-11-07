@@ -196,3 +196,27 @@ A guard of one's own that admits an in-band request decides these units in its o
 `check`, where `Posture::Gated` is what it reads. A listed guard identifying a caller and
 reading the request in `check` costs its author the edit above, found at the router's
 first read.
+
+## 2026-11-07 — a `#[public]` unit reading its principal refuses a caller no guard identified, on every edge
+
+Run on each in-band edge, with a guard declaring `produced_principal` that admits a caller it
+did not identify — `AuthnGuard` pooled, admitting an anonymous `/graphql` request in band, and a
+hand-written one at a message or a tool: a `#[public]` GraphQL field, a `#[field_resolver]` under
+one, a WS message and an MCP operation reading that principal as an `Ambient<P>` answered
+`INTERNAL` and filed the wiring `error` saying the layer attaching it was not bound. HTTP's route had been
+fixed alone, its commit saying an in-band edge refuses such a caller already; a `#[public]` unit
+is no gated one, so none did. Correctness decided:
+
+- **The in-band guard stage refuses it, the HTTP route's rule**: once the chain passed, a
+  `#[public]` unit whose handler reads as an `Ambient<P>` a principal a guard of its chain or its
+  request produces, and which carries none, is refused `UNAUTHENTICATED`, filed as that guard's
+  denial, ahead of every argument. One type, `NeededPrincipal`, found at the site's composition and
+  run by `check_guards` and by HTTP's stage, which alone reads a credential set aside.
+- **A `#[field_resolver]` reads it too**: its posture is its root's, `Gated` by declaration, and
+  under a `#[public]` root it is the field a caller with no principal reaches.
+
+This is not the 2026-11-05 refusal of a stage reading `produced_principal` for every gated unit:
+here the handler declares it cannot run without the principal, so its absence is the caller's,
+whatever the guard decided, and the ambient context reads by `TypeId` since the route's fix.
+
+Left: an `Ambient` behind a type alias is not read off its spelling, on any edge.

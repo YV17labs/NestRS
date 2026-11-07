@@ -938,6 +938,53 @@ mod graphql {
         );
     }
 
+    #[resolver]
+    struct WhoamiResolver;
+
+    #[operations]
+    impl WhoamiResolver {
+        #[query]
+        #[public]
+        async fn whoami(&self, who: nest_rs_core::Ambient<super::Who>) -> GraphqlResult<String> {
+            Ok(who.into_inner().0.to_owned())
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [BearerStrategy, BearerAuthn, WhoamiResolver],
+    )]
+    struct WhoamiModule;
+
+    #[module(
+        imports = [WhoamiModule],
+        providers = [nest_rs_guards::GlobalGuards<(BearerAuthn,)>],
+    )]
+    struct WhoamiApp;
+
+    /// In band, the guard admits a `/graphql` request carrying no credential:
+    /// a `#[public]` field reading the principal as an `Ambient` refuses that
+    /// caller `UNAUTHENTICATED`, never the wiring error an unattached value is.
+    #[tokio::test]
+    async fn a_public_field_reading_its_principal_refuses_a_caller_with_no_credential() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<WhoamiApp>().await.expect("boots");
+
+        let named = subgraph_answer(&app, "{ whoami }", Some("good")).await;
+        assert_eq!(named["data"]["whoami"], "ada", "{named}");
+
+        let anonymous = subgraph_answer(&app, "{ whoami }", None).await;
+        assert_anonymous_refused(&anonymous, "whoami");
+        let line = logs.expect_one(nest_rs_authn::TARGET, "guard denied the operation");
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("reason").as_deref(), Some("anonymous_caller"));
+        assert!(
+            logs.find("nest_rs::graphql", "graphql operation failed")
+                .is_empty(),
+            "a caller with no credential is no wiring error",
+        );
+    }
+
     #[tokio::test]
     async fn an_anonymous_caller_is_refused_the_sdl_under_a_pooled_authn_guard() {
         let logs = LogCapture::install();

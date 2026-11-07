@@ -1723,7 +1723,10 @@ lists what the boot, a log or the wire shows when one is missed.
   never reached — answers the edge's opaque internal error, and the type is
   filed once at `error` (`graphql operation failed`, `websocket message failed`,
   `mcp operation failed`, its `error` field naming the type). Attach it at the
-  request — `EndpointGuards<…>`, the gateway's guards — or on the operation.
+  request — `EndpointGuards<…>`, the gateway's guards — or on the operation. A
+  principal a guard there produces, read on a `#[public]` operation by a caller
+  it did not identify, is that caller's `UNAUTHENTICATED` instead: read
+  `nest_rs::core::ambient::<P>()` where the operation serves a visitor too.
 - **A global guard whose decision is a unit's alone** — a field's, a message's,
   an operation's, written only in `check` — now runs it on every request too:
   every route, the WebSocket upgrade and the `/graphql` and `/mcp` requests

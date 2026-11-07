@@ -387,3 +387,151 @@ mod parameter {
         );
     }
 }
+
+mod needed_principal {
+    //! A `#[public]` operation reading as an `Ambient<P>` the principal a guard of
+    //! its chain produces: a caller that guard admitted without one answers
+    //! `UNAUTHENTICATED`, filed as that guard's denial, never the wiring error an
+    //! unattached value is.
+
+    use nest_rs_core::{
+        Ambient, AmbientValue, Layer, UnitContext, async_trait, code, injectable, module,
+    };
+    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
+    use nest_rs_http::{EndpointGuards, HttpView};
+    use nest_rs_mcp::{McpError, McpView, mcp, tools};
+    use nest_rs_testing::mcp::{call_method_with, open_session_with, result};
+    use nest_rs_testing::{LogCapture, TestApp};
+    use serde_json::{Value, json};
+
+    const PATH: &str = "/mcp/named";
+
+    /// Who the request says is calling, whether or not it named itself.
+    #[derive(Clone)]
+    struct Caller(String);
+
+    impl AmbientValue for Caller {}
+
+    /// Who the caller's credential names.
+    #[derive(Clone)]
+    struct Named(String);
+
+    impl AmbientValue for Named {}
+
+    /// Attaches the caller the `/mcp` request names, `anonymous` when it names
+    /// none, and names its actor so a session opens for it.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct CallerGuard;
+
+    #[async_trait]
+    impl Guard for CallerGuard {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let name = HttpView::of(cx)?
+                .request()
+                .header("x-name")
+                .unwrap_or("anonymous");
+            nest_rs_core::__private::set_actor_id(name);
+            let caller = Caller(name.to_owned());
+            cx.attach(caller);
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for CallerGuard {}
+
+    /// Identifies a caller the request named and admits one it did not, as a
+    /// guard reading a credential the operation carries would.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Identifies;
+
+    #[async_trait]
+    impl Guard for Identifies {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        fn produced_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<Named>())
+        }
+
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let caller = cx.require::<Caller>()?;
+            if caller.0 != "anonymous" {
+                let named = Named(caller.0.clone());
+                cx.attach(named);
+            }
+            Ok(())
+        }
+    }
+
+    impl GuardFor<McpView> for Identifies {}
+
+    #[mcp(path = "/mcp/named")]
+    #[derive(Clone, Default)]
+    struct NamedTools;
+
+    #[tools]
+    impl NamedTools {
+        /// Say who the credential names.
+        #[tool]
+        #[public]
+        #[use_guards(Identifies)]
+        async fn named(&self, named: Ambient<Named>) -> Result<String, McpError> {
+            Ok(named.into_inner().0)
+        }
+    }
+
+    #[module(providers = [
+        CallerGuard,
+        Identifies,
+        NamedTools,
+        EndpointGuards<McpView, (CallerGuard,)>,
+    ])]
+    struct NamedModule;
+
+    /// What calling `named` answers, the request carrying `headers`.
+    async fn call(app: &TestApp, headers: &[(&str, &str)]) -> Value {
+        let session = open_session_with(app.http(), PATH, None, headers, json!({})).await;
+        let params = json!({ "name": "named", "arguments": {} });
+        let body = call_method_with(
+            app.http(),
+            PATH,
+            &session,
+            None,
+            headers,
+            "tools/call",
+            params,
+        )
+        .await;
+        result(&body)
+    }
+
+    #[tokio::test]
+    async fn a_public_operation_reading_its_principal_refuses_an_unidentified_caller() {
+        let app = TestApp::for_module::<NamedModule>().await.expect("boots");
+        let read = call(&app, &[("x-name", "ada")]).await;
+        assert_eq!(read["result"]["content"][0]["text"], "ada", "{read}");
+
+        let logs = LogCapture::install();
+        let anonymous = call(&app, &[]).await;
+        assert_eq!(
+            anonymous["error"]["data"]["code"],
+            code::UNAUTHENTICATED.as_str(),
+            "{anonymous}"
+        );
+        let denial = logs.expect_one("nest_rs::layers", "guard denied the operation");
+        assert_eq!(denial.level, "warn");
+        assert_eq!(denial.field("guard").as_deref(), Some("Identifies"));
+        assert!(
+            logs.find(nest_rs_mcp::TARGET, "mcp operation failed")
+                .is_empty(),
+            "an unidentified caller is no wiring error",
+        );
+    }
+}

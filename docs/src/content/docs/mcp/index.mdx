@@ -364,7 +364,9 @@ by hand reads `nest_rs::core::current_request_scope()` instead.
 guards verified, or what a guard bound on the operation derived from it — as a
 route reads it. Neither parameter is an argument of the tool: the input schema
 a client lists names neither, and an absent value answers opaquely, its type
-filed at `error`.
+filed at `error` — but for the principal a guard there produces: on a
+`#[public]` operation, a caller that guard did not identify is refused
+`UNAUTHENTICATED`.
 
 The app's own interceptors (`GlobalInterceptors`) run around every operation
 `#[tools]` declares too, outermost, after the guards. An `#[interceptor(stage = unit)]` serving MCP runs once

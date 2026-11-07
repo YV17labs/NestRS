@@ -1242,6 +1242,7 @@ mod tests {
                 force: Vec::new(),
                 gate: None,
                 withheld: false,
+                ambient: Vec::new(),
             },
         )
     }

@@ -16,14 +16,14 @@ use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
     HandlerSite, HostBorrow, HostMeta, HostMount, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath,
-    SitePosture, authorized_entity, await_if_async, cfg_attrs, concrete_signature,
-    deprecation_header, exception_filter_specs, force_guard_typeids, guard_capability_bounds,
-    handler_const, handler_ref, host_runtime_entry, impl_self_ident, injected_methods_with_layers,
-    injected_per_request_method, interceptor_specs, layer_deps, mixed_site_ident,
-    normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
-    refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
-    spelled, take_posture, takes_value, ungrouped_expr, unit_of_work_required, unknown_argument,
-    validate_argument,
+    SitePosture, ambient_type_ids, authorized_entity, await_if_async, cfg_attrs,
+    concrete_signature, deprecation_header, exception_filter_specs, force_guard_typeids,
+    guard_capability_bounds, handler_const, handler_ref, host_runtime_entry, impl_self_ident,
+    injected_methods_with_layers, injected_per_request_method, interceptor_specs, layer_deps,
+    mixed_site_ident, normalize_forwarded_args, nth_generic_type, one_role_per_method,
+    posture_key_unsupported, refuse_rust_deprecated, reject_meta_on_operations, scoped_specs,
+    shared_receiver, site, spelled, take_posture, takes_value, ungrouped_expr,
+    unit_of_work_required, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -1424,9 +1424,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
     };
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
     // Read off its spelling, as `Piped` is: what each `Ambient<T>` reads.
-    let ambient = param_types
-        .iter()
-        .filter_map(|ty| nth_generic_type(ty, "Ambient", 0));
+    let ambient = ambient_type_ids(param_types);
     let method_interceptor_specs = interceptor_specs(interceptors);
     let method_exception_filter_specs = exception_filter_specs(method_exception_filters);
     let force_guard_typeids = force_guard_typeids(force_guards);
@@ -1469,7 +1467,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
                     authorized: #authorized,
                     masked: ::core::option::Option::is_some(&#shaper_selection),
                     stream: #is_sse,
-                    ambient: ::std::vec![#(::std::any::TypeId::of::<#ambient>()),*],
+                    ambient: #ambient,
                 },
             )
         }

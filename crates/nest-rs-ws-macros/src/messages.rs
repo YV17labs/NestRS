@@ -14,7 +14,7 @@ use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta, HostMount,
-    PostureGate, PostureRules, SitePosture, TailParam, await_if_async, cfg_attrs,
+    PostureGate, PostureRules, SitePosture, TailParam, ambient_type_ids, await_if_async, cfg_attrs,
     concrete_signature, declared_handler, exception_filter_specs, force_guard_typeids,
     guard_capability_bounds, handler_const, handler_ref, host_runtime_entry, impl_self_ident,
     injected_methods_with_layers, injected_per_request_method, interceptor_specs, layer_deps,
@@ -286,6 +286,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             force_guards: &force_guards,
             gate,
             withheld: posture.withheld(),
+            ambient: ambient_type_ids(method.sig.inputs.iter().skip(1).filter_map(|arg| {
+                let FnArg::Typed(pt) = arg else { return None };
+                Some(pt.ty.as_ref())
+            })),
             cfgs: &cfgs,
         });
         site_items.push(site.items);
@@ -691,6 +695,9 @@ struct MessageSite<'a> {
     /// Whether the posture withholds the ability from the message's reads, a
     /// `bool` expression.
     withheld: TokenStream2,
+    /// What the message's `Ambient<T>` parameters read, a `Vec<TypeId>`
+    /// expression.
+    ambient: TokenStream2,
     cfgs: &'a [TokenStream2],
 }
 
@@ -715,6 +722,7 @@ fn message_site(site: &MessageSite<'_>) -> EmittedSite {
         force_guards,
         gate,
         withheld,
+        ambient,
         cfgs,
     } = site;
     let method_name = method.unraw().to_string();
@@ -758,6 +766,7 @@ fn message_site(site: &MessageSite<'_>) -> EmittedSite {
                     force: #force_typeids,
                     gate: #gate,
                     withheld: #withheld,
+                    ambient: #ambient,
                 },
             )
         }

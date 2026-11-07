@@ -184,9 +184,9 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 
 **HTTP and CORS**
 - An `Ambient<P>` behind a type alias is not read off its spelling, so a
-  `#[public]` route taking one answers an anonymous caller the wiring `500`
-  and lists no `401`. Close: a trait probe on the parameter's type, as
-  `__body_of!` reads a body. *read*
+  `#[public]` unit taking one answers an anonymous caller the wiring `500`
+  (`INTERNAL` in band) and a route lists no `401`. Close: a trait probe on the
+  parameter's type, as `__body_of!` reads a body, on every edge. *read*
 - No real proxy has run against the forwarding-header reader, and hyper's
   HTTP/2 header-list refusal and a `414` are pinned by no test. *read*
 - A `multipart/form-data` type RFC 9110 §5.6.6 admits and mime 0.3 refuses,

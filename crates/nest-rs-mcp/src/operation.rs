@@ -20,7 +20,7 @@ use nest_rs_core::{
     anyhow,
 };
 use nest_rs_guards::__private::{
-    GuardSpec, RefusalMark, carried_stage_idle, check_guards, identifying_guard,
+    GuardSpec, NeededPrincipal, RefusalMark, carried_stage_idle, check_guards, identifying_guard,
     resolve_global_guards, validate_carried_chain, validate_gate_reached,
 };
 use nest_rs_guards::{Denial, Guard};
@@ -143,12 +143,16 @@ pub struct OperationGuards {
     pub withheld: bool,
     /// The posture declares a class gate, which reads the ability a guard attached.
     pub class_gated: bool,
+    /// What the operation's `Ambient<T>` parameters read, by type.
+    pub ambient: Vec<TypeId>,
 }
 
 /// The guard stage of the operation `handler` declares: the app-wide pool, the
 /// host's guards and the method's, each once, each running its
-/// [`check`](Guard::check) on the operation — `None` when it runs none and has
-/// nothing to withhold.
+/// [`check`](Guard::check) on the operation — `None` when it runs none, needs no
+/// principal and has nothing to withhold. A `#[public]` operation reading as an
+/// `Ambient<P>` the principal a guard of its chain or its request produces
+/// refuses a caller they admitted without it.
 ///
 /// The pool is part of it, as on a GraphQL root field: the endpoint's request
 /// runs `check_http`, which a guard deciding the operation alone overrides to
@@ -185,11 +189,21 @@ pub fn operation_guard_stage(
     if declared.class_gated {
         validate_gate_reached(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
     }
-    if carried_stage_idle(&chain, declared.withheld, request_chain).map_err(anyhow::Error::msg)? {
+    let needed = if handler.posture() == Posture::Public && !declared.ambient.is_empty() {
+        let request = request_chain().map_err(anyhow::Error::msg)?;
+        NeededPrincipal::of(&declared.ambient, chain.iter().chain(&request))
+    } else {
+        None
+    };
+    if needed.is_none()
+        && carried_stage_idle(&chain, declared.withheld, request_chain)
+            .map_err(anyhow::Error::msg)?
+    {
         return Ok(None);
     }
     Ok(Some(Arc::new(OperationGuardStage {
         guards: chain,
+        needed,
         withheld: declared.withheld,
     })))
 }
@@ -198,13 +212,14 @@ pub fn operation_guard_stage(
 /// one's [`check`](Guard::check) on the operation, read through [`McpView`].
 struct OperationGuardStage {
     guards: Vec<ResolvedLayer<dyn Guard>>,
+    needed: Option<NeededPrincipal>,
     withheld: bool,
 }
 
 impl GuardStage for OperationGuardStage {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
-            check_guards(&self.guards, None, self.withheld, cx)
+            check_guards(&self.guards, self.needed.as_ref(), None, self.withheld, cx)
                 .await
                 .map_err(|refused| Failure::from(refused.into_denial(DENIED, cx)))
         })
@@ -438,6 +453,7 @@ mod tests {
                 kind: McpOperationKind::Tool,
                 withheld: true,
                 class_gated: false,
+                ambient: Vec::new(),
             },
         )
         .expect("no guard to resolve");

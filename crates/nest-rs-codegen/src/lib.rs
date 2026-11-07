@@ -172,9 +172,10 @@ pub mod __private {
     pub use crate::time_zone::invalid_time_zone;
     pub use crate::trusted_proxy::trusted_proxy_entry;
     pub use crate::ty::{
-        HostBorrow, TailParam, answer_span, await_if_async, concrete_signature, generic_args,
-        impl_self_ident, last_segment_ident, nth_generic_type, path_label, payload_arg_type,
-        piped_input, returns_unit, shared_receiver, spelled, tail_param, type_label,
+        HostBorrow, TailParam, ambient_type_ids, answer_span, await_if_async, concrete_signature,
+        generic_args, impl_self_ident, last_segment_ident, nth_generic_type, path_label,
+        payload_arg_type, piped_input, returns_unit, shared_receiver, spelled, tail_param,
+        type_label,
     };
     pub use crate::ungrouped::ungrouped_expr;
     pub use crate::unit_of_work::unit_of_work_required;

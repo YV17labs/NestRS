@@ -14,12 +14,12 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use http::{HeaderValue, StatusCode, header};
 use nest_rs_core::__private::{
-    GuardStage, Pending, ResolvedLayer, carries, install_pending, new_unit_context, pending_of,
+    GuardStage, Pending, ResolvedLayer, install_pending, new_unit_context, pending_of,
     take_pending, withhold_from_reads,
 };
 use nest_rs_core::{AmbientValue, DenialDocument, Failure, Handler, UnitContext};
 use nest_rs_guards::__private::{
-    RefusalMark, Refused, anonymous_denial, denial_code, denial_of, identifying_guard, produces,
+    NeededPrincipal, RefusalMark, Refused, denial_code, denial_of, identifying_guard, produces,
     required_principal_absent,
 };
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
@@ -61,24 +61,13 @@ fn earned_by_a_rejected_credential(cx: &UnitContext<'_>, principal: TypeId) -> O
         .map(RejectedCredential::denial)
 }
 
-/// A principal the handler of a `#[public]` route reads as an `Ambient`, which a
-/// guard of its chain produces: absent once the guards passed, that guard
-/// admitted the caller without one, and the caller's `401` is the route's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct NeededPrincipal {
-    /// The principal's type.
-    pub(crate) principal: TypeId,
-    /// Where the guard producing it stands in the chain.
-    pub(crate) guard: usize,
-}
-
 /// Run each of `guards`' [`check_http`](Guard::check_http), in order, on the
 /// unit `cx` describes, then refuse a caller they admitted without the
 /// `needed` principal, then run each of the site's class `gates` on the same
 /// unit. The first refusal stops the stage.
 async fn run_guards(
     guards: &[ResolvedLayer<dyn Guard>],
-    needed: Option<NeededPrincipal>,
+    needed: Option<&NeededPrincipal>,
     gates: &[GateFn],
     cx: &mut UnitContext<'_>,
 ) -> Result<(), Refused> {
@@ -95,13 +84,13 @@ async fn run_guards(
             drop(view.take_response());
         }
     }
-    if let Some(needed) = needed
-        && !carries(cx, needed.principal)
-        && let Some(entry) = guards.get(needed.guard)
-    {
-        let denial =
-            earned_by_a_rejected_credential(cx, needed.principal).unwrap_or_else(anonymous_denial);
-        return Err(Refused::by(entry.name, entry.layer.as_ref(), denial));
+    let cx_read: &UnitContext<'_> = cx;
+    if let Some(refused) = needed.and_then(|needed| {
+        needed.refused(cx_read, |principal| {
+            earned_by_a_rejected_credential(cx_read, principal)
+        })
+    }) {
+        return Err(refused);
     }
     for gate in gates {
         gate(cx).map_err(|refused| Refused::Filed(denial_of(&refused)))?;
@@ -185,7 +174,8 @@ impl HttpGuardStage {
     /// `#[public]` route is the caller's `401`.
     fn producing_a_needed_principal(&self) -> Option<&ResolvedLayer<dyn Guard>> {
         self.needed
-            .and_then(|needed| self.guards.get(needed.guard))
+            .as_ref()
+            .map(NeededPrincipal::guard)
             .or_else(|| {
                 self.guards
                     .iter()
@@ -234,7 +224,7 @@ impl HttpGuardStage {
 impl GuardStage for HttpGuardStage {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
-            match run_guards(&self.guards, self.needed, &self.gates, cx).await {
+            match run_guards(&self.guards, self.needed.as_ref(), &self.gates, cx).await {
                 Ok(()) => {
                     self.passed(cx);
                     Ok(())

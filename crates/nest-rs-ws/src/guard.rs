@@ -14,9 +14,10 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::{Container, Failure, Handler, LayerSite, Peer, Posture, UnitContext};
 use nest_rs_guards::__private::{
-    GlobalBucket, GuardSpec, Refused, SiteChainSources, carried_stage_idle, check_guards,
-    client_message, compose_site_chain, denial_code, denial_of, denial_reason, host_chain,
-    identifying_guard, validate_carried_chain, validate_gate_reached, validate_guard_chain,
+    GlobalBucket, GuardSpec, NeededPrincipal, Refused, SiteChainSources, carried_stage_idle,
+    check_guards, client_message, compose_site_chain, denial_code, denial_of, denial_reason,
+    host_chain, identifying_guard, validate_carried_chain, validate_gate_reached,
+    validate_guard_chain,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::OriginRefused;
@@ -45,13 +46,16 @@ pub struct MessageGuards {
     /// The posture withholds the ability from the message's reads: no mask
     /// shapes its reply.
     pub withheld: bool,
+    /// What the message's `Ambient<T>` parameters read, by type.
+    pub ambient: Vec<TypeId>,
 }
 
 /// The guard stage of the message `handler` declares: the app-wide pool and
 /// the message's own guards, each once unless `#[force_guards]` replays one,
-/// then its class gate — `None` when it runs none and has nothing to withhold.
-/// The gateway's own guards ran at the upgrade, so a principal a guard here
-/// requires may be theirs.
+/// then its class gate — `None` when it runs none, needs no principal and has
+/// nothing to withhold. The gateway's own guards ran at the upgrade, so a
+/// principal a guard here requires, or a `#[public]` message reads as an
+/// `Ambient<P>`, may be theirs.
 pub fn message_guard_stage(
     container: &Container,
     handler: &Handler,
@@ -68,16 +72,24 @@ pub fn message_guard_stage(
     let upgrade_chain = || host_chain(container, &declared.upgrade, &site);
     validate_carried_chain(&site, &guards, upgrade_chain)
         .map_err(nest_rs_core::anyhow::Error::msg)?;
+    let needed = if handler.posture() == Posture::Public && !declared.ambient.is_empty() {
+        let upgrade = upgrade_chain().map_err(nest_rs_core::anyhow::Error::msg)?;
+        NeededPrincipal::of(&declared.ambient, guards.iter().chain(&upgrade))
+    } else {
+        None
+    };
     if declared.gate.is_some() {
         validate_gate_reached(&site, &guards, upgrade_chain)
             .map_err(nest_rs_core::anyhow::Error::msg)?;
-    } else if carried_stage_idle(&guards, declared.withheld, upgrade_chain)
-        .map_err(nest_rs_core::anyhow::Error::msg)?
+    } else if needed.is_none()
+        && carried_stage_idle(&guards, declared.withheld, upgrade_chain)
+            .map_err(nest_rs_core::anyhow::Error::msg)?
     {
         return Ok(None);
     }
     Ok(Some(Arc::new(MessageGuardStage {
         guards,
+        needed,
         gate: declared.gate,
         withheld: declared.withheld,
     })))
@@ -88,6 +100,7 @@ pub fn message_guard_stage(
 /// exception filter maps it.
 struct MessageGuardStage {
     guards: Vec<ResolvedLayer<dyn Guard>>,
+    needed: Option<NeededPrincipal>,
     gate: Option<ClassGate>,
     withheld: bool,
 }
@@ -95,9 +108,15 @@ struct MessageGuardStage {
 impl GuardStage for MessageGuardStage {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
-            check_guards(&self.guards, self.gate, self.withheld, cx)
-                .await
-                .map_err(|refused| refuse(cx, refused))
+            check_guards(
+                &self.guards,
+                self.needed.as_ref(),
+                self.gate,
+                self.withheld,
+                cx,
+            )
+            .await
+            .map_err(|refused| refuse(cx, refused))
         })
     }
 
@@ -307,6 +326,7 @@ mod tests {
                 source: LayerSite::Method,
                 layer: Arc::new(guard),
             }],
+            needed: None,
             gate: None,
             withheld: false,
         }
@@ -342,6 +362,7 @@ mod tests {
                 force: Vec::new(),
                 gate: None,
                 withheld: true,
+                ambient: Vec::new(),
             },
         )
         .expect("no guard to resolve");

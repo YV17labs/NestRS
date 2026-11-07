@@ -119,6 +119,17 @@ pub fn tail_param(ty: &Type) -> Option<TailParam> {
     TailParam::named(last_segment_ident(&tp.path))
 }
 
+/// What each `Ambient<T>` among a handler's parameter `types` reads, as the
+/// `Vec<TypeId>` of its `T`s: the principal a guard of the unit's chain produces,
+/// among them, is one a `#[public]` unit admitted without is refused for.
+pub fn ambient_type_ids<'a>(types: impl IntoIterator<Item = &'a Type>) -> TokenStream {
+    let read = types
+        .into_iter()
+        .filter(|ty| tail_param(ty) == Some(TailParam::Ambient))
+        .filter_map(|ty| nth_generic_type(ty, "Ambient", 0));
+    quote!(::std::vec![#(::std::any::TypeId::of::<#read>()),*])
+}
+
 /// Whether a parameter's type is spelled `name<..>`, by its last path segment:
 /// read for a diagnostic or, for `Authorized`, the parameter `bind = Service`
 /// fills.
@@ -645,5 +656,23 @@ mod tests {
             let ty: Type = ty;
             assert_eq!(tail_param(&ty), read, "{}", quote!(#ty));
         }
+    }
+
+    #[test]
+    fn what_an_ambient_parameter_reads_is_its_type_argument() {
+        let types: [Type; 4] = [
+            parse_quote!(nest_rs::core::Ambient<Claims>),
+            parse_quote!(Scoped<Cart>),
+            parse_quote!(Option<Ambient<Tenant>>),
+            parse_quote!(Ambient<Tenant>),
+        ];
+        assert_eq!(
+            ambient_type_ids(&types).to_string(),
+            quote!(::std::vec![
+                ::std::any::TypeId::of::<Claims>(),
+                ::std::any::TypeId::of::<Tenant>()
+            ])
+            .to_string(),
+        );
     }
 }

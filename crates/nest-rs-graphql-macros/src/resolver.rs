@@ -17,11 +17,11 @@ use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
     HandlerSite, HostBorrow, HostMeta, HostMount, InjectableBody, SitePosture, TailParam,
-    VersionedEdge, answer_span, authorized_entity, await_if_async, build_injectable_body,
-    camel_case, cfg_attrs, concrete_signature, delegated_attrs, exception_filter_specs,
-    force_guard_typeids, forwarded_arg_idents, forwarded_idents, from_container_method,
-    guard_capability_bounds, handler_const, handler_ref, host_meta_fn, host_runtime_entry,
-    impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
+    VersionedEdge, ambient_type_ids, answer_span, authorized_entity, await_if_async,
+    build_injectable_body, camel_case, cfg_attrs, concrete_signature, delegated_attrs,
+    exception_filter_specs, force_guard_typeids, forwarded_arg_idents, forwarded_idents,
+    from_container_method, guard_capability_bounds, handler_const, handler_ref, host_meta_fn,
+    host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, injected_per_request_method, injects_impls,
     interceptor_specs, key_as_written, layer_deps, normalize_forwarded_args, nth_generic_type,
     one_role_per_method, piped_input, reject_meta_on_operations, scoped_specs, shared_receiver,
@@ -606,6 +606,8 @@ struct FieldSite<'a> {
     /// Whether the posture withholds the ability from the field's reads, a
     /// `bool` expression.
     withheld: TokenStream2,
+    /// What the field's `Ambient<T>` parameters read, a `Vec<TypeId>` expression.
+    ambient: TokenStream2,
 }
 
 /// The hidden items declaring a field's site beside its handler: the function
@@ -626,6 +628,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         exception_filters,
         gate,
         withheld,
+        ambient,
     } = site;
     let class_gated = gate.is_some();
     let gate = match gate {
@@ -670,7 +673,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         #[doc(hidden)]
         fn #guards_fn(
             __nestrs_container: &::nest_rs_core::Container,
-            _: &::nest_rs_core::Handler,
+            __nestrs_handler: &::nest_rs_core::Handler,
         ) -> ::nest_rs_core::anyhow::Result<
             ::core::option::Option<
                 ::std::sync::Arc<dyn ::nest_rs_core::__private::GuardStage>,
@@ -678,6 +681,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         > {
             ::nest_rs_graphql::__private::field_guard_stage(
                 __nestrs_container,
+                __nestrs_handler,
                 ::nest_rs_graphql::__private::FieldGuards {
                     host: <#self_ty>::__nestrs_resolver_guard_specs(),
                     method: #method_guards,
@@ -686,6 +690,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
                     label: #label,
                     withheld: #withheld,
                     class_gated: #class_gated,
+                    ambient: #ambient,
                 },
             )
         }
@@ -1049,6 +1054,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         // `Scoped(x): Scoped<T>` is a `Scoped<T>` whatever its pattern.
         let tail = tail_args(&sig);
         scoped_params.extend(scoped_types(&tail).map(|ty| (cfgs.clone(), ty)));
+        let ambient = ambient_type_ids(tail.iter().map(|(_, ty, _)| ty));
 
         if is_field {
             if authorize_spec.is_some() || is_public {
@@ -1083,6 +1089,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 exception_filters: &method_exception_filters,
                 gate: None,
                 withheld: quote!(false),
+                ambient: ambient.clone(),
             }));
             site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
             let FieldMethod {
@@ -1349,6 +1356,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 exception_filters: &method_exception_filters,
                 gate,
                 withheld,
+                ambient: ambient.clone(),
             }));
             let site = site_ref(&self_ty, &method_name);
             site_refs.push((cfgs.clone(), site.clone()));

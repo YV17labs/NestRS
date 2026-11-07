@@ -27,12 +27,12 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, Posture, PostureGate,
-    PostureRules, TailParam, answer_span, await_if_async, cfg_attrs, concrete_signature,
-    exception_filter_specs, force_guard_typeids, forwarded_arg_idents, generic_args,
-    guard_capability_bounds, handler_const, handler_ref, impl_self_ident, interceptor_specs,
-    layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
-    reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident, site_fn_ident,
-    tail_param, ungrouped_expr, unit_of_work_required, validate_argument,
+    PostureRules, TailParam, ambient_type_ids, answer_span, await_if_async, cfg_attrs,
+    concrete_signature, exception_filter_specs, force_guard_typeids, forwarded_arg_idents,
+    generic_args, guard_capability_bounds, handler_const, handler_ref, impl_self_ident,
+    interceptor_specs, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
+    piped_input, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
+    site_fn_ident, tail_param, ungrouped_expr, unit_of_work_required, validate_argument,
 };
 use nest_rs_codegen::snake_case;
 
@@ -1336,6 +1336,7 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
         let gate = class_gate(&op.posture);
         let class_gated = op.posture.gate().is_some();
         let withheld = op.posture.withheld();
+        let ambient = ambient_type_ids(op.tail.iter().map(|arg| &arg.ty));
         quote! {
             #handler
 
@@ -1371,6 +1372,7 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
                         kind: #kind,
                         withheld: #withheld,
                         class_gated: #class_gated,
+                        ambient: #ambient,
                     },
                 )
             }

@@ -11,9 +11,10 @@ use crate::{BACKEND_TIMEOUT, Capability, JobId, PushOptions, PushReceipt, QueueN
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum QueueError {
-    /// A job, or a checkpoint's state, could not be converted to or from JSON.
+    /// A job, or a checkpoint's state, could not be converted to or from JSON:
+    /// said by where and what kind, never by the value serde would quote.
     #[error("failed to convert the queue value to or from JSON")]
-    Serialize(#[from] serde_json::Error),
+    Serialize(#[source] nest_rs_core::DecodeError),
     /// The backend rejected or failed the operation. Its own failure is the
     /// `source`, kept opaque so the port names no backend.
     #[error("the queue backend failed")]
@@ -62,16 +63,17 @@ pub enum QueueError {
         /// The backend that does not provide it.
         backend: &'static str,
     },
-    /// A queue name outside the rule [`QueueName`] states.
+    /// A queue name outside the rule [`QueueName`] states, said by what it
+    /// breaks and never by the name, which a raw push takes from its caller.
     #[error(
-        "{name:?} is not a valid queue name: it takes 1 to {max} ASCII letters, digits, `_`, `.` \
-         or `-` — `:` separates the levels of a backend's keys, and whitespace would reach a log \
-         field or a metric label",
+        "invalid queue name: {reason} — a queue name takes 1 to {max} ASCII letters, digits, \
+         `_`, `.` or `-`: `:` separates the levels of a backend's keys, and whitespace would \
+         reach a log field or a metric label",
         max = QueueName::MAX_LEN,
     )]
     InvalidQueueName {
-        /// The value refused, truncated to [`QueueName::MAX_LEN`] characters.
-        name: String,
+        /// Which part of the rule it broke.
+        reason: &'static str,
     },
     /// A unique key no backend could enqueue.
     #[error(
@@ -82,28 +84,27 @@ pub enum QueueError {
         /// Which part of the rule it broke.
         reason: &'static str,
     },
-    /// A job id no push could have minted — see [`JobId::parse`].
-    #[error("{id:?} is not a job id: a job id is a UUID v7, as a push mints it")]
+    /// A job id no push could have minted — see [`JobId::parse`] — said by
+    /// what it is, never by the text, which its caller may have read anywhere.
+    #[error("invalid job id: {reason} — a job id is a UUID v7, as a push mints it")]
     InvalidJobId {
-        /// The value refused, truncated to [`QueueError::SHOWN_ID_LEN`]
-        /// characters.
-        id: String,
+        /// What the text is instead.
+        reason: &'static str,
     },
     /// A push under a unique key another job on the same queue still holds.
     ///
     /// The push filed nothing. The key is held while its job is pending or
     /// running, and is free again once that job completes, dead-letters or is
     /// cancelled — [`cancel_unique`](crate::Jobs::cancel_unique)
-    /// frees it while the job waits.
+    /// frees it while the job waits. It names the job holding the key, never
+    /// the key, which a push most often reads off its payload.
     #[error(
-        "unique key {key:?} on queue `{queue}` is held by job `{holder}`, which is still pending \
-         or running — the push was refused and filed nothing"
+        "the push's unique key on queue `{queue}` is held by job `{holder}`, which is still \
+         pending or running — the push was refused and filed nothing"
     )]
     UniqueKeyHeld {
         /// The queue the push named.
         queue: QueueName,
-        /// The key the push declared.
-        key: String,
         /// The job holding it.
         holder: JobId,
     },
@@ -139,11 +140,15 @@ pub enum QueueError {
     Outbox(#[source] nest_rs_database::OutboxError),
 }
 
-impl QueueError {
-    /// How much of a refused job id an error shows: a UUID's hyphenated form
-    /// and then some, never a pasted blob.
-    pub const SHOWN_ID_LEN: usize = 64;
+/// A serde failure as the port reports one, without the value it quoted: a
+/// driver's `?` on its own decode takes this conversion.
+impl From<serde_json::Error> for QueueError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Serialize(nest_rs_core::DecodeError::new(&error))
+    }
+}
 
+impl QueueError {
     /// Wrap a backend's own failure as [`QueueError::Backend`], without this
     /// crate naming its type — `storage.push(job).await.map_err(QueueError::backend)?`.
     pub fn backend<E>(source: E) -> Self
@@ -294,4 +299,42 @@ pub fn undecodable(queue: &str, error: &nest_rs_core::DecodeError) -> JobError {
         Some(path) => format!("failed to deserialize job for queue `{queue}` at `{path}`: {error}"),
         None => format!("failed to deserialize job for queue `{queue}`: {error}"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A refusal of what a caller handed the port says it by kind: no reader —
+    /// `error_message`, a `{:?}`, a `main` returning it — prints the value.
+    #[test]
+    fn no_refusal_of_a_callers_value_prints_it() {
+        let marked = "zzqx-sk_live";
+        let decoded = serde_json::from_str::<u64>(&format!("\"{marked}\""));
+        for refused in [
+            JobId::parse(marked).expect_err("no UUID"),
+            JobId::parse(&format!("{marked}-9f0c1f6e-1d2b-4c3a-8e7f-2a1b3c4d5e6f"))
+                .expect_err("no UUID"),
+            QueueName::new(format!("{marked}:audio")).expect_err("a `:`"),
+            QueueName::new(format!("{marked}{}", "x".repeat(QueueName::MAX_LEN)))
+                .expect_err("too long"),
+            QueueError::from(decoded.expect_err("not a number")),
+        ] {
+            let printed = nest_rs_testing::printed(&refused);
+            assert!(!printed.contains(marked), "{printed}");
+        }
+    }
+
+    #[test]
+    fn a_serde_failure_says_where_it_stopped_in_its_sentence_and_names_no_path() {
+        let decoded = serde_json::from_str::<u64>("\"zzqx\"").expect_err("not a number");
+        let QueueError::Serialize(report) = QueueError::from(decoded) else {
+            panic!("a serde failure is the port's `Serialize`");
+        };
+        assert_eq!(report.path(), None);
+        assert_eq!(
+            report.to_string(),
+            "invalid type: a string, expected u64 at line 1 column 6"
+        );
+    }
 }

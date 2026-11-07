@@ -152,13 +152,12 @@ impl<I: Instance> JobProducer for RedisQueueProducer<I> {
         let keys = self.keys.of(queue);
         let mut push = SCRIPTS.push.keys(&keys.transition()[..7]);
         push.arg(after);
-        let mut unique_keys = Vec::with_capacity(envelopes.len());
+        let pushed = envelopes.len();
         for envelope in envelopes {
             let id = envelope.id().to_string();
             let unique = envelope.unique_key().unwrap_or_default().to_owned();
             let record = serde_json::to_vec(&envelope.into_json())?;
             push.arg(id).arg(record).arg(&unique);
-            unique_keys.push(unique);
         }
         let answer: redis::Value = self.conn.invoke(&push).await.map_err(QueueError::backend)?;
         match answer {
@@ -166,8 +165,9 @@ impl<I: Instance> JobProducer for RedisQueueProducer<I> {
             redis::Value::Array(refused) => {
                 let held = redis::from_redis_value::<(usize, String)>(redis::Value::Array(refused))
                     .ok()
-                    .and_then(|(at, holder)| Some((unique_keys.get(at)?.clone(), holder)));
-                let Some((key, holder)) = held else {
+                    .filter(|(at, _)| *at < pushed)
+                    .map(|(_, holder)| holder);
+                let Some(holder) = held else {
                     return Err(QueueError::backend(UnexpectedReply {
                         call: "the push",
                         expected: "the position of a job pushed, and a job id",
@@ -175,7 +175,6 @@ impl<I: Instance> JobProducer for RedisQueueProducer<I> {
                 };
                 Err(QueueError::UniqueKeyHeld {
                     queue: queue.clone(),
-                    key,
                     holder: JobId::parse(&holder)?,
                 })
             }

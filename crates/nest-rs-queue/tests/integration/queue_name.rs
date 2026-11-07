@@ -37,7 +37,8 @@ fn the_decorators_copy_of_the_rule_agrees_with_the_port() {
 /// site in front, so a limit or a reason changed on one side fails here.
 #[test]
 fn the_decorators_refusal_is_the_ports_with_the_site_in_front() {
-    for value in ["billing:invoices", "tenant#acme", ""] {
+    let too_long = "a".repeat(QueueName::MAX_LEN + 1);
+    for value in ["billing:invoices", "tenant#acme", "", too_long.as_str()] {
         let port = QueueName::new(value.to_owned())
             .expect_err("outside the rule")
             .to_string();
@@ -46,10 +47,7 @@ fn the_decorators_refusal_is_the_ports_with_the_site_in_front() {
             format!("#[queue] `name`: {port}"),
         );
     }
-    let too_long = "a".repeat(QueueName::MAX_LEN + 1);
-    let port = QueueName::new(too_long.clone())
-        .expect_err("too long")
-        .to_string();
+    let port = QueueName::new(too_long).expect_err("too long").to_string();
     assert!(
         port.contains(&format!("1 to {}", QueueName::MAX_LEN)),
         "{port}"

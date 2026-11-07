@@ -33,8 +33,11 @@ impl JobId {
     pub fn parse(raw: &str) -> Result<Self, QueueError> {
         match Uuid::try_parse(raw) {
             Ok(uuid) if uuid.get_version_num() == 7 => Ok(Self(uuid)),
-            _ => Err(QueueError::InvalidJobId {
-                id: raw.chars().take(QueueError::SHOWN_ID_LEN).collect(),
+            Ok(_) => Err(QueueError::InvalidJobId {
+                reason: "it is a UUID of another version",
+            }),
+            Err(_) => Err(QueueError::InvalidJobId {
+                reason: "it is no UUID",
             }),
         }
     }
@@ -127,12 +130,18 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_id_is_shown_truncated() {
-        let error = JobId::parse(&"x".repeat(500)).expect_err("refused");
-        let QueueError::InvalidJobId { id } = &error else {
-            panic!("{error:?}");
-        };
-        assert_eq!(id.len(), QueueError::SHOWN_ID_LEN);
+    fn a_refused_id_is_said_by_what_it_is() {
+        let v4 = "9f0c1f6e-1d2b-4c3a-8e7f-2a1b3c4d5e6f";
+        for (refused, reason) in [
+            ("x".repeat(500), "it is no UUID"),
+            (v4.to_owned(), "it is a UUID of another version"),
+        ] {
+            let error = JobId::parse(&refused).expect_err("refused");
+            assert!(
+                matches!(error, QueueError::InvalidJobId { reason: said } if said == reason),
+                "{error:?}"
+            );
+        }
     }
 
     #[test]

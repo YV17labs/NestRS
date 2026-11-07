@@ -84,7 +84,6 @@ impl JobProducer for RecordingProducer {
             {
                 return Err(QueueError::UniqueKeyHeld {
                     queue: queue.clone(),
-                    key: key.to_owned(),
                     holder: holder.clone(),
                 });
             }
@@ -369,15 +368,17 @@ async fn a_unique_push_under_a_held_key_is_refused_naming_the_holder() {
         .push_with(TranscodeQueue, song(), unique.clone())
         .await
         .expect_err("the key is held");
-    let QueueError::UniqueKeyHeld { queue, key, holder } = &refused else {
+    let QueueError::UniqueKeyHeld { queue, holder, .. } = &refused else {
         panic!("{refused:?}");
     };
-    assert_eq!((queue.as_str(), key.as_str()), ("transcode", "song-1"));
+    assert_eq!(queue.as_str(), "transcode");
     assert_eq!(holder, first.id());
-    let sentence = refused.to_string();
+    let sentence = nest_rs_core::error_message(&refused);
+    assert!(sentence.contains(&first.id().to_string()), "{sentence}");
+    let printed = nest_rs_testing::printed(&refused);
     assert!(
-        sentence.contains(&first.id().to_string()) && sentence.contains("song-1"),
-        "{sentence}"
+        !printed.contains("song-1"),
+        "the key is the pusher's: {printed}"
     );
 
     assert!(
@@ -578,7 +579,10 @@ async fn a_unique_cancel_names_its_queue_and_checks_its_key_before_the_backend_s
     let cancelled = logs.expect_one(nest_rs_queue::TARGET, "unique job cancelled");
     assert_eq!(cancelled.level, "info");
     assert_eq!(cancelled.field("queue").as_deref(), Some("transcode"));
-    assert_eq!(cancelled.field("unique_key").as_deref(), Some(HELD_KEY));
+    assert!(
+        !cancelled.quotes(HELD_KEY),
+        "the key is the caller's: {cancelled:#?}"
+    );
 }
 
 /// A backend declaring cancellation and overriding neither removal.

@@ -124,12 +124,14 @@ pub(crate) fn check(
     let mut refusals = Vec::new();
     let mut checked = Vec::with_capacity(methods.len());
     for method in &methods {
-        // An entry built by hand, not by the decorator, reaches the boot unchecked.
+        // An entry built by hand, not by the decorator, reaches the boot unchecked;
+        // its name is code, so the boot names it.
         match QueueName::new(method.queue()) {
             Ok(queue) => checked.push((*method, queue)),
             Err(refused) => refusals.push(format!(
-                "`{}` drains a queue whose name is refused: {refused}",
-                method.name()
+                "`{}` drains the queue {:?}, whose name is refused: {refused}",
+                method.name(),
+                method.queue(),
             )),
         }
         // A window under a millisecond is zero to a store counting in

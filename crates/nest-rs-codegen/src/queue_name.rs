@@ -15,11 +15,19 @@ pub fn is_valid_queue_name(value: &str) -> bool {
 }
 
 /// The refusal of a `#[queue]` literal outside the rule — the runtime's
-/// sentence with the site in front.
+/// sentence with the site in front, which says the part of the rule broken and
+/// never the name: at runtime it may be a caller's.
 pub fn invalid_queue_name(attr: &str, key: &str, value: &str) -> String {
+    let reason = if value.is_empty() {
+        "it is empty"
+    } else if value.len() > MAX_LEN {
+        "it is too long"
+    } else {
+        "it holds a character no queue name takes"
+    };
     format!(
-        "{}: {value:?} is not a valid queue name: it takes 1 to {MAX_LEN} ASCII letters, \
-         digits, `_`, `.` or `-` — `:` separates the levels of a backend's keys, and \
+        "{}: invalid queue name: {reason} — a queue name takes 1 to {MAX_LEN} ASCII letters, \
+         digits, `_`, `.` or `-`: `:` separates the levels of a backend's keys, and \
          whitespace would reach a log field or a metric label",
         crate::args::site(attr, Some(key)),
     )

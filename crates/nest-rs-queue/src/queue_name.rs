@@ -25,13 +25,10 @@ impl QueueName {
     /// a backend's record or from the raw push hatch.
     pub fn new(name: impl Into<Cow<'static, str>>) -> Result<Self, QueueError> {
         let name = name.into();
-        if is_valid_queue_name(&name) {
-            return Ok(Self(name));
+        match refusal(&name) {
+            None => Ok(Self(name)),
+            Some(reason) => Err(QueueError::InvalidQueueName { reason }),
         }
-        // Truncated before it reaches an error message a log line will carry: a
-        // raw name is the caller's input and has no length limit of its own.
-        let shown: String = name.chars().take(Self::MAX_LEN).collect();
-        Err(QueueError::InvalidQueueName { name: shown })
     }
 
     /// The whole wire name.
@@ -43,11 +40,23 @@ impl QueueName {
 /// Whether `value` follows the rule a queue name follows; public so the
 /// decorator's compile-time copy of the rule is pinned to it.
 pub fn is_valid_queue_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= QueueName::MAX_LEN
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+    refusal(value).is_none()
+}
+
+/// Which part of the rule `value` breaks, if any.
+fn refusal(value: &str) -> Option<&'static str> {
+    if value.is_empty() {
+        Some("it is empty")
+    } else if value.len() > QueueName::MAX_LEN {
+        Some("it is too long")
+    } else if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+    {
+        Some("it holds a character no queue name takes")
+    } else {
+        None
+    }
 }
 
 impl fmt::Display for QueueName {
@@ -116,10 +125,20 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_name_is_shown_truncated_and_escaped() {
-        let error = QueueName::new(format!("{}\u{7}", "x".repeat(400))).expect_err("refused");
-        let rendered = error.to_string();
-        assert!(rendered.len() < 400, "{rendered}");
-        assert!(!rendered.contains('\u{7}'), "{rendered:?}");
+    fn a_refused_name_is_said_by_the_part_of_the_rule_it_breaks() {
+        for (refused, reason) in [
+            (String::new(), "it is empty"),
+            ("x".repeat(400), "it is too long"),
+            (
+                "tenant#acme".to_owned(),
+                "it holds a character no queue name takes",
+            ),
+        ] {
+            let error = QueueName::new(refused).expect_err("refused");
+            assert!(
+                matches!(error, QueueError::InvalidQueueName { reason: said } if said == reason),
+                "{error:?}"
+            );
+        }
     }
 }

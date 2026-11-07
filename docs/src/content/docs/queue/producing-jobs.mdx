@@ -220,8 +220,8 @@ see [Delivery on Redis](/queue/delivery/#delayed-jobs).
 
 A unique key keeps a queue from holding the same piece of work twice. While a
 job pushed under a key is pending or running, a second push under that key is
-refused with `QueueError::UniqueKeyHeld`, which names the job holding it, and
-files nothing:
+refused with `QueueError::UniqueKeyHeld`, which names the job holding it, never
+the key, which a push most often reads off its payload, and files nothing:
 
 ```rust title="crates/features/src/audio/service.rs"
 let pushed = self

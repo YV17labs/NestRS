@@ -159,12 +159,7 @@ pub(crate) async fn cancel_unique(
     .await?
         || unkept;
     if removed {
-        tracing::info!(
-            target: TARGET,
-            queue = %queue,
-            unique_key = key,
-            "unique job cancelled",
-        );
+        tracing::info!(target: TARGET, queue = %queue, "unique job cancelled");
     }
     Ok(removed)
 }

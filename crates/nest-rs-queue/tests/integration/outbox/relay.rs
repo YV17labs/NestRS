@@ -109,7 +109,6 @@ impl JobProducer for Filing {
                 {
                     return Err(QueueError::UniqueKeyHeld {
                         queue: queue.clone(),
-                        key: key.to_owned(),
                         holder: holder.clone(),
                     });
                 }

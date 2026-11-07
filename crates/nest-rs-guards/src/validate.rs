@@ -3,6 +3,8 @@
 //! chain whose declarations cannot line up fails boot with a named error
 //! instead of answering `500` on every request.
 
+use std::any::TypeId;
+
 use nest_rs_core::__private::{
     ResolvedLayer, compose_chain, dedup_bucket, resolve_scoped, shorten,
 };
@@ -182,12 +184,10 @@ pub fn validate_carried_chain(
     let request = request()?;
     validate_phase_order(label, &first_runs(request.iter().chain(unit)))?;
     for (at, guard, expected) in required {
-        let attached = request.iter().chain(&unit[..at]).any(|entry| {
-            entry
-                .layer
-                .produced_principal()
-                .is_some_and(|produced| produced.type_id == expected.type_id)
-        });
+        let attached = request
+            .iter()
+            .chain(&unit[..at])
+            .any(|entry| produces(entry, expected.type_id));
         if !attached {
             return Err(unattached(label, guard, expected));
         }
@@ -278,6 +278,15 @@ pub fn identifies(entry: &ResolvedLayer<dyn Guard>) -> bool {
         entry.layer.phase(),
         GuardPhase::Authentication | GuardPhase::Authorization
     )
+}
+
+/// Whether `entry` declares that it attaches the principal of the type
+/// `principal` names.
+pub fn produces(entry: &ResolvedLayer<dyn Guard>, principal: TypeId) -> bool {
+    entry
+        .layer
+        .produced_principal()
+        .is_some_and(|produced| produced.type_id == principal)
 }
 
 #[cfg(test)]

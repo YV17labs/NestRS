@@ -15,7 +15,7 @@ use nest_rs_core::__private::{
 use nest_rs_core::LayerSite;
 use nest_rs_core::{Container, Handler, Posture};
 use nest_rs_guards::__private::{
-    GuardSpec, boot_validate_guards, resolve_global_guards, validate_gate_reached,
+    GuardSpec, boot_validate_guards, produces, resolve_global_guards, validate_gate_reached,
     validate_route_chain,
 };
 use nest_rs_guards::Guard;
@@ -199,12 +199,7 @@ fn needed_principal(
     ambient: &[TypeId],
 ) -> Option<NeededPrincipal> {
     ambient.iter().find_map(|principal| {
-        let guard = chain.iter().position(|entry| {
-            entry
-                .layer
-                .produced_principal()
-                .is_some_and(|produced| produced.type_id == *principal)
-        })?;
+        let guard = chain.iter().position(|entry| produces(entry, *principal))?;
         Some(NeededPrincipal {
             principal: *principal,
             guard,

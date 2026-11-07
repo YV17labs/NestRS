@@ -69,14 +69,12 @@ impl TrustedProxy {
             return Err(NotATrustedProxy::EveryAddress);
         }
         let past_the_prefix = match network {
-            IpAddr::V4(v4) => match v4.to_bits().checked_shl(prefix as u32) {
-                Some(rest) => rest != 0,
-                None => false,
-            },
-            IpAddr::V6(v6) => match v6.to_bits().checked_shl(prefix as u32) {
-                Some(rest) => rest != 0,
-                None => false,
-            },
+            IpAddr::V4(v4) => {
+                matches!(v4.to_bits().checked_shl(prefix as u32), Some(rest) if rest != 0)
+            }
+            IpAddr::V6(v6) => {
+                matches!(v6.to_bits().checked_shl(prefix as u32), Some(rest) if rest != 0)
+            }
         };
         if past_the_prefix {
             return Err(NotATrustedProxy::BitsPastPrefix);
@@ -95,12 +93,12 @@ impl TrustedProxy {
 
     /// The first and the last address this entry holds, as its family's bits.
     fn span(self) -> (u128, u128) {
-        let (first, length) = match self.network {
-            IpAddr::V4(v4) => (u128::from(v4.to_bits()), 32),
-            IpAddr::V6(v6) => (v6.to_bits(), 128),
+        let first = match self.network {
+            IpAddr::V4(v4) => u128::from(v4.to_bits()),
+            IpAddr::V6(v6) => v6.to_bits(),
         };
         // From 1, the prefix leaves at most 127 bits: a valid shift.
-        let host_bits = u32::from(length - self.prefix);
+        let host_bits = u32::from(full_length(self.network) - self.prefix);
         (first, first | ((1_u128 << host_bits) - 1))
     }
 

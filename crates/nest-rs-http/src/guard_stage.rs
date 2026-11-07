@@ -19,7 +19,7 @@ use nest_rs_core::__private::{
 };
 use nest_rs_core::{AmbientValue, DenialDocument, Failure, Handler, UnitContext};
 use nest_rs_guards::__private::{
-    RefusalMark, Refused, anonymous_denial, denial_code, denial_of, identifying_guard,
+    RefusalMark, Refused, anonymous_denial, denial_code, denial_of, identifying_guard, produces,
     required_principal_absent,
 };
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
@@ -194,14 +194,7 @@ impl HttpGuardStage {
             .map(|needed| needed.principal)
             .into_iter()
             .chain(required)
-            .find_map(|principal| {
-                self.guards.iter().find(|entry| {
-                    entry
-                        .layer
-                        .produced_principal()
-                        .is_some_and(|produced| produced.type_id == principal)
-                })
-            })
+            .find_map(|principal| self.guards.iter().find(|entry| produces(entry, principal)))
     }
 
     /// The stage refusing, once its guards passed, a caller they admitted

@@ -312,24 +312,18 @@ impl Hop {
         if let Ok(ip) = node.parse::<IpAddr>() {
             return Ok(Self::Address(ip.to_canonical()));
         }
-        let name = match node.strip_prefix('[') {
-            Some(bracketed) => {
-                let (inside, after) = bracketed.split_once(']').ok_or(Unreadable)?;
-                let ip = inside.parse::<Ipv6Addr>().ok().ok_or(Unreadable)?;
-                return match after {
-                    "" => Ok(Self::Address(IpAddr::V6(ip).to_canonical())),
-                    _ => after
-                        .strip_prefix(':')
-                        .filter(|port| is_port(port))
-                        .map(|_| Self::Address(IpAddr::V6(ip).to_canonical()))
-                        .ok_or(Unreadable),
-                };
+        if let Some(bracketed) = node.strip_prefix('[') {
+            let (inside, after) = bracketed.split_once(']').ok_or(Unreadable)?;
+            let ip = inside.parse::<Ipv6Addr>().ok().ok_or(Unreadable)?;
+            if !(after.is_empty() || after.strip_prefix(':').is_some_and(is_port)) {
+                return Err(Unreadable);
             }
-            None => match node.rsplit_once(':') {
-                Some((name, port)) if is_port(port) => name,
-                Some(_) => return Err(Unreadable),
-                None => node,
-            },
+            return Ok(Self::Address(IpAddr::V6(ip).to_canonical()));
+        }
+        let name = match node.rsplit_once(':') {
+            Some((name, port)) if is_port(port) => name,
+            Some(_) => return Err(Unreadable),
+            None => node,
         };
         if name.eq_ignore_ascii_case("unknown") || is_obfuscated(name) {
             return Ok(Self::Withheld);
@@ -343,10 +337,8 @@ impl Hop {
 
 /// RFC 7239 §6's `node-port`: a port number, or an obfuscated one.
 fn is_port(port: &str) -> bool {
-    is_obfuscated(port)
-        || (!port.is_empty()
-            && port.bytes().all(|b| b.is_ascii_digit())
-            && port.parse::<u16>().is_ok())
+    // `u16`'s parser takes a leading `+`, which no port writes.
+    is_obfuscated(port) || (port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok())
 }
 
 /// RFC 7239 §6.3's `obfnode` and `obfport`: `_` and one or more letters, digits,

@@ -143,7 +143,7 @@ async fn refusals_filed(headers: &[(&str, &str)]) -> usize {
         "forwarding headers disagree about the client — neither is believed",
     ]
     .iter()
-    .map(|message| logs.find("nest_rs::http", message).len())
+    .map(|message| logs.find(nest_rs_http::target::HTTP, message).len())
     .sum()
 }
 

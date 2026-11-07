@@ -2165,8 +2165,10 @@ lists what the boot, a log or the wire shows when one is missed.
   included: list it as the browser sends it.
 - **`<PREFIX>_HTTP__TRUSTED_PROXIES`** with a `/0` (`0.0.0.0/0`, `::/0`) or a
   range with address bits set past its prefix (`10.0.0.1/8`) fails the boot
-  naming the entry's place, and ranges holding every address of a family between
-  them (`0.0.0.0/1,128.0.0.0/1`) fail it naming the variable, as a list pinned in
+  naming the entry's place, and ranges holding between them every address of a
+  family a caller connects from (`0.0.0.0/1,128.0.0.0/1`, or
+  `0.0.0.0/1,128.0.0.0/2,192.0.0.0/3`, short only of multicast and reserved
+  space) fail it naming the variable, as a list pinned in
   code does. Name your proxies' own range, written from its first address; in
   code, a `trusted_proxy!` literal the type refuses does not compile.
 - **A listed proxy writing a forwarding header the parser cannot read** — a

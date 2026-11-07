@@ -319,8 +319,10 @@ pub struct HttpConfig {
     /// and `/mcp`, where a trusted proxy's `Forwarded` (`proto=`, `host=`) or
     /// `X-Forwarded-Proto` / `X-Forwarded-Host` set the request's own origin;
     /// an entry that is no [`TrustedProxy`], a `/0` among them, aborts the boot,
-    /// and so do ranges holding every address of a family between them
-    /// (`0.0.0.0/1,128.0.0.0/1`), from the environment and from code alike. See
+    /// and so do ranges holding between them every address of a family a caller
+    /// connects from (`0.0.0.0/1,128.0.0.0/1`, or `0.0.0.0/1,128.0.0.0/2,192.0.0.0/3`,
+    /// short only of multicast and reserved space), from the environment and from
+    /// code alike. See
     /// `ClientOrigin` for the resolution rule.
     #[config(with = trusted_proxies)]
     pub trusted_proxies: Vec<TrustedProxy>,
@@ -638,8 +640,9 @@ fn trusted_proxies(
         return Ok(proxies);
     };
     let refused = format!(
-        "holds ranges that between them hold every {family} address, under which every caller \
-         could forge the address it is attributed to; name your proxies' own ranges"
+        "holds ranges that between them hold every {family} address a caller connects from, \
+         under which every caller could forge the address it is attributed to; name your \
+         proxies' own ranges"
     );
     Err(match from_env {
         Some(setting) => setting.refuse(format_args!("is a list that {refused}")),
@@ -910,15 +913,18 @@ mod tests {
         );
     }
 
-    /// Two ranges holding every address of a family between them believe every
-    /// caller, as `/0` would: refused at boot, from the environment and from
-    /// code alike, naming the variable and never the list.
+    /// Ranges holding between them every address of a family a caller connects
+    /// from believe every caller, as `/0` would, whatever multicast or reserved
+    /// space they leave out: refused at boot, from the environment and from code
+    /// alike, naming the variable and never the list.
     #[test]
     fn a_list_whose_ranges_hold_a_whole_family_fails_the_boot() {
         for list in [
             "0.0.0.0/1,128.0.0.0/1",
             "10.0.0.1,128.0.0.0/2,0.0.0.0/1,192.0.0.0/2",
             "::/1,8000::/1",
+            "0.0.0.0/1,128.0.0.0/2,192.0.0.0/3",
+            "::/1,8000::/2,c000::/3,e000::/4,f000::/5,f800::/6,fc00::/7,fe00::/8",
         ] {
             let env = ConfigService::with_vars("http", [("TRUSTED_PROXIES", list)]);
             let refused = HttpConfig::from_env(&env, HttpConfig::default())

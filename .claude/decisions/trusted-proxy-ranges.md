@@ -127,3 +127,17 @@ panicked at the boot. Security and the developer decided:
 Refused: **a `const fn` parsing the text itself**, which would re-implement the standard library's
 address grammar for one literal; **a range's breadth past the whole family** (a `/1` alone): where
 to draw a line short of every address is the deployment's statement, not a fact.
+
+## 2026-11-07: what no caller connects from counts as held
+
+Run: `0.0.0.0/1,128.0.0.0/2,192.0.0.0/3` booted, believing every unicast IPv4 caller; what it left
+out, `224.0.0.0/4` multicast and `240.0.0.0/4` reserved (RFC 1112 §4), no caller reaching a server
+holds. In IPv6, eight entries short of `ff00::/8` did the same. Security decided: the sweep counts
+as held, beside the list's own spans, what no caller connects from — those two IPv4 ranges, IPv6's
+multicast `ff00::/8` (RFC 4291 §2.7), and the mapped `::ffff:0:0/96`, which a peer reads as the
+IPv4 address it carries. This revises the entry above: a list missing only the mapped range is a
+whole family too, and the refusal still states a fact, now of what a caller can be.
+
+Refused: **a list holding every globally routable address** (all of the public space, short of a
+private range): it reads IANA's special-purpose registry, which moves, and such a list is written
+range by range, never by accident; it stays the deployment's statement.

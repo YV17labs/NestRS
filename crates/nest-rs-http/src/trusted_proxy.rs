@@ -2,7 +2,7 @@
 //! or a CIDR range, parsed once at boot and compared per request.
 
 use std::borrow::Cow;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 use nest_rs_config::FromSetting;
@@ -149,9 +149,34 @@ const fn full_length(network: IpAddr) -> u8 {
     }
 }
 
-/// The family every address of which `proxies` hold between them, a `/0` in all
-/// but name (`0.0.0.0/1` and `128.0.0.0/1`), which the boot refuses as it does a
-/// `/0`: under it every caller could forge the address it is attributed to.
+/// What no caller connects from, held by every list: IPv4's multicast and reserved
+/// ranges, `224.0.0.0/4` and `240.0.0.0/4` (RFC 1112 §4), IPv6's multicast
+/// `ff00::/8` (RFC 4291 §2.7), and the mapped `::ffff:0:0/96`, which a peer reads
+/// as the IPv4 address it carries.
+const NO_CALLER: [TrustedProxy; 4] = [
+    TrustedProxy {
+        network: IpAddr::V4(Ipv4Addr::new(224, 0, 0, 0)),
+        prefix: 4,
+    },
+    TrustedProxy {
+        network: IpAddr::V4(Ipv4Addr::new(240, 0, 0, 0)),
+        prefix: 4,
+    },
+    TrustedProxy {
+        network: IpAddr::V6(Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0)),
+        prefix: 8,
+    },
+    TrustedProxy {
+        network: IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0, 0)),
+        prefix: MAPPED_PREFIX,
+    },
+];
+
+/// The family every address a caller connects from of which `proxies` hold
+/// between them, a `/0` in all but name (`0.0.0.0/1` and `128.0.0.0/1`, or
+/// `0.0.0.0/1,128.0.0.0/2,192.0.0.0/3`, which leaves out only [`NO_CALLER`]'s),
+/// which the boot refuses as it does a `/0`: under it every caller could forge
+/// the address it is attributed to.
 pub(crate) fn whole_family(proxies: &[TrustedProxy]) -> Option<&'static str> {
     [
         ("IPv4", false, u128::from(u32::MAX)),
@@ -161,6 +186,7 @@ pub(crate) fn whole_family(proxies: &[TrustedProxy]) -> Option<&'static str> {
     .find_map(|(family, v6, last)| {
         let mut spans: Vec<_> = proxies
             .iter()
+            .chain(&NO_CALLER)
             .filter(|proxy| proxy.network.is_ipv6() == v6)
             .map(|proxy| proxy.span())
             .collect();
@@ -320,13 +346,31 @@ mod tests {
             (&["0.0.0.0/1", "0.0.0.0/2", "128.0.0.0/1"], Some("IPv4")),
             (&["::/1", "8000::/1"], Some("IPv6")),
             (&["::ffff:0.0.0.0/97", "::ffff:128.0.0.0/97"], Some("IPv4")),
-            (&["0.0.0.0/1", "128.0.0.0/2"], None),
-            (&["0.0.0.0/1", "192.0.0.0/2"], None),
-            (&["0.0.0.0/1", "::/1", "8000::/2"], None),
+            (&["0.0.0.0/1", "128.0.0.0/2", "192.0.0.0/3"], Some("IPv4")),
+            (
+                &["0.0.0.0/1", "128.0.0.0/2", "192.0.0.0/3", "240.0.0.0/4"],
+                Some("IPv4"),
+            ),
             (
                 &["255.255.255.255", "0.0.0.0/1", "128.0.0.0/2", "192.0.0.0/3"],
+                Some("IPv4"),
+            ),
+            (
+                &[
+                    "::/1", "8000::/2", "c000::/3", "e000::/4", "f000::/5", "f800::/6", "fc00::/7",
+                    "fe00::/8",
+                ],
+                Some("IPv6"),
+            ),
+            (&["0.0.0.0/1", "128.0.0.0/2"], None),
+            (&["0.0.0.0/1", "192.0.0.0/2"], None),
+            (&["0.0.0.0/1", "128.0.0.0/2", "192.0.0.0/4"], None),
+            (&["0.0.0.0/1", "::/1", "8000::/2"], None),
+            (
+                &["::/1", "8000::/2", "c000::/3", "e000::/4", "f000::/5"],
                 None,
             ),
+            (&["224.0.0.0/4"], None),
             (&[], None),
         ] {
             assert_eq!(whole_family(&list(entries)), family, "{entries:?}");

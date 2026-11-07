@@ -187,9 +187,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   `#[public]` route taking one answers an anonymous caller the wiring `500`
   and lists no `401`. Close: a trait probe on the parameter's type, as
   `__body_of!` reads a body. *read*
-- A trusted-proxy list holding all of IPv6 but `::ffff:0:0/96` boots, though
-  it believes every IPv6 caller. Close: count the mapped range as held, in
-  `whole_family`. Kept: nobody writes it by accident. *read*
 - No real proxy has run against the forwarding-header reader, and hyper's
   HTTP/2 header-list refusal and a `414` are pinned by no test. *read*
 - A `multipart/form-data` type RFC 9110 §5.6.6 admits and mime 0.3 refuses,

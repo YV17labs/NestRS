@@ -197,11 +197,12 @@ The rest of the rule:
 - A chain over several field lines is one list, in order: a proxy may add its
   own line after the caller's (RFC 7239 §4), and that line stays the rightmost.
   `X-Real-IP` names one hop, so its last line is the one read.
-- A header is read whole or not at all. A hop that is no address, bytes no text
+- A chain is read whole or not at all. A hop that is no address, bytes no text
   holds or a quote no quote closes make the header unreadable, and a node the
   proxy withheld (`unknown`) where the client stands names nobody: either way the
   request counts against the proxy's own bucket, whatever the other headers say,
-  so no hop a caller wrote becomes its key.
+  so no hop a caller wrote becomes its key. `X-Real-IP`, one hop in no order, is
+  read only where neither chain names a client, and refused the same way there.
 - An entry of `TRUSTED_PROXIES` that is no address or CIDR range, a `/0`, or a
   range with address bits set past its prefix (`10.0.0.1/8`), **aborts the boot**
   naming the variable and the entry's place in the list, never its value — never

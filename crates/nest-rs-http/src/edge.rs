@@ -313,7 +313,7 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         let arrival = req.take_arrival().unwrap_or_else(Instant::now);
         // Resolved once so the context, the echoed header and the access line agree
         // on one id; the origin first, because the id's gate reads it.
-        let origin = ClientOrigin::of_with(&req, &self.trusted_proxies);
+        let (origin, refused) = ClientOrigin::of_with(&req, &self.trusted_proxies);
         let correlation = trace_context::resolve(&req, origin);
         let method = self.known_methods.name(req.method());
         req.set_verb(method.clone());
@@ -331,6 +331,11 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
 
         // Built here, not in `handle`: a streaming body outlives that future.
         let continuation = RequestContinuation::new(Some(self.scopes.open()), correlation.clone());
+        // Resolved before the request's correlation existed, filed once it does,
+        // so the line joins the request it refused a client for.
+        if let Some(refused) = refused {
+            span.in_scope(|| continuation.enter(|| refused.file()));
+        }
         // Held across every await: a request dropped at one (shutdown, client reset)
         // still names its span, records the failure and files its line `cancelled`.
         let unanswered = Unanswered::hold(log, &continuation, &span, &method, &matched);

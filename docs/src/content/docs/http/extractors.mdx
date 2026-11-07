@@ -212,12 +212,14 @@ forwarding header when that peer is a proxy you listed:
    obfuscated `_id` names no address, so where it stands for the client, the
    proxy withheld it and no client is named.
 
-A header is read whole or not at all. One the parser cannot read — a quote no
+A chain is read whole or not at all. One the parser cannot read — a quote no
 quote closes, a pair with no `=`, a hop that is no address — names no client,
 whatever the other headers say: the proxy's own address answers, and one `warn`
-on `nest_rs::http` names the header, never what it held. A quote left open is
-the reason: a proxy appending a quoted value to a caller's line would close the
-caller's quote, and the caller's own hop would read as the rightmost.
+on `nest_rs::http`, filed inside the request, names the header, never what it
+held. A quote left open is the reason: a proxy appending a quoted value to a
+caller's line would close the caller's quote, and the caller's own hop would
+read as the rightmost. `X-Real-IP`, one hop in no order, is read only where
+neither chain names a client, and refused the same way there.
 
 With no trusted proxy configured — the default — step 2 always wins, so
 `forwarded` stays `false` and a header a caller sets changes nothing.

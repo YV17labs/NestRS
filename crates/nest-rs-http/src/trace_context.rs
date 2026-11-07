@@ -308,7 +308,7 @@ mod tests {
     }
 
     fn resolve(req: &Request, trusted_proxies: &[TrustedProxy]) -> Correlation {
-        super::resolve(req, ClientOrigin::of_with(req, trusted_proxies))
+        super::resolve(req, ClientOrigin::of_with(req, trusted_proxies).0)
     }
 
     /// A request from `peer`, carrying `headers`.
@@ -427,14 +427,14 @@ mod tests {
         assert_eq!(
             upstream_request_id(
                 &trusted,
-                ClientOrigin::of_with(&trusted, &[proxy("10.0.0.1")])
+                ClientOrigin::of_with(&trusted, &[proxy("10.0.0.1")]).0
             ),
             Some(NGINX_REQUEST_ID),
         );
         assert_eq!(
             upstream_request_id(
                 &untrusted,
-                ClientOrigin::of_with(&untrusted, &[proxy("10.0.0.1")])
+                ClientOrigin::of_with(&untrusted, &[proxy("10.0.0.1")]).0
             ),
             None,
         );
@@ -466,7 +466,7 @@ mod tests {
         ] {
             let req = req_from("10.0.0.1", &[(UPSTREAM_REQUEST_ID_HEADER, sent)]);
             assert_eq!(
-                upstream_request_id(&req, ClientOrigin::of_with(&req, &trusted)),
+                upstream_request_id(&req, ClientOrigin::of_with(&req, &trusted).0),
                 recorded.then_some(sent),
                 "{sent}",
             );
@@ -493,7 +493,7 @@ mod tests {
                 );
             }
             let req = built.finish();
-            url_scheme(&req, ClientOrigin::of_with(&req, &trusted))
+            url_scheme(&req, ClientOrigin::of_with(&req, &trusted).0)
         };
         let proto = HeaderName::from_static("x-forwarded-proto");
 

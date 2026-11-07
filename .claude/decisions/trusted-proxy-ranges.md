@@ -75,8 +75,11 @@ the parser skipped handed the client's position to the hop on its left, the call
 withholding the client), and an unreadable `Forwarded` beside a caller's `X-Forwarded-For` left
 the answer to the latter. Security decided:
 
-- **A header the parser cannot read whole is no chain, and the proxy stands** (`TrustedProxy`),
-  whatever the other headers say, with one `warn` naming the header and the peer, never a hop.
+- **A chain the parser cannot read whole is no chain, and the proxy stands** (`TrustedProxy`),
+  whatever the other headers say, with one `warn` naming the header and the peer, never a hop,
+  filed inside the request once its trace exists. `X-Real-IP`, one hop in no order, is read only
+  where neither chain names a client, and refused the same way there: beside a chain the proxy
+  appended to, an unreadable one can only be a caller's.
   The grammar refuses what reads two ways: a quote no quote closes, a quote inside a value, a
   closing quote followed by anything but a separator, a pair with no `=` or no name, an empty
   value, a hop that is no node (RFC 7239 §6), bytes no text holds. A proxy's appended part is
@@ -87,7 +90,9 @@ the answer to the latter. Security decided:
 - **Whitespace and characters outside `tchar` in an unquoted value pass**: they read one way, and a
   hand-written proxy rule emits `for=[2001:db8::1]:8080` unquoted.
 - **`ClientOrigin::of` returns the edge's resolution**, so a request files one line, not one per
-  reader (`ClientIp`, the throttler).
+  reader (`ClientIp`, the throttler). The edge resolves before the request's trace exists, so the
+  resolution hands back what it refused, and the edge files it inside the request's span and
+  correlation.
 
 Refused:
 

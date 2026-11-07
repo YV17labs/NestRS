@@ -117,6 +117,56 @@ async fn a_composition_root_pins_an_address_and_a_range() {
     }
 }
 
+/// Resolved before the request's trace exists, a refusal is filed inside it: an
+/// operator joins it to its request, for a chain read two ways and for two chains
+/// naming different clients alike.
+#[tokio::test]
+async fn a_refusal_is_filed_inside_the_request_it_refused_a_client_for() {
+    let app = TestApp::builder()
+        .module::<PinnedProxiesModule>()
+        .build()
+        .await
+        .expect("the app boots");
+    for (headers, message) in [
+        (
+            &[(
+                "forwarded",
+                "for=198.51.100.99;x=\", for=203.0.113.7;host=\",a\"",
+            )][..],
+            "forwarding header unreadable — no client is believed",
+        ),
+        (
+            &[
+                ("forwarded", "for=198.51.100.99"),
+                ("x-forwarded-for", "203.0.113.7"),
+            ],
+            "forwarding headers disagree about the client — neither is believed",
+        ),
+    ] {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut request = app
+            .http()
+            .get("/who")
+            .peer_addr("10.0.0.1:40000".parse().unwrap());
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request
+            .send()
+            .await
+            .assert_text("10.0.0.1 forwarded=false")
+            .await;
+        let refusal = logs.expect_one(nest_rs_http::target::HTTP, message);
+        let request = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_http::unit::REQUEST.name(),
+        );
+        assert!(refusal.trace_id.is_some(), "{message}: no trace_id");
+        assert_eq!(refusal.trace_id, request.trace_id, "{message}");
+        assert_eq!(refusal.span_id, request.span_id, "{message}");
+    }
+}
+
 /// How many times a listed peer's `GET /who` with `headers`, answered as its
 /// proxy's, was said to name no client.
 async fn refusals_filed(headers: &[(&str, &str)]) -> usize {

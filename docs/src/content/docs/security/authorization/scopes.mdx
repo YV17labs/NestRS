@@ -198,15 +198,17 @@ frame the transport already speaks:
 ```
 
 The list is what one grant lacks, every scope of it needed. When several
-grants would have allowed the operation, it is the narrowest one's — the
-action's own before `Action::Manage`'s, the first declared among them — never their
-union, which would send the client asking for more than it needs.
+grants would have allowed the operation, it is the one asking for fewest — the
+action's own before `Action::Manage`'s, then the first declared, among those asking
+as many — never their union, which would send the client asking for more than it
+needs.
 
 A site gated on `Manage` needs [every action](/security/authorization/policies/#actions),
-so its list is what lifts all of them: what each refused action lacks, each scope
-once, or the wildcard's own grant, which opens the four at once, when it asks for
-less. A site no scope could lift, a denial barring one action or an action no grant
-opens, names none and answers a plain `403`.
+so its list is the smallest that lifts all of them: one grant of each refused action,
+each scope once — `posts:write` alone where it opens `Update` and is one of the two
+grants opening `Read` — or a grant of the wildcard, which opens the four at once,
+when it asks for fewer. A site no scope could lift, a denial barring one action or
+an action no grant opens, names none and answers a plain `403`.
 
 The sentence is RFC 6750 §3.1's own description of `insufficient_scope`, and
 it is the same on every transport: one class gate,

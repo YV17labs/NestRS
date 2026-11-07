@@ -328,14 +328,16 @@ impl Ability {
     /// is needed, and together with what the credential holds they suffice —
     /// RFC 6750 §3's `scope`, what a client asks for next.
     ///
-    /// When several grants would have allowed it, the set is the narrowest's:
-    /// the action's own grant before the [`Action::Manage`] wildcard's, the
-    /// first declared among them. Never a union, which would make a client ask
-    /// for more than it needs.
+    /// When several grants would have allowed it, the set is the one asking for
+    /// fewest, the action's own grant before the [`Action::Manage`] wildcard's and
+    /// the first declared among those asking as many. Never a union, which would make
+    /// a client ask for more than it needs.
     ///
-    /// At a site gated on [`Action::Manage`], which needs every action, the set
-    /// is what lifts them all: what each refused action lacks, each scope once,
-    /// or the wildcard's own grant, which opens the four, when it asks for less.
+    /// At a site gated on [`Action::Manage`], which needs every action, the set is
+    /// the smallest lifting them all: one grant of each refused action, each scope
+    /// once, or a grant of the wildcard, which opens the four, when it asks for
+    /// fewer. Ties go to each action's own smallest grant. The search over those
+    /// choices is bounded; past its bound it keeps the smallest set it met.
     ///
     /// Read it only after [`can_class`](Self::can_class) said no: a withheld rule
     /// and a granted one can coexist. Empty means the refusal was not about scope
@@ -348,38 +350,37 @@ impl Ability {
         if action == Action::Manage {
             return self.missing_scopes_of_every_action(subject);
         }
-        keys_for(action, subject)
-            .filter_map(|key| self.withheld.get(&key))
-            .flatten()
-            .next()
-            .cloned()
-            .unwrap_or_default()
+        fewest(
+            keys_for(action, subject)
+                .filter_map(|key| self.withheld.get(&key))
+                .flatten(),
+        )
+        .cloned()
+        .unwrap_or_default()
     }
 
     /// [`missing_scopes`](Self::missing_scopes) at a site gated on `Manage`, no
     /// denial barring it.
     fn missing_scopes_of_every_action(&self, subject: TypeId) -> Vec<String> {
-        let mut each = Vec::new();
+        let wildcard = self.withheld.get(&(Action::Manage, subject));
+        let mut choices: Vec<&[Vec<String>]> = Vec::new();
+        let mut needs_the_wildcard = false;
         for action in Action::CONCRETE {
             if self.can_class(action, subject) {
                 continue;
             }
-            let lacking = self.missing_scopes(action, subject);
-            if lacking.is_empty() {
-                return Vec::new();
-            }
-            for scope in lacking {
-                if !each.contains(&scope) {
-                    each.push(scope);
-                }
+            match self.withheld.get(&(action, subject)) {
+                Some(own) if !own.is_empty() => choices.push(own),
+                _ if wildcard.is_some_and(|grants| !grants.is_empty()) => needs_the_wildcard = true,
+                _ => return Vec::new(),
             }
         }
-        // The wildcard's own grant opens all four: it answers when it asks for less.
-        match self
-            .withheld
-            .get(&(Action::Manage, subject))
-            .and_then(|grants| grants.first())
-        {
+        let widest = wildcard.and_then(|grants| fewest(grants.iter()));
+        if needs_the_wildcard {
+            return widest.cloned().unwrap_or_default();
+        }
+        let each = smallest_cover(&choices);
+        match widest {
             Some(wildcard) if wildcard.len() < each.len() => wildcard.clone(),
             _ => each,
         }
@@ -440,7 +441,9 @@ impl Ability {
             }
         }
         // A withheld grant is named only where the other side grants what it opens. The
-        // wildcards go last, landing on an action's key: `missing_scopes` takes the first.
+        // wildcards go last, landing on an action's key behind its own grants: the order
+        // breaks `missing_scopes`' ties, the action's own grant before a wildcard's asking
+        // for as many scopes.
         for wildcards in [false, true] {
             for (side, beside) in [(self, other), (other, self)] {
                 for (&(action, subject), scopes) in &side.withheld {
@@ -932,6 +935,61 @@ impl Ability {
 /// The rule-map keys a concrete `action` reads: its own, then the wildcard's. A
 /// site gated on [`Action::Manage`] reads each concrete action, never this with
 /// `Manage` itself.
+/// The set asking for fewest scopes among `grants`, the first of those asking as many.
+fn fewest<'a>(grants: impl Iterator<Item = &'a Vec<String>>) -> Option<&'a Vec<String>> {
+    grants.min_by_key(|grant| grant.len())
+}
+
+/// How many partial unions [`smallest_cover`] extends before it keeps what it has: the
+/// refusal path pays a bounded search however many grants a factory declares.
+const COVER_STEPS: usize = 1024;
+
+/// The smallest union of one set from each of `choices`, each scope once, in the
+/// order the choices and their scopes come: each choice's fewest first, replaced only
+/// by a union asking for strictly fewer.
+fn smallest_cover(choices: &[&[Vec<String>]]) -> Vec<String> {
+    fn extend(
+        choices: &[&[Vec<String>]],
+        held: &mut Vec<String>,
+        best: &mut Vec<String>,
+        steps: &mut usize,
+    ) {
+        let Some((first, rest)) = choices.split_first() else {
+            if held.len() < best.len() {
+                best.clone_from(held);
+            }
+            return;
+        };
+        for grant in first.iter() {
+            if *steps >= COVER_STEPS {
+                return;
+            }
+            *steps += 1;
+            let before = held.len();
+            for scope in grant {
+                if !held.contains(scope) {
+                    held.push(scope.clone());
+                }
+            }
+            if held.len() < best.len() {
+                extend(rest, held, best, steps);
+            }
+            held.truncate(before);
+        }
+    }
+
+    let mut best = Vec::new();
+    for grant in choices.iter().filter_map(|grants| fewest(grants.iter())) {
+        for scope in grant {
+            if !best.contains(scope) {
+                best.push(scope.clone());
+            }
+        }
+    }
+    extend(choices, &mut Vec::new(), &mut best, &mut 0);
+    best
+}
+
 fn keys_for(action: Action, subject: TypeId) -> impl Iterator<Item = (Action, TypeId)> {
     [(action, subject), (Action::Manage, subject)].into_iter()
 }
@@ -2207,6 +2265,101 @@ mod tests {
             ability.missing_scopes(Action::Manage, posts()),
             ["posts:write", "posts:purge"],
             "each needed, together sufficient, none twice, none already held",
+        );
+    }
+
+    /// Two grants may open one action — `posts:read`, or `posts:write`, which a token
+    /// writing posts reads them with — and the set lifting every action is the
+    /// smallest across those choices, not the union of each action's first.
+    #[test]
+    fn a_site_gated_on_manage_names_the_smallest_set_lifting_every_action() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        for action in [Action::Create, Action::Delete] {
+            b.can(action, post::Entity);
+        }
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:read"));
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:write"));
+        b.can(Action::Update, post::Entity)
+            .requires_scope(Scope::new("posts:write"));
+        let ability = b.build().unwrap();
+
+        assert!(!ability.can_class(Action::Manage, posts()));
+        assert_eq!(
+            ability.missing_scopes(Action::Manage, posts()),
+            ["posts:write"],
+            "`posts:write` alone opens `Read` and `Update`",
+        );
+    }
+
+    /// However many grants a factory declares, the refusal pays a bounded search, and
+    /// what it names past the bound still lifts every action.
+    #[test]
+    fn a_cover_search_past_its_bound_keeps_a_set_lifting_every_choice() {
+        let per_action: Vec<Vec<Vec<String>>> = (0..4)
+            .map(|action| {
+                (0..40)
+                    .map(|at| vec![format!("a{action}:{at}")])
+                    .chain([vec!["shared".to_owned()]])
+                    .collect()
+            })
+            .collect();
+        let choices: Vec<&[Vec<String>]> = per_action.iter().map(Vec::as_slice).collect();
+        let named = smallest_cover(&choices);
+        for grants in &choices {
+            assert!(
+                grants
+                    .iter()
+                    .any(|grant| grant.iter().all(|scope| named.contains(scope))),
+                "{named:?}",
+            );
+        }
+        assert_eq!(
+            named,
+            ["a0:0", "a1:0", "a2:0", "a3:0"],
+            "the bound met before the last grants, so each action's first stands",
+        );
+    }
+
+    /// The wildcard's grants are choices too, each opening all four: a later one
+    /// asking for less answers.
+    #[test]
+    fn a_site_gated_on_manage_weighs_every_grant_of_the_wildcard() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Manage, post::Entity)
+            .requires_scope(Scope::new("posts:admin"))
+            .requires_scope(Scope::new("org:admin"));
+        b.can(Action::Manage, post::Entity)
+            .requires_scope(Scope::new("posts:owner"));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            ability.missing_scopes(Action::Manage, posts()),
+            ["posts:owner"]
+        );
+    }
+
+    /// One action's set is its smallest too: the narrowest grant asks for least, its
+    /// own before the wildcard's when both ask as much.
+    #[test]
+    fn an_actions_missing_scopes_are_its_smallest_set() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:read"))
+            .requires_scope(Scope::new("org:member"));
+        b.can(Action::Manage, post::Entity)
+            .requires_scope(Scope::new("posts:admin"));
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:write"));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            ability.missing_scopes(Action::Read, posts()),
+            ["posts:write"]
         );
     }
 

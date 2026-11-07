@@ -164,9 +164,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 **Authorization, posture, mask** (beyond section 3)
 - `AbilityGuard` alone at a unit under `#[authorize]` boots and answers `401`
   on every call. *read*
-- `cannot(Read)` beside `can(Manage)`: settled (a `Manage` site needs every
-  action); `missing_scopes` at a `Manage` site may name more than the
-  smallest set. *read*
 
 **HTTP and CORS**
 - An `Ambient<P>` behind a type alias is not read off its spelling, so a
@@ -332,7 +329,12 @@ rule's `when` predicate written into `Repo`'s scope unscanned, where a value
 typed `sea_query::Enum` whose type name holds a `"` widens the rows that rule
 admits (policy the factory writes once, while the call site's condition,
 which changes per query, is scanned; closing it costs every scoped query a
-second render of its scope).
+second render of its scope); past the cover search's bound of 1,024 partial
+unions, which six grants per refused action reach, `missing_scopes` at a
+`Manage` site naming the smallest set it met, which a scope lifting every
+action, declared after each action's own grants, leaves larger than the
+smallest (closing it: an exact search, which grows as the fourth power of the
+grants per refused action, on the refusal path).
 
 ## 7. Upstream
 

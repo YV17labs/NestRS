@@ -155,3 +155,24 @@ A **site** gated on `Manage` — a posture, or any read the ability is asked wit
 - A reply's row under a site gated on `Manage` is trusted as `Loaded` for `Read`'s
   rules, whichever action the body read it for, as a reply under any other posture
   trusts its read (`mask-provenance.md`).
+
+## 2026-11-07 — the scopes a refusal names are the smallest set
+
+Under the owner's words of 2026-11-07 (take up every subject the open list names, the
+best solution). The limit above was seen: `Read` opened by `posts:read` or by
+`posts:write`, `Update` by `posts:write`, and a site gated on `Manage` named
+`posts:read posts:write` where `posts:write` alone lifts both; the wildcard's second
+grant was never weighed, and one action named its first declared grant over a later one
+asking for fewer. RFC 6750 §3's `scope` is the scope the resource requires, and a
+client asks for what it is told: naming more asks a user to consent to more.
+
+`missing_scopes` now names, for one action, the grant asking for fewest, its own before
+the wildcard's and the first declared among those asking as many; at a `Manage` site,
+the smallest union of one grant per refused action, or a wildcard grant asking for
+fewer, ties going to each action's own smallest grant. The search is a set cover over
+at most the four concrete actions, pruned at the best size met, and bounded at 1,024
+partial unions: past it the set it met stands, every scope of it needed and the whole
+sufficient. The refusal path pays it; a granted call pays nothing.
+
+**Refused:** the union of each action's first grant, kept as "a little more than
+needed": the client and its user pay for it, the server would not.

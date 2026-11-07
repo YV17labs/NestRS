@@ -177,10 +177,7 @@ where
         let handler = site.handler();
         let path = nest_rs_mcp::__private::served_path();
         let served = nest_rs_mcp::__private::served_operation(kind, handler.address());
-        let served = match path.as_deref() {
-            Some(path) => served.at(path),
-            None => served,
-        };
+        let served = path.as_deref().map_or(served, |path| served.at(path));
         let unit = MaskedUnit::on(Edge::Mcp, Some(handler), served);
         masked_value_for::<A, E, O>(unit, value)
     }

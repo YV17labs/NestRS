@@ -123,9 +123,9 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
 
 /// The gateway a socket's lines name, in the fields of its `mounted` lines.
 #[derive(Clone)]
-pub(crate) struct SocketSite {
-    pub(crate) host: &'static str,
-    pub(crate) path: Arc<str>,
+struct SocketSite {
+    host: &'static str,
+    path: Arc<str>,
 }
 
 /// The wiring `#[messages]` attaches for the gateway at `path`: its

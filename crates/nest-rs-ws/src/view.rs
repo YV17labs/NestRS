@@ -55,10 +55,7 @@ pub struct WsView {
 impl UnitView for WsView {
     fn served_address(&self) -> Option<ServedAddress<'_>> {
         let served = ServedAddress::event(self.event);
-        Some(match &self.path {
-            Some(path) => served.at(path),
-            None => served,
-        })
+        Some(self.path.as_deref().map_or(served, |path| served.at(path)))
     }
 }
 

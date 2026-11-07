@@ -108,10 +108,7 @@ impl UnitView for McpView {
             return None;
         };
         let served = served_operation(self.kind?, name);
-        Some(match &self.path {
-            Some(path) => served.at(path),
-            None => served,
-        })
+        Some(self.path.as_deref().map_or(served, |path| served.at(path)))
     }
 }
 

@@ -268,7 +268,7 @@ impl OperationUnits {
         let address = &LineAddress {
             declared,
             served_resource,
-            path: self.served_at.as_deref().map(ServedPath::path),
+            path: self.served_at.as_deref().map(|served| &*served.0),
         };
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
         let line = OperationLine::open(named, address, correlation.clone(), operation.clone());
@@ -741,12 +741,6 @@ impl AmbientValue for ServedResource {}
 /// inside names it too.
 pub(crate) struct ServedPath(pub(crate) Arc<str>);
 
-impl ServedPath {
-    fn path(&self) -> &str {
-        &self.0
-    }
-}
-
 impl AmbientValue for ServedPath {}
 
 /// What an operation's lines name it by.
@@ -770,10 +764,7 @@ impl LineAddress<'_> {
             }
             None => self.declared,
         };
-        match self.path {
-            Some(path) => named.at(path),
-            None => named,
-        }
+        self.path.map_or(named, |path| named.at(path))
     }
 }
 

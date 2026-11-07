@@ -79,13 +79,12 @@ holds them `#[principal(scopes)]` on your claims type, and read the
 standard space-delimited `scope` claim with the `serde` helper the
 framework ships:
 
-```rust title="crates/features/src/authn/claims.rs (from the demo)" {10-17}
+```rust title="crates/features/src/authn/claims.rs (from the demo)" {9-16}
 #[derive(Debug, Clone, Serialize, Deserialize, PrincipalIdentity)]
 pub struct Claims {
     #[principal(actor)]
     pub sub: Subject,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<String>,
+    pub client_id: String,
     #[principal(tenant)]
     pub org_id: Uuid,
     pub roles: Vec<Role>,

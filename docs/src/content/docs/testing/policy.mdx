@@ -42,7 +42,7 @@ fn ability_scoped(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>) -> Abilit
 fn ability_of(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>, sub: Subject) -> Ability {
     let claims = Claims {
         sub,
-        client_id: None,
+        client_id: "publish-web".into(),
         org_id,
         roles,
         scopes: scopes.clone(),

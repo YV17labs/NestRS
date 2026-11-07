@@ -88,7 +88,7 @@ mod tests {
     fn ability_of(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>, sub: Subject) -> Ability {
         let claims = Claims {
             sub,
-            client_id: None,
+            client_id: "publish-web".into(),
             org_id,
             roles,
             scopes: scopes.clone(),
@@ -440,7 +440,7 @@ mod tests {
     fn an_admin_whose_credential_is_not_scope_aware_may_transcode() {
         let claims = Claims {
             sub: Subject::User(Uuid::nil()),
-            client_id: None,
+            client_id: "publish-web".into(),
             org_id: Uuid::now_v7(),
             roles: vec![Role::Admin],
             scopes: Vec::new(),

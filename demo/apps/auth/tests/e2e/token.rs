@@ -75,7 +75,7 @@ async fn a_client_asking_for_no_scope_is_granted_exactly_its_registration() {
     assert_eq!(claims.roles, [Role::User]);
     assert_eq!(claims.org_id, ORG_ID);
     assert_eq!(claims.sub, Subject::Client(READER_ID.into()));
-    assert_eq!(claims.client_id.as_deref(), Some(READER_ID));
+    assert_eq!(claims.client_id, READER_ID);
 }
 
 #[tokio::test]

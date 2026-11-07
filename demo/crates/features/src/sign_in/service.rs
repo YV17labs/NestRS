@@ -44,7 +44,7 @@ pub struct SignInService {
 impl SignInService {
     #[on_module_init]
     async fn refuse_clients_outside_the_policy(&self) -> nest_rs::core::anyhow::Result<()> {
-        registered_within_policy(&self.clients).map_err(|errors| {
+        registered_within_policy(&self.clients, &self.config).map_err(|errors| {
             ConfigError::validation(OAuthServerConfig::<ClientPayload>::NAMESPACE, errors).into()
         })
     }
@@ -79,7 +79,7 @@ impl SignInService {
             self.sign_in_audience(resource)?,
             Claims {
                 sub: Subject::User(user_id),
-                client_id: None,
+                client_id: self.config.client_id.clone(),
                 org_id,
                 roles,
                 scopes: constants::all(),
@@ -211,7 +211,7 @@ pub(crate) fn grant_client_credentials_with_jwt(
         audience,
         Claims {
             sub: Subject::Client(client.client_id.clone()),
-            client_id: Some(client.client_id.clone()),
+            client_id: client.client_id.clone(),
             org_id: client.payload.org_id,
             roles: client.payload.roles.clone(),
             scopes,
@@ -256,7 +256,7 @@ mod tests {
     fn user_claims(roles: Vec<Role>, scopes: Vec<String>) -> Claims {
         Claims {
             sub: Subject::User(Uuid::now_v7()),
-            client_id: None,
+            client_id: SignInConfig::default().client_id,
             org_id: Uuid::now_v7(),
             roles,
             scopes,
@@ -291,7 +291,7 @@ mod tests {
             .await
             .expect("verify");
         assert_eq!(claims.sub, issued.sub);
-        assert_eq!(claims.client_id, None);
+        assert_eq!(claims.client_id, issued.client_id);
         assert_eq!(claims.org_id, issued.org_id);
         assert!(claims.is_admin());
     }
@@ -354,7 +354,7 @@ mod tests {
             .await
             .expect("verify");
         assert_eq!(claims.sub, Subject::Client("ci".into()));
-        assert_eq!(claims.client_id.as_deref(), Some("ci"));
+        assert_eq!(claims.client_id, "ci");
         assert_eq!(claims.org_id, client.payload.org_id);
         assert_eq!(claims.roles, [Role::Admin]);
         assert_eq!(claims.scopes, [POSTS_READ]);
@@ -369,9 +369,23 @@ mod tests {
             Arc::new(SignInConfig {
                 resources: vec![RESOURCE.into(), OTHER_RESOURCE.into()],
                 default_org_id: Uuid::now_v7(),
+                ..SignInConfig::default()
             }),
             Arc::new(OAuthServerConfig::default()),
         )
+    }
+
+    #[tokio::test]
+    async fn a_first_party_login_names_its_own_client() {
+        let token = sign_in_service(Duration::from_secs(60))
+            .issue(None, Uuid::now_v7(), Uuid::now_v7(), vec![Role::User])
+            .expect("issue");
+
+        let claims: Claims = verifier(RESOURCE)
+            .verify(token.access_token.expose_secret())
+            .await
+            .expect("verify");
+        assert_eq!(claims.client_id, SignInConfig::default().client_id);
     }
 
     #[test]

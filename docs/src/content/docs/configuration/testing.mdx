@@ -54,6 +54,7 @@ async fn issues_a_token_for_a_registered_client() {
         .provide(SignInConfig {
             resources: vec!["http://localhost:3002".into()],
             default_org_id: Uuid::nil(),
+            ..SignInConfig::default()
         })
         .build()
         .await

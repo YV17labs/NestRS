@@ -1,3 +1,4 @@
+use auth::SignInConfig;
 use features::{Claims, Role};
 use nest_rs::http::StatusCode;
 use nest_rs::testing::LogCapture;
@@ -51,7 +52,7 @@ async fn login_issues_a_token_the_public_key_verifies() {
     );
     assert_eq!(claims.org_id, ORG_ID);
     assert!(claims.sub.user_id().is_some(), "{:?}", claims.sub);
-    assert_eq!(claims.client_id, None);
+    assert_eq!(claims.client_id, SignInConfig::default().client_id);
     assert!(claims.roles.contains(&Role::Admin));
 }
 

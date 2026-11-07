@@ -181,3 +181,29 @@ private type, `RegisteredClaim`, so the next registered claim is one row.
   verifier's refusal this entry closes is of the type alone. `roles`, `groups` and `entitlements`
   (RFC 9068 §2.2.3.1) are left out: RFC 7643's multi-valued attributes fix no one JSON shape.
 - `sign_unchecked`, a suite's forger, still signs what it is given.
+
+## 2026-11-07 — the demo's user tokens name the first-party client, and the signer requires none
+
+The 2026-10-25 entry left the demo's user grants naming no `client_id`, which RFC 9068 §2.2
+requires, until an authorization-code grant gave them a client. Seen run: `issue`, which `/login`
+and the social callback call, minted `client_id` absent. Settled by the owner's mandate of
+2026-11-07.
+
+- **The demo's first-party login names its own client**, `SignInConfig::client_id`
+  (`<PREFIX>_SIGN_IN__CLIENT_ID`, `publish-web` by default): the Publish web client the sign-in
+  serves, which it does not invent but is deployed for. The boot refuses a registered OAuth
+  client holding that id (`names_the_first_party_client`), so a user's token never reads as a
+  machine client's. `features::Claims::client_id` is a `String`: every demo token names a
+  client, so the type says so, and a literal cannot leave it out.
+- **The signer does not require `client_id`.** The 2026-11-05 entry made `sub` impossible to
+  forget at no cost because every claims type already names its actor for the guard; nothing a
+  claims type already says names its client. Each way to require one costs a line in every app
+  minting tokens, weighed against the developer-first rule and left to the owner (`TODO.md`):
+  a refusal in `sign` asks `nestrs g auth`'s claims, its dev token and every test's claims literal
+  for a client, which the template's development route would have to invent; a
+  `#[principal(client)]` role asks the same field and an attribute; a client argument on `sign`
+  asks it at every call. **Refused: a configured default stamped when the claims name none**: a
+  machine grant that forgot its `client_id` would go out as the first-party client's, the
+  confusion RFC 9068 §5 asks an issuer to prevent, where a forgotten field should fail.
+- The same holds for `iss` and `aud`, stamped only when configured: requiring them asks every
+  signing deployment for two variables, the owner's call too.

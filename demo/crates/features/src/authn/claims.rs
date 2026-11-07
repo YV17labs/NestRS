@@ -63,8 +63,7 @@ impl fmt::Display for Subject {
 pub struct Claims {
     #[principal(actor)]
     pub sub: Subject,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<String>,
+    pub client_id: String,
     #[principal(tenant)]
     pub org_id: Uuid,
     pub roles: Vec<Role>,
@@ -91,7 +90,7 @@ mod tests {
     fn claims(roles: Vec<Role>) -> Claims {
         Claims {
             sub: Subject::User(Uuid::nil()),
-            client_id: None,
+            client_id: "publish-web".into(),
             org_id: Uuid::nil(),
             roles,
             scopes: Vec::new(),
@@ -101,7 +100,7 @@ mod tests {
     fn machine(client_id: &str) -> Claims {
         Claims {
             sub: Subject::Client(client_id.to_owned()),
-            client_id: Some(client_id.to_owned()),
+            client_id: client_id.to_owned(),
             ..claims(vec![Role::User])
         }
     }
@@ -164,14 +163,14 @@ mod tests {
         let sub = Uuid::now_v7();
         let user = Claims {
             sub: Subject::User(sub),
-            client_id: None,
+            client_id: "publish-web".into(),
             org_id: Uuid::now_v7(),
             roles: vec![Role::User],
             scopes: vec![POSTS_READ.into()],
         };
         let json = serde_json::to_value(&user).expect("serialize");
         assert_eq!(json["sub"], sub.to_string());
-        assert!(json.get("client_id").is_none(), "{json}");
+        assert_eq!(json["client_id"], "publish-web");
         assert_eq!(
             json["scope"],
             POSTS_READ.as_str(),

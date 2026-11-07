@@ -29,6 +29,7 @@ fn sign_in_service() -> SignInService {
         Arc::new(SignInConfig {
             resources: vec![RESOURCE.into()],
             default_org_id: ORG,
+            ..SignInConfig::default()
         }),
         Arc::new(OAuthServerConfig::<ClientPayload>::default()),
     )
@@ -111,6 +112,7 @@ fn sign_in_app_serving(
         .provide(SignInConfig {
             resources,
             default_org_id: ORG,
+            ..SignInConfig::default()
         })
         .provide(OAuthServerConfig { clients })
         .provide(GithubSocialConfig {

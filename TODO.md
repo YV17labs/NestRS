@@ -214,8 +214,15 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   without a close holds its socket until the connection's maximum age. *read*
 
 **Auth**
-- The demo's user tokens name no `client_id`. Close: an authorization-code
-  grant with PKCE for the first-party login. *read*
+- A token `sign` mints carries `client_id` only when the claims name one,
+  and `iss` and `aud` only when configured, though RFC 9068 §2.2 requires
+  all three; the
+  `nestrs g auth` claims and dev token name no client. Close: `sign`
+  refusing claims naming no `client_id`, and a signing `JwtService`
+  refusing to start without an issuer and an audience — each a line in
+  every app minting tokens (a client in its claims literal, two
+  variables), which the developer-first rule weighs: the owner's call.
+  *read*
 - DPoP and mTLS-bound tokens are refused, not verified. *seen*
 
 **Data, queue, storage, health**
@@ -278,7 +285,10 @@ scoped `#[sse]` stream; a public tenant seam outside a request; `OPTIONS *`;
 one percent-decoder; computed response headers in OpenAPI; a cursor key
 accessor; a backend-fed subscription stream; RFC 8705 / DPoP; client
 authentication `none`, `client_secret_jwt`, `private_key_jwt`, the TLS
-methods; RFC 7009 revocation and RFC 7662 introspection; `Repo::restore`;
+methods; RFC 7009 revocation and RFC 7662 introspection; an authorization-code grant
+with PKCE for the demo's first-party login (RFC 6749 §4.1, a registered
+public client identifying itself, where `<PREFIX>_SIGN_IN__CLIENT_ID` names
+it today); a refresh grant on `OAuthClient`; `Repo::restore`;
 `App::run_task`; public `ResourceBinding`; `nestrs generate guard` and
 `interceptor`; a public `RetiredKey`; bench tiers beyond HTTP; a lease port;
 named storage disks; `ModuleRef`; `AppLifecycle::spawn`; ETag / If-Match;

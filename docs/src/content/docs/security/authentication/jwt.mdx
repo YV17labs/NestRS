@@ -196,20 +196,24 @@ a `sub` that is no string, since
 [RFC 7519 §4.1.2](https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.2) makes
 it one and a verifier reading one refuses anything else: an integer id is written as
 its decimal string, which `#[principal(actor)]` on a field of another name does for
-you. Every claim the specifications register is held the same way, the `SignError`
+you. A test forging such a token, to prove your verifier refuses it, hands it to
+[`TestApp::bearer`](/tutorial/testing/), which signs what it is given.
+
+Every claim the specifications register is held the same way, the `SignError`
 naming it: `iss`, `jti`, `client_id` and `acr` are strings; `exp`, `nbf`, `iat` and
 `auth_time` are NumericDates, a JSON number of seconds since the epoch; `aud` is a
 string or an array of them, `amr` an array of strings, and `scope` the list RFC 6749
 §3.3 writes, scope tokens each separated by one space, or empty when the token grants
-none. A registered claim your claims serialize as `null` is left out of the token. A test forging such a token, to prove your verifier refuses it, hands it to
-[`TestApp::bearer`](/tutorial/testing/), which signs what it is given.
+none. A registered claim your claims serialize as `null` is left out of the token.
 
-The demo's machine tokens name their `client_id`. Its user tokens name none,
-which RFC 9068 §2.2 requires: `/login` and the social callback identify no OAuth
-client, so naming one would invent it. That gap closes when the first-party login
-becomes an authorization-code grant (RFC 6749 §4.1, with PKCE) by a registered
-public client, so read it as the demo's limit, never as what a client you register
-should do.
+`client_id`, which RFC 9068 §2.2 requires too, is your claims' to name: `sign`
+supplies none, and a token whose claims name none goes out without it. The demo's
+claims hold it as a `String`, so no literal leaves it out. A machine token names the
+client that authenticated at `/token`; a user's, from `/login` or the social callback,
+names the first-party client the sign-in serves, `<PREFIX>_SIGN_IN__CLIENT_ID`
+(`publish-web` by default), which the boot refuses any registered client to hold. An
+authorization-code grant by that client (RFC 6749 §4.1, with PKCE) would have it
+identify itself, where the deployment names it here.
 
 `sign_handshake`, for a flow's short-lived token, stamps the same but `exp`:
 its claims name their lifetime with `expiry_in(secs)`, and claims naming none

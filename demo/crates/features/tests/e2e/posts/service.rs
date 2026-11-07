@@ -79,7 +79,7 @@ async fn status(conn: &DatabaseConnection, id: Uuid) -> PostStatus {
 fn publisher(org_id: Uuid, user: Uuid) -> Arc<Ability> {
     let claims = Claims {
         sub: Subject::User(user),
-        client_id: None,
+        client_id: "publish-web".into(),
         org_id,
         roles: vec![Role::Admin],
         scopes: Vec::new(),

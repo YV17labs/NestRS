@@ -158,11 +158,12 @@ use crate::users::UsersModule;
 pub struct SignInModule;
 ```
 
-`SignInConfig` is the product's own — the resources a sign-in may ask for and
-the org a first social sign-in joins — read from `<PREFIX>_SIGN_IN__*`, the
+`SignInConfig` is the product's own — the resources a sign-in may ask for, the
+org a first social sign-in joins and the client its tokens are issued to — read
+from `<PREFIX>_SIGN_IN__*`, the
 feature's own word: a product stem never takes a family's (`oauth`), whose
-first level is the framework members'. Its overlay is derived, and its one rule is a
-`#[validate]` line:
+first level is the framework members'. Its overlay is derived, and its rules are
+`#[validate]` lines:
 
 ```rust title="crates/features/src/sign_in/config.rs (from the demo, abridged)"
 #[config(namespace = "sign_in")]
@@ -171,6 +172,8 @@ pub struct SignInConfig {
     #[validate(length(min = 1, code = "at_least_one_resource"))]
     pub resources: Vec<String>,
     pub default_org_id: Uuid,
+    #[validate(length(min = 1, code = "required"))]
+    pub client_id: String,
 }
 ```
 

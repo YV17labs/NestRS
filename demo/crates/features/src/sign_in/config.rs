@@ -15,12 +15,16 @@ pub struct ClientPayload {
     pub roles: Vec<Role>,
 }
 
+const FIRST_PARTY_CLIENT: &str = "publish-web";
+
 #[config(namespace = "sign_in")]
 #[derive(Clone)]
 pub struct SignInConfig {
     #[validate(length(min = 1, code = "at_least_one_resource"))]
     pub resources: Vec<String>,
     pub default_org_id: Uuid,
+    #[validate(length(min = 1, code = "required"))]
+    pub client_id: String,
 }
 
 impl Default for SignInConfig {
@@ -28,12 +32,14 @@ impl Default for SignInConfig {
         Self {
             resources: Vec::new(),
             default_org_id: DEFAULT_ORG,
+            client_id: FIRST_PARTY_CLIENT.into(),
         }
     }
 }
 
 pub(crate) fn registered_within_policy(
     registry: &OAuthServerConfig<ClientPayload>,
+    sign_in: &SignInConfig,
 ) -> Result<(), ValidationErrors> {
     let mut errors = ValidationErrors::new();
     for client in &registry.clients {
@@ -52,6 +58,9 @@ pub(crate) fn registered_within_policy(
         }
         if Subject::from(client.client_id.clone()).user_id().is_some() {
             refuse("client_id", "reads_as_a_user");
+        }
+        if client.client_id == sign_in.client_id {
+            refuse("client_id", "names_the_first_party_client");
         }
     }
     if errors.is_empty() {
@@ -86,7 +95,9 @@ mod tests {
     }
 
     fn refused(clients: Vec<RegisteredClient<ClientPayload>>) -> (Vec<String>, String) {
-        let errors = registered_within_policy(&OAuthServerConfig { clients }).expect_err("refused");
+        let errors =
+            registered_within_policy(&OAuthServerConfig { clients }, &SignInConfig::default())
+                .expect_err("refused");
         let keys = errors.errors().keys().map(ToString::to_string).collect();
         let rendered =
             ConfigError::validation(OAuthServerConfig::<ClientPayload>::NAMESPACE, errors)
@@ -96,10 +107,27 @@ mod tests {
 
     #[test]
     fn clients_registered_for_the_delegated_scopes_pass() {
-        registered_within_policy(&OAuthServerConfig {
-            clients: vec![client("ci-runner", &constants::ALL.map(Scope::as_str))],
-        })
+        registered_within_policy(
+            &OAuthServerConfig {
+                clients: vec![client("ci-runner", &constants::ALL.map(Scope::as_str))],
+            },
+            &SignInConfig::default(),
+        )
         .expect("within the policy");
+    }
+
+    #[test]
+    fn a_client_registered_as_the_first_party_login_is_refused_naming_it() {
+        let (keys, rendered) = refused(vec![
+            client("ci-runner", &[constants::POSTS_READ.as_str()]),
+            client(FIRST_PARTY_CLIENT, &[constants::POSTS_READ.as_str()]),
+        ]);
+
+        assert_eq!(keys, [format!("clients[{FIRST_PARTY_CLIENT}].client_id")]);
+        assert!(
+            rendered.contains("names_the_first_party_client"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -144,6 +172,7 @@ mod tests {
                     "https://api.example.com,https://mcp.example.com",
                 ),
                 ("DEFAULT_ORG_ID", &org.to_string()),
+                ("CLIENT_ID", "publish-ios"),
             ],
         );
 
@@ -151,6 +180,7 @@ mod tests {
 
         assert_eq!(cfg.resources, [RESOURCE, "https://mcp.example.com"]);
         assert_eq!(cfg.default_org_id, org);
+        assert_eq!(cfg.client_id, "publish-ios");
         cfg.validate().expect("valid");
     }
 

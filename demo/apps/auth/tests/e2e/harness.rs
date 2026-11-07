@@ -53,6 +53,7 @@ pub(crate) async fn boot() -> TestApp {
         .provide(SignInConfig {
             resources: vec![API.into(), ASSISTANT.into()],
             default_org_id: ORG_ID,
+            ..SignInConfig::default()
         })
         .build()
         .await

@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::audio::{AudioService, Transcodes};
 use crate::orgs::ActiveModel as OrgActive;
+use crate::sign_in::SignInConfig;
 use crate::users::{ActiveModel as UserActive, UserRole};
 use crate::{Claims, Role, Subject};
 
@@ -41,7 +42,9 @@ pub fn user() -> Subject {
 
 pub fn claims(org_id: Uuid, role: Role, sub: Subject) -> Claims {
     Claims {
-        client_id: sub.client_id().map(str::to_owned),
+        client_id: sub
+            .client_id()
+            .map_or_else(|| SignInConfig::default().client_id, str::to_owned),
         sub,
         org_id,
         roles: vec![role],

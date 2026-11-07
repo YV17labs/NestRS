@@ -236,6 +236,12 @@ so a client can tell a deliberate close from the `1006` a network fault leaves:
 | A read failed on broken framing | `1011 Internal Error` | reconnects |
 | `#[on_connect]` panicked, or outlasted `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` | `1011 Internal Error` | reconnects |
 
+A message past the cap closes the socket unread, so no `ws.message` line and no
+layer sees it: the close is its one line, a `warn` on `nest_rs::ws` naming the
+gateway by `host` and `path`, as its `mounted` lines do, with the cap and the code,
+never the frame. Every line about a socket's end — its lifetime, a stalled
+outbox, the send deadline, a silent peer — names its gateway the same way.
+
 A handler that panics does not close the socket: its `ws.message` line files
 `panic`, the client gets the opaque error frame — `internal error`, under
 `code: "INTERNAL"` — and the panic's text goes to `nest_rs::ws` at `error`. A message still running when the shutdown

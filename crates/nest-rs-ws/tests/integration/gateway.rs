@@ -1599,7 +1599,10 @@ struct CappedModule;
 
 /// The protocol-layer cap surfaces as a read error with the framing gone, so the
 /// socket cannot continue: it closes with the code RFC 6455 §7.4.1 gives a
-/// message too big to process.
+/// message too big to process. No unit opens — reading the frame is what the cap
+/// exists not to do — so the close is the operator's one line about it: a `warn`
+/// naming the gateway as its `mounted` lines do, the cap and the code, never the
+/// frame.
 #[tokio::test]
 async fn a_message_past_the_cap_closes_1009_message_too_big() {
     let logs = LogCapture::install();
@@ -1610,8 +1613,9 @@ async fn a_message_past_the_cap_closes_1009_message_too_big() {
         .expect("a pinned message cap boots");
 
     let mut socket = app.socket("/socket").connect().await;
+    let marker = "sk_live_51HsecretTOKEN";
     socket
-        .send("echo", serde_json::json!("x".repeat(512)))
+        .send("echo", serde_json::json!(marker.repeat(32)))
         .await;
 
     let (code, reason) = socket.expect_close().await;
@@ -1621,13 +1625,32 @@ async fn a_message_past_the_cap_closes_1009_message_too_big() {
         "§7.4.1 1009 Message Too Big: {reason}"
     );
     assert!(!reason.is_empty());
+    app.shutdown().await.expect("the transport stops cleanly");
 
-    let read = logs.expect_one("nest_rs::ws", "websocket read error");
+    let read = logs.expect_one("nest_rs::ws", "closing socket: a message is past its cap");
+    assert_eq!(read.level, "warn", "a client refused, as a 413 is");
+    for (field, value) in [
+        ("host", "SocketGateway"),
+        ("path", "/socket"),
+        ("close_code", "1009"),
+        ("max_message_bytes", "64"),
+    ] {
+        assert_eq!(
+            read.field(field).as_deref(),
+            Some(value),
+            "{field}: {:?}",
+            read.fields
+        );
+    }
+    let mounted = logs
+        .find(nest_rs_http::target::ROUTES, "mounted")
+        .into_iter()
+        .find(|line| line.field("host").as_deref() == Some("SocketGateway"))
+        .expect("the gateway mounted");
     assert_eq!(
-        read.field("close_code").as_deref(),
-        Some("1009"),
-        "the line says the code the peer was sent: {:?}",
-        read.fields,
+        read.field("path"),
+        mounted.field("path"),
+        "it joins its mount"
     );
     assert!(
         read.field("error")
@@ -1635,8 +1658,15 @@ async fn a_message_past_the_cap_closes_1009_message_too_big() {
         "…while the operator's line does name the size that did it: {:?}",
         read.fields,
     );
-
-    app.shutdown().await.expect("the transport stops cleanly");
+    assert!(!logs.quotes(marker), "no line quotes the frame");
+    assert!(
+        logs.find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_ws::unit::MESSAGE.name()
+        )
+        .is_empty(),
+        "no message unit opened for a frame never read",
+    );
 }
 
 #[tokio::test]

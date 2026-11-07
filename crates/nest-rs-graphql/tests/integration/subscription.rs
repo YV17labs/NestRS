@@ -1117,14 +1117,16 @@ async fn another_method_on_the_graphql_path_answers_405_naming_the_served_ones()
 
 /// A frame past the socket's message cap is never buffered whole: the protocol
 /// layer refuses it and the socket closes with RFC 6455 §7.4.1's 1009, as the
-/// WebSocket gateway's cap does.
+/// WebSocket gateway's cap does, said at `warn` naming the mount as its `mounted
+/// endpoint` line does, the cap and the code, never the frame.
 #[tokio::test]
 async fn a_frame_past_the_message_cap_closes_1009_message_too_big() {
     let logs = LogCapture::install();
     let (app, _) = ticks_app::<SubscriptionApp>().await;
     let mut socket = graphql_ws(&app).connect().await;
 
-    let padding = "x".repeat(128 * 1024);
+    let marker = "sk_live_51HsecretTOKEN";
+    let padding = marker.repeat(8 * 1024);
     socket
         .send_text(
             serde_json::json!({ "type": "connection_init", "payload": { "padding": padding } })
@@ -1135,12 +1137,35 @@ async fn a_frame_past_the_message_cap_closes_1009_message_too_big() {
 
     assert_eq!(code, CloseCode::Size, "{reason}");
     assert!(!reason.is_empty());
-    let read = logs.expect_one(nest_rs_graphql::TARGET, "subscription socket read failed");
+    app.shutdown().await.expect("the transport stops cleanly");
+    let read = logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "closing subscription socket: a message is past its cap",
+    );
+    assert_eq!(read.level, "warn", "a client refused, as a 413 is");
+    let cap = (64 * 1024).to_string();
+    for (field, value) in [
+        ("host", "GraphqlModule"),
+        ("path", "/graphql"),
+        ("close_code", "1009"),
+        ("max_message_bytes", cap.as_str()),
+    ] {
+        assert_eq!(
+            read.field(field).as_deref(),
+            Some(value),
+            "{field}: {:?}",
+            read.fields
+        );
+    }
+    let mounted = logs
+        .find(nest_rs_http::target::ROUTES, "mounted endpoint")
+        .into_iter()
+        .find(|line| line.field("host").as_deref() == Some("GraphqlModule"))
+        .expect("the endpoint mounted");
     assert_eq!(
-        read.field("close_code").as_deref(),
-        Some("1009"),
-        "the line says the code the peer was sent: {:?}",
-        read.fields,
+        read.field("path"),
+        mounted.field("path"),
+        "it joins its mount"
     );
     assert!(
         read.field("error")
@@ -1148,7 +1173,7 @@ async fn a_frame_past_the_message_cap_closes_1009_message_too_big() {
         "the operator's line names the size that did it: {:?}",
         read.fields,
     );
-    app.shutdown().await.expect("the transport stops cleanly");
+    assert!(!logs.quotes(marker), "no line quotes the frame");
 }
 
 #[module(imports = [

@@ -240,7 +240,7 @@ authorised for:
 
 | Bound | Variable | Default | Past it |
 |---|---|---|---|
-| A message's size | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | 64 KiB, from 1 to a gibibyte | the frame is refused before it is buffered, and the socket closes `1009 Message Too Big` |
+| A message's size | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | 64 KiB, from 1 to a gibibyte | the frame is refused before it is buffered, and the socket closes `1009 Message Too Big`, said at `warn` naming the mount, the cap and the code, never the frame |
 | The wait for `connection_init` | `<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS` | 3 s, from 1 to 60 | the socket closes `4408 Connection initialisation timeout` |
 | A peer's silence | `<PREFIX>_GRAPHQL__PING_INTERVAL_SECS` | 20 s, from 1 to 3600, `0` ⇒ none | the server sends it a Ping |
 | The wait for an answer to that Ping | `<PREFIX>_GRAPHQL__PING_TIMEOUT_SECS` | 20 s, from 1 to 3600, never off | the socket is dropped without a close, as its peer's |

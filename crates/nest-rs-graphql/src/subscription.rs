@@ -748,6 +748,7 @@ struct Inbound<S> {
     /// Every frame the peer sends is heard here, the one reader of the socket.
     keep_alive: KeepAlive,
     ping_timeout: Duration,
+    max_message_bytes: usize,
     /// Wakes the loop to send the Ping the keepalive owes.
     ping: Arc<tokio::sync::Notify>,
     site: SocketSite,
@@ -774,8 +775,36 @@ impl<S> Inbound<S> {
             pipes,
             keep_alive: KeepAlive::new(bounds.ping_interval, bounds.ping_timeout),
             ping_timeout: bounds.ping_timeout,
+            max_message_bytes: bounds.max_message_bytes,
             ping: Arc::default(),
             site,
+        }
+    }
+
+    /// Say why the read failed: a message past the cap is a client refused,
+    /// as a `413` is, and the one line its frame earns, since nothing reads
+    /// it — at `warn`, naming the cap, never the frame; any other failure is
+    /// most often the connection gone.
+    fn read_failed(&self, error: &websocket::Error, code: CloseCode) {
+        if code == CloseCode::Size {
+            tracing::warn!(
+                target: crate::TARGET,
+                host = self.site.host(),
+                path = &*self.site.path,
+                error = %nest_rs_core::error_message(error),
+                close_code = u16::from(code),
+                max_message_bytes = self.max_message_bytes,
+                "closing subscription socket: a message is past its cap",
+            );
+        } else {
+            tracing::debug!(
+                target: crate::TARGET,
+                host = self.site.host(),
+                path = &*self.site.path,
+                error = %nest_rs_core::error_message(error),
+                close_code = u16::from(code),
+                "subscription socket read failed",
+            );
         }
     }
 
@@ -859,14 +888,7 @@ where
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Ready(Some(Err(error))) => {
                     let (code, reason) = websocket::read_failed(&error);
-                    tracing::debug!(
-                        target: crate::TARGET,
-                        host = this.site.host(),
-                        path = &*this.site.path,
-                        error = %nest_rs_core::error_message(&error),
-                        close_code = u16::from(code),
-                        "subscription socket read failed",
-                    );
+                    this.read_failed(&error, code);
                     return this.refuse(Refusal::ReadFailed(code, reason));
                 }
                 Poll::Ready(Some(Ok(message))) => {

@@ -551,7 +551,10 @@ fn stalled_outbox(site: &SocketSite, conn_id: u64) -> Closure {
 }
 
 /// Close a socket whose read failed, under the code [`websocket::read_failed`]
-/// reads off the failure.
+/// reads off the failure. A message past the cap is a client refused, as a
+/// `413` is, and the one line its frame earns, since no unit reads it: at
+/// `warn`, naming the cap, never the frame. Any other failure is most often the
+/// connection gone.
 fn read_failed(
     site: &SocketSite,
     conn_id: ConnId,
@@ -559,16 +562,28 @@ fn read_failed(
     max_message_bytes: usize,
 ) -> Closure {
     let (code, reason) = websocket::read_failed(error);
-    tracing::debug!(
-        target: crate::TARGET,
-        host = site.host,
-        path = &*site.path,
-        conn_id,
-        error = %nest_rs_core::error_message(error),
-        close_code = u16::from(code),
-        max_message_bytes,
-        "websocket read error",
-    );
+    if code == CloseCode::Size {
+        tracing::warn!(
+            target: crate::TARGET,
+            host = site.host,
+            path = &*site.path,
+            conn_id,
+            error = %nest_rs_core::error_message(error),
+            close_code = u16::from(code),
+            max_message_bytes,
+            "closing socket: a message is past its cap",
+        );
+    } else {
+        tracing::debug!(
+            target: crate::TARGET,
+            host = site.host,
+            path = &*site.path,
+            conn_id,
+            error = %nest_rs_core::error_message(error),
+            close_code = u16::from(code),
+            "websocket read error",
+        );
+    }
     Closure::Server(code, reason)
 }
 

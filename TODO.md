@@ -215,8 +215,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   turns red when it closes. *seen*
 
 **WebSocket and MCP**
-- A frame over `max_message_bytes`, closed `1009`, runs no layer and files no
-  `ws.message`. *read*
 - A failure swapped by an interceptor then answered by a filter keeps the
   first one's class. *read*
 

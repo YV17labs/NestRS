@@ -1,6 +1,7 @@
 //! [`McpView`], the MCP edge's view of the operation it dispatches.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use nest_rs_core::{ServedAddress, UnitView};
 use nest_rs_http::CarriedView;
@@ -95,6 +96,9 @@ pub struct McpView {
     kind: Option<McpOperationKind>,
     name: Option<Cow<'static, str>>,
     host: Option<&'static str>,
+    /// The path the operation's endpoint is mounted at; `None` on a hand-built
+    /// one.
+    path: Option<Arc<str>>,
 }
 
 impl UnitView for McpView {
@@ -103,7 +107,11 @@ impl UnitView for McpView {
         let Cow::Borrowed(name) = self.name.as_ref()? else {
             return None;
         };
-        Some(served_operation(self.kind?, name))
+        let served = served_operation(self.kind?, name);
+        Some(match &self.path {
+            Some(path) => served.at(path),
+            None => served,
+        })
     }
 }
 
@@ -129,6 +137,7 @@ impl McpView {
             kind: Some(kind),
             name: Some(Cow::Borrowed(name)),
             host: Some(host),
+            path: None,
         }
     }
 
@@ -145,7 +154,13 @@ impl McpView {
             kind,
             name: name.map(Cow::Owned),
             host,
+            path: None,
         }
+    }
+
+    /// The same view, at the endpoint mounted at `path`.
+    pub(crate) fn served_at(self, path: Option<Arc<str>>) -> Self {
+        Self { path, ..self }
     }
 
     /// The JSON-RPC method the client called (`tools/call`, `resources/read`).

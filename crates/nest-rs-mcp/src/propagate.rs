@@ -146,6 +146,9 @@ pub(crate) struct OperationUnits {
     /// What the mount's hosts declare; `None` asks the host's `get_tool`.
     index: Option<Arc<MountIndex>>,
     chains: RequestChains,
+    /// The path the mount is served at, made ambient for every operation it
+    /// runs; `None` on a hand-built endpoint.
+    served_at: Option<Arc<ServedPath>>,
 }
 
 impl OperationUnits {
@@ -162,7 +165,13 @@ impl OperationUnits {
             operation_timeout,
             index,
             chains,
+            served_at: None,
         }
+    }
+
+    /// The same units, naming the mount at `served_at` on their lines.
+    pub(crate) fn served_at(self, served_at: Option<Arc<ServedPath>>) -> Self {
+        Self { served_at, ..self }
     }
 
     /// Run `inner` as one operation, under the `/mcp` request's context
@@ -251,9 +260,15 @@ impl OperationUnits {
             Some(served) => Either::Left(nest_rs_core::with_ambient(Arc::clone(served), inner)),
             None => Either::Right(inner),
         };
+        // The site a `#[tools]` operation reaches inside names the mount too.
+        let inner = match &self.served_at {
+            Some(path) => Either::Left(nest_rs_core::with_ambient(Arc::clone(path), inner)),
+            None => Either::Right(inner),
+        };
         let address = &LineAddress {
             declared,
             served_resource,
+            path: self.served_at.as_deref().map(ServedPath::path),
         };
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
         let line = OperationLine::open(named, address, correlation.clone(), operation.clone());
@@ -392,6 +407,7 @@ impl OperationUnits {
             _ => None,
         };
         McpView::request(method.as_cow(), kind, name.map(str::to_owned), host)
+            .served_at(self.served_at.as_ref().map(|path| Arc::clone(&path.0)))
     }
 }
 
@@ -549,6 +565,7 @@ fn timed_out(mcp_method: &str, address: &LineAddress<'_>, timeout: Duration) -> 
     tracing::warn!(
         target: crate::TARGET,
         mcp_method,
+        path = named.path,
         tool = named.tool,
         prompt = named.prompt,
         resource = named.resource,
@@ -719,23 +736,43 @@ impl ServedResource {
 
 impl AmbientValue for ServedResource {}
 
+/// The path an operation's mount is served at, as its `mounted` lines name
+/// it: ambient for the operation, so the site a `#[tools]` operation reaches
+/// inside names it too.
+pub(crate) struct ServedPath(pub(crate) Arc<str>);
+
+impl ServedPath {
+    fn path(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AmbientValue for ServedPath {}
+
 /// What an operation's lines name it by.
 #[derive(Default)]
 struct LineAddress<'a> {
     declared: ServedAddress<'a>,
     /// On an operation a URI addresses, where its unit says the template.
     served_resource: Option<Arc<ServedResource>>,
+    /// The path its mount is served at; `None` on a hand-built endpoint.
+    path: Option<&'a str>,
 }
 
 impl LineAddress<'_> {
     /// `tool`, `prompt` or `resource` as the mount declares it, or
-    /// [`OTHER`](operation_log::OTHER) for what it does not.
+    /// [`OTHER`](operation_log::OTHER) for what it does not, at the mount's
+    /// `path`.
     fn named(&self) -> ServedAddress<'_> {
-        match &self.served_resource {
+        let named = match &self.served_resource {
             Some(served) => {
                 ServedAddress::resource(served.template().unwrap_or(operation_log::OTHER))
             }
             None => self.declared,
+        };
+        match self.path {
+            Some(path) => named.at(path),
+            None => named,
         }
     }
 }
@@ -814,6 +851,7 @@ impl<'a> OperationLine<'a> {
                 payload,
                 "mcp operation panicked; its client is answered with an internal error",
                 mcp_method = self.mcp_method,
+                path = named.path,
                 tool = named.tool,
                 prompt = named.prompt,
                 resource = named.resource,
@@ -833,6 +871,7 @@ impl<'a> OperationLine<'a> {
                 // Flat, never dotted: a dotted field name is ambiguous to
                 // `tracing`'s parser beside a path target.
                 mcp_method = self.mcp_method,
+                path = named.path,
                 tool = named.tool,
                 prompt = named.prompt,
                 resource = named.resource,

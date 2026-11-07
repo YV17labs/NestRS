@@ -60,8 +60,8 @@ the same words is one message, its edge a field or its target (`mounted`, `no
 guard at the request`); a guard's denial says what it refused and an edge's
 failure line what failed, each with a message per edge. A line naming a dispatched
 unit names it by the fields of its `mounted` line: `host` and `method`, then the
-edge's coordinates (`verb`+`path`, `kind`+`field`, `event`, `tool`, `prompt` or
-`resource`). `http.request`, `ws.message` and `mcp.operation`, filed by their edge
+edge's coordinates (`verb`+`path`, `kind`+`field`, `path`+`event`, or `path` and
+the `tool`, `prompt` or `resource`). `http.request`, `ws.message` and `mcp.operation`, filed by their edge
 around the dispatch, say the coordinates alone and join through them. `method` is the
 Rust method wherever a line says it: an HTTP method is
 `verb`, a JSON-RPC one `mcp_method`, and an operation type `kind`. A guard reads as

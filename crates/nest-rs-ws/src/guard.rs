@@ -166,7 +166,7 @@ pub(crate) fn gate_alone(
     gate: ClassGate,
     data: serde_json::Value,
 ) -> Result<(serde_json::Value, Pending), WsError> {
-    let mut view = WsView::new(client.clone(), handler.address(), data);
+    let mut view = WsView::new(client.clone(), handler.address(), None, data);
     let peer = Peer::new(None, Some(client.id()));
     let mut cx = new_unit_context(handler, &mut view, Some(peer), None);
     let gated = gate(&mut cx);
@@ -335,7 +335,7 @@ mod tests {
         client: &WsClient,
         data: serde_json::Value,
     ) -> (Result<(), Failure>, WsView, Option<std::sync::Arc<Seen>>) {
-        let mut view = WsView::new(client.clone(), "send", data);
+        let mut view = WsView::new(client.clone(), "send", None, data);
         let peer = nest_rs_core::Peer::new(None, Some(client.id()));
         let (checked, seen) = {
             let mut cx = new_unit_context(&SEND, &mut view, Some(peer), None);

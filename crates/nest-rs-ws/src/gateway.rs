@@ -745,8 +745,15 @@ async fn refuse_unread(
         None,
         |deadline| async move {
             report();
-            crate::message::unserved(messages, client, serde_json::Value::Null, refusal, deadline)
-                .await
+            crate::message::unserved(
+                messages,
+                client,
+                serde_json::Value::Null,
+                &wiring.site.path,
+                refusal,
+                deadline,
+            )
+            .await
         },
     )
     .await;
@@ -876,8 +883,8 @@ impl From<std::thread::Result<()>> for HookEnd {
 /// The units a socket carries, each filed under its own canonical name.
 #[derive(Clone, Copy)]
 enum Unit<'a> {
-    /// One message, named by its event.
-    Message { event: &'a str },
+    /// One message, named by its event and its gateway's path.
+    Message { event: &'a str, path: &'a str },
     /// The connect hook.
     Connect,
     /// The disconnect hook.
@@ -953,11 +960,12 @@ impl<'a> UnitLine<'a> {
         self.emit(operation_log::PANIC);
         let conn_id = self.conn_id;
         RequestContinuation::new(None, self.correlation.clone()).enter(|| match self.unit {
-            Unit::Message { event } => nest_rs_core::contained_panic!(
+            Unit::Message { event, path } => nest_rs_core::contained_panic!(
                 target: crate::TARGET,
                 payload,
                 "websocket handler panicked; its client is answered with an internal error",
                 conn_id,
+                path,
                 event,
             ),
             Unit::Connect => nest_rs_core::contained_panic!(
@@ -982,11 +990,12 @@ impl<'a> UnitLine<'a> {
         let span = &self.span;
         let started = self.started;
         RequestContinuation::new(None, self.correlation.clone()).enter(|| match self.unit {
-            Unit::Message { event } => nest_rs_core::operation_line!(
+            Unit::Message { event, path } => nest_rs_core::operation_line!(
                 crate::unit::MESSAGE,
                 span: span,
                 outcome: outcome,
                 started: started,
+                path,
                 event,
                 conn_id,
             ),
@@ -1067,12 +1076,29 @@ async fn handle_text<G: Gateway>(
         |deadline| async move {
             match served {
                 Some((event, Some(message))) => {
-                    crate::message::answer(gateway, message, client, event, data, deadline).await
+                    crate::message::answer(
+                        gateway,
+                        message,
+                        client,
+                        event,
+                        &wiring.site.path,
+                        data,
+                        deadline,
+                    )
+                    .await
                 }
                 Some((_, None)) => crate::message::refused(),
                 None => {
                     let refusal = crate::WsError::unknown_event();
-                    crate::message::unserved(messages, client, data, &refusal, deadline).await
+                    crate::message::unserved(
+                        messages,
+                        client,
+                        data,
+                        &wiring.site.path,
+                        &refusal,
+                        deadline,
+                    )
+                    .await
                 }
             }
         },
@@ -1106,7 +1132,11 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
             None => body.await,
         }
     };
-    let spec = unit_spec(Unit::Message { event: named }, at);
+    let message = Unit::Message {
+        event: named,
+        path: &wiring.site.path,
+    };
+    let spec = unit_spec(message, at);
     let unit = run_unit(
         unit_of_work,
         spec,
@@ -1122,12 +1152,7 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
         ws.event = %named,
         ws.connection_id = conn_id,
     );
-    let line = UnitLine::open(
-        Unit::Message { event: named },
-        conn_id,
-        correlation.clone(),
-        span.clone(),
-    );
+    let line = UnitLine::open(message, conn_id, correlation.clone(), span.clone());
     let ran = nest_rs_core::with_request_scope(
         Some(wiring.scopes.open()),
         correlation,

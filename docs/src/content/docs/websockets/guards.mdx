@@ -31,8 +31,8 @@ goes back as HTTP, no socket is opened, no `on_connect` fires. A guard
 listed at message scope **rejects the dispatch** — the connection
 stays open, the envelope is replaced with an error frame on the same
 event name, and one `guard denied the message` lands on the guard's target
-(`nest_rs::layers` when it declares none) naming the guard, the event and the
-status — never the guard's text, as on every edge.
+(`nest_rs::layers` when it declares none) naming the guard, the gateway's path,
+the event and the status — never the guard's text, as on every edge.
 
 ## Connection-level: the upgrade gate
 

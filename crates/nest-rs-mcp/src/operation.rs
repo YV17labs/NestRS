@@ -278,9 +278,16 @@ where
     answered(handler, outcome, slot)
 }
 
-/// The view of the operation `name` of `host`, served by `kind`'s router.
+/// The view of the operation `name` of `host`, served by `kind`'s router, at
+/// the path its endpoint is mounted at when one runs it.
 pub fn operation_view(kind: McpOperationKind, name: &'static str, host: &'static str) -> McpView {
-    McpView::declared(kind, name, host)
+    McpView::declared(kind, name, host).served_at(served_path())
+}
+
+/// The path the endpoint running this operation is mounted at, as its
+/// `mounted` lines name it; `None` outside one, or on a hand-built endpoint.
+pub fn served_path() -> Option<Arc<str>> {
+    nest_rs_core::ambient::<crate::propagate::ServedPath>().map(|served| Arc::clone(&served.0))
 }
 
 /// What a site whose chains did not compose answers: the opaque answer, its

@@ -198,7 +198,7 @@ async fn an_mcp_line_says_its_json_rpc_method_apart_from_the_handler_and_its_too
     assert_joins(
         &line,
         &mounted(&logs, "ShelvesTool", "count_shelves"),
-        &["tool"],
+        &["path", "tool"],
     );
     assert_eq!(
         line.field("method"),

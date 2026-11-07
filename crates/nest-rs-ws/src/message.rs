@@ -225,17 +225,19 @@ impl Answered {
     }
 }
 
-/// Run `data`, arrived on `client` for `event`, through `message`'s chains,
-/// then render what the unit came to, filing what its answer withholds.
+/// Run `data`, arrived on `client` for `event` at the gateway mounted at
+/// `path`, through `message`'s chains, then render what the unit came to,
+/// filing what its answer withholds.
 pub(crate) async fn answer<G: Gateway>(
     gateway: &G,
     message: &Message,
     client: &WsClient,
     event: &'static str,
+    path: &Arc<str>,
     data: serde_json::Value,
     deadline: Option<tokio::time::Instant>,
 ) -> Answered {
-    let mut view = WsView::new(client.clone(), event, data);
+    let mut view = WsView::new(client.clone(), event, Some(path), data);
     let outcome = {
         let peer = Peer::new(None, Some(client.id()));
         let mut cx = new_unit_context(message.handler, &mut view, Some(peer), deadline);
@@ -258,13 +260,14 @@ pub(crate) async fn unserved(
     messages: &MessageTable,
     client: &WsClient,
     data: serde_json::Value,
+    path: &Arc<str>,
     refusal: &WsError,
     deadline: Option<tokio::time::Instant>,
 ) -> Answered {
     let Some(chains) = &messages.unserved else {
         return refused();
     };
-    let mut view = WsView::new(client.clone(), operation_log::OTHER, data);
+    let mut view = WsView::new(client.clone(), operation_log::OTHER, Some(path), data);
     let outcome = {
         let peer = Peer::new(None, Some(client.id()));
         let mut cx = new_unit_context(&UNSERVED, &mut view, Some(peer), deadline);

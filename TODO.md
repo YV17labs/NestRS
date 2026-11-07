@@ -215,6 +215,11 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   turns red when it closes. *seen*
 
 **WebSocket and MCP**
+- A WebSocket mask's `authorization denied` and `response masking failed` name
+  `event` without the gateway's `path`: the reply is masked inside the
+  handler's call, which holds no view. Close: the path through the masked
+  unit, as MCP's mask reads its endpoint's. `ws.connect` and `ws.disconnect`
+  name `conn_id` alone, not the gateway's `host` and `path`. *read*
 
 **Auth**
 - A token `sign` mints carries `client_id` only when the claims name one,

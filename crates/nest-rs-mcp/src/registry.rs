@@ -605,10 +605,11 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
         .unwrap_or_default()
         .warn_when_operations_outlast_the_window(window, path);
     let index = Arc::new(index);
+    let shared_path: Arc<str> = Arc::from(path);
     let mount = McpMount::from_container(container)
         .stopped_with(detached.clone())
-        .declaring(index.clone());
-    let shared_path: Arc<str> = Arc::from(path);
+        .declaring(index.clone())
+        .served_at(Arc::clone(&shared_path));
     let container = container.clone();
     routes.route_any(
         path,

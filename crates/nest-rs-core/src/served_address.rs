@@ -22,7 +22,8 @@ pub struct ServedAddress<'a> {
     /// The HTTP method of a request, as the conventions or a route spell it.
     pub verb: Option<&'a str>,
     /// The route template a request matched, under the app's prefix, as its
-    /// `mounted` or `mounted endpoint` line says it.
+    /// `mounted` or `mounted endpoint` line says it; for a WebSocket message or
+    /// an MCP operation, the path its gateway or its endpoint is mounted at.
     pub path: Option<&'a str>,
     /// The kind of operation a GraphQL field runs under: `query`, `mutation`
     /// or `subscription`.
@@ -88,6 +89,24 @@ impl<'a> ServedAddress<'a> {
         Self {
             resource: Some(resource),
             ..Self::default()
+        }
+    }
+
+    /// The same unit, under the mount at `path`: a WebSocket message's gateway,
+    /// an MCP operation's endpoint, as their `mounted` lines name it.
+    ///
+    /// ```
+    /// use nest_rs_core::ServedAddress;
+    ///
+    /// let message = ServedAddress::event("send").at("/chat");
+    /// assert_eq!(message.path, Some("/chat"));
+    /// assert_eq!(message.event, Some("send"));
+    /// ```
+    #[must_use]
+    pub fn at(self, path: &'a str) -> Self {
+        Self {
+            path: Some(path),
+            ..self
         }
     }
 }

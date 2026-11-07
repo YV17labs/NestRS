@@ -572,8 +572,24 @@ async fn units_refused<M: Module + 'static, G: Guard + 'static>(declared: bool) 
         &line,
         "DoorGateway",
         Some("ping"),
-        &[("event", "ping")],
+        &[("path", "/ws/door"), ("event", "ping")],
     );
+    let message = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_ws::unit::MESSAGE.name(),
+        )
+        .into_iter()
+        .next()
+        .expect("the refused message files its line");
+    for (coordinate, value) in [("path", "/ws/door"), ("event", "ping")] {
+        assert_eq!(
+            message.field(coordinate).as_deref(),
+            Some(value),
+            "the message's line says the coordinates its denial names: {:?}",
+            message.fields,
+        );
+    }
     drop(socket);
     app.close().await;
 
@@ -610,7 +626,7 @@ async fn units_refused<M: Module + 'static, G: Guard + 'static>(declared: bool) 
         &line,
         "DoorTool",
         Some("ping"),
-        &[("tool", "ping")],
+        &[("path", "/mcp"), ("tool", "ping")],
     );
 }
 

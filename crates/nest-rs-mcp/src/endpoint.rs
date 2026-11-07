@@ -23,7 +23,7 @@ use crate::error::{
     SESSION_NOT_FOUND, classed_method_not_found, is_transport_message, said_by_code,
     transport_sentence, unread_message,
 };
-use crate::propagate::{OperationUnits, PropagatingHandler, RequestChains};
+use crate::propagate::{OperationUnits, PropagatingHandler, RequestChains, ServedPath};
 use crate::registry::MountIndex;
 use crate::sessions::{BoundedSessions, Principal, Refused, ReportedStore, say_no_subject};
 use nest_rs_database::UnitOfWork;
@@ -56,6 +56,9 @@ pub struct McpMount {
     index: Option<Arc<MountIndex>>,
     /// Who the endpoint serves, which decides what its sessions are bound to.
     posture: Posture,
+    /// The path the mount is served at, as its `mounted` lines name it; a
+    /// hand-built [`endpoint`]'s lines name none.
+    served_at: Option<Arc<ServedPath>>,
 }
 
 impl McpMount {
@@ -72,6 +75,7 @@ impl McpMount {
             detached: DetachedWork::new(),
             index: None,
             posture: Posture::Gated,
+            served_at: None,
         }
     }
 
@@ -156,6 +160,7 @@ impl McpMount {
             detached: DetachedWork::new(),
             index: None,
             posture: crate::module::posture(container),
+            served_at: None,
         }
     }
 
@@ -171,6 +176,13 @@ impl McpMount {
     /// its hosts declare.
     pub(crate) fn declaring(mut self, index: Arc<MountIndex>) -> Self {
         self.index = Some(index);
+        self
+    }
+
+    /// Name the mount by `path` on every line its operations file, as its
+    /// `mounted` lines do.
+    pub(crate) fn served_at(mut self, path: Arc<str>) -> Self {
+        self.served_at = Some(Arc::new(ServedPath(path)));
         self
     }
 }
@@ -198,6 +210,7 @@ where
         detached,
         index,
         posture,
+        served_at,
     } = mount;
 
     let units = OperationUnits::new(
@@ -206,7 +219,8 @@ where
         config.operation_timeout,
         index,
         chains,
-    );
+    )
+    .served_at(served_at);
 
     let session_store = session_store.map(|store| Arc::new(ReportedStore::new(store, posture)));
     let sessions = Arc::new(BoundedSessions::new(

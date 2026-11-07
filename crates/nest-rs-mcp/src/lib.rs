@@ -123,7 +123,7 @@ pub mod __private {
     pub use crate::module::RUNTIME;
     pub use crate::operation::{
         OPERATION_LAYERS, OperationGuards, description_is_blank, operation_guard_stage,
-        operation_view, run_operation,
+        operation_view, run_operation, served_path,
     };
     pub use crate::registry::{
         DeclaredOperation, DeclaredRoutes, DefaultDeclaredRoutes, DefaultOperationLayers,

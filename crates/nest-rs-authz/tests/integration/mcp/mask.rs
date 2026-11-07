@@ -389,6 +389,7 @@ async fn a_stripped_required_field_fails_the_operation_closed() {
     for (field, named) in [
         ("host", "MaskTool"),
         ("method", "strict_widget"),
+        ("path", "/mcp/mask"),
         ("tool", "strict_widget"),
     ] {
         assert_eq!(event.field(field).as_deref(), Some(named), "{field}");

@@ -189,12 +189,12 @@ lifecycle hook:
 | Unit | Canonical name | Names |
 |---|---|---|
 | HTTP request | `http.request` | `verb`, `path` (the route template), `status`, `bytes` |
-| WS message | `ws.message` | event (`_OTHER` for one no handler serves), `conn_id` |
+| WS message | `ws.message` | `path`, the gateway's, and `event` (`_OTHER` for one no handler serves), `conn_id` |
 | WS socket open | `ws.connect` | `conn_id` |
 | WS socket close | `ws.disconnect` | `conn_id` |
 | Scheduled tick | `schedule.tick` | `host`, `method`, `replicas`, and the `occurrence` a job firing once claimed |
 | Queue job | `queue.job` | `queue`, `host`, `method`, `job_id`, `backend_id`, `attempt` |
-| MCP operation | `mcp.operation` | `mcp_method`, the JSON-RPC method (`_OTHER` for a custom one), and `tool`, `prompt` or `resource` as the host declares it (`_OTHER` for any other) |
+| MCP operation | `mcp.operation` | `mcp_method`, the JSON-RPC method (`_OTHER` for a custom one), `path`, the endpoint's, and `tool`, `prompt` or `resource` as the host declares it (`_OTHER` for any other) |
 | GraphQL operation | `graphql.operation` | `kind` |
 | GraphQL root field | `graphql.field` | `host`, `method`, `kind`, `field` |
 | GraphQL subscription | `graphql.subscription` | the connection is the unit |

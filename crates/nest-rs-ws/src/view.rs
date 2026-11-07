@@ -1,5 +1,7 @@
 //! [`WsView`], the WebSocket edge's view of the message it dispatches.
 
+use std::sync::Arc;
+
 use nest_rs_core::__private::{Withheld, is_same_failure, kept};
 use nest_rs_core::{Failure, ServedAddress, Settled, UnitContext, UnitView};
 
@@ -35,6 +37,9 @@ use crate::server::WsClient;
 pub struct WsView {
     client: WsClient,
     event: &'static str,
+    /// The path the message's gateway is mounted at; `None` for a message
+    /// dispatched as a test calls it, which no gateway mounts.
+    path: Option<Arc<str>>,
     data: Option<serde_json::Value>,
     reply: Option<WsReply>,
     /// What the reply withholds, filed for the operator once it goes out: set
@@ -49,16 +54,27 @@ pub struct WsView {
 
 impl UnitView for WsView {
     fn served_address(&self) -> Option<ServedAddress<'_>> {
-        Some(ServedAddress::event(self.event))
+        let served = ServedAddress::event(self.event);
+        Some(match &self.path {
+            Some(path) => served.at(path),
+            None => served,
+        })
     }
 }
 
 impl WsView {
-    /// The view of `event`'s message `data`, arrived on `client`.
-    pub(crate) fn new(client: WsClient, event: &'static str, data: serde_json::Value) -> Self {
+    /// The view of `event`'s message `data`, arrived on `client` at the
+    /// gateway mounted at `path`, when one mounts it.
+    pub(crate) fn new(
+        client: WsClient,
+        event: &'static str,
+        path: Option<&Arc<str>>,
+        data: serde_json::Value,
+    ) -> Self {
         Self {
             client,
             event,
+            path: path.cloned(),
             data: Some(data),
             reply: None,
             withheld: None,

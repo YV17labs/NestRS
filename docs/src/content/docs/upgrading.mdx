@@ -1394,6 +1394,12 @@ lists what the boot, a log or the wire shows when one is missed.
   `@include(if: $x)` dropping it, and an argument's root field alone failing. Send the
   variable, or declare it a default. A client relying on `@skip` or `@include` ignoring
   a default now reads what its document says.
+- **A GraphQL client sending `null` for a variable its type declares Non-Null**,
+  `$hint: String!` sent `null`, or `[1, null]` for `$ids: [ID!]`, reads
+  `Variable "$hint" of non-null type "String!" must not be null.` (or `… must not hold
+  null at "ids[1]".`), and the operation runs nothing: a nullable argument read the
+  `null`, and a mutation ran its root fields. Declare the variable nullable, or send a
+  value.
 - **A GraphQL document selecting an object twice at one place, a directive leaving one
   selection nothing to answer**, `{ org { name @skip(if: true) } org { id } }`, reads an
   `INVALID_ARGUMENT` refusal and runs nothing: `org` answered `null` whenever that

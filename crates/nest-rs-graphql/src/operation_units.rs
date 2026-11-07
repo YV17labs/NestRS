@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::{Infallible, identity};
+use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, PoisonError};
@@ -18,8 +19,8 @@ use std::time::Duration;
 use async_graphql::futures_util::StreamExt;
 use async_graphql::futures_util::stream::{self, BoxStream, FuturesOrdered, Stream};
 use async_graphql::parser::types::{
-    Directive, DocumentOperations, ExecutableDocument, FragmentDefinition, OperationDefinition,
-    OperationType, Selection, SelectionSet, VariableDefinition,
+    BaseType, Directive, DocumentOperations, ExecutableDocument, FragmentDefinition,
+    OperationDefinition, OperationType, Selection, SelectionSet, Type, VariableDefinition,
 };
 use async_graphql::{
     BatchRequest, BatchResponse, Context, Data, Executor, Name, Pos, Positioned, Request, Response,
@@ -444,39 +445,78 @@ impl Answered {
     }
 }
 
-/// GraphQL §6.1.2, *CoerceVariableValues*, for the absent variables
-/// async-graphql (`7.2.1`) leaves uncoerced: each takes its default, which
-/// `@skip` and `@include` read in `request.variables` alone (`schema.rs`,
+/// GraphQL §6.1.2, *CoerceVariableValues*, for what async-graphql (`7.2.1`)
+/// leaves uncoerced. An absent variable takes its default, which `@skip` and
+/// `@include` read in `request.variables` alone (`schema.rs`,
 /// `remove_skipped_selection`) where an argument reads the definition too. The
-/// first Non-Null one with none is the request error it returns: async-graphql
-/// runs such an operation, reading the directive's `if` as `false` and failing
-/// only the fields whose arguments read it, after the root fields before them.
+/// first Non-Null one absent with none, or sent `null` where its type is Non-Null,
+/// at its top or in a list, is the request error it returns: async-graphql runs
+/// such an operation, reading the directive's `if` as `false`, handing a nullable
+/// argument the `null`, and failing only the fields a Non-Null position reads it
+/// at, after the root fields before them. What a variable's named type holds is
+/// validation's: it reads the value against the position's type, which names the
+/// same one (`VariablesInAllowedPosition`), so only the variable's own Non-Null
+/// wrappers go unread.
 fn coerce_variables(
     definitions: &[Positioned<VariableDefinition>],
     variables: &mut Variables,
 ) -> Option<ServerError> {
-    let mut absent = None;
+    let mut refused = None;
     for definition in definitions {
         let name = &definition.node.name.node;
-        if variables.contains_key(name) {
+        let ty = &definition.node.var_type.node;
+        if let Some(value) = variables.get(name) {
+            if refused.is_none() {
+                refused = null_where_required(ty, value, &mut name.to_string()).map(|at| {
+                    let said = match at {
+                        None => format!(
+                            r#"Variable "${name}" of non-null type "{ty}" must not be null."#
+                        ),
+                        Some(at) => format!(
+                            r#"Variable "${name}" of type "{ty}" must not hold null at "{at}"."#
+                        ),
+                    };
+                    (said, definition.pos)
+                });
+            }
             continue;
         }
         match &definition.node.default_value {
             Some(default) => {
                 variables.insert(name.clone(), default.node.clone());
             }
-            None if !definition.node.var_type.node.nullable => {
-                absent.get_or_insert(definition);
+            None if !ty.nullable && refused.is_none() => {
+                let said =
+                    format!(r#"Variable "${name}" of required type "{ty}" was not provided."#);
+                refused = Some((said, definition.pos));
             }
             None => {}
         }
     }
-    absent.map(|definition| {
-        let said = format!(
-            r#"Variable "${}" of required type "{}" was not provided."#,
-            definition.node.name.node, definition.node.var_type.node,
-        );
-        crate::error::invalid_argument(said).into_server_error(definition.pos)
+    refused.map(|(said, at)| crate::error::invalid_argument(said).into_server_error(at))
+}
+
+/// Where `value` holds a `null` its type `ty` refuses: `Some(None)` at its top,
+/// `Some(Some(path))` inside a list, `path` the variable's name and each index
+/// down to it. A value standing where a list is declared is coerced to a list of
+/// one (§3.11), so it is read as that list's item.
+fn null_where_required(ty: &Type, value: &Value, path: &mut String) -> Option<Option<String>> {
+    if *value == Value::Null {
+        return (!ty.nullable).then_some(None);
+    }
+    let BaseType::List(item) = &ty.base else {
+        return None;
+    };
+    let Value::List(items) = value else {
+        return null_where_required(item, value, path);
+    };
+    items.iter().enumerate().find_map(|(at, value)| {
+        let length = path.len();
+        write!(path, "[{at}]").ok()?;
+        let found =
+            null_where_required(item, value, path).map(|at| at.or_else(|| Some(path.clone())));
+        path.truncate(length);
+        found
     })
 }
 
@@ -1078,6 +1118,46 @@ mod tests {
             refused(request("query A($b: Int!) { x } query B { x }", Some("B"))).is_none(),
             "another operation's"
         );
+    }
+
+    /// Each place a type refuses a `null`, and the ones it does not, a lone value
+    /// standing where a list is declared read as that list's one item (§3.11).
+    #[test]
+    fn a_null_is_refused_wherever_its_variables_type_is_non_null() {
+        use serde_json::json;
+
+        let sent = |ty: &str, value: serde_json::Value| {
+            let query = format!("query($v: {ty}) {{ x }}");
+            refused(request(&query, None).variables(Variables::from_json(json!({ "v": value }))))
+                .map(|refusal| refusal.message)
+        };
+        let null = |ty: &str| format!(r#"Variable "$v" of non-null type "{ty}" must not be null."#);
+        let held = |ty: &str, at: &str| {
+            format!(r#"Variable "$v" of type "{ty}" must not hold null at "{at}"."#)
+        };
+        for (ty, value, said) in [
+            ("Int!", json!(null), Some(null("Int!"))),
+            ("[Int]!", json!(null), Some(null("[Int]!"))),
+            ("[Int!]", json!([1, null]), Some(held("[Int!]", "v[1]"))),
+            (
+                "[[Int!]]",
+                json!([[1], [2, 3, null]]),
+                Some(held("[[Int!]]", "v[1][2]")),
+            ),
+            (
+                "[[Int]!]",
+                json!([[1], null]),
+                Some(held("[[Int]!]", "v[1]")),
+            ),
+            ("[Int!] = [1]", json!([null]), Some(held("[Int!]", "v[0]"))),
+            ("Int", json!(null), None),
+            ("[Int]", json!([null]), None),
+            ("[Int!]", json!(null), None),
+            ("[Int!]", json!(3), None),
+            ("[[Int]]", json!([null, [null]]), None),
+        ] {
+            assert_eq!(sent(ty, value.clone()), said, "{ty}: {value}");
+        }
     }
 
     #[test]

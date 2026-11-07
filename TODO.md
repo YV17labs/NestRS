@@ -201,8 +201,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   selection's answer. *seen*
 - A repeated root field's refusal reads by response key and refuses one
   document too many. *seen*
-- A required variable sent `null` is refused only where its position refuses
-  it. *seen*
 - A `Context` read by hand in a body is not checked at boot. *read*
 
 **WebSocket and MCP**

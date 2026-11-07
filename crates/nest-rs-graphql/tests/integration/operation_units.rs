@@ -272,6 +272,12 @@ impl ProbeResolver {
 
     #[mutation]
     #[public]
+    async fn noted(&self, hints: Option<Vec<Option<String>>>) -> usize {
+        hints.map_or(0, |hints| hints.len())
+    }
+
+    #[mutation]
+    #[public]
     async fn maybe_write(&self, fail: bool) -> Result<Option<String>> {
         tokio::task::yield_now().await;
         match fail {
@@ -1102,22 +1108,61 @@ async fn a_nullable_variable_left_absent_is_no_refusal() {
     assert_eq!(reply["data"], json!({ "hinted": false }), "{reply}");
 }
 
-/// What a required variable sent as `null` reads, which §6.1.2 refuses too and
-/// async-graphql (`7.2.1`) does not: a directive's `if` is refused by validation,
-/// and a nullable argument reads the `null` the client wrote. Nothing runs that
-/// the client did not ask for, so it stands.
+/// GraphQL §6.1.2, *CoerceVariableValues*: a variable sent `null` where its type
+/// is Non-Null, at its top or inside a list, is a request error, which async-graphql
+/// (`7.2.1`) refuses only where a position reading it is Non-Null too, so a nullable
+/// argument read the `null` and a mutation ran its root fields. Nothing runs now.
 #[tokio::test]
-async fn a_required_variable_sent_null_is_refused_only_where_its_position_refuses_it() {
-    let (app, _) = boot().await;
-    let argument = post(
+async fn a_required_variable_sent_null_is_refused_before_anything_runs() {
+    let logs = LogCapture::install();
+    let (app, journal) = boot().await;
+    for (query, variables, said) in [
+        (
+            "query($hint: String!) { hinted(hint: $hint) }",
+            json!({ "hint": null }),
+            r#"Variable "$hint" of non-null type "String!" must not be null."#,
+        ),
+        (
+            "mutation($hints: [String!]) { first: write(fail: false) second: noted(hints: $hints) }",
+            json!({ "hints": ["a", null] }),
+            r#"Variable "$hints" of type "[String!]" must not hold null at "hints[1]"."#,
+        ),
+        (
+            "mutation($hints: [String!]!) { first: write(fail: false) second: noted(hints: $hints) }",
+            json!({ "hints": null }),
+            r#"Variable "$hints" of non-null type "[String!]!" must not be null."#,
+        ),
+        (
+            "query($hint: String! = \"a\") { hinted(hint: $hint) }",
+            json!({ "hint": null }),
+            r#"Variable "$hint" of non-null type "String!" must not be null."#,
+        ),
+    ] {
+        let reply = post(&app, json!({ "query": query, "variables": variables })).await;
+        assert_eq!(reply["data"], Value::Null, "{query}: {reply}");
+        assert_eq!(reply["errors"].as_array().map(Vec::len), Some(1), "{reply}");
+        assert_eq!(reply["errors"][0]["message"], said, "{query}: {reply}");
+        assert_eq!(
+            reply["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
+            "{query}: {reply}"
+        );
+    }
+    assert!(dispatched(&logs).is_empty(), "no root field resolves");
+    assert!(
+        !journal.read().iter().any(|entry| entry.contains("block")),
+        "no root field opens a block: {:?}",
+        journal.read()
+    );
+
+    let nullable = post(
         &app,
         json!({
-            "query": "query($hint: String!) { hinted(hint: $hint) }",
-            "variables": { "hint": null },
+            "query": "mutation($hints: [String]) { noted(hints: $hints) }",
+            "variables": { "hints": ["a", null] },
         }),
     )
     .await;
-    assert_eq!(argument["data"], json!({ "hinted": false }), "{argument}");
+    assert_eq!(nullable["data"], json!({ "noted": 2 }), "{nullable}");
     let directive = post(
         &app,
         json!({

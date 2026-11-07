@@ -863,28 +863,13 @@ where
             );
             return this.refuse(Refusal::InitTimeout);
         }
-        match this.keep_alive.poll_due(cx) {
-            Poll::Ready(Due::Ping) => this.ping.notify_one(),
-            Poll::Ready(Due::Silent) => {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    host = this.site.host(),
-                    path = &*this.site.path,
-                    ping_timeout_ms = this.ping_timeout.as_millis(),
-                    "closing subscription socket: the peer sent nothing back within the ping \
-                     timeout",
-                );
-                return this.refuse(Refusal::Silent);
-            }
-            Poll::Pending => {}
-        }
         // The loop answers the withheld `subscribe`, then polls the engine again.
         if this.withheld.waits() {
             return Poll::Pending;
         }
         loop {
             match std::pin::Pin::new(&mut this.socket).poll_next(cx) {
-                Poll::Pending => return Poll::Pending,
+                Poll::Pending => break,
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Ready(Some(Err(error))) => {
                     let (code, reason) = websocket::read_failed(&error);
@@ -953,6 +938,25 @@ where
                     }
                     return Poll::Ready(Some(parsed));
                 }
+            }
+        }
+        // After the read, so a frame that waited unread as the Ping's wait
+        // ended is its answer.
+        loop {
+            match this.keep_alive.poll_due(cx) {
+                Poll::Ready(Due::Ping) => this.ping.notify_one(),
+                Poll::Ready(Due::Silent) => {
+                    tracing::warn!(
+                        target: crate::TARGET,
+                        host = this.site.host(),
+                        path = &*this.site.path,
+                        ping_timeout_ms = this.ping_timeout.as_millis(),
+                        "closing subscription socket: the peer sent nothing back within the \
+                         ping timeout",
+                    );
+                    return this.refuse(Refusal::Silent);
+                }
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
@@ -1439,6 +1443,49 @@ mod tests {
             Refusal::Silent.close(),
             None,
             "a silent peer is sent no Close"
+        );
+    }
+
+    /// An answer that arrived before the Ping's wait ended, but was not read
+    /// yet because the loop was writing, is the answer: the peer's half reads
+    /// what waits before it judges the peer silent.
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_waiting_unread_as_the_pings_wait_ends_keeps_the_socket() {
+        let timeout = nest_rs_http::DEFAULT_PING_TIMEOUT;
+        let (peer, mut frames) = tokio::sync::mpsc::unbounded_channel();
+        let socket = futures_util::stream::poll_fn(move |cx| frames.poll_recv(cx));
+        let mut inbound = Inbound::new(
+            socket,
+            std::future::pending(),
+            bounds(),
+            None,
+            SocketSite {
+                path: Arc::from("/graphql"),
+            },
+        );
+        let ping = Arc::clone(&inbound.ping);
+        let refusal = Arc::clone(&inbound.refusal);
+        peer.send(Ok(Message::text(r#"{"type":"connection_init"}"#)))
+            .expect("open");
+        assert!(matches!(
+            inbound.next().await,
+            Some(Ok(ClientMessage::ConnectionInit { .. }))
+        ));
+        tokio::select! {
+            read = inbound.next() => panic!("nothing reaches the engine before the Ping: {}", read.is_some()),
+            () = ping.notified() => {}
+        }
+
+        peer.send(Ok(Message::Pong(Default::default())))
+            .expect("open");
+        tokio::time::advance(timeout + Duration::from_millis(1)).await;
+        let polled = std::future::poll_fn(|cx| Poll::Ready(inbound.poll_next_unpin(cx))).await;
+
+        assert!(
+            polled.is_pending() && refusal.get().is_none(),
+            "the Pong waiting unread is the answer: read {}, refused {:?}",
+            polled.is_ready(),
+            refusal.get(),
         );
     }
 

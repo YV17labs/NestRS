@@ -301,8 +301,9 @@ async fn serve_connection<G, N, S>(
     // after every reply already queued. A frame that cannot be written ends the
     // socket: a peer that stops reading sends nothing either.
     let (writer_ends, mut writer_stopped) = tokio::sync::oneshot::channel::<()>();
-    // The read loop owns the keepalive; the Ping it owes goes out here, beside
-    // the replies, since this task owns the `Sink`.
+    // The read loop owns the keepalive; the Ping it owes goes out here, since
+    // this task owns the `Sink`, and ahead of the replies: an outbox that never
+    // empties would hold it back until its peer was dropped as silent.
     let ping = Arc::new(tokio::sync::Notify::new());
     let pinged = Arc::clone(&ping);
     let writer_site = site.clone();
@@ -310,11 +311,11 @@ async fn serve_connection<G, N, S>(
         loop {
             let frame = tokio::select! {
                 biased;
+                () = pinged.notified() => Message::Ping(Default::default()),
                 frame = rx.recv() => match frame {
                     Some(frame) => Message::Text(frame),
                     None => break,
                 },
-                () = pinged.notified() => Message::Ping(Default::default()),
             };
             if let Err(error) = sink.send(frame).await {
                 stopped_writing(&writer_site, conn_id, &error);
@@ -1865,6 +1866,89 @@ mod tests {
             crate::unit::DISCONNECT.name(),
         );
         assert_eq!(left.field("outcome").as_deref(), Some(operation_log::OK));
+    }
+
+    /// A peer that only reads, from a socket whose outbox never empties, is
+    /// pinged all the same and keeps it: the Ping goes out ahead of the frames
+    /// queued before it, so pushes never hold it back until the peer, silent
+    /// since it was never asked, is dropped.
+    #[tokio::test(start_paused = true)]
+    async fn a_peer_reading_a_socket_whose_outbox_never_empties_is_pinged_and_keeps_it() {
+        use tokio_tungstenite::tungstenite::protocol::Role;
+
+        const INTERVAL: Duration = Duration::from_secs(1);
+        const TIMEOUT: Duration = Duration::from_secs(1);
+        const READ_EVERY: Duration = Duration::from_millis(10);
+        const BACKLOG: usize = 64;
+        const HORIZON: Duration = Duration::from_secs(5);
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let (server_end, client_end) = tokio::io::duplex(4 * 1024);
+        let server_socket =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(server_end, Role::Server, None)
+                .await;
+        let mut client =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(client_end, Role::Client, None)
+                .await;
+        let server = Arc::new(WsServer::<crate::server::Global>::default());
+        let _serving = tokio::spawn(serve_connection(
+            Arc::new(Echo),
+            Arc::clone(&server),
+            Arc::new(no_message()),
+            wiring(),
+            SocketLimits {
+                max_lifetime: None,
+                max_message_bytes: 1024,
+                ping_interval: Some(INTERVAL),
+                ping_timeout: TIMEOUT,
+            },
+            server_socket,
+            std::future::pending(),
+        ));
+        while server.connection_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+        // As many pushes as reads, after a backlog the pipe cannot hold.
+        let pushing = Arc::clone(&server);
+        let producer = tokio::spawn(async move {
+            let tick = "x".repeat(256);
+            for _ in 0..BACKLOG {
+                pushing.broadcast("tick", &tick).expect("encodes");
+            }
+            loop {
+                tokio::time::sleep(READ_EVERY).await;
+                pushing.broadcast("tick", &tick).expect("encodes");
+            }
+        });
+
+        let mut pings = 0_u32;
+        let reading = async {
+            loop {
+                match client.next().await {
+                    Some(Ok(Message::Ping(_))) => pings += 1,
+                    Some(Ok(Message::Text(_))) => {}
+                    other => return other,
+                }
+                tokio::time::sleep(READ_EVERY).await;
+            }
+        };
+        let ended = tokio::time::timeout(HORIZON, reading).await;
+        producer.abort();
+
+        let silent = logs.find(
+            crate::TARGET,
+            "closing socket: the peer sent nothing back within the ping timeout",
+        );
+        assert!(
+            ended.is_err() && server.connection_count() == 1 && silent.is_empty(),
+            "a peer reading every frame keeps its socket: read {ended:?}, pinged {pings} times, \
+             {} silent-peer lines",
+            silent.len(),
+        );
+        assert!(
+            pings >= 3,
+            "pinged once per interval of its silence, the pushes notwithstanding: {pings} Pings",
+        );
     }
 
     /// Pins the event, not the path: every `try_send` failure routes through

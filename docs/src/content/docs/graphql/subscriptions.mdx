@@ -209,8 +209,9 @@ A peer can vanish without a close, and its TCP connection says nothing of it.
 So once a peer has sent nothing for `<PREFIX>_GRAPHQL__PING_INTERVAL_SECS`, the
 server sends it a WebSocket Ping (RFC 6455 §5.5.2), which every client answers
 as it reads, a browser's `WebSocket` included, whatever the subprotocol. Any
-frame from the peer counts as its answer, so a socket in use is never pinged. A
-peer that sends nothing back within `<PREFIX>_GRAPHQL__PING_TIMEOUT_SECS` is
+frame from the peer counts as its answer, so a peer that talks is never pinged,
+and one that only listens to its subscriptions is pinged however much they
+send. A peer that sends nothing back within `<PREFIX>_GRAPHQL__PING_TIMEOUT_SECS` is
 taken for gone: its socket is dropped without a close, its subscriptions ended,
 its line filed `cancelled`, and one `warn` on `nest_rs::graphql` names the
 mount by `host` and `path`. Both default to 20 seconds, so a vanished peer is

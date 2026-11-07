@@ -157,7 +157,8 @@ closed mid-session — and its TCP connection says nothing of it. So once a peer
 has sent nothing for the Ping interval, the server sends it a Ping (RFC 6455
 §5.5.2), which every client answers as it reads, a browser's `WebSocket`
 included, with no code of yours. Any frame from the peer counts as its answer,
-so a socket in use is never pinged. A peer that sends nothing back within the
+so a peer that talks is never pinged, and one that only listens is pinged
+however busy its socket is. A peer that sends nothing back within the
 Ping timeout is taken for gone: its socket is dropped without a close, its
 `#[on_disconnect]` hook runs, and one `warn` on `nest_rs::ws` names the gateway
 by `host` and `path`. A vanished peer is so released within 40 seconds of its

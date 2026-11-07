@@ -65,3 +65,20 @@ connection loop, the subscription socket's peer half), and the drop over a real
 socket in `nest-rs-testing`'s `silent_peer.rs`. A peer that vanished, its packets
 dropped, needs a network the suites do not have: what the server sees of one, a
 peer that sends nothing back, is what they prove.
+
+**2026-11-07, two orderings the keepalive owes** (found by this branch's review,
+each held by a test beside its loop on an in-memory pipe). A peer is pinged by
+its own silence, not its socket's: one that only listens to a busy feed is
+pinged like an idle one, so the Pings' cost is paid by every socket whose peer
+sends nothing.
+
+- **The gateway's writer sends the Ping ahead of the frames queued before it.**
+  Behind them, it waited for an outbox that never emptied, and the peer, never
+  asked, was dropped as silent. At most one Ping per interval goes first, so the
+  replies are never held back by it. graphql-ws's loop picks between the Ping
+  and the engine's next frame at random, which delays the Ping by a frame or two
+  and never for good: left as it is.
+- **A frame waiting unread when the Ping's wait ends is its answer.** Both
+  sockets read what waits before they judge the peer silent, so a loop busy
+  writing as the wait ends never drops a peer that answered in time; the
+  subscription socket's peer half judged first.

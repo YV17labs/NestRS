@@ -1678,6 +1678,7 @@ dependencies = [
  "nest-rs-core-macros",
  "parking_lot 0.13.0",
  "pin-project-lite",
+ "ref-cast",
  "schemars",
  "sea-orm",
  "serde",
@@ -1707,7 +1708,6 @@ version = "7.0.0"
 dependencies = [
  "futures-util",
  "nest-rs-core",
- "thiserror",
  "tokio",
  "uuid",
 ]

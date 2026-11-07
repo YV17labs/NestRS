@@ -84,12 +84,11 @@ async fn run_guards(
             drop(view.take_response());
         }
     }
-    let cx_read: &UnitContext<'_> = cx;
-    if let Some(refused) = needed.and_then(|needed| {
-        needed.refused(cx_read, |principal| {
-            earned_by_a_rejected_credential(cx_read, principal)
+    if let Some(needed) = needed
+        && let Some(refused) = needed.refused(cx, |principal| {
+            earned_by_a_rejected_credential(cx, principal)
         })
-    }) {
+    {
         return Err(refused);
     }
     for gate in gates {

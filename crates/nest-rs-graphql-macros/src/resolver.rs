@@ -1089,7 +1089,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 exception_filters: &method_exception_filters,
                 gate: None,
                 withheld: quote!(false),
-                ambient: ambient.clone(),
+                ambient,
             }));
             site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
             let FieldMethod {
@@ -1356,7 +1356,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 exception_filters: &method_exception_filters,
                 gate,
                 withheld,
-                ambient: ambient.clone(),
+                ambient,
             }));
             let site = site_ref(&self_ty, &method_name);
             site_refs.push((cfgs.clone(), site.clone()));

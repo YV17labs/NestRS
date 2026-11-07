@@ -152,12 +152,8 @@ pub fn field_guard_stage(
         validate_gate_reached(label, &chain, request_chain).map_err(anyhow::Error::msg)?;
     }
     let public = handler.posture() == Posture::Public || site == GraphqlSite::Field;
-    let needed = if public && !ambient.is_empty() {
-        let request = request_chain().map_err(anyhow::Error::msg)?;
-        NeededPrincipal::of(&ambient, chain.iter().chain(&request))
-    } else {
-        None
-    };
+    let needed = NeededPrincipal::carried(public, &ambient, &chain, request_chain)
+        .map_err(anyhow::Error::msg)?;
     if needed.is_none()
         && carried_stage_idle(&chain, withheld, request_chain).map_err(anyhow::Error::msg)?
     {

@@ -73,13 +73,17 @@ pub struct NeededPrincipal {
 }
 
 impl NeededPrincipal {
-    /// The first of the `ambient` types a handler reads that a guard of `guards`
-    /// produces as its principal, beside the first such guard.
-    pub fn of<'g, I>(ambient: &[TypeId], guards: I) -> Option<Self>
+    /// On a `#[public]` unit (`public`), the first of the `ambient` types its
+    /// handler reads that a guard of `guards` produces as its principal, beside
+    /// the first such guard.
+    pub fn of<'g, I>(public: bool, ambient: &[TypeId], guards: I) -> Option<Self>
     where
         I: IntoIterator<Item = &'g ResolvedLayer<dyn Guard>>,
         I::IntoIter: Clone,
     {
+        if !public {
+            return None;
+        }
         let guards = guards.into_iter();
         ambient.iter().find_map(|principal| {
             let guard = guards.clone().find(|entry| produces(entry, *principal))?;
@@ -88,6 +92,21 @@ impl NeededPrincipal {
                 guard: guard.clone(),
             })
         })
+    }
+
+    /// [`of`](Self::of) over the `chain` of a unit an in-band request carries and
+    /// the chain that `request` ran, resolved only for a `#[public]` unit whose
+    /// handler reads an `Ambient` at all.
+    pub fn carried(
+        public: bool,
+        ambient: &[TypeId],
+        chain: &[ResolvedLayer<dyn Guard>],
+        request: impl FnOnce() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
+    ) -> Result<Option<Self>, String> {
+        if !public || ambient.is_empty() {
+            return Ok(None);
+        }
+        Ok(Self::of(public, ambient, chain.iter().chain(&request()?)))
     }
 
     /// The guard producing the principal, which a refusal and a document name.

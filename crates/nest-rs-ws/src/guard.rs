@@ -72,12 +72,9 @@ pub fn message_guard_stage(
     let upgrade_chain = || host_chain(container, &declared.upgrade, &site);
     validate_carried_chain(&site, &guards, upgrade_chain)
         .map_err(nest_rs_core::anyhow::Error::msg)?;
-    let needed = if handler.posture() == Posture::Public && !declared.ambient.is_empty() {
-        let upgrade = upgrade_chain().map_err(nest_rs_core::anyhow::Error::msg)?;
-        NeededPrincipal::of(&declared.ambient, guards.iter().chain(&upgrade))
-    } else {
-        None
-    };
+    let public = handler.posture() == Posture::Public;
+    let needed = NeededPrincipal::carried(public, &declared.ambient, &guards, upgrade_chain)
+        .map_err(nest_rs_core::anyhow::Error::msg)?;
     if declared.gate.is_some() {
         validate_gate_reached(&site, &guards, upgrade_chain)
             .map_err(nest_rs_core::anyhow::Error::msg)?;

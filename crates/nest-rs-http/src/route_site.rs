@@ -186,9 +186,8 @@ pub fn route_guard_stage(
         validate_gate_reached(&label, &chain, || Ok(Vec::new())).map_err(anyhow::Error::msg)?;
     }
     log_effective_chain(&label, "guards", &chain);
-    let needed = (handler.posture() == Posture::Public)
-        .then(|| NeededPrincipal::of(&declared.ambient, &chain))
-        .flatten();
+    let public = handler.posture() == Posture::Public;
+    let needed = NeededPrincipal::of(public, &declared.ambient, &chain);
     stage(chain, needed, declared.gates, declared.masked)
 }
 

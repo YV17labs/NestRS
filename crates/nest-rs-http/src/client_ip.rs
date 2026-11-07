@@ -81,13 +81,7 @@ impl ClientOrigin {
             return *origin;
         }
         let config = configured();
-        let (origin, refusal) = Self::of_head(
-            req.headers(),
-            req.peer_addr().map(|peer| peer.ip()),
-            trusted_proxies(config.as_deref()),
-        );
-        refusal.iter().for_each(Refusal::file);
-        origin
+        Self::filed(Self::of_with(req, trusted_proxies(config.as_deref())))
     }
 
     /// [`of`](Self::of) against an explicit list, for the transport edge, which
@@ -155,9 +149,21 @@ impl ClientOrigin {
         peer: Option<IpAddr>,
         trusted_proxies: &[TrustedProxy],
     ) -> Self {
-        let (origin, refusal) =
-            Self::weigh(forwarded, forwarded_for, real_ip, peer, trusted_proxies);
-        refusal.iter().for_each(Refusal::file);
+        Self::filed(Self::weigh(
+            forwarded,
+            forwarded_for,
+            real_ip,
+            peer,
+            trusted_proxies,
+        ))
+    }
+
+    /// The origin a resolution answered, what it refused to believe filed where
+    /// it was read.
+    fn filed((origin, refusal): (Self, Option<Refusal>)) -> Self {
+        if let Some(refusal) = refusal {
+            refusal.file();
+        }
         origin
     }
 
@@ -963,9 +969,11 @@ mod tests {
                 http::HeaderValue::from_bytes(value).expect("header value"),
             );
         }
-        let (origin, refused) = ClientOrigin::of_head(&headers, Some(proxy), &listed(&[proxy]));
-        refused.iter().for_each(Refusal::file);
-        origin
+        ClientOrigin::filed(ClientOrigin::of_head(
+            &headers,
+            Some(proxy),
+            &listed(&[proxy]),
+        ))
     }
 
     /// A proxy may add its own line after the caller's (RFC 7239 §4), and the

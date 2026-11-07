@@ -189,12 +189,9 @@ pub fn operation_guard_stage(
     if declared.class_gated {
         validate_gate_reached(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
     }
-    let needed = if handler.posture() == Posture::Public && !declared.ambient.is_empty() {
-        let request = request_chain().map_err(anyhow::Error::msg)?;
-        NeededPrincipal::of(&declared.ambient, chain.iter().chain(&request))
-    } else {
-        None
-    };
+    let public = handler.posture() == Posture::Public;
+    let needed = NeededPrincipal::carried(public, &declared.ambient, &chain, request_chain)
+        .map_err(anyhow::Error::msg)?;
     if needed.is_none()
         && carried_stage_idle(&chain, declared.withheld, request_chain)
             .map_err(anyhow::Error::msg)?

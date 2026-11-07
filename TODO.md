@@ -162,8 +162,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   order key, the guards suite's `404` and `405`, seaorm's listener e2e). *read*
 
 **Authorization, posture, mask** (beyond section 3)
-- No test reads through `Repo::scoped(Manage)` on Postgres or reaches a
-  `bind` under `Manage`. *read*
 - `AbilityGuard` alone at a unit under `#[authorize]` boots and answers `401`
   on every call. *read*
 - `cannot(Read)` beside `can(Manage)`: settled (a `Manage` site needs every

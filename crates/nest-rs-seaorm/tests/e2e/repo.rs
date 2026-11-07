@@ -6,7 +6,8 @@
 //! inside a savepoint. An update setting nothing, for which sea-orm sends no
 //! `UPDATE`, hands back only what its scope admits. A grant's `.fields` on an update
 //! is decided in the statement's own `WHERE`: the columns it permits and the hook's
-//! stamp land, and a row whose grants do not permit each column stays as it was.
+//! stamp land, and a row whose grants do not permit each column stays as it was. A
+//! read gated on `Manage` holds each row to every concrete action, in its SQL.
 
 use std::sync::Arc;
 
@@ -577,4 +578,65 @@ async fn an_update_under_no_field_list_writes_every_column_it_sets() {
 
     assert_eq!(updated.body, "rewritten");
     assert_eq!(updated.note.as_deref(), Some("added"));
+}
+
+/// Read every row of the org, change only one's: the rows a `Manage` read admits are
+/// the ones every concrete action admits, decided by the database.
+fn managing_one(org: Uuid, mine: Uuid) -> Ability {
+    granting(|b| {
+        for action in [Action::Read, Action::Create] {
+            b.can(action, article::Entity)
+                .when(move |p| p.eq(article::Column::OrgId, org));
+        }
+        for action in [Action::Update, Action::Delete] {
+            b.can(action, article::Entity)
+                .when(move |p| p.eq(article::Column::Id, mine));
+        }
+    })
+}
+
+#[tokio::test]
+async fn a_read_gated_on_manage_admits_the_rows_every_action_admits() {
+    let conn = db().await;
+    let org = Uuid::now_v7();
+    let mine = an_article(&conn, org).await;
+    let theirs = an_article(&conn, org).await;
+
+    let (managed, read) = under(&conn, managing_one(org, mine.id), async {
+        let in_org = || article::Column::OrgId.eq(org);
+        let managed = Repo::<article::Entity>::scoped(Action::Manage)
+            .filter(in_org())
+            .all()
+            .await
+            .expect("the managed rows are read");
+        let read = Repo::<article::Entity>::scoped(Action::Read)
+            .filter(in_org())
+            .count()
+            .await
+            .expect("the readable rows are counted");
+        (managed, read)
+    })
+    .await;
+
+    assert_eq!(read, 2, "`Read` admits both: {theirs:?}");
+    assert_eq!(managed, [mine], "`Update` and `Delete` admit one row");
+}
+
+#[tokio::test]
+async fn an_instance_check_on_manage_answers_per_row_in_sql() {
+    let conn = db().await;
+    let org = Uuid::now_v7();
+    let mine = an_article(&conn, org).await;
+    let theirs = an_article(&conn, org).await;
+
+    let (on_mine, on_theirs) = under(&conn, managing_one(org, mine.id), async {
+        (
+            Repo::<article::Entity>::can(Action::Manage, &mine).await,
+            Repo::<article::Entity>::can(Action::Manage, &theirs).await,
+        )
+    })
+    .await;
+
+    assert!(on_mine.expect("the check runs"));
+    assert!(!on_theirs.expect("the check runs"));
 }

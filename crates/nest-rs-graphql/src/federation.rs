@@ -65,6 +65,9 @@ static SERVICE_SITE: Site = declare_site(&SERVICE, federation_field_site(service
 /// The site `_entities` runs.
 static ENTITIES_SITE: Site = declare_site(&ENTITIES, federation_field_site(entities_guard_stage));
 
+/// How a boot error names the site `_service` runs.
+const SERVICE_SITE_LABEL: &str = "POST /graphql (_service)";
+
 /// A federation root field's declaration: a root field no resolver declares,
 /// gated by `guard_stage` alone, inside the app's filters and interceptors.
 const fn federation_field_site(guard_stage: GuardStageFactory) -> SiteDeclaration {
@@ -97,9 +100,8 @@ fn service_guard_stage(
     container: &Container,
     _: &Handler,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
-    const SITE: &str = "POST /graphql (_service)";
-    let pool = resolve_global_chain(container, SITE);
-    let mut chain = carried_request_chain::<GraphqlView>(container, SITE)?;
+    let pool = resolve_global_chain(container, SERVICE_SITE_LABEL);
+    let mut chain = carried_request_chain::<GraphqlView>(container, SERVICE_SITE_LABEL)?;
     chain.retain(|guard| {
         identifies(guard) || pool.iter().any(|pooled| pooled.type_id == guard.type_id)
     });
@@ -131,12 +133,11 @@ pub(crate) fn check_sdl_exposure(
     container: &Container,
     config: &GraphqlConfig,
 ) -> anyhow::Result<()> {
-    const SITE: &str = "POST /graphql (_service)";
     if !config.federation {
         return Ok(());
     }
-    let pool = resolve_global_chain(container, SITE);
-    let carried = carried_request_chain::<GraphqlView>(container, SITE)?;
+    let pool = resolve_global_chain(container, SERVICE_SITE_LABEL);
+    let carried = carried_request_chain::<GraphqlView>(container, SERVICE_SITE_LABEL)?;
     if pool.iter().chain(&carried).any(identifies) {
         return Ok(());
     }

@@ -84,34 +84,26 @@ impl Extension for RequestExtension {
         // The operation's read cached a parse that passed; one that failed runs again
         // here, and the refusal says only what this one left. Its objects are given
         // their keys once its cost is counted, which bounds what that read expands.
-        let (refusal, given) = match request.parsed_query() {
-            Ok(document) => {
-                match document_cost::refusal(
-                    document,
-                    operation.as_deref(),
-                    &variables,
-                    self.limits(),
-                    registry,
-                ) {
-                    Some(refusal) => (Some(refusal), None),
-                    None => {
-                        let given = own_key
-                            .zip(selected_operation(document, operation.as_deref()))
-                            .and_then(|(own_key, (_, selected))| {
-                                own_key.give(document, &selected.node, registry, &variables)
-                            });
-                        (None, given)
-                    }
-                }
-            }
-            Err(refused) => (Some(unparsed(refused)), None),
+        let read = match request.parsed_query() {
+            Ok(document) => match document_cost::refusal(
+                document,
+                operation.as_deref(),
+                &variables,
+                self.limits(),
+                registry,
+            ) {
+                Some(refusal) => Err(refusal),
+                None => Ok(own_key
+                    .zip(selected_operation(document, operation.as_deref()))
+                    .and_then(|(own_key, (_, selected))| {
+                        own_key.give(document, &selected.node, registry, &variables)
+                    })),
+            },
+            Err(refused) => Err(unparsed(refused)),
         };
         request.variables = variables;
         request.operation_name = operation;
-        if let Some(refusal) = refusal {
-            return Err(refusal);
-        }
-        if let Some(given) = given {
+        if let Some(given) = read? {
             request.set_parsed_query(given);
         }
         next.run(ctx, self.seeds.seed(request).data(FiledOnce::default()))

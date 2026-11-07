@@ -10,6 +10,8 @@ use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::{HttpConfig, HttpEndpointMeta, HttpModule};
 use nest_rs_testing::{HeadlessApp, LogCapture, TestApp};
 
+use crate::in_profile;
+
 #[resolver]
 struct PingResolver;
 
@@ -229,28 +231,6 @@ fn a_pin_over_the_default_leaves_every_surface_to_the_profile() {
         assert_eq!(emitted_sdl().exists(), writes, "{profile:?}: the emit");
     }
     let _ = std::fs::remove_file(emitted_sdl());
-}
-
-/// Runs `boot` in a process that declares `profile`, which the boot reads off
-/// the process environment `figment::Jail` scopes.
-#[expect(
-    clippy::result_large_err,
-    reason = "figment::Jail fixes the closure's error type"
-)]
-fn in_profile<F: std::future::Future>(profile: &str, boot: impl FnOnce() -> F) -> F::Output {
-    let mut out = None;
-    figment::Jail::expect_with(|jail| {
-        jail.set_env(nest_rs_config::Environment::var_name(), profile);
-        out = Some(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("runtime")
-                .block_on(boot()),
-        );
-        Ok(())
-    });
-    out.expect("the jailed boot ran")
 }
 
 /// What `App::run` files for a host whose edge nothing in the boot imports.

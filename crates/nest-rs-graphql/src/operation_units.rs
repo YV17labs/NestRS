@@ -9,7 +9,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::identity;
-use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, PoisonError};
@@ -26,6 +25,7 @@ use async_graphql::{
     BatchRequest, BatchResponse, Context, Data, Executor, Name, Pos, Positioned, Request, Response,
     ServerError, ServerResult, Value, Variables,
 };
+use async_graphql_value::Value as Written;
 use nest_rs_core::__private::{RequestScopes, nested_continuation};
 use nest_rs_core::operation_log::{CANCELLED, ERROR, OK, PANIC};
 use nest_rs_core::{Problem, code};
@@ -35,8 +35,6 @@ use nest_rs_database::{
 };
 use nest_rs_http::__private::RequestDeadline;
 use tracing::Instrument;
-
-use async_graphql_value::Value as Written;
 
 use crate::error::AnsweredError;
 use crate::loader::BatchSpan;
@@ -462,13 +460,13 @@ fn coerce_variables(
         let ty = &definition.node.var_type.node;
         if let Some(value) = variables.get(name) {
             if refused.is_none() {
-                refused = null_where_required(ty, value, &mut name.to_string()).map(|at| {
+                refused = null_where_required(ty, value).map(|at| {
                     let said = match at {
                         None => format!(
                             r#"Variable "${name}" of non-null type "{ty}" must not be null."#
                         ),
                         Some(at) => format!(
-                            r#"Variable "${name}" of type "{ty}" must not hold null at "{at}"."#
+                            r#"Variable "${name}" of type "{ty}" must not hold null at "{name}{at}"."#
                         ),
                     };
                     (said, definition.pos)
@@ -492,26 +490,19 @@ fn coerce_variables(
 }
 
 /// Where `value` holds a `null` its type `ty` refuses: `Some(None)` at its top,
-/// `Some(Some(path))` inside a list, `path` the variable's name and each index
-/// down to it. A value standing where a list is declared is coerced to a list of
-/// one (§3.11), so it is read as that list's item.
-fn null_where_required(ty: &Type, value: &Value, path: &mut String) -> Option<Option<String>> {
+/// `Some(Some(path))` inside a list, `path` each index down to it (`[1][2]`), written
+/// only once one is found. A value standing where a list is declared is coerced to a
+/// list of one (§3.11), whose one item it is, and that item is not `null`.
+fn null_where_required(ty: &Type, value: &Value) -> Option<Option<String>> {
     if *value == Value::Null {
         return (!ty.nullable).then_some(None);
     }
-    let BaseType::List(item) = &ty.base else {
+    let (BaseType::List(item), Value::List(items)) = (&ty.base, value) else {
         return None;
     };
-    let Value::List(items) = value else {
-        return null_where_required(item, value, path);
-    };
     items.iter().enumerate().find_map(|(at, value)| {
-        let length = path.len();
-        write!(path, "[{at}]").ok()?;
-        let found =
-            null_where_required(item, value, path).map(|at| at.or_else(|| Some(path.clone())));
-        path.truncate(length);
-        found
+        null_where_required(item, value)
+            .map(|below| Some(format!("[{at}]{}", below.unwrap_or_default())))
     })
 }
 

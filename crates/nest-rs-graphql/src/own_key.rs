@@ -320,17 +320,16 @@ impl<'a> Marks<'a> {
 
     /// Whether `set`, selected on `ty`, answers a key whatever type its value takes.
     fn answers(&mut self, set: &'a SelectionSet, ty: &'a str, depth: usize) -> bool {
-        let possible: Vec<&'a str> = match self.registry.types.get(ty) {
-            Some(MetaType::Object { .. }) => vec![ty],
-            Some(abstract_type) => match abstract_type.possible_types() {
-                Some(possible) => possible.iter().map(String::as_str).collect(),
-                None => return true,
-            },
-            None => return true,
-        };
-        possible
-            .into_iter()
-            .all(|concrete| self.selects(set, concrete, ty, depth))
+        let registry = self.registry;
+        match registry.types.get(ty) {
+            Some(MetaType::Object { .. }) => self.selects(set, ty, ty, depth),
+            Some(abstract_type) => abstract_type.possible_types().is_none_or(|possible| {
+                possible
+                    .iter()
+                    .all(|concrete| self.selects(set, concrete, ty, depth))
+            }),
+            None => true,
+        }
     }
 
     /// Whether `set` selects a field of a value of type `concrete` resolved as
@@ -450,15 +449,15 @@ fn drawn_key() -> Name {
 
 /// Whether two selections of `set`, or of a set within `depth` sets of it, name one
 /// object's response key, in a document holding no fragment, whose sets merge none.
+/// Each key is looked up, never scanned for: this runs before validation scores a
+/// document, whose width the body cap alone holds.
 fn repeats_below(set: &SelectionSet, depth: usize) -> bool {
-    let mut keys: Vec<&str> = Vec::new();
+    let mut keys: HashSet<&str> = HashSet::new();
     depth > 0
         && set.items.iter().any(|selection| match &selection.node {
             Selection::Field(field) if !field.node.selection_set.node.items.is_empty() => {
-                let key = field.node.response_key().node.as_str();
-                let repeated = keys.contains(&key);
-                keys.push(key);
-                repeated || repeats_below(&field.node.selection_set.node, depth - 1)
+                !keys.insert(field.node.response_key().node.as_str())
+                    || repeats_below(&field.node.selection_set.node, depth - 1)
             }
             _ => false,
         })
@@ -485,6 +484,7 @@ mod tests {
 
     use super::*;
     use crate::operation_units::selected_operation;
+    use crate::testing::thread_cpu_time;
 
     #[derive(SimpleObject)]
     struct Fine {
@@ -769,5 +769,27 @@ mod tests {
             &Variables::default(),
         );
         assert!(given.is_none());
+    }
+
+    /// Each set's keys are looked up, so a wide document costs a thirtieth of its parse
+    /// here, where a scan of the keys read so far cost their square: twice its parse
+    /// at 20,000 objects, and four times as much at twice the width.
+    #[test]
+    fn a_wide_document_costs_no_square_of_its_width() {
+        let objects: String = (0..20_000)
+            .map(|at| format!("a{at}: fine {{ fine }} "))
+            .collect();
+        let text = format!("{{ {objects}}}");
+        let registry = registry();
+        let started = thread_cpu_time();
+        let document = parse_query(&text).expect("the document parses");
+        let parsing = thread_cpu_time() - started;
+        let (_, operation) = selected_operation(&document, None).expect("one operation");
+        let started = thread_cpu_time();
+        let given =
+            OwnKey::default().give(&document, &operation.node, &registry, &Variables::default());
+        let past = thread_cpu_time() - started;
+        assert!(given.is_none(), "no object repeats");
+        assert!(past < parsing, "parsed in {parsing:?}, then {past:?}");
     }
 }

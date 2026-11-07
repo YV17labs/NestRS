@@ -37,6 +37,28 @@ use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_testing::CapturedSpan;
 
+/// Runs `boot` in a process that declares `profile`, which the boot reads off
+/// the process environment `figment::Jail` scopes.
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn in_profile<F: std::future::Future>(profile: &str, boot: impl FnOnce() -> F) -> F::Output {
+    let mut out = None;
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(nest_rs_config::Environment::var_name(), profile);
+        out = Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(boot()),
+        );
+        Ok(())
+    });
+    out.expect("the jailed boot ran")
+}
+
 /// `span` records the outcome its line filed, and an `Error` status.
 fn assert_span_records(span: &CapturedSpan, outcome: &str) {
     assert_eq!(

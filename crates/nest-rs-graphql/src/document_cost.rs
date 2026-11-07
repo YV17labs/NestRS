@@ -582,6 +582,16 @@ mod tests {
         Err(format!("{:?}", Past::Limit))
     }
 
+    /// The [`refusal`] of `document`, read against a schema of no types, which only
+    /// a list's rows past their bound read, the request naming no operation.
+    fn schemaless_refusal(
+        document: &ExecutableDocument,
+        variables: &Variables,
+        limits: DocumentLimits,
+    ) -> Option<ServerError> {
+        refusal(document, None, variables, limits, &Registry::default())
+    }
+
     /// What `document`'s arguments copy, given `$v` of `size` bytes.
     fn copied(document: &str, size: usize) -> usize {
         copied_selecting(document, None, size)
@@ -649,26 +659,11 @@ mod tests {
             list_argument_bytes: usize::MAX,
         };
         let document = parse_query(&wide).expect("the document parses");
-        assert!(
-            refusal(
-                &document,
-                None,
-                &Variables::default(),
-                limits,
-                &Registry::default()
-            )
-            .is_none()
-        );
+        assert!(schemaless_refusal(&document, &Variables::default(), limits).is_none());
 
         let defining = wide.replacen("query", "query($unused: Int)", 1);
         let document = parse_query(&defining).expect("the document parses");
-        let refused = refusal(
-            &document,
-            None,
-            &Variables::default(),
-            limits,
-            &Registry::default(),
-        );
+        let refused = schemaless_refusal(&document, &Variables::default(), limits);
         assert_eq!(refused.expect("past the limit").message, TOO_COMPLEX);
     }
 
@@ -705,14 +700,8 @@ mod tests {
             "{ ...A } fragment A on Q { a }\nfragment U on Q { ...V }\nfragment V on Q { b }",
         )
         .expect("the document parses");
-        let refused = refusal(
-            &document,
-            None,
-            &Variables::default(),
-            LIMITS,
-            &Registry::default(),
-        )
-        .expect("two unreached");
+        let refused =
+            schemaless_refusal(&document, &Variables::default(), LIMITS).expect("two unreached");
         assert_eq!(refused.message, r#"Fragment "U" is never used"#);
         assert_eq!(refused.locations, [Pos { line: 2, column: 1 }]);
     }
@@ -766,14 +755,8 @@ mod tests {
         assert_eq!(counted(&chain(32), 2000), Ok(0));
         for links in [33, 1_000] {
             let document = parse_query(chain(links)).expect("the document parses");
-            let refused = refusal(
-                &document,
-                None,
-                &Variables::default(),
-                LIMITS,
-                &Registry::default(),
-            )
-            .expect("past the depth");
+            let refused = schemaless_refusal(&document, &Variables::default(), LIMITS)
+                .expect("past the depth");
             assert_eq!(
                 refused.message,
                 "The recursion depth of the query cannot be greater than `32`"
@@ -796,14 +779,8 @@ mod tests {
     #[test]
     fn a_refusal_is_worded_as_async_graphql_words_it() {
         let document = parse_query(fan_out(16, 2, "leaf")).expect("the document parses");
-        let refused = refusal(
-            &document,
-            None,
-            &Variables::default(),
-            LIMITS,
-            &Registry::default(),
-        )
-        .expect("past the limit");
+        let refused =
+            schemaless_refusal(&document, &Variables::default(), LIMITS).expect("past the limit");
         assert_eq!(refused.message, TOO_COMPLEX);
         assert!(refused.locations.is_empty());
         assert!(refused.path.is_empty());
@@ -905,24 +882,9 @@ mod tests {
             list_argument_bytes: usize::MAX,
         };
         let exactly = 2 * (1_000 + FIRST) + 5;
-        assert!(
-            refusal(
-                &document,
-                None,
-                &variables,
-                limits(exactly),
-                &Registry::default()
-            )
-            .is_none()
-        );
-        let refused = refusal(
-            &document,
-            None,
-            &variables,
-            limits(exactly - 1),
-            &Registry::default(),
-        )
-        .expect("one byte past");
+        assert!(schemaless_refusal(&document, &variables, limits(exactly)).is_none());
+        let refused =
+            schemaless_refusal(&document, &variables, limits(exactly - 1)).expect("one byte past");
         assert_eq!(refused.message, TOO_COMPLEX);
     }
 
@@ -951,9 +913,8 @@ mod tests {
             copied_bytes,
             list_argument_bytes: usize::MAX,
         };
-        assert!(refusal(&document, None, &variables, limits(8), &Registry::default()).is_none());
-        let refused = refusal(&document, None, &variables, limits(7), &Registry::default())
-            .expect("one step past");
+        assert!(schemaless_refusal(&document, &variables, limits(8)).is_none());
+        let refused = schemaless_refusal(&document, &variables, limits(7)).expect("one step past");
         assert_eq!(refused.message, TOO_COMPLEX);
     }
 
@@ -1196,7 +1157,7 @@ mod tests {
         let document = request.parsed_query().expect("the document parses");
         let parsing = thread_cpu_time() - started;
         let started = thread_cpu_time();
-        if refusal(document, None, &variables, LIMITS, &Registry::default()).is_none() {
+        if schemaless_refusal(document, &variables, LIMITS).is_none() {
             drop(schema.execute(request).await);
         }
         (parsing, thread_cpu_time() - started)

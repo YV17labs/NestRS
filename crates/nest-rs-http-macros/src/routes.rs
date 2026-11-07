@@ -826,10 +826,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Some(ty) => quote! { ::nest_rs_http::__answer_of!(#ty) },
             None => quote! { ::nest_rs_http::__private::AnswerDoc::OK },
         };
-        let success_status = if shaped_status {
-            quote! { ::core::option::Option::Some(#success_status) }
+        let (success_status, answers_an_error) = if shaped_status {
+            (
+                quote! { ::core::option::Option::Some(#success_status) },
+                quote! { false },
+            )
         } else {
-            quote! { __nestrs_answer.status }
+            (
+                quote! { __nestrs_answer.status },
+                quote! { __nestrs_answer.error },
+            )
         };
         route_metas.push(quote! {
             #(#cfgs)*
@@ -854,6 +860,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 may_conflict: #may_conflict,
                 sets_location: #redirects || __nestrs_answer.location,
                 sets_next_link: __nestrs_answer.next_link,
+                answers_an_error: #answers_an_error,
                 response_headers: #response_headers,
                 success_status: #success_status,
                 public: #is_public,

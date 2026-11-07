@@ -584,13 +584,23 @@ fn operation_object(
     if !headers.is_empty() {
         ok.insert("headers".into(), Value::Object(headers));
     }
-    responses.insert(
-        status.map_or_else(
-            || COMPUTED_STATUS_RANGE.to_owned(),
-            |status| status.to_string(),
-        ),
-        Value::Object(ok),
-    );
+    if route.answers_an_error() {
+        // A problem answered as the success: no success, an error only it knows.
+        for range in COMPUTED_ERROR_RANGES {
+            responses.insert(
+                range.to_owned(),
+                problem_response(COMPUTED_ERROR_DESCRIPTION),
+            );
+        }
+    } else {
+        responses.insert(
+            status.map_or_else(
+                || COMPUTED_STATUS_RANGE.to_owned(),
+                |status| status.to_string(),
+            ),
+            Value::Object(ok),
+        );
+    }
     let edge = edge_statuses(
         route,
         full_path,
@@ -807,12 +817,11 @@ fn edge_statuses(
     {
         out.insert(400);
     }
-    if body.is_some() {
-        // The transport's body cap and its gap, whatever the media type.
-        out.insert(413);
-        if edge_answers.body_stalled {
-            out.insert(408);
-        }
+    // The transport's body cap, which refuses a declared length past it before
+    // routing, whatever the route reads; the gap, only where a reader waits.
+    out.insert(413);
+    if body.is_some() && edge_answers.body_stalled {
+        out.insert(408);
     }
     // What a body's extractor reads off the `Content-Type`.
     if body_refused_by_the_edge && !matches!(body, Some(RequestBodyMeta::Raw)) {
@@ -857,6 +866,14 @@ fn is_redirect(status: u16) -> bool {
 /// §4.8.16.2's range for it: a generated client reads it as the success it is,
 /// where `default` would type it as every status the document lists no other for.
 const COMPUTED_STATUS_RANGE: &str = "2XX";
+
+/// The keys of an error only the handler knows the status of, a problem
+/// document answered as its success: OpenAPI 3.1's ranges for each class.
+const COMPUTED_ERROR_RANGES: [&str; 2] = ["4XX", "5XX"];
+
+/// What a range of [`COMPUTED_ERROR_RANGES`] says.
+const COMPUTED_ERROR_DESCRIPTION: &str =
+    "A problem, under the error status the handler sets at run time.";
 
 const COMPUTED_STATUS_DESCRIPTION: &str = "Success, under the status the handler sets at run time.";
 
@@ -1227,6 +1244,7 @@ mod tests {
             may_conflict: false,
             sets_location: false,
             sets_next_link: false,
+            answers_an_error: false,
             response_headers: &[],
             success_status: Some(200),
             public: false,
@@ -1917,9 +1935,10 @@ mod tests {
             "#/components/schemas/ProblemDetails",
             "{op}",
         );
-        assert!(
-            op["responses"].get("413").is_none(),
-            "no body, no cap: {op}"
+        assert_eq!(
+            op["responses"]["413"]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ProblemDetails",
+            "a declared length past the cap is refused before routing, body or none: {op}"
         );
     }
 

@@ -185,8 +185,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 **HTTP and CORS**
 - A `#[public]` route requiring `Ambient<P>` behind a rejected token answers
   `401`, absent from its document. *seen*
-- `413` on a route with no body, hyper's connection refusals, and a bare
-  `ProblemDetails` documented `2XX` are in no document. *read*
 - A `multipart/form-data` type RFC 9110 §5.6.6 admits and mime 0.3 refuses,
   whitespace before a `;` or an empty parameter (`boundary=x;;`), answers
   `400` `its type does not parse`. Close: read the boundary off the

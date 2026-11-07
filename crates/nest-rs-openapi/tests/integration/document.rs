@@ -383,7 +383,8 @@ mod guards {
     use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Read, subject};
     use nest_rs_core::async_trait;
     use nest_rs_core::{
-        AmbientValue, ChallengeScheme, DenialDocument, Layer, UnitContext, injectable, module,
+        Ambient, AmbientValue, ChallengeScheme, DenialDocument, Layer, UnitContext, injectable,
+        module,
     };
     use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase};
     use nest_rs_http::{HttpView, Request, controller, routes};
@@ -501,8 +502,11 @@ mod guards {
     impl Strategy for Bearer {
         type Principal = Caller;
 
-        async fn authenticate(&self, _req: &mut Request) -> Result<Caller, AuthError> {
-            Err(AuthError::MissingCredentials)
+        async fn authenticate(&self, req: &mut Request) -> Result<Caller, AuthError> {
+            match req.header("authorization") {
+                Some(_) => Err(AuthError::InvalidToken),
+                None => Err(AuthError::MissingCredentials),
+            }
         }
     }
 
@@ -522,6 +526,12 @@ mod guards {
         #[get("/signup")]
         #[public]
         async fn signup(&self) -> &'static str {
+            "{}"
+        }
+
+        #[get("/me")]
+        #[public]
+        async fn me(&self, _caller: Ambient<Caller>) -> &'static str {
             "{}"
         }
     }
@@ -708,8 +718,8 @@ mod answers {
     use nest_rs_core::{input, module, output};
     use nest_rs_http::{
         ApiVersioning, Body, Bytes, Created, Form, Header, HttpConfig, HttpCors, HttpModule,
-        IntoResponse, Json, Multipart, Paginated, Path, Query, RawBody, Response, Result,
-        StatusCode, controller, header, routes,
+        IntoResponse, Json, Multipart, Paginated, Path, ProblemDetails, Query, RawBody, Response,
+        Result, StatusCode, controller, header, routes,
     };
     use nest_rs_testing::{TestApp, TestClient};
     use serde_json::{Value, json};
@@ -1025,6 +1035,18 @@ mod answers {
                 .content_type(nest_rs_http::HeaderValue::from_static("text/csv"))
                 .body("a,b")
         }
+
+        #[get("/problem")]
+        #[public]
+        async fn problem(&self) -> ProblemDetails {
+            ProblemDetails::not_found()
+        }
+
+        #[get("/problem/result")]
+        #[public]
+        async fn problem_result(&self) -> Result<ProblemDetails> {
+            Ok(ProblemDetails::from_status(StatusCode::SERVICE_UNAVAILABLE))
+        }
     }
 
     #[module(imports = [openapi()], providers = [OrdersController, BodiesController])]
@@ -1160,6 +1182,55 @@ mod answers {
             .send()
             .await;
         resp.0.status()
+    }
+
+    /// The edge refuses a declared length past the cap before routing, whatever
+    /// the route reads: a route taking no body answers it as one taking one does.
+    #[tokio::test]
+    async fn a_route_taking_no_body_documents_the_413_a_declared_length_past_the_cap_earns() {
+        let app = TestApp::for_module::<TightCapApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        for (method, path) in [("get", "/orders/plain"), ("delete", "/orders/nothing")] {
+            let live = match method {
+                "get" => app.http().get(path),
+                _ => app.http().delete(path),
+            }
+            .header("content-length", "10")
+            .body("0123456789")
+            .send()
+            .await;
+            live.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+
+            assert_a_problem(responses(&doc, path, method), "413");
+        }
+    }
+
+    /// A problem document answered as a handler's success is an error whose
+    /// status only the handler knows: OpenAPI's error ranges, with the problem
+    /// it is, and no success.
+    #[tokio::test]
+    async fn a_problem_answered_bare_documents_the_error_ranges_it_answers_in() {
+        let app = TestApp::for_module::<DefaultApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+        for (path, status) in [
+            ("/bodies/problem", StatusCode::NOT_FOUND),
+            ("/bodies/problem/result", StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let live = app.http().get(path).send().await;
+            live.assert_status(status);
+            live.assert_content_type("application/problem+json");
+
+            let answers = responses(&doc, path, "get");
+            assert!(
+                answers
+                    .as_object()
+                    .is_some_and(|answers| answers.keys().all(|key| !key.starts_with('2'))),
+                "a problem is no success: {answers}",
+            );
+            assert_a_problem(answers, "4XX");
+            assert_a_problem(answers, "5XX");
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -1400,9 +1471,11 @@ mod answers {
         );
         let answers = &operation["responses"];
         assert_a_problem(answers, "400");
-        for status in ["408", "413", "415"] {
+        for status in ["408", "415"] {
             assert!(answers.get(status).is_none(), "{status}: {answers}");
         }
+        // The edge's, before routing, as on every route.
+        assert_a_problem(answers, "413");
     }
 
     /// A map names no property to expand, and its values are still read.

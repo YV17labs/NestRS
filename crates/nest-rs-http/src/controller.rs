@@ -87,6 +87,7 @@ impl RequestBodyMeta {
 /// #   may_conflict: false,
 /// #   sets_location: false,
 /// #   sets_next_link: false,
+/// #   answers_an_error: false,
 /// #   response_headers: &[],
 /// #   success_status: Some(200),
 /// #   public: false,
@@ -126,6 +127,9 @@ pub struct HttpRouteParts {
     pub may_conflict: bool,
     pub sets_location: bool,
     pub sets_next_link: bool,
+    /// The handler answers no success but a problem document, under an error
+    /// status it computes.
+    pub answers_an_error: bool,
     pub response_headers: &'static [(&'static str, &'static str)],
     pub success_status: Option<u16>,
     pub public: bool,
@@ -285,6 +289,12 @@ impl HttpRouteMeta {
     /// a `Link` with `rel="next"` whenever another page follows.
     pub fn sets_next_link(&self) -> bool {
         self.parts.sets_next_link
+    }
+
+    /// Whether the handler answers no success but a problem document, under an
+    /// error status it computes: a bare `ProblemDetails`.
+    pub fn answers_an_error(&self) -> bool {
+        self.parts.answers_an_error
     }
 
     /// Each `#[response_header(name, value)]` on the handler, as written: the
@@ -561,6 +571,7 @@ mod tests {
             may_conflict: false,
             sets_location: false,
             sets_next_link: false,
+            answers_an_error: false,
             response_headers: &[],
             success_status: Some(200),
             public: false,
@@ -613,6 +624,7 @@ mod tests {
             may_conflict: true,
             sets_location: true,
             sets_next_link: true,
+            answers_an_error: false,
             response_headers: &[("x-kind", "user")],
             success_status: Some(201),
             public: true,

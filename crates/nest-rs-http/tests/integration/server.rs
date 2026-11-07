@@ -212,7 +212,41 @@ async fn an_http1_head_past_64_kib_answers_431() {
         .await;
     let head = read_head(&mut stream).await;
     assert!(head.starts_with("HTTP/1.1 431"), "{head}");
+    assert_no_route_answered(&head);
     cancel.cancel();
+}
+
+/// A head hyper cannot parse is answered `400` before any request exists: no
+/// route, no layer and no problem document, whichever path it names.
+#[tokio::test]
+async fn a_head_that_does_not_parse_answers_400_before_any_route() {
+    let (port, cancel) = serve(HttpConfig::default()).await;
+    for head in [
+        "GET /server/ping HTTP/1.1\r\nHost: localhost\r\nX-Broken header\r\n\r\n",
+        "GET /server/ping HTTP/9.9\r\nHost: localhost\r\n\r\n",
+    ] {
+        let mut stream = connect(port).await;
+        let _ = stream.write_all(head.as_bytes()).await;
+        let answered = read_head(&mut stream).await;
+        assert!(answered.starts_with("HTTP/1.1 400"), "{answered}");
+        assert_no_route_answered(&answered);
+    }
+    cancel.cancel();
+}
+
+/// A head the transport wrote alone: no layer stamped it, and it carries no
+/// problem document, so no route's answer and no route's document holds it.
+#[track_caller]
+fn assert_no_route_answered(head: &str) {
+    let head = head.to_ascii_lowercase();
+    for stamp in [
+        "content-type: application/problem+json",
+        "x-request-id",
+        "traceparent",
+        "x-content-type-options",
+    ] {
+        assert!(!head.contains(stamp), "{stamp} in {head}");
+    }
 }
 
 /// A socket opens over HTTP/1.1: an HTTP/2 connection advertises no RFC 8441

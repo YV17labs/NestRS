@@ -57,6 +57,10 @@ one status says so with [`#[http_code(N)]`](/http/responses/#http_coden), which 
 document names and every success answers; a status outside the range is one of
 [your own error bodies](#error-bodies-of-your-own).
 
+A handler returning a bare `ProblemDetails`, alone or in a `Result`, answers no
+success at all: the document lists none, and the problem under `4XX` and `5XX`,
+OpenAPI's ranges for an error whose status only the handler knows.
+
 ## Bodies that are not JSON
 
 A handler returning text or bytes declares nothing: the document reads the media

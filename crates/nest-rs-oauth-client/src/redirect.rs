@@ -106,7 +106,7 @@ impl DocumentedAnswer for AuthorizationRedirect {
     const ANSWER: AnswerDoc = AnswerDoc {
         status: Some(302),
         location: true,
-        next_link: false,
+        ..AnswerDoc::OK
     };
 }
 

@@ -17,6 +17,7 @@ use crate::body::Body;
 use crate::created::Created;
 use crate::json::Json;
 use crate::paginated::Paginated;
+use crate::problem::ProblemDetails;
 
 /// The status and the headers an answer type sends beside its body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +28,9 @@ pub struct AnswerDoc {
     pub location: bool,
     /// It sends a `Link` to the next page whenever one follows.
     pub next_link: bool,
+    /// It answers no success: a problem document, under an error status only
+    /// the handler knows.
+    pub error: bool,
 }
 
 impl AnswerDoc {
@@ -35,13 +39,13 @@ impl AnswerDoc {
         status: Some(200),
         location: false,
         next_link: false,
+        error: false,
     };
 
     /// A status only the handler knows, and no header the document can name.
     const COMPUTED: Self = Self {
         status: None,
-        location: false,
-        next_link: false,
+        ..Self::OK
     };
 }
 
@@ -58,7 +62,7 @@ pub trait DocumentedAnswer {
 const CREATED: AnswerDoc = AnswerDoc {
     status: Some(201),
     location: true,
-    next_link: false,
+    ..AnswerDoc::OK
 };
 
 const PAGINATED: AnswerDoc = AnswerDoc {
@@ -95,6 +99,16 @@ impl DocumentedAnswer for Vec<u8> {}
 impl DocumentedAnswer for Body {}
 
 impl DocumentedAnswer for () {}
+
+/// A problem document answered as a handler's success answers its error, under
+/// a status only the handler knows.
+impl DocumentedAnswer for ProblemDetails {
+    const ANSWER: AnswerDoc = AnswerDoc {
+        status: None,
+        error: true,
+        ..AnswerDoc::OK
+    };
+}
 
 impl<R: DocumentedAnswer, E> DocumentedAnswer for Result<R, E> {
     const ANSWER: AnswerDoc = R::ANSWER;
@@ -178,6 +192,17 @@ mod tests {
             crate::__answer_of!(crate::Result<Paginated<Json<Vec<u8>>>>),
             PAGINATED,
         );
+    }
+
+    #[test]
+    fn a_problem_answered_as_the_success_is_an_error_only_the_handler_knows() {
+        for answer in [
+            crate::__answer_of!(ProblemDetails),
+            crate::__answer_of!(crate::Result<ProblemDetails>),
+        ] {
+            assert_eq!((answer.status, answer.error), (None, true));
+        }
+        assert!(!crate::__answer_of!((StatusCode, Json<u8>)).error);
     }
 
     #[test]

@@ -166,7 +166,8 @@ The document composes from the route table, so everything in it is derived:
   version on every route once one is versioned,
   `404` where a path parameter or a version selects, `408` where a body can stall
   under the [body-read deadline](/http/configuration/#connection-deadlines),
-  `409` where a write can conflict, `413` and `415` where a body can be refused,
+  `409` where a write can conflict, `413` everywhere, since the transport refuses a
+  declared length past its cap before routing, and `415` where a body can be refused,
   `500` everywhere, `503` with its `Retry-After` under a
   [request timeout](/http/configuration/#request-timeout), `403` where a mask's
   ability can be refused or a CORS policy lists its origins — and every status the
@@ -180,6 +181,11 @@ The document composes from the route table, so everything in it is derived:
   `Deprecation` on a deprecated route,
   and every `#[response_header]` with its value;
 - `deprecated: true` on a route `#[api(deprecated = "…")]` marks.
+
+No operation lists what the connection answers before a request exists: a head
+the server cannot parse is answered `400`, one past the 64 KiB read buffer `431`,
+by the HTTP layer underneath, with no problem document, layer or correlation
+header. No route received it, and OpenAPI's responses are an operation's.
 
 `operationId` is derived too, as `<controller>_<handler>`, mapped onto what an
 identifier can carry — `PostsController::list` publishes `posts_list`, and a raw

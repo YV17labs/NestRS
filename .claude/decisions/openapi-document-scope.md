@@ -116,3 +116,21 @@ the page used to carry about a built `Response`.
 the document does not list. Closing it takes the parameter's `P` read off the handler and matched
 against the principal the chain's guard defers for, since an `Ambient<T>` a guard attaches defers
 nothing.
+
+## 2026-11-07 — every route lists the cap's `413`, a bare problem no success, and the connection's refusals no route
+
+Each seen on a request, against `38bdfce04`'s document:
+
+- **A route taking no body answers the cap's `413`**: `GET` and `DELETE` with a declared length
+  past the cap were refused before routing, and the document listed no `413`. The entry above
+  called that no answer of the route's; it is what the edge answers whatever the route declares,
+  the rule that entry lists `503` by, so every operation lists it. A body with no declared length
+  that no reader reads is never refused, so `408` stays where a reader waits.
+- **A `ProblemDetails` answered as a handler's success answers no success**: `GET` answered `404`
+  `application/problem+json` and the document said `2XX` with no body. It now lists no success and
+  the problem under `4XX` and `5XX`, OpenAPI 3.1's ranges for an error the handler computes. An
+  `HttpError` returned bare stays `2XX`: `from_response` may carry any answer.
+- **What hyper answers before a request exists is no operation's**: a head that does not parse
+  answers `400`, one past the 64 KiB buffer `431`, with no problem document and no layer's header,
+  run over a socket. OpenAPI's responses are "the expected responses of an operation", and no
+  operation received these, so none lists them; `openapi/index.mdx` says so.

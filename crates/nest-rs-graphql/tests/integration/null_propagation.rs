@@ -5,7 +5,7 @@
 
 use nest_rs_core::module;
 use nest_rs_graphql::async_graphql::futures_util::stream as futures_stream;
-use nest_rs_graphql::async_graphql::{Object, Result};
+use nest_rs_graphql::async_graphql::{Json, Object, Result, SimpleObject, Union};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_testing::TestApp;
 use serde_json::{Value, json};
@@ -34,6 +34,19 @@ impl Shape {
     async fn sure_inner(&self) -> Shape {
         Shape
     }
+}
+
+/// The other member of [`Either`].
+#[derive(SimpleObject)]
+struct Other {
+    other: i32,
+}
+
+/// What a type condition reads: a `Shape` or an `Other`.
+#[derive(Union)]
+enum Either {
+    Shape(Shape),
+    Other(Other),
 }
 
 #[resolver]
@@ -83,11 +96,51 @@ impl ShapeResolver {
         vec![Shape, Shape]
     }
 
+    #[query]
+    #[public]
+    async fn either(&self) -> Option<Either> {
+        Some(Either::Shape(Shape))
+    }
+
+    #[query]
+    #[public]
+    async fn sure_either(&self) -> Either {
+        Either::Shape(Shape)
+    }
+
+    #[query]
+    #[public]
+    async fn eithers(&self) -> Vec<Either> {
+        vec![Either::Shape(Shape), Either::Other(Other { other: 2 })]
+    }
+
+    #[query]
+    #[public]
+    async fn meta(&self) -> Json<Value> {
+        Json(meta())
+    }
+
+    #[mutation]
+    #[public]
+    async fn reshaped(&self) -> Option<Shape> {
+        Some(Shape)
+    }
+
     #[subscription]
     #[public]
     async fn shaped(&self) -> impl futures_stream::Stream<Item = Shape> {
         futures_stream::iter([Shape])
     }
+}
+
+/// What the `JSON` scalar `meta` answers: members named as the key given to an
+/// object could be.
+fn meta() -> Value {
+    json!({
+        "__nestrs_key": 1,
+        "__nestrs_key1": 2,
+        "kept": { "__nestrs_key": 3 },
+    })
 }
 
 #[module(imports = [GraphqlModule], providers = [ShapeResolver])]
@@ -216,7 +269,8 @@ async fn an_operation_over_the_socket_answers_its_nulls() {
 }
 
 /// A copy a directive leaves out is no copy: the object answers as the one
-/// that ran, its nulls placed, on `POST` and in a batch alike.
+/// that ran, its nulls placed, on `POST` and in a batch alike; both copies run
+/// when both are kept, and the object answers what each selects.
 #[tokio::test]
 async fn a_copy_a_directive_leaves_out_hides_no_answer() {
     let app = boot().await;
@@ -251,13 +305,12 @@ async fn a_copy_a_directive_leaves_out_hides_no_answer() {
             }),
             json!({ "shapes": [{ "broken": null }, { "broken": null }] }),
         ),
-        // Both copies run: the `null` may hide what the other answered, so it stands.
         (
             json!({
                 "query": "query($x: Boolean!) { shape { broken } shape @include(if: $x) { fine } }",
                 "variables": { "x": true },
             }),
-            json!({ "shape": null }),
+            json!({ "shape": { "broken": null, "fine": 1 } }),
         ),
     ] {
         let answer = post(&app, &body).await;
@@ -265,25 +318,29 @@ async fn a_copy_a_directive_leaves_out_hides_no_answer() {
     }
 }
 
-/// async-graphql (`7.2.1`, `do_resolve_container`) answers `null` for an object
-/// with no key to answer, and an object every selection of which a directive
-/// leaves out has none. At a nullable position that `null` reads as a resolver's
-/// `None` does, so it stands. When this fails, a release answers `{}`.
+/// An object its directives leave nothing to answer is an object all the same:
+/// GraphQL §6.3 answers `{}`, at a nullable position as at a Non-Null one, where
+/// async-graphql (`7.2.1`, `do_resolve_container`) answers `null`.
 #[tokio::test]
-async fn a_nullable_object_every_selection_of_which_is_left_out_answers_null() {
+async fn a_nullable_object_every_selection_of_which_is_left_out_answers_an_empty_object() {
     let app = boot().await;
     for (document, data) in [
-        (
-            "{ shape { fine @skip(if: true) } }",
-            json!({ "shape": null }),
-        ),
+        ("{ shape { fine @skip(if: true) } }", json!({ "shape": {} })),
         (
             "{ shapes { fine @skip(if: true) } }",
-            json!({ "shapes": [null, null] }),
+            json!({ "shapes": [{}, {}] }),
         ),
         (
             "{ shape { fine @skip(if: true) } shape { broken @include(if: false) } }",
-            json!({ "shape": null }),
+            json!({ "shape": {} }),
+        ),
+        (
+            "{ shape { inner { fine @skip(if: true) } } }",
+            json!({ "shape": { "inner": {} } }),
+        ),
+        (
+            "{ shape { ...F } } fragment F on Shape { fine @skip(if: true) }",
+            json!({ "shape": {} }),
         ),
     ] {
         let answer = post(&app, &json!({ "query": document })).await;
@@ -291,9 +348,7 @@ async fn a_nullable_object_every_selection_of_which_is_left_out_answers_null() {
     }
 }
 
-/// A Non-Null position has no `None`: a `null` with no error there can only be
-/// an object every selection of which a directive left out, and it answers as
-/// GraphQL §6.3 does.
+/// A Non-Null position answers the same `{}`.
 #[tokio::test]
 async fn a_non_null_object_every_selection_of_which_is_left_out_answers_an_empty_object() {
     let app = boot().await;
@@ -364,54 +419,48 @@ async fn an_empty_object_stands_beside_a_field_error() {
     assert_eq!(paths(&answer), [json!(["broken"])]);
 }
 
-/// What the operation answers once a directive leaves the selection under
-/// `key` nothing to answer beside another that answers.
-fn hidden(key: &str) -> String {
-    format!(
-        r#"the operation selects "{key}" more than once at one place, and its directives leave one of those selections nothing to answer: put the directive on that selection, to leave it out whole"#
-    )
-}
-
-/// async-graphql answers `null` for a selection left nothing to answer, and
-/// drops what the other selection answers once that `null` finished first, with
-/// no error: `null_propagation::tests::` pins it, so no such document runs.
+/// async-graphql resolves each selection of one response key apart and keeps
+/// whichever finished first where one answered `null`, so a copy its directives,
+/// a type condition or its every field's error left with no key hid what the
+/// other selected, with no error. Each object keeps a key of its own, so none
+/// does, whatever the order the copies are written in or finish in.
 #[tokio::test]
-async fn a_selection_left_nothing_to_answer_beside_another_is_refused() {
+async fn no_copy_hides_another_selections_answer() {
     let app = boot().await;
-    for (body, key) in [
+    for (body, data) in [
         (
             json!({ "query": "{ shape { fine @skip(if: true) } shape { fine } }" }),
-            "shape",
+            json!({ "shape": { "fine": 1 } }),
         ),
         (
             json!({ "query": "{ shape { fine } shape { fine @skip(if: true) } }" }),
-            "shape",
+            json!({ "shape": { "fine": 1 } }),
         ),
         (
             json!({
                 "query": "query($x: Boolean = false) { \
                           shape { fine @include(if: $x) } shape { fine } }",
             }),
-            "shape",
+            json!({ "shape": { "fine": 1 } }),
         ),
         (
             json!({
                 "query": "query($x: Boolean!) { shape { fine @include(if: $x) } shape { fine } }",
                 "variables": { "x": false },
             }),
-            "shape",
+            json!({ "shape": { "fine": 1 } }),
         ),
         (
             json!({ "query": "{ ... { shape { fine @skip(if: true) } } shape { fine } }" }),
-            "shape",
+            json!({ "shape": { "fine": 1 } }),
         ),
         (
             json!({ "query": "{ shapes { fine @skip(if: true) } shapes { fine } }" }),
-            "shapes",
+            json!({ "shapes": [{ "fine": 1 }, { "fine": 1 }] }),
         ),
         (
             json!({ "query": "{ sureShape { fine @skip(if: true) } sureShape { fine } }" }),
-            "sureShape",
+            json!({ "sureShape": { "fine": 1 } }),
         ),
         (
             json!({
@@ -419,52 +468,156 @@ async fn a_selection_left_nothing_to_answer_beside_another_is_refused() {
                           fragment B on Query { shape { fine } } \
                           fragment C on Shape { fine @skip(if: true) }",
             }),
-            "shape",
+            json!({ "shape": { "fine": 1 } }),
         ),
         (
             json!({
                 "query": "{ a: shape { ... @skip(if: true) { fine } } a: shape { fine } }",
             }),
-            "a",
+            json!({ "a": { "fine": 1 } }),
         ),
         (
             json!({ "query": "{ shape { inner { fine @skip(if: true) } } shape { inner { fine } } }" }),
-            "inner",
+            json!({ "shape": { "inner": { "fine": 1 } } }),
         ),
         (
-            json!({ "query": "{ shape { fine @skip(if: true) } shape { broken } }" }),
-            "shape",
+            json!({ "query": "{ either { ... on Other { other } } either { ... on Shape { fine } } }" }),
+            json!({ "either": { "fine": 1 } }),
+        ),
+        (
+            json!({ "query": "{ shape { broken } shape { fine } }" }),
+            json!({ "shape": { "broken": null, "fine": 1 } }),
+        ),
+        (
+            json!({ "query": "{ shapes { broken } shapes { fine } }" }),
+            json!({ "shapes": [{ "broken": null, "fine": 1 }, { "broken": null, "fine": 1 }] }),
+        ),
+        (
+            json!({
+                "query": "{ ...A ...B } fragment A on Query { shape { broken } } \
+                          fragment B on Query { shape { fine } }",
+            }),
+            json!({ "shape": { "broken": null, "fine": 1 } }),
+        ),
+        (
+            json!({ "query": "{ shape { inner { broken } } shape { inner { fine } } }" }),
+            json!({ "shape": { "inner": { "broken": null, "fine": 1 } } }),
         ),
     ] {
         let answer = post(&app, &body).await;
-        assert_eq!(answer["data"], Value::Null, "{body}: {answer}");
+        assert_eq!(answer["data"], data, "{body}: {answer}");
+        assert!(!answer.to_string().contains("__nestrs"), "{answer}");
+    }
+}
+
+/// What a type condition leaves an object is read: no condition applying to the
+/// value, the object answers `{}`, and two selections under distinct conditions,
+/// which no one value meets, are no repeat, so one left with nothing is refused
+/// nowhere.
+#[tokio::test]
+async fn an_object_no_type_condition_of_which_applies_answers_an_empty_object() {
+    let app = boot().await;
+    for (document, data) in [
+        (
+            "{ either { ... on Other { other } } }",
+            json!({ "either": {} }),
+        ),
+        (
+            "{ sureEither { ... on Other { other } } }",
+            json!({ "sureEither": {} }),
+        ),
+        (
+            "{ eithers { ... on Other { other } } }",
+            json!({ "eithers": [{}, { "other": 2 }] }),
+        ),
+        (
+            "{ either { ...O } } fragment O on Other { other }",
+            json!({ "either": {} }),
+        ),
+        (
+            "{ either { ... on Shape { inner { fine @skip(if: true) } } \
+               ... on Other { other } } }",
+            json!({ "either": { "inner": {} } }),
+        ),
+        (
+            "{ either { ... on Shape { fine } ... on Other { other } } }",
+            json!({ "either": { "fine": 1 } }),
+        ),
+    ] {
+        let answer = post(&app, &json!({ "query": document })).await;
+        assert_eq!(answer, json!({ "data": data }), "{document}");
+    }
+}
+
+/// async-graphql 7.2.1 (`Fields::add_set`) applies a condition on a union only where
+/// that union is resolved, where GraphQL §6.3.2 applies it to a member wherever one is
+/// selected: a canary, whose `{}` answers turn `{"fine": 1}` on the bump fixing it
+/// (`TODO.md` §4).
+#[tokio::test]
+async fn a_condition_on_a_union_applies_only_where_that_union_is_resolved() {
+    let app = boot().await;
+    for (document, data) in [
+        (
+            "{ shape { ... on Either { ... on Shape { fine } } } }",
+            json!({ "shape": {} }),
+        ),
+        (
+            "{ shape { ...E } } fragment E on Either { ... on Shape { fine } }",
+            json!({ "shape": {} }),
+        ),
+        (
+            "{ either { ... on Either { ... on Shape { fine } } } }",
+            json!({ "either": { "fine": 1 } }),
+        ),
+        (
+            "{ either { ...E } } fragment E on Either { ... on Shape { fine } }",
+            json!({ "either": { "fine": 1 } }),
+        ),
+    ] {
+        let answer = post(&app, &json!({ "query": document })).await;
+        assert_eq!(answer, json!({ "data": data }), "{document}");
+    }
+}
+
+/// The key an object is given leaves no member of a scalar's value, whatever it is
+/// called.
+#[tokio::test]
+async fn a_scalar_beside_an_object_given_its_key_keeps_every_member() {
+    let app = boot().await;
+    for (document, shape) in [
+        ("{ meta shape { fine @skip(if: true) } }", json!({})),
+        (
+            "{ meta shape { fine } shape { fine } }",
+            json!({ "fine": 1 }),
+        ),
+        (
+            "{ shape { inner { fine @skip(if: true) } } meta }",
+            json!({ "inner": {} }),
+        ),
+    ] {
+        let answer = post(&app, &json!({ "query": document })).await;
         assert_eq!(
-            answer["errors"][0]["message"],
-            hidden(key),
-            "{body}: {answer}"
-        );
-        assert_eq!(
-            answer["errors"].as_array().map(Vec::len),
-            Some(1),
-            "{answer}"
-        );
-        assert_eq!(
-            answer["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
-            "{answer}"
+            answer,
+            json!({ "data": { "meta": meta(), "shape": shape } }),
+            "{document}"
         );
     }
 }
 
+/// The key each object keeps is no key a client wrote: one naming its own the same
+/// way reads its own.
 #[tokio::test]
-async fn a_refused_selection_points_at_the_one_left_nothing_to_answer() {
+async fn a_client_key_spelled_as_the_kept_one_reads_its_own() {
     let answer = post(
         &boot().await,
-        &json!({ "query": "{\n  shape { fine }\n  shape { fine @skip(if: true) }\n}" }),
+        &json!({
+            "query": "{ shape { __nestrs_key: fine } shape { fine @skip(if: true) } }",
+        }),
     )
     .await;
     assert_eq!(
-        answer["errors"][0]["locations"],
-        json!([{ "line": 3, "column": 9 }]),
+        answer,
+        json!({ "data": { "shape": { "__nestrs_key": 1 } } }),
         "{answer}"
     );
 }
@@ -481,11 +634,12 @@ async fn a_document_validation_refuses_says_what_validation_says_of_it() {
         answer["errors"][0]["message"], r#"Unknown field "unknownField" on type "Query"."#,
         "{answer}"
     );
+    assert!(!answer.to_string().contains("__nestrs"), "{answer}");
 }
 
-/// None of these hides an answer, so each runs.
+/// Each copy answers its own position.
 #[tokio::test]
-async fn a_selection_hiding_no_answer_is_not_refused() {
+async fn a_copy_under_another_key_answers_its_own() {
     let app = boot().await;
     for (body, data) in [
         (
@@ -497,19 +651,12 @@ async fn a_selection_hiding_no_answer_is_not_refused() {
             json!({ "shape": { "fine": 1 } }),
         ),
         (
-            json!({
-                "query": "query($x: Boolean = true) { \
-                          shape { fine @include(if: $x) } shape { fine } }",
-            }),
-            json!({ "shape": { "fine": 1 } }),
-        ),
-        (
             json!({ "query": "{ a: shape { fine @skip(if: true) } b: shape { fine } }" }),
-            json!({ "a": null, "b": { "fine": 1 } }),
+            json!({ "a": {}, "b": { "fine": 1 } }),
         ),
         (
             json!({ "query": "{ shape { inner { fine @skip(if: true) } } a: shape { inner { fine } } }" }),
-            json!({ "shape": { "inner": null }, "a": { "inner": { "fine": 1 } } }),
+            json!({ "shape": { "inner": {} }, "a": { "inner": { "fine": 1 } } }),
         ),
         (
             json!({ "query": "{ shape { fine } shape { fine } }" }),
@@ -521,9 +668,9 @@ async fn a_selection_hiding_no_answer_is_not_refused() {
     }
 }
 
-/// In a batch only the operation holding it is refused.
+/// Each operation of a batch is read on its own.
 #[tokio::test]
-async fn a_batch_refuses_only_its_operation_hiding_an_answer() {
+async fn each_operation_of_a_batch_keeps_its_objects() {
     let answer = post(
         &boot().await,
         &json!([
@@ -533,15 +680,24 @@ async fn a_batch_refuses_only_its_operation_hiding_an_answer() {
     )
     .await;
     assert_eq!(
-        answer[0]["errors"][0]["message"],
-        hidden("shape"),
+        answer,
+        json!([
+            { "data": { "shape": { "fine": 1 } } },
+            { "data": { "sureShape": {} } },
+        ]),
         "{answer}"
     );
-    assert_eq!(
-        answer[1],
-        json!({ "data": { "sureShape": {} } }),
-        "{answer}"
-    );
+}
+
+/// A mutation's root field reads the object it answers as a query's does.
+#[tokio::test]
+async fn a_mutations_object_left_nothing_answers_an_empty_object() {
+    let answer = post(
+        &boot().await,
+        &json!({ "query": "mutation { reshaped { fine @skip(if: true) } }" }),
+    )
+    .await;
+    assert_eq!(answer, json!({ "data": { "reshaped": {} } }), "{answer}");
 }
 
 #[tokio::test]
@@ -561,9 +717,20 @@ async fn a_subscription_item_answers_its_nulls() {
     let item = socket.next_item("left").await.expect("the item");
     assert_eq!(item, json!({ "data": { "shaped": {} } }), "{item}");
     socket.subscribe(
-        "hiding",
+        "copies",
         "subscription { shaped { inner { fine @skip(if: true) } inner { fine } } }",
     );
-    let item = socket.next_item("hiding").await.expect("the refusal");
-    assert_eq!(item["errors"][0]["message"], hidden("inner"), "{item}");
+    let item = socket.next_item("copies").await.expect("the item");
+    assert_eq!(
+        item,
+        json!({ "data": { "shaped": { "inner": { "fine": 1 } } } }),
+        "{item}"
+    );
+    socket.subscribe("query", "{ shape { fine @skip(if: true) } shape { fine } }");
+    let item = socket.next_item("query").await.expect("the item");
+    assert_eq!(
+        item,
+        json!({ "data": { "shape": { "fine": 1 } } }),
+        "{item}"
+    );
 }

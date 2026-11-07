@@ -11,17 +11,30 @@
 //! pins the exact version, held by a compile-time canary in `resolver.rs` and the
 //! `tests/integration/sdl_snapshot.rs` snapshot. To bump it: raise the pin, fix
 //! the canary until the crate compiles, then review the SDL snapshot diff.
-//! `src/null_propagation.rs` reads five of its behaviours — a failed field's
-//! key left out, the first of a field's selections to finish kept, a request's
-//! cached parse executed, `null` for an object with no key, what finishes after
-//! a `null` dropped — a mutation root field reads the errors filed so far off its
-//! context, `src/operation_units.rs` refuses a mutation naming one root field
-//! twice because a root field runs once per selection, copies the private rule
-//! of `remove_skipped_selection`, fills in a variable's default because a
-//! directive reads `request.variables` alone, and stops where
-//! `check_recursive_depth` refuses, and `src/request_extension.rs` refuses inside
-//! `Extension::validation` because it wraps `check_rules` with the request's data
-//! attached, each held by its tests.
+//! Each behaviour of async-graphql the crate reads is held by its tests:
+//!
+//! - `src/null_propagation.rs`: a failed field's key left out, the first of a
+//!   field's selections to finish kept, a request's cached parse executed, and a
+//!   mutation root field reading the errors filed so far off its context;
+//! - `src/own_key.rs`: `null` for an object with no key, what finishes after a
+//!   `null` dropped (`insert_value`), `__typename` answered under its response key
+//!   by `Fields::add_set` and scored nothing, a type condition applied to the
+//!   concrete type, an interface it implements or the type its position resolves
+//!   (so one on a union only where that union is resolved, never to a member
+//!   selected elsewhere: `TODO.md` §4), and the parse `Request::set_parsed_query`
+//!   caches executed after `Extension::prepare_request`;
+//! - `src/operation_units.rs`: a root field run once per selection (so a mutation
+//!   naming one twice is refused), the private rule of `remove_skipped_selection`
+//!   (copied), a directive reading `request.variables` alone (so a variable's
+//!   default is filled in), a variable's Non-Null wrappers read by no validation
+//!   rule (so a `null` is refused there), and `check_recursive_depth`'s bound;
+//! - `src/request_extension.rs`: `Extension::validation` wrapping `check_rules`
+//!   with the request's data attached;
+//! - `src/document_cost.rs`: the walks `check_rules` inlines, which pay a
+//!   fragment's expansion at each spread, a field's arguments read again at each
+//!   row of a list (`Context::get_param_value` and `var_value` cloning, the rows
+//!   resolved together), and the parser's argument values in
+//!   `async-graphql-value`'s `Value`, whose pin moves with this one.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
@@ -44,6 +57,7 @@ mod null_propagation;
 mod opaque;
 mod operation;
 mod operation_units;
+mod own_key;
 mod redact;
 mod request_extension;
 mod resolver;

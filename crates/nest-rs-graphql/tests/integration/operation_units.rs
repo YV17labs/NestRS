@@ -816,9 +816,10 @@ async fn a_copy_a_directive_leaves_out_repeats_no_root_field() {
 }
 
 /// A selection a directive leaves nothing to answer, beside one that answers,
-/// below a mutation's root: nothing runs, as for a repeated root selection.
+/// below a mutation's root: the field runs once, and answers what the other copy
+/// selects, where async-graphql's `null` hid it.
 #[tokio::test]
-async fn a_mutation_hiding_an_answer_below_its_root_runs_nothing() {
+async fn a_mutation_selecting_an_object_twice_below_its_root_answers_both_copies() {
     let logs = LogCapture::install();
     let (app, journal) = boot().await;
     let reply = post(
@@ -826,19 +827,24 @@ async fn a_mutation_hiding_an_answer_below_its_root_runs_nothing() {
         json!({ "query": "mutation { maybeShaped { inner { fine @skip(if: true) } inner { fine } } }" }),
     )
     .await;
-    assert_eq!(reply["data"], Value::Null, "{reply}");
     assert_eq!(
-        reply["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
+        reply,
+        json!({ "data": { "maybeShaped": { "inner": { "fine": 1 } } } }),
         "{reply}"
     );
     assert_eq!(
         journal.read(),
         [
             "open graphql.operation per_unit",
-            "settle graphql.operation false"
+            "block released",
+            "settle graphql.operation true"
         ],
     );
-    assert!(dispatched(&logs).is_empty(), "no root field resolves");
+    assert_eq!(
+        dispatched(&logs),
+        ["maybeShaped"],
+        "the root field resolves once"
+    );
 }
 
 /// A mutation whose root spreads a chain of `links` fragments, the last selecting
@@ -1684,10 +1690,8 @@ async fn over_graphql_ws_a_document_is_read_as_a_post_reads_it() {
         ),
         (
             "mutation { shaped { inner { fine @skip(if: true) } inner { fine } } }",
-            Value::Null,
-            Some(
-                r#"the operation selects "inner" more than once at one place, and its directives leave one of those selections nothing to answer: put the directive on that selection, to leave it out whole"#,
-            ),
+            json!({ "shaped": { "inner": { "fine": 1 } } }),
+            None,
         ),
         (
             "mutation { shaped { fine @skip(if: true) } }",

@@ -15,11 +15,9 @@
 //!
 //! async-graphql also answers `null` for an object with no key to answer, with
 //! no error, and drops what another selection of that object answers after it
-//! (`insert_value`). A document holding an `@` is read for a selection its
-//! directives leave that way ([`Blanks`]): beside one that answers it is refused
-//! ([`HiddenAnswers`]), and at a Non-Null position it answers the `{}` of §6.3.
+//! (`insert_value`): a selection set that could answer no key is given one of its
+//! own (`crate::own_key`), which leaves the answer before its nulls are placed.
 
-use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,13 +32,12 @@ use async_graphql::parser::types::{
 };
 use async_graphql::parser::{parse_query, parse_schema};
 use async_graphql::{
-    Context, Data, Executor, Name, PathSegment, Pos, Positioned, Request, Response, ServerError,
+    Context, Data, Executor, Name, PathSegment, Positioned, Request, Response, ServerError,
     ServerResult, Value, Variables,
 };
 
-use crate::operation_units::{
-    OperationRefusal, RECURSIVE_DEPTH, is_skipped, read_selected, selected_operation,
-};
+use crate::operation_units::{is_skipped, read_selected, selected_operation};
+use crate::own_key::OwnKey;
 
 /// The schema `E`, each field that erred answering `null` where the
 /// specification places it.
@@ -71,12 +68,7 @@ impl<E> NullPropagated<E> {
                 Arc::clone(&kept),
             ));
         }
-        if kept.leaves_blank && !request.data.contains_key(&TypeId::of::<OperationRefusal>()) {
-            request.data.insert(OperationRefusal::Unread(HiddenAnswers {
-                types: Arc::clone(&self.types),
-                kept: Arc::clone(&kept),
-            }));
-        }
+        request.data.insert(kept.own_key.clone());
         Some(kept)
     }
 }
@@ -107,25 +99,6 @@ impl<E: Executor> Executor for NullPropagated<E> {
                 response
             })
             .boxed()
-    }
-}
-
-/// A document selecting an object through a selection its directives leave
-/// nothing to answer, read once validation passed: refused when another selection
-/// of that object answers, whose answer async-graphql would drop.
-pub(crate) struct HiddenAnswers {
-    types: Arc<FieldTypes>,
-    kept: Arc<Kept>,
-}
-
-impl HiddenAnswers {
-    /// The refusal of the first selection hiding what another answers.
-    pub(crate) fn refusal(&self) -> Option<ServerError> {
-        let (key, at) = self.kept.selections(&self.types)?.first_hiding()?;
-        let said = format!(
-            r#"the operation selects "{key}" more than once at one place, and its directives leave one of those selections nothing to answer: put the directive on that selection, to leave it out whole"#
-        );
-        Some(crate::error::invalid_argument(said).into_server_error(at))
     }
 }
 
@@ -302,8 +275,9 @@ struct Kept {
     /// What `@skip` and `@include` read in `text`: the request's variables,
     /// held only when the text holds a directive.
     variables: Variables,
-    /// Whether its directives leave a selection nothing to answer ([`Blanks`]).
-    leaves_blank: bool,
+    /// The key the document gives the objects that could answer none, taken out
+    /// of the answer before its nulls are placed.
+    own_key: OwnKey,
     /// `text` parsed again, the first time a null is placed; `None` when it
     /// does not parse.
     parsed: OnceLock<Option<ExecutableDocument>>,
@@ -318,17 +292,14 @@ impl Kept {
             true => request.variables.clone(),
             false => Variables::default(),
         };
-        let (operation, ty, leaves_blank) = read_selected(request, |document, name, operation| {
-            let set = &operation.node.selection_set.node;
-            let leaves_blank =
-                directed && Blanks::new(&document.fragments, &variables).held_in(set, 0);
-            (name.cloned(), operation.node.ty, leaves_blank)
+        let (operation, ty) = read_selected(request, |_, name, operation| {
+            (name.cloned(), operation.node.ty)
         })?;
         let kept = Self {
             operation,
             text: std::mem::take(&mut request.query),
             variables,
-            leaves_blank,
+            own_key: OwnKey::default(),
             parsed: OnceLock::new(),
         };
         Some((kept, ty))
@@ -350,17 +321,18 @@ impl Kept {
         ))
     }
 
-    /// `response`'s nulls, placed where its errors' paths say a field erred, and
-    /// each `null` no such error explains answered as what it stands for. With no
-    /// error at all, a `null` is an operation every root selection of which a
-    /// directive left out: async-graphql (`7.2.1`) answers one for an object with
-    /// no key, and the root object always is one.
+    /// `response` without the key its document gave its objects, its nulls placed
+    /// where its errors' paths say a field erred. With no error at all, a `null` is
+    /// a subscription's item whose every root selection a directive left out:
+    /// async-graphql (`7.2.1`) answers one for an object with no key, and the root
+    /// object always is one.
     fn place_nulls(&self, response: &mut Response, types: &FieldTypes) {
+        self.own_key.take_from(&mut response.data);
         if response.errors.is_empty() && response.data == Value::Null {
             response.data = Value::Object(IndexMap::new());
         }
         let erred = response.errors.iter().any(|error| !error.path.is_empty());
-        if !erred && !self.leaves_blank {
+        if !erred {
             return;
         }
         let Some(mut selections) = self.selections(types) else {
@@ -371,98 +343,10 @@ impl Kept {
             );
             return;
         };
-        if erred {
-            selections.place(
-                &mut response.data,
-                response.errors.iter().map(|error| error.path.as_slice()),
-            );
-        }
-        if self.leaves_blank {
-            selections.answer_blanks(&mut response.data);
-        }
-    }
-}
-
-/// What a document's directives leave its selection sets: a blank one has nothing
-/// to answer, each of its selections left out, through its fragments. Read before
-/// validation, so each fragment is read once and no deeper than
-/// [`RECURSIVE_DEPTH`], and a cycle, which validation refuses, ends the read.
-struct Blanks<'d> {
-    fragments: &'d HashMap<Name, Positioned<FragmentDefinition>>,
-    variables: &'d Variables,
-    /// Whether each fragment read so far is blank; one still being read is not.
-    read: HashMap<&'d str, bool>,
-    /// The fragments [`held_in`](Self::held_in) went through.
-    walked: HashSet<&'d str>,
-}
-
-impl<'d> Blanks<'d> {
-    fn new(
-        fragments: &'d HashMap<Name, Positioned<FragmentDefinition>>,
-        variables: &'d Variables,
-    ) -> Self {
-        Self {
-            fragments,
-            variables,
-            read: HashMap::new(),
-            walked: HashSet::new(),
-        }
-    }
-
-    /// Whether a field under `set`, itself `depth` selection sets down, selects a
-    /// blank set. The operation's own is no field's: its root answers `{}` by itself.
-    fn held_in(&mut self, set: &'d SelectionSet, depth: usize) -> bool {
-        depth <= RECURSIVE_DEPTH
-            && set.items.iter().any(|selection| {
-                !is_skipped(selection.node.directives(), self.variables)
-                    && match &selection.node {
-                        Selection::Field(field) => {
-                            let set = &field.node.selection_set.node;
-                            self.is_blank(set, depth + 1) || self.held_in(set, depth + 1)
-                        }
-                        Selection::InlineFragment(fragment) => {
-                            self.held_in(&fragment.node.selection_set.node, depth + 1)
-                        }
-                        Selection::FragmentSpread(spread) => {
-                            let name = spread.node.fragment_name.node.as_str();
-                            self.walked.insert(name)
-                                && self.fragments.get(name).is_some_and(|fragment| {
-                                    self.held_in(&fragment.node.selection_set.node, depth + 1)
-                                })
-                        }
-                    }
-            })
-    }
-
-    /// Whether `set` has nothing to answer: a field's with no selection of its own
-    /// is a leaf's, which answers itself.
-    fn is_blank(&mut self, set: &'d SelectionSet, depth: usize) -> bool {
-        depth <= RECURSIVE_DEPTH
-            && !set.items.is_empty()
-            && set.items.iter().all(|selection| {
-                is_skipped(selection.node.directives(), self.variables)
-                    || match &selection.node {
-                        Selection::Field(_) => false,
-                        Selection::InlineFragment(fragment) => {
-                            self.is_blank(&fragment.node.selection_set.node, depth + 1)
-                        }
-                        Selection::FragmentSpread(spread) => self
-                            .fragment_is_blank(spread.node.fragment_name.node.as_str(), depth + 1),
-                    }
-            })
-    }
-
-    fn fragment_is_blank(&mut self, name: &'d str, depth: usize) -> bool {
-        if let Some(read) = self.read.get(name) {
-            return *read;
-        }
-        self.read.insert(name, false);
-        let blank = self
-            .fragments
-            .get(name)
-            .is_some_and(|fragment| self.is_blank(&fragment.node.selection_set.node, depth));
-        self.read.insert(name, blank);
-        blank
+        selections.place(
+            &mut response.data,
+            response.errors.iter().map(|error| error.path.as_slice()),
+        );
     }
 }
 
@@ -660,85 +544,6 @@ impl<'a> Selections<'a> {
                 self.collect(&set.node, parent, &mut below);
             }
             self.positions[position].below = Some(below);
-        }
-    }
-
-    /// The response key and the place of the first selection left nothing to
-    /// answer beside another that answers, at one position. Only a document
-    /// validation passed comes here: `max_complexity` counts through fragments, so
-    /// it bounds the positions this visits, which nothing does before it.
-    fn first_hiding(&mut self) -> Option<(&'a str, Pos)> {
-        let mut blanks = Blanks::new(self.fragments, self.variables);
-        self.hiding_below(ROOT, &mut blanks)
-    }
-
-    fn hiding_below(&mut self, position: usize, blanks: &mut Blanks<'a>) -> Option<(&'a str, Pos)> {
-        self.read_below(position);
-        let below: Vec<(&'a str, usize)> = self.positions[position]
-            .below
-            .iter()
-            .flatten()
-            .map(|(key, index)| (*key, *index))
-            .collect();
-        below.into_iter().find_map(|(key, index)| {
-            let mut left = None;
-            let mut answering = false;
-            for (set, _) in &self.positions[index].sets {
-                if blanks.is_blank(&set.node, 0) {
-                    left.get_or_insert(set.pos);
-                } else {
-                    answering = true;
-                }
-            }
-            match (left, answering) {
-                (Some(at), true) => Some((key, at)),
-                _ => self.hiding_below(index, blanks),
-            }
-        })
-    }
-
-    /// Each `null` in `data` a Non-Null type forbids, where every selection has
-    /// nothing to answer, as the object it stands for.
-    fn answer_blanks(&mut self, data: &mut Value) {
-        let mut blanks = Blanks::new(self.fragments, self.variables);
-        self.answer_blanks_at(data, ROOT, None, &mut blanks);
-    }
-
-    fn answer_blanks_at(
-        &mut self,
-        value: &mut Value,
-        position: usize,
-        ty: Option<&'a Type>,
-        blanks: &mut Blanks<'a>,
-    ) {
-        match value {
-            Value::Null => {
-                let sets = &self.positions[position].sets;
-                if ty.is_some_and(|ty| !ty.nullable)
-                    && !sets.is_empty()
-                    && sets.iter().all(|(set, _)| blanks.is_blank(&set.node, 0))
-                {
-                    *value = Value::Object(IndexMap::new());
-                }
-            }
-            Value::List(items) => {
-                let ty = ty.and_then(|ty| match &ty.base {
-                    BaseType::List(item) => Some(&**item),
-                    BaseType::Named(_) => None,
-                });
-                for item in items {
-                    self.answer_blanks_at(item, position, ty, blanks);
-                }
-            }
-            Value::Object(fields) => {
-                for (key, value) in fields {
-                    if let Some(below) = self.below(position, key) {
-                        let ty = self.positions[below].ty;
-                        self.answer_blanks_at(value, below, ty, blanks);
-                    }
-                }
-            }
-            _ => {}
         }
     }
 
@@ -1599,11 +1404,10 @@ mod tests {
         }
     }
 
-    /// Why a selection left nothing to answer is refused beside another
-    /// (`a_selection_left_nothing_to_answer_beside_another_is_refused`):
+    /// Why a selection set that could answer no key is given one (`crate::own_key`):
     /// async-graphql answers `null` for it, and `insert_value` drops what finishes
     /// after a `null`, so which selection answers is which finished first. A bump
-    /// that answers `{}`, or merges past a `null`, fails here, and the refusal can go.
+    /// that answers `{}`, and merges past a `null`, fails here, and the key can go.
     #[tokio::test]
     async fn a_blank_selection_hides_what_finishes_after_it() {
         /// Its first read waits, so the selection written first finishes last.
@@ -1654,11 +1458,10 @@ mod tests {
         }
     }
 
-    /// What a type condition leaves an object is decided by what the value turns
-    /// out to be, so no read of the document says it, and only a walk of every
-    /// answer selecting through one would: async-graphql's `null` stands, at a
-    /// Non-Null position too, and hides what another selection answers. When this
-    /// fails, a release answers `{}`.
+    /// What async-graphql answers for an object no type condition of which applies,
+    /// at a Non-Null position too, with no key given (`crate::own_key`): `null`,
+    /// which hides what another selection answers. When this fails, a release
+    /// answers `{}`, and the key can go.
     #[tokio::test]
     async fn an_object_no_type_condition_of_which_applies_answers_null() {
         for (document, data) in [
@@ -1686,158 +1489,6 @@ mod tests {
                 "{document}"
             );
         }
-    }
-
-    /// The read goes by response key, as the placement does, so two selections no
-    /// one value meets, under distinct type conditions, count as one position, and
-    /// a document leaving one of them blank is refused though it hides nothing.
-    /// The page says so, and the directive on the selection itself runs.
-    #[test]
-    fn a_hidden_answer_is_read_by_response_key_whatever_the_type_conditions() {
-        let document = "{ either { ... on Leaf { child { fine @skip(if: true) } } \
-                        ... on Fine { child { fine } } } }";
-        let types = FieldTypes::of(&bare().sdl());
-        let Some((kept, _)) = Kept::take(&mut Request::new(document)) else {
-            panic!("{document} selects an operation");
-        };
-        assert!(kept.leaves_blank);
-        let hiding = kept
-            .selections(&types)
-            .and_then(|mut selections| selections.first_hiding());
-        assert_eq!(hiding.map(|(key, _)| key), Some("child"));
-    }
-
-    /// Whether `document`, sent `variables`, leaves a selection nothing to answer.
-    fn leaves_blank(document: &str, variables: serde_json::Value) -> bool {
-        let mut request = Request::new(document).variables(Variables::from_json(variables));
-        let Some((kept, _)) = Kept::take(&mut request) else {
-            panic!("{document} selects an operation");
-        };
-        kept.leaves_blank
-    }
-
-    #[test]
-    fn a_blank_set_is_read_through_fragments_and_variables() {
-        for (document, variables) in [
-            ("{ leaf { fine @skip(if: true) } }", json!({})),
-            ("{ leaf { fine @include(if: false) } }", json!({})),
-            (
-                "query($x: Boolean!) { leaf { fine @include(if: $x) } }",
-                json!({ "x": false }),
-            ),
-            (
-                "{ leaf { a: fine @skip(if: true) broken @skip(if: true) } }",
-                json!({}),
-            ),
-            ("{ leaf { ... @skip(if: true) { fine } } }", json!({})),
-            ("{ leaf { ... { fine @skip(if: true) } } }", json!({})),
-            (
-                "{ leaf { ...A @skip(if: true) } } fragment A on Leaf { fine }",
-                json!({}),
-            ),
-            (
-                "{ leaf { ...A } } fragment A on Leaf { fine @skip(if: true) }",
-                json!({}),
-            ),
-            (
-                "{ leaf { ...A } } fragment A on Leaf { ...B } \
-                 fragment B on Leaf { fine @skip(if: true) }",
-                json!({}),
-            ),
-            (
-                "{ ...A } fragment A on Query { leaf { fine @skip(if: true) } }",
-                json!({}),
-            ),
-            ("{ ... { leaf { fine @skip(if: true) } } }", json!({})),
-            (
-                "{ leaf { fine child { fine @skip(if: true) } } }",
-                json!({}),
-            ),
-            (
-                "{ leaf { fine } a: leaf { ...A ...A } } fragment A on Leaf { fine @skip(if: true) }",
-                json!({}),
-            ),
-        ] {
-            assert!(leaves_blank(document, variables), "{document}");
-        }
-        for (document, variables) in [
-            ("{ leaf { fine } }", json!({})),
-            ("{ leaf { fine @skip(if: false) } }", json!({})),
-            ("{ leaf { fine @include(if: true) } }", json!({})),
-            (
-                "query($x: Boolean!) { leaf { fine @include(if: $x) } }",
-                json!({ "x": true }),
-            ),
-            ("{ leaf { fine @skip(if: true) broken } }", json!({})),
-            (
-                "{ leaf { ...A broken } } fragment A on Leaf { fine @skip(if: true) }",
-                json!({}),
-            ),
-            (
-                "{ leaf { ...A } } fragment A on Leaf { fine @skip(if: false) }",
-                json!({}),
-            ),
-            // Left out itself, it answers nothing at all: no `null` to hide with.
-            (
-                "{ leaf @skip(if: true) { fine @skip(if: true) } }",
-                json!({}),
-            ),
-            (
-                "{ ...A @skip(if: true) } fragment A on Query { leaf { fine @skip(if: true) } }",
-                json!({}),
-            ),
-            // The operation's root is no object anyone selects.
-            ("{ broken @skip(if: true) }", json!({})),
-            (
-                "{ ...A } fragment A on Query { broken @skip(if: true) }",
-                json!({}),
-            ),
-            // A fragment another operation spreads.
-            (
-                "{ leaf { fine } } fragment A on Query { leaf { fine @skip(if: true) } }",
-                json!({}),
-            ),
-            // Validation refuses these; the read ends on them.
-            (
-                "{ leaf { ...A } } fragment A on Leaf { ...A fine @skip(if: true) }",
-                json!({}),
-            ),
-            (
-                "{ leaf { ...A } } fragment A on Leaf { ...B @skip(if: false) } \
-                 fragment B on Leaf { ...A }",
-                json!({}),
-            ),
-            (
-                "{ ...A } fragment A on Query { ...A broken @skip(if: true) }",
-                json!({}),
-            ),
-            ("{ leaf { ...Missing @skip(if: false) } }", json!({})),
-            // No text holds an `@`, so nothing reads it.
-            ("{ leaf { ...A } } fragment A on Leaf { fine }", json!({})),
-        ] {
-            assert!(!leaves_blank(document, variables), "{document}");
-        }
-    }
-
-    /// Read before async-graphql's recursion limit, as long a chain as a body
-    /// holds: a stack overflow aborts the process.
-    #[test]
-    fn a_fragment_chain_past_the_recursion_limit_overflows_no_read() {
-        let chain = |on: &str, first: &str| {
-            let mut document = String::from(first);
-            for link in 0..6_000 {
-                document.push_str(&format!(" fragment F{link} on {on} {{ ...F{} }}", link + 1));
-            }
-            document.push_str(&format!(
-                " fragment F6000 on {on} {{ leaf {{ fine @skip(if: true) }} }}"
-            ));
-            document
-        };
-        assert!(!leaves_blank(&chain("Query", "{ ...F0 }"), json!({})));
-        assert!(!leaves_blank(
-            &chain("Leaf", "{ leaf { ...F0 } }"),
-            json!({})
-        ));
     }
 
     #[tokio::test]

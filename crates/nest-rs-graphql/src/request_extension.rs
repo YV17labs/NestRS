@@ -1,11 +1,13 @@
 //! What the schema does around each request, in the one extension it keeps,
 //! since an extension is entered on every field (`redact.rs`): before anything
 //! walks the document it refuses one that does not parse ([`unparsed`]) and what
-//! one that does would cost ([`document_cost`]), it seeds the request's loaders and
-//! what it files once ([`FiledOnce`]), and once validation passed answers the refusal
-//! the operation's read left ([`OperationRefusal`]). No other hook sits between
+//! one that does would cost ([`document_cost`]), gives each object that could answer
+//! no key one of its own ([`OwnKey`]), seeds the request's loaders and what it files
+//! once ([`FiledOnce`]), and once validation passed answers the refusal the
+//! operation's read left ([`OperationRefusal`]). No other hook sits between
 //! validation and execution.
 
+use std::any::TypeId;
 use std::sync::Arc;
 
 use async_graphql::async_trait::async_trait;
@@ -18,7 +20,8 @@ use crate::config::GraphqlConfig;
 use crate::document_cost::{self, DocumentLimits};
 use crate::filed_once::FiledOnce;
 use crate::loader::LoaderSeeds;
-use crate::operation_units::OperationRefusal;
+use crate::operation_units::{OperationRefusal, selected_operation};
+use crate::own_key::OwnKey;
 use crate::redact::unparsed;
 
 /// Hands each request the schema's one [`RequestExtension`], which holds nothing of
@@ -70,24 +73,46 @@ impl Extension for RequestExtension {
         mut request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
+        let own_key = request
+            .data
+            .get(&TypeId::of::<OwnKey>())
+            .and_then(|held| held.downcast_ref::<OwnKey>())
+            .cloned();
         let variables = std::mem::take(&mut request.variables);
         let operation = request.operation_name.take();
+        let registry = &ctx.schema_env.registry;
         // The operation's read cached a parse that passed; one that failed runs again
-        // here, and the refusal says only what this one left.
-        let refusal = match request.parsed_query() {
-            Ok(document) => document_cost::refusal(
-                document,
-                operation.as_deref(),
-                &variables,
-                self.limits(),
-                &ctx.schema_env.registry,
-            ),
-            Err(refused) => Some(unparsed(refused)),
+        // here, and the refusal says only what this one left. Its objects are given
+        // their keys once its cost is counted, which bounds what that read expands.
+        let (refusal, given) = match request.parsed_query() {
+            Ok(document) => {
+                match document_cost::refusal(
+                    document,
+                    operation.as_deref(),
+                    &variables,
+                    self.limits(),
+                    registry,
+                ) {
+                    Some(refusal) => (Some(refusal), None),
+                    None => {
+                        let given = own_key
+                            .zip(selected_operation(document, operation.as_deref()))
+                            .and_then(|(own_key, (_, selected))| {
+                                own_key.give(document, &selected.node, registry, &variables)
+                            });
+                        (None, given)
+                    }
+                }
+            }
+            Err(refused) => (Some(unparsed(refused)), None),
         };
         request.variables = variables;
         request.operation_name = operation;
         if let Some(refusal) = refusal {
             return Err(refusal);
+        }
+        if let Some(given) = given {
+            request.set_parsed_query(given);
         }
         next.run(ctx, self.seeds.seed(request).data(FiledOnce::default()))
             .await
@@ -101,7 +126,7 @@ impl Extension for RequestExtension {
         let validated = next.run(ctx).await?;
         match ctx
             .data_opt::<OperationRefusal>()
-            .and_then(OperationRefusal::said)
+            .map(OperationRefusal::said)
         {
             Some(refusal) => Err(vec![refusal]),
             None => Ok(validated),

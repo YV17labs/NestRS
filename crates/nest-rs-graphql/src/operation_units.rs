@@ -40,7 +40,7 @@ use async_graphql_value::Value as Written;
 
 use crate::error::AnsweredError;
 use crate::loader::BatchSpan;
-use crate::null_propagation::{HiddenAnswers, MutationAnswer, RootAnswer};
+use crate::null_propagation::{MutationAnswer, RootAnswer};
 
 /// The schema `E`, each query and mutation it executes run as a unit of work
 /// of its own; a subscription's unit is its connection.
@@ -305,23 +305,16 @@ pub(crate) fn selected_operation<'d>(
     }
 }
 
-/// What an operation answers in place of running, said once validation passed
+/// What an operation answers in place of running, read off the document before
+/// the executor and said once validation passed
 /// ([`RequestExtension`](crate::request_extension)): a document validation
 /// refuses says what validation says of it.
-pub(crate) enum OperationRefusal {
-    /// Read off the document before the executor.
-    Read(ServerError),
-    /// Still to read, once validation bounded the walk it takes.
-    Unread(HiddenAnswers),
-}
+pub(crate) struct OperationRefusal(ServerError);
 
 impl OperationRefusal {
-    /// What it answers, when it answers anything.
-    pub(crate) fn said(&self) -> Option<ServerError> {
-        match self {
-            Self::Read(refusal) => Some(refusal.clone()),
-            Self::Unread(hidden) => hidden.refusal(),
-        }
+    /// What it answers.
+    pub(crate) fn said(&self) -> ServerError {
+        self.0.clone()
     }
 }
 
@@ -368,7 +361,7 @@ impl Selected {
         request.variables = variables;
         let (selected, refusal) = read.unwrap_or_default();
         if let Some(refusal) = refusal {
-            request.data.insert(OperationRefusal::Read(refusal));
+            request.data.insert(OperationRefusal(refusal));
         }
         selected
     }
@@ -909,7 +902,7 @@ mod tests {
             .data
             .get(&std::any::TypeId::of::<OperationRefusal>())
             .and_then(|held| held.downcast_ref::<OperationRefusal>())
-            .and_then(OperationRefusal::said)
+            .map(OperationRefusal::said)
     }
 
     /// What a request is refused before it runs, when it is.

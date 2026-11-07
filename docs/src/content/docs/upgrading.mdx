@@ -1400,12 +1400,13 @@ lists what the boot, a log or the wire shows when one is missed.
   null at "ids[1]".`), and the operation runs nothing: a nullable argument read the
   `null`, and a mutation ran its root fields. Declare the variable nullable, or send a
   value.
-- **A GraphQL document selecting an object twice at one place, a directive leaving one
-  selection nothing to answer**, `{ org { name @skip(if: true) } org { id } }`, reads an
-  `INVALID_ARGUMENT` refusal and runs nothing: `org` answered `null` whenever that
-  selection finished first. Put the directive on the selection itself,
-  `org @skip(if: true) { name }`. An object every selection of which a directive leaves
-  out answers `{}` at a Non-Null position, where it answered `null`.
+- **A GraphQL object with no key to answer reads `{}`**, where it read `null`:
+  `{ org { name @skip(if: true) } }`, or a type condition applying to nothing the value
+  is, `{ node { ... on Post { title } } }` over a `Comment`. An object selected twice at
+  one place, `{ org { name @skip(if: true) } org { id } }` or two copies one of whose
+  every field failed, reads what each copy selects, where whichever finished first hid
+  the other. A client reading that `null` as "no object" reads the value's `None`
+  alone now.
 - **A GraphQL document spreading its fragments again past `max_complexity`** reads `Query
   is too complex.` before anything walks it, a `__typename` at the end of them included,
   which was answered; so does one whose arguments copy or scan more than twice what the

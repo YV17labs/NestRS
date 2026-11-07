@@ -18,7 +18,7 @@ use futures_util::{Stream, TryStreamExt};
 use tokio::io::AsyncRead;
 use tokio_util::io::{ReaderStream, StreamReader};
 
-use crate::error::{HttpError, MultipartError, Result};
+use crate::error::{BodyError, HttpError, MultipartError, Result};
 use crate::request::{FromRequest, Request, RequestBody};
 
 /// A `multipart/form-data` body, read one part at a time as it arrives.
@@ -90,10 +90,53 @@ impl<'a> FromRequest<'a> for Multipart {
     }
 }
 
-/// What the parser refused, kept for the log and never answered: it may name
-/// what the client sent.
+/// What the parser refused, said by kind: its own sentence names the field, the
+/// header or the bytes the client sent. A body that could not be read is no
+/// refusal of the parser's, and each caller hands it on first ([`body_failed`]).
+fn by_kind(refused: multer::Error) -> MultipartError {
+    use multer::Error as Refused;
+    let said = match refused {
+        Refused::UnknownField { .. } => "a part the form does not take",
+        Refused::IncompleteFieldData { .. } => "a part's data ends before its boundary",
+        Refused::IncompleteHeaders => "a part's headers end before their blank line",
+        Refused::ReadHeaderFailed(_) => "a part's headers do not parse",
+        Refused::DecodeHeaderName { .. } => "a part's header name does not decode",
+        Refused::DecodeHeaderValue { .. } => "a part's header value does not decode",
+        Refused::IncompleteStream => "the body ends before its closing boundary",
+        Refused::FieldSizeExceeded { .. } => "a part is larger than its limit",
+        Refused::StreamSizeExceeded { .. } => "the body is larger than its limit",
+        Refused::NoBoundary => "its type names no boundary",
+        // multer raises it only from `parse_boundary`, over the request's own type.
+        Refused::DecodeContentType(_) => "its type does not parse",
+        _ => "its parts do not parse",
+    };
+    MultipartError::Malformed(said.into())
+}
+
+/// The body's own read failure, as the body failed: its stream yields
+/// `io::Error`s, which multer boxes.
+fn body_failed(cause: Box<dyn std::error::Error + Send + Sync>) -> io::Error {
+    cause
+        .downcast::<io::Error>()
+        .map_or_else(io::Error::other, |failed| *failed)
+}
+
+/// What the parser refused, as the extractor answers it: the body's own read
+/// failure as the edge answers one, any other said by kind.
 fn malformed(refused: multer::Error) -> HttpError {
-    MultipartError::Malformed(Box::new(refused)).into()
+    match refused {
+        multer::Error::StreamReadFailed(cause) => BodyError::Io(body_failed(cause)).into(),
+        refused => by_kind(refused).into(),
+    }
+}
+
+/// What the parser refused, as a part's stream fails with it: the body's own
+/// read failure as the body failed, any other said by kind.
+fn unreadable(refused: multer::Error) -> io::Error {
+    match refused {
+        multer::Error::StreamReadFailed(cause) => body_failed(cause),
+        refused => io::Error::new(io::ErrorKind::InvalidData, by_kind(refused)),
+    }
 }
 
 /// One part of a [`Multipart`] body: its name, its file name and media type
@@ -128,14 +171,24 @@ impl Field {
     /// `400`.
     pub async fn text(self) -> Result<String> {
         let bytes = self.bytes().await?;
-        String::from_utf8(bytes.into())
-            .map_err(|refused| MultipartError::Malformed(Box::new(refused)).into())
+        String::from_utf8(bytes.into()).map_err(|refused| {
+            let said = format!(
+                "a part's text is not UTF-8 past its byte {}",
+                refused.utf8_error().valid_up_to()
+            );
+            MultipartError::Malformed(said.into()).into()
+        })
     }
 
     /// The part's bytes as they arrive, for a sink that consumes a stream — an
     /// object store's streamed upload — rather than a buffered part.
+    ///
+    /// A part the parser refuses fails the stream with an
+    /// [`InvalidData`](io::ErrorKind::InvalidData) error saying it by kind, as
+    /// [`bytes`](Self::bytes) would; a body that cannot be read fails it with
+    /// the body's own error.
     pub fn into_byte_stream(self) -> PartStream {
-        let read = StreamReader::new(self.part.map_err(io::Error::other));
+        let read = StreamReader::new(self.part.map_err(unreadable));
         PartStream(ReaderStream::new(Box::pin(read)))
     }
 }
@@ -292,5 +345,171 @@ mod tests {
             .unwrap();
         assert!(body.contains("the multipart body is malformed"), "{body}");
         assert!(!body.contains("sk_live"), "{body}");
+    }
+
+    /// What the parser refused is kept for the operator's line by kind: no
+    /// reader of the failure — its line, a `{:?}`, a `main` — reads a name, a
+    /// header or a byte the client sent.
+    #[tokio::test]
+    async fn no_reader_of_a_refused_body_reads_what_the_client_sent() {
+        let mut form = parts(
+            "multipart/form-data; boundary=x",
+            "--x\r\ncontent-disposition: form-data; name=\"sk_live_51\"\r\n\r\nunterminated",
+        )
+        .await
+        .unwrap();
+        let unterminated = match form.next_field().await {
+            Ok(Some(field)) => field.bytes().await.unwrap_err(),
+            Ok(None) => panic!("a part was sent"),
+            Err(refused) => refused,
+        };
+        let printed = nest_rs_testing::printed(&unterminated);
+        assert!(!printed.contains("sk_live"), "{printed}");
+        assert!(
+            printed.contains("the multipart body is malformed"),
+            "{printed}"
+        );
+
+        let mut form = parts(
+            "multipart/form-data; boundary=x",
+            "--x\r\ncontent-disposition: form-data; name=\"sk_live_51\"\r\n\r\nunterminated",
+        )
+        .await
+        .unwrap();
+        let field = form.next_field().await.expect("parts").expect("one part");
+        let cut_short = first_failure(field.into_byte_stream()).await;
+        let printed = nest_rs_testing::printed(&cut_short);
+        assert!(!printed.contains("sk_live"), "{printed}");
+        assert!(
+            printed.contains(
+                "the multipart body is malformed: a part's data ends before its boundary"
+            ),
+            "{printed}"
+        );
+        assert_eq!(cut_short.kind(), io::ErrorKind::InvalidData);
+
+        let (request, mut body) = upload(b"sk_live_\xff");
+        let mut form = Multipart::from_request(&request, &mut body)
+            .await
+            .expect("a form");
+        let field = form.next_field().await.expect("parts").expect("one part");
+        let not_text = field.text().await.expect_err("no UTF-8");
+        assert_eq!(not_text.status(), StatusCode::BAD_REQUEST);
+        let printed = nest_rs_testing::printed(&not_text);
+        let bytes = format!("{:?}", &b"sk_live_"[..]);
+        let bytes = bytes.trim_start_matches('[').trim_end_matches(']');
+        assert!(!printed.contains(bytes), "{printed}");
+        assert!(
+            printed.contains("a part's text is not UTF-8 past its byte 8"),
+            "{printed}"
+        );
+    }
+
+    /// The first error `stream` yields, past whatever bytes it yields first.
+    async fn first_failure(mut stream: PartStream) -> io::Error {
+        while let Some(chunk) = stream.next().await {
+            if let Err(failed) = chunk {
+                return failed;
+            }
+        }
+        panic!("the stream ended without failing")
+    }
+
+    /// A form whose body arrives as the sender feeds it, so a test fails it
+    /// past what the parser has read.
+    async fn fed() -> (
+        tokio::sync::mpsc::UnboundedSender<IoResult<Bytes>>,
+        Multipart,
+    ) {
+        let (send, sent) = tokio::sync::mpsc::unbounded_channel::<IoResult<Bytes>>();
+        let sent = futures_util::stream::unfold(sent, |mut sent| async move {
+            sent.recv().await.map(|chunk| (chunk, sent))
+        });
+        let (request, mut body) = Request::builder()
+            .header(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("multipart/form-data; boundary=x"),
+            )
+            .body(crate::body::Body::from_stream(sent))
+            .split();
+        let form = Multipart::from_request(&request, &mut body)
+            .await
+            .expect("a form");
+        (send, form)
+    }
+
+    const PART_HEAD: &[u8] = b"--x\r\ncontent-disposition: form-data; name=\"file\"\r\n\r\nabc";
+
+    fn reset() -> io::Error {
+        io::Error::new(io::ErrorKind::ConnectionReset, "zzqx-peer reset")
+    }
+
+    #[tokio::test]
+    async fn a_part_streamed_from_a_body_that_fails_fails_as_the_body_did() {
+        let (send, mut form) = fed().await;
+        send.send(Ok(Bytes::from_static(PART_HEAD)))
+            .expect("the body is read");
+        let field = form.next_field().await.expect("parts").expect("one part");
+        send.send(Err(reset())).expect("the body is read");
+        let failed = first_failure(field.into_byte_stream()).await;
+        assert_eq!(failed.kind(), io::ErrorKind::ConnectionReset);
+        assert_eq!(nest_rs_core::error_message(&failed), "zzqx-peer reset");
+    }
+
+    /// The status and body `refused` answers.
+    async fn answered(refused: HttpError) -> (StatusCode, String) {
+        let response = refused.into_response();
+        let status = response.status();
+        let body = response.into_body().into_string().await.unwrap();
+        (status, body)
+    }
+
+    /// A body that fails under the extractor is the edge's own refusal of it,
+    /// in its words: the transport's sentence stays in the chain, never in the
+    /// detail.
+    #[tokio::test]
+    async fn a_body_that_fails_under_the_extractor_answers_as_the_edge_answers_one() {
+        let expected = answered(BodyError::Io(reset()).into()).await;
+        assert_eq!(expected.0, StatusCode::BAD_REQUEST);
+        assert!(!expected.1.contains("zzqx"), "{}", expected.1);
+
+        let (send, mut form) = fed().await;
+        send.send(Ok(Bytes::from_static(b"--x\r\ncontent-disposition: form-")))
+            .expect("the body is read");
+        send.send(Err(reset())).expect("the body is read");
+        let under_next_field = form.next_field().await.expect_err("the body failed");
+
+        let (send, mut form) = fed().await;
+        send.send(Ok(Bytes::from_static(PART_HEAD)))
+            .expect("the body is read");
+        let field = form.next_field().await.expect("parts").expect("one part");
+        send.send(Err(reset())).expect("the body is read");
+        let under_bytes = field.bytes().await.expect_err("the body failed");
+
+        for refused in [under_next_field, under_bytes] {
+            let Some(BodyError::Io(failed)) = refused.downcast_ref::<BodyError>() else {
+                panic!("not the edge's refusal: {refused:?}");
+            };
+            assert_eq!(failed.kind(), io::ErrorKind::ConnectionReset);
+            assert_eq!(answered(refused).await, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_type_that_does_not_parse_is_400_said_of_the_type_never_of_a_part() {
+        let refused = parts("multipart/form-data; boundary=\"x", FORM)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        let body = refused
+            .into_response()
+            .into_body()
+            .into_string()
+            .await
+            .unwrap();
+        assert!(
+            body.contains("the multipart body is malformed: its type does not parse"),
+            "{body}"
+        );
     }
 }

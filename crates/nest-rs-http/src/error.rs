@@ -870,10 +870,10 @@ pub(crate) enum MultipartError {
     #[error("{}", MediaType("`multipart/form-data`"))]
     MediaType,
     /// The body does not parse as parts, or a part's text is not UTF-8:
-    /// `400`. What the parser said is kept for the log, never answered: it
-    /// may name what the client sent.
-    #[error("the multipart body is malformed")]
-    Malformed(#[source] BoxError),
+    /// `400`, said by kind. The parser's own sentence is never kept: it names
+    /// the field, the header and the bytes the client sent.
+    #[error("the multipart body is malformed: {0}")]
+    Malformed(std::borrow::Cow<'static, str>),
 }
 
 impl ResponseError for MultipartError {

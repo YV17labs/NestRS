@@ -154,7 +154,10 @@ The document composes from the route table, so everything in it is derived:
   other a guard challenges with (a token endpoint's `basicAuth`), per-operation
   `security` naming it on a route whose guards can answer `401`, one requirement
   naming each scheme where a chain challenges two, since a chain runs every guard,
-  and `security: []` on a `#[public]` one no guard still challenges;
+  and `security: []` on a `#[public]` one no guard still challenges — a `#[public]`
+  route whose handler reads as an `Ambient<P>` the principal a guard of its chain
+  attaches, or whose later guard requires it, still challenges: its `401` answers a
+  caller that guard did not identify;
 - the success status — a `#[http_code]`'s or a `#[redirect]`'s, or the one the
   return type states — or
   [the `2XX` range](/openapi/operations/#a-status-the-handler-computes) where
@@ -208,10 +211,6 @@ What the composer does not derive, it leaves to you:
   pair or a built `Response` answering a `404`, or an `Err` of its own, is documented
   by [`#[api(error(404 = T))]`](/openapi/operations/#error-bodies-of-your-own), as
   any body of your own is.
-- **A `401` a `#[public]` route defers.** A `#[public]` route taking a required
-  `Ambient<P>` answers a rejected credential's `401`, and an anonymous caller the
-  wiring `500`, while its document says `security: []` and lists no `401`. A route
-  that needs its principal is not `#[public]`.
 - **`externalDocs`**, the document-level link to further reading.
 - **OpenAPI 3.2.** The document is 3.1.2, the 3.1 line's current patch. A 3.2
   document is valid with no other change, but the TypeScript client

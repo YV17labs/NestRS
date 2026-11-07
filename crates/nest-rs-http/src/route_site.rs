@@ -25,7 +25,7 @@ use crate::body_pipes::BodyPipes;
 use crate::deprecation::deprecated_route;
 use crate::endpoint::BoxEndpoint;
 use crate::error::{Result, RouteError};
-use crate::guard_stage::{HttpGuardStage, StageKind};
+use crate::guard_stage::{HttpGuardStage, NeededPrincipal, StageKind};
 use crate::location::caller_path;
 use crate::request::Request;
 use crate::response::Response;
@@ -103,6 +103,7 @@ fn hand_route_guard_stage(
             authorized: false,
             masked: false,
             stream: false,
+            ambient: Vec::new(),
         },
     )
 }
@@ -136,6 +137,10 @@ pub struct RouteGuards {
     pub masked: bool,
     /// The route answers `#[sse]`, an event stream no shaper reconciles.
     pub stream: bool,
+    /// What the handler's `Ambient<T>` parameters read, by type: on a
+    /// `#[public]` route, the principal a guard of the chain produces is one a
+    /// caller it admitted without it is refused for.
+    pub ambient: Vec<TypeId>,
 }
 
 /// The guard stage of the route `handler` declares: the app's pool, then the
@@ -181,23 +186,46 @@ pub fn route_guard_stage(
         validate_gate_reached(&label, &chain, || Ok(Vec::new())).map_err(anyhow::Error::msg)?;
     }
     log_effective_chain(&label, "guards", &chain);
-    stage(chain, declared.gates, declared.masked)
+    let needed = (handler.posture() == Posture::Public)
+        .then(|| needed_principal(&chain, &declared.ambient))
+        .flatten();
+    stage(chain, needed, declared.gates, declared.masked)
 }
 
-/// The stage running `chain` then `gates`, or `None` when both are empty.
+/// The first of the `ambient` types a handler reads that a guard of `chain`
+/// produces as its principal, and where that guard stands.
+fn needed_principal(
+    chain: &[ResolvedLayer<dyn Guard>],
+    ambient: &[TypeId],
+) -> Option<NeededPrincipal> {
+    ambient.iter().find_map(|principal| {
+        let guard = chain.iter().position(|entry| {
+            entry
+                .layer
+                .produced_principal()
+                .is_some_and(|produced| produced.type_id == *principal)
+        })?;
+        Some(NeededPrincipal {
+            principal: *principal,
+            guard,
+        })
+    })
+}
+
+/// The stage running `chain`, refusing a caller it admitted without the
+/// `needed` principal, then `gates`, or `None` when it runs nothing.
 fn stage(
     chain: Vec<ResolvedLayer<dyn Guard>>,
+    needed: Option<NeededPrincipal>,
     gates: Vec<GateFn>,
     masked: bool,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
     if chain.is_empty() && gates.is_empty() {
         return Ok(None);
     }
-    Ok(Some(Arc::new(HttpGuardStage::new(
-        chain,
-        gates,
-        StageKind::Route { unmasked: !masked },
-    )?)))
+    Ok(Some(Arc::new(
+        HttpGuardStage::new(chain, gates, StageKind::Route { unmasked: !masked })?.needing(needed),
+    )))
 }
 
 /// A route as a boot error and a chain's log line name it.

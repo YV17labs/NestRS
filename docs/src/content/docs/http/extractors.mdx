@@ -325,8 +325,13 @@ its protocol describes.
 The canonical use is the authenticated principal: `AuthnGuard` runs the
 strategy, then attaches a `Claims` (or whatever the resource server's
 principal is). Every authenticated handler reads it as `auth: Ambient<Claims>`.
-On a `#[public]` route reached with a credential the strategy rejected,
-`Ambient<Claims>` answers the `401` that credential earned rather than a `500`.
+On a `#[public]` route, a handler reading `Ambient<Claims>` needs the caller the
+guard identifies: one it did not is refused at the guard stage, before any other
+argument is read, with the `401` a rejected credential earned
+(`Bearer error="invalid_token"`) or, for a caller that sent none, the plain
+challenge, and the route's document lists that `401`. A handler that serves a
+visitor too reads the principal with `nest_rs::core::ambient::<Claims>()`, an
+`Option`.
 
 See [Guards](/fundamentals/guards/) for how to attach a value, and for
 the design rule (guards gate and attach; handlers read).

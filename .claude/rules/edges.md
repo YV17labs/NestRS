@@ -199,8 +199,9 @@ guard, filter or interceptor loop of its own.
    in which attaches it (a route's, or a unit's with the request carrying it,
    whose `produced_principal` says who does), so its absence is a caller admitted
    without one, the caller's `401` on every edge, and on a `#[public]` route the
-   `401` a credential it set aside earned, as an `Ambient` parameter answers (RFC
-   6750 §3). A guard deciding a visitor
+   `401` a credential it set aside earned (RFC 6750 §3) — and so does the route
+   whose handler reads that principal as an `Ambient`, refused at its guard stage,
+   and documented. A guard deciding a visitor
    itself says `PrincipalClaim::or_visitor`, its unattached claim a `warn`
    (`.claude/decisions/check-http-stays-on-guard.md`). **`check` has no default**, so no guard admits a unit it
    never decided — one whose decision is the request's alone admits the

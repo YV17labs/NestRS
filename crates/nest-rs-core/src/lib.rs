@@ -302,7 +302,7 @@ pub mod __private {
     pub use crate::trace_context::field;
     pub use crate::type_name::{short_type_name, shorten};
     pub use crate::unit_context::{
-        new_unit_context, pending_of, take_pending, withhold_from_reads,
+        carries, new_unit_context, pending_of, take_pending, withhold_from_reads,
     };
     pub use crate::way_down::{MainCrate, main};
 

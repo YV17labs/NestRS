@@ -85,6 +85,11 @@ pub fn ambient<T: AmbientValue>() -> Option<Arc<T>> {
     request_scope::current_request_ctx(|ctx| ctx.ambient.get::<T>()).flatten()
 }
 
+/// Whether the running unit carries an ambient value of the type `type_id` names.
+pub(crate) fn carries(type_id: TypeId) -> bool {
+    request_scope::current_request_ctx(|ctx| ctx.ambient.holds_type(type_id)).unwrap_or(false)
+}
+
 /// Whether the running unit carries an ambient value of any type.
 pub(crate) fn carries_ambient() -> bool {
     request_scope::current_request_ctx(|ctx| !ctx.ambient.is_empty()).unwrap_or(false)
@@ -213,6 +218,11 @@ impl Entries {
         self.inline[0].is_none()
     }
 
+    /// Whether a value of the type `id` names is held.
+    pub(crate) fn holds_type(&self, id: TypeId) -> bool {
+        self.iter().any(|held| held.id == id)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.iter().count()
     }
@@ -304,6 +314,11 @@ impl Pending {
     /// Whether nothing was recorded.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Whether a value of the type `id` names was recorded.
+    pub(crate) fn holds_type(&self, id: TypeId) -> bool {
+        self.0.holds_type(id)
     }
 
     /// Record everything `later` recorded, each replacing a value of its type

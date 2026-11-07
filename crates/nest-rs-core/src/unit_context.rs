@@ -1,7 +1,7 @@
 //! [`UnitContext`], what a layer knows about the unit it runs around, with the
 //! edge's [`UnitView`] of it and the [`Peer`] on its other end.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::fmt;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -230,6 +230,13 @@ pub fn take_pending(cx: &mut UnitContext<'_>) -> Pending {
 /// edge's stage records for work its unit runs off its task.
 pub fn pending_of<'c>(cx: &'c UnitContext<'_>) -> &'c Pending {
     &cx.pending
+}
+
+/// Whether the unit `cx` describes carries a value of the type `type_id` names,
+/// attached by its running stage or ambient: what an edge reads of a type a
+/// declaration named, with no `T` in hand.
+pub fn carries(cx: &UnitContext<'_>, type_id: TypeId) -> bool {
+    cx.pending.holds_type(type_id) || crate::ambient::carries(type_id)
 }
 
 /// Withhold from the reads of the unit `cx` describes what its guards attached

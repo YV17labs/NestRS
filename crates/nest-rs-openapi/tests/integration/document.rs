@@ -386,7 +386,7 @@ mod guards {
         Ambient, AmbientValue, ChallengeScheme, DenialDocument, Layer, UnitContext, injectable,
         module,
     };
-    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase};
+    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
     use nest_rs_http::{HttpView, Request, controller, routes};
     use nest_rs_testing::TestApp;
     use nest_rs_throttler::ThrottlerGuard as Limit;
@@ -512,6 +512,31 @@ mod guards {
 
     type Authn = AuthnGuard<Bearer>;
 
+    /// Decides on the principal an earlier guard attached, and requires it.
+    #[injectable]
+    #[derive(Default)]
+    struct OwnAccount;
+
+    impl Layer for OwnAccount {}
+
+    #[async_trait]
+    impl Guard for OwnAccount {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authorization
+        }
+
+        fn expected_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<Caller>())
+        }
+
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            cx.require::<Caller>()?;
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for OwnAccount {}
+
     #[controller(path = "/accounts")]
     #[use_guards(Authn)]
     struct AccountsController;
@@ -534,9 +559,16 @@ mod guards {
         async fn me(&self, _caller: Ambient<Caller>) -> &'static str {
             "{}"
         }
+
+        #[get("/own")]
+        #[public]
+        #[use_guards(OwnAccount)]
+        async fn own(&self) -> &'static str {
+            "{}"
+        }
     }
 
-    #[module(imports = [openapi()], providers = [Bearer, Authn, AccountsController])]
+    #[module(imports = [openapi()], providers = [Bearer, Authn, OwnAccount, AccountsController])]
     struct AccountsApp;
 
     /// Challenges `Basic` in its own words, as a token endpoint's client guard does.
@@ -706,6 +738,58 @@ mod guards {
         let public = responses(&doc, "/accounts/signup");
         assert_the_wait_is_declared(&public["503"]);
         assert!(public.get("401").is_none(), "{public}");
+    }
+
+    /// A `#[public]` route whose handler needs the principal its chain's guard
+    /// attaches admits no caller that guard did not identify: a rejected token
+    /// earns its `401`, a caller with none the caller's `401`, and the document
+    /// says both, with the scheme the route requires.
+    #[tokio::test]
+    async fn a_public_route_needing_its_principal_answers_and_documents_its_401() {
+        let app = TestApp::for_module::<AccountsApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        let me = responses(&doc, "/accounts/me");
+        assert_eq!(
+            me["401"]["headers"]["WWW-Authenticate"]["required"], true,
+            "{me}"
+        );
+        assert_eq!(
+            doc["paths"]["/accounts/me"]["get"]["security"],
+            serde_json::json!([{ "bearerAuth": [] }]),
+        );
+
+        let anonymous = app.http().get("/accounts/me").send().await;
+        anonymous.assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
+        anonymous.assert_header("www-authenticate", "Bearer");
+        let rejected = app
+            .http()
+            .get("/accounts/me")
+            .header("authorization", "Bearer forged")
+            .send()
+            .await;
+        rejected.assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
+        rejected.assert_header("www-authenticate", r#"Bearer error="invalid_token""#);
+    }
+
+    /// The same on a `#[public]` route whose later guard requires that principal:
+    /// the guard's absence is the caller's `401`, so the document says it.
+    #[tokio::test]
+    async fn a_public_route_whose_guard_requires_its_principal_documents_its_401() {
+        let app = TestApp::for_module::<AccountsApp>().await.expect("boots");
+        let doc = document(&app, "/api-json").await;
+
+        let own = responses(&doc, "/accounts/own");
+        assert_eq!(
+            own["401"]["headers"]["WWW-Authenticate"]["required"], true,
+            "{own}"
+        );
+
+        app.http()
+            .get("/accounts/own")
+            .send()
+            .await
+            .assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
     }
 }
 

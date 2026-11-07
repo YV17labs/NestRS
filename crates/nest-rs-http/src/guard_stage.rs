@@ -8,17 +8,19 @@
 //! of the unit; a self-mount's stage also keeps it on the request for work the
 //! mount runs off its task ([`attached_pending`]).
 
+use std::any::TypeId;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use http::{HeaderValue, StatusCode, header};
 use nest_rs_core::__private::{
-    GuardStage, Pending, ResolvedLayer, install_pending, new_unit_context, pending_of,
+    GuardStage, Pending, ResolvedLayer, carries, install_pending, new_unit_context, pending_of,
     take_pending, withhold_from_reads,
 };
 use nest_rs_core::{AmbientValue, DenialDocument, Failure, Handler, UnitContext};
 use nest_rs_guards::__private::{
-    RefusalMark, Refused, denial_code, denial_of, identifying_guard, required_principal_absent,
+    RefusalMark, Refused, anonymous_denial, denial_code, denial_of, identifying_guard,
+    required_principal_absent,
 };
 use nest_rs_guards::{Denial, Guard, RequiredScopes};
 
@@ -43,22 +45,40 @@ fn refused_by(
     denial: Denial,
     cx: &UnitContext<'_>,
 ) -> Refused {
-    let earned = required_principal_absent(&denial, guard).and_then(|principal| {
-        cx.switch_to::<HttpView>()?
-            .request()
-            .extensions()
-            .get::<RejectedCredential>()
-            .filter(|rejected| rejected.principal == principal)
-            .map(RejectedCredential::denial)
-    });
+    let earned = required_principal_absent(&denial, guard)
+        .and_then(|principal| earned_by_a_rejected_credential(cx, principal));
     Refused::by(name, guard, earned.unwrap_or(denial))
 }
 
+/// The `401` a credential a `#[public]` route set aside earned, on its way to a
+/// `principal` the request now lacks.
+fn earned_by_a_rejected_credential(cx: &UnitContext<'_>, principal: TypeId) -> Option<Denial> {
+    cx.switch_to::<HttpView>()?
+        .request()
+        .extensions()
+        .get::<RejectedCredential>()
+        .filter(|rejected| rejected.principal == principal)
+        .map(RejectedCredential::denial)
+}
+
+/// A principal the handler of a `#[public]` route reads as an `Ambient`, which a
+/// guard of its chain produces: absent once the guards passed, that guard
+/// admitted the caller without one, and the caller's `401` is the route's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NeededPrincipal {
+    /// The principal's type.
+    pub(crate) principal: TypeId,
+    /// Where the guard producing it stands in the chain.
+    pub(crate) guard: usize,
+}
+
 /// Run each of `guards`' [`check_http`](Guard::check_http), in order, on the
-/// unit `cx` describes, then each of the site's class `gates` on the same unit.
-/// The first refusal stops the stage.
+/// unit `cx` describes, then refuse a caller they admitted without the
+/// `needed` principal, then run each of the site's class `gates` on the same
+/// unit. The first refusal stops the stage.
 async fn run_guards(
     guards: &[ResolvedLayer<dyn Guard>],
+    needed: Option<NeededPrincipal>,
     gates: &[GateFn],
     cx: &mut UnitContext<'_>,
 ) -> Result<(), Refused> {
@@ -75,6 +95,14 @@ async fn run_guards(
             drop(view.take_response());
         }
     }
+    if let Some(needed) = needed
+        && !carries(cx, needed.principal)
+        && let Some(entry) = guards.get(needed.guard)
+    {
+        let denial =
+            earned_by_a_rejected_credential(cx, needed.principal).unwrap_or_else(anonymous_denial);
+        return Err(Refused::by(entry.name, entry.layer.as_ref(), denial));
+    }
     for gate in gates {
         gate(cx).map_err(|refused| Refused::Filed(denial_of(&refused)))?;
     }
@@ -85,6 +113,7 @@ async fn run_guards(
 /// pipeline runs a site's guard stage.
 pub(crate) struct HttpGuardStage {
     guards: Vec<ResolvedLayer<dyn Guard>>,
+    needed: Option<NeededPrincipal>,
     gates: Vec<GateFn>,
     kind: StageKind,
 }
@@ -145,9 +174,40 @@ impl HttpGuardStage {
         refuse_a_declared_non_error(&guards)?;
         Ok(Self {
             guards,
+            needed: None,
             gates,
             kind,
         })
+    }
+
+    /// The guard producing a principal the unit cannot run without — the one its
+    /// handler reads, or one a later guard requires — whose absence on a
+    /// `#[public]` route is the caller's `401`.
+    fn producing_a_needed_principal(&self) -> Option<&ResolvedLayer<dyn Guard>> {
+        let required = self
+            .guards
+            .iter()
+            .filter_map(|entry| entry.layer.expected_principal())
+            .filter(|claim| !claim.or_visitor)
+            .map(|claim| claim.type_id);
+        self.needed
+            .map(|needed| needed.principal)
+            .into_iter()
+            .chain(required)
+            .find_map(|principal| {
+                self.guards.iter().find(|entry| {
+                    entry
+                        .layer
+                        .produced_principal()
+                        .is_some_and(|produced| produced.type_id == principal)
+                })
+            })
+    }
+
+    /// The stage refusing, once its guards passed, a caller they admitted
+    /// without the `needed` principal.
+    pub(crate) fn needing(self, needed: Option<NeededPrincipal>) -> Self {
+        Self { needed, ..self }
     }
 
     /// What the stage records once its guards passed.
@@ -179,7 +239,7 @@ impl HttpGuardStage {
 impl GuardStage for HttpGuardStage {
     fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
         Box::pin(async move {
-            match run_guards(&self.guards, &self.gates, cx).await {
+            match run_guards(&self.guards, self.needed, &self.gates, cx).await {
                 Ok(()) => {
                     self.passed(cx);
                     Ok(())
@@ -206,6 +266,12 @@ impl GuardStage for HttpGuardStage {
                 statuses.iter().map(move |status| (*status, document))
             })
             .collect();
+        if public
+            && let Some(entry) = self.producing_a_needed_principal()
+            && !denials.iter().any(|(status, _)| *status == 401)
+        {
+            denials.push((401, entry.layer.denial_document()));
+        }
         if !self.gates.is_empty() {
             denials.push((403, DenialDocument::PROBLEM));
             if !public && !denials.iter().any(|(status, _)| *status == 401) {

@@ -134,3 +134,30 @@ Each seen on a request, against `38bdfce04`'s document:
   answers `400`, one past the 64 KiB buffer `431`, with no problem document and no layer's header,
   run over a socket. OpenAPI's responses are "the expected responses of an operation", and no
   operation received these, so none lists them; `openapi/index.mdx` says so.
+
+## 2026-11-07 — a `#[public]` route needing its principal says its `401`, and answers it to every caller its guard did not identify
+
+The limit named above, run on a `#[public]` route taking `Ambient<Caller>` behind `AuthnGuard`:
+its document listed `200 500 503` and `security: []`, a rejected token answered `401`, and a caller
+with none the wiring `500`, its `error` line saying the guard never ran. A later guard requiring the
+principal on a `#[public]` route answered its `401` with the same document. Correctness decided:
+
+- **`#[routes]` reads each `Ambient<T>` parameter's `T` off its spelling**, as it reads `Piped`, and
+  the route's guard stage finds the guard of its chain producing it as its principal. On a
+  `#[public]` route the stage refuses, once its guards passed, a caller that guard admitted without
+  it: the `401` a rejected credential earned, else the caller's own, the plain challenge. It is
+  the rule a later guard's `expected_principal` follows already, by cause, filed as that guard's
+  denial, ahead of every argument a handler reads.
+- **The document lists that `401`**, with the producing guard's scheme, whichever of the two needs
+  the principal, so the route's `security` names the scheme where it said `[]`.
+- **An `Ambient<T>` no guard of the chain produces as its principal defers nothing**: a context a
+  guard attaches stays the wiring `500` when absent.
+
+Refused: **refusing the shape at boot.** A guard attaching a visitor principal for every caller
+makes `#[public]` beside a required `Ambient<P>` a route that serves everyone; the boot cannot tell
+that guard from `AuthnGuard`. **Recording an anonymous caller on every `#[public]` request** so the
+extractor answers it: an allocation on every public request behind an authentication guard, the
+probes' included, for the routes that need it alone.
+
+Left: an `Ambient` behind a type alias is not read off its spelling; such a route keeps the old
+answers, the earned `401` and the anonymous `500`.

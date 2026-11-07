@@ -1383,7 +1383,7 @@ fn site_ident(ctrl_name: &syn::Ident, method_name: &syn::Ident) -> syn::Ident {
 fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident) -> EmittedRoute {
     let RouteHandler {
         method,
-        param_types: _,
+        param_types,
         deprecation_header,
         versions: _,
         cfgs,
@@ -1423,6 +1423,10 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         None => quote! {},
     };
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
+    // Read off its spelling, as `Piped` is: what each `Ambient<T>` reads.
+    let ambient = param_types
+        .iter()
+        .filter_map(|ty| nth_generic_type(ty, "Ambient", 0));
     let method_interceptor_specs = interceptor_specs(interceptors);
     let method_exception_filter_specs = exception_filter_specs(method_exception_filters);
     let force_guard_typeids = force_guard_typeids(force_guards);
@@ -1465,6 +1469,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
                     authorized: #authorized,
                     masked: ::core::option::Option::is_some(&#shaper_selection),
                     stream: #is_sse,
+                    ambient: ::std::vec![#(::std::any::TypeId::of::<#ambient>()),*],
                 },
             )
         }

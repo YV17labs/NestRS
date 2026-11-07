@@ -482,6 +482,16 @@
             },
             "description": "Forbidden"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -622,6 +632,16 @@
             },
             "description": "Forbidden"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -748,6 +768,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "429": {
             "content": {
@@ -1004,6 +1034,16 @@
             },
             "description": "Forbidden"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -1236,6 +1276,16 @@
             },
             "description": "OK"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -1293,6 +1343,16 @@
             },
             "description": "OK"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -1349,6 +1409,16 @@
               }
             },
             "description": "OK"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "500": {
             "content": {
@@ -1485,6 +1555,16 @@
             },
             "description": "Forbidden"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -1600,6 +1680,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "500": {
             "content": {
@@ -1734,6 +1824,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "500": {
             "content": {
@@ -2006,6 +2106,16 @@
             },
             "description": "Conflict"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -2119,6 +2229,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "500": {
             "content": {
@@ -2418,6 +2538,16 @@
             },
             "description": "Forbidden"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -2690,6 +2820,16 @@
             },
             "description": "Conflict"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -2803,6 +2943,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "500": {
             "content": {
@@ -3085,6 +3235,16 @@
             },
             "description": "Not Found"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -3218,6 +3378,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "500": {
             "content": {
@@ -3491,6 +3661,16 @@
             },
             "description": "Conflict"
           },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
           "500": {
             "content": {
               "application/problem+json": {
@@ -3605,6 +3785,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "500": {
             "content": {

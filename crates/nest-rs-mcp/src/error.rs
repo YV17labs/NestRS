@@ -753,8 +753,33 @@ pub(crate) enum SessionsError {
     Store(#[source] SessionStoreError),
     /// rmcp's local session manager refused.
     #[error("the session manager failed")]
-    Local(#[from] LocalSessionManagerError),
+    Local(#[source] ManagerRefused),
 }
+
+impl From<LocalSessionManagerError> for SessionsError {
+    fn from(refused: LocalSessionManagerError) -> Self {
+        Self::Local(ManagerRefused(refused))
+    }
+}
+
+/// rmcp's manager refusal as every reader of the chain reads it, by
+/// [`say_session`]'s kind: its own `Display` and `Debug` name the session a
+/// client named.
+pub(crate) struct ManagerRefused(LocalSessionManagerError);
+
+impl std::fmt::Display for ManagerRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&nest_rs_core::error_message(&self.0))
+    }
+}
+
+impl std::fmt::Debug for ManagerRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&nest_rs_core::error_message(&self.0), f)
+    }
+}
+
+impl std::error::Error for ManagerRefused {}
 
 nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say_session) }
 
@@ -1146,8 +1171,8 @@ mod tests {
     }
 
     /// rmcp writes the error into the `500` it answers, and its own sentence
-    /// names the session a client named: the reply says neither, the chain
-    /// the kind alone.
+    /// names the session a client named: the reply says neither, and every
+    /// reader of the chain — a `{:?}`, a report — the kind alone.
     #[test]
     fn a_session_manager_error_is_said_by_its_kind_never_the_session() {
         let named = SessionsError::from(LocalSessionManagerError::SessionNotFound(
@@ -1158,6 +1183,8 @@ mod tests {
             nest_rs_core::error_message(&named),
             "the session manager failed: session not found"
         );
+        let printed = nest_rs_testing::printed(&named);
+        assert!(!printed.contains("named-by-a-client"), "{printed}");
 
         let io = SessionsError::from(LocalSessionManagerError::SessionError(SessionError::Io(
             std::io::Error::new(std::io::ErrorKind::BrokenPipe, "sk_live_quoted"),
@@ -1166,6 +1193,8 @@ mod tests {
             nest_rs_core::error_message(&io),
             "the session manager failed: session I/O failed: broken pipe"
         );
+        let printed = nest_rs_testing::printed(&io);
+        assert!(!printed.contains("sk_live"), "{printed}");
     }
 
     /// What a domain answers when the ledger refuses; it says no problem.

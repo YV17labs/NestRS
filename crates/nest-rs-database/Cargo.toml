@@ -15,7 +15,6 @@ categories = ["database"]
 # The ambient executor and its scope are one value of the kernel's ambient
 # context, which carries them across every continuation by their own rule.
 nest-rs-core.workspace = true
-thiserror.workspace = true
 # `UnitSpec::deadline` is tokio's `Instant`, the clock every edge's deadline is
 # read on.
 tokio.workspace = true
@@ -29,6 +28,9 @@ futures-util.workspace = true
 # `test-util` pauses time, so a deadline and a settle that outlives it are read
 # off one clock.
 tokio = { workspace = true, features = ["test-util"] }
+# `printed`: a database's error kept as a source is held to what every reader
+# prints of it.
+nest-rs-testing = { path = "../nest-rs-testing" }
 
 [lints]
 workspace = true

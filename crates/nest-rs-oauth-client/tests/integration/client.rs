@@ -534,11 +534,12 @@ async fn a_refused_connection_names_the_endpoint_and_the_cause() {
         !sentence.contains("for url"),
         "reqwest's own URL is taken out: {sentence}"
     );
-    let cause = std::error::Error::source(&error)
-        .and_then(std::error::Error::source)
-        .and_then(|cause| cause.downcast_ref::<reqwest::Error>())
-        .expect("reqwest's error is the cause beneath the detail");
-    assert!(cause.is_connect() && cause.url().is_none(), "{cause:?}");
+    let printed = nest_rs_testing::printed(&error);
+    assert!(
+        !printed.contains("for url") && !printed.contains("Url {"),
+        "no reader of the failure reads reqwest's URL: {printed}"
+    );
+    assert!(!printed.contains(ACCESS_TOKEN), "{printed}");
 }
 
 #[tokio::test]

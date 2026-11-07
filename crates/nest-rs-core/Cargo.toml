@@ -57,6 +57,9 @@ parking_lot.workspace = true
 uuid.workspace = true
 # `Secret`'s `==`: constant-time over the bytes.
 constant_time_eq.workspace = true
+# `SaidFailure` is a `#[repr(transparent)]` view of a driver's error a holder
+# keeps, which a borrow alone can reach; `unsafe_code` is denied.
+ref-cast.workspace = true
 sea-orm = { workspace = true, optional = true }
 
 [dev-dependencies]

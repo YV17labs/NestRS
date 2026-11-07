@@ -113,8 +113,9 @@ anything else is opaque — and
 `ServiceError`, `#[crud]` and the product read it rather than matching the
 driver's error again. The server's message quotes the input it refused, so a
 driver says its errors through a `SafeLink`, by code and schema names, and
-`ServiceError` keeps the `DbErr` for a `match` while its `Debug` and `source()` say
-what the `SafeLink` does; held by the unit tests beside each. **A `#[crud]`
+`ServiceError`, `AtomicError` and `OutboxError` keep the `DbErr` for a `match` while
+their `Debug` and `source()` say what the `SafeLink` does; held by the unit tests
+beside each. **A `#[crud]`
 create or update a unique key
 refuses names the input's fields the key holds** under `errors`
 (`{"email": [{"code": "unique"}]}`), never the value: the binding reads the

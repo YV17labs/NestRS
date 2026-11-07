@@ -283,7 +283,9 @@ failed"` or `"authentication unavailable"` — and keeps the detail, then the
 cause's chain, as its `source()`. The line the edge files for the guard's
 refusal carries that whole chain as its `error`, through
 `nest_rs::core::error_message`, a decode failure in it said without its
-value, so you never `format!` an error into the detail:
+value — and so does every other reader, a `{:?}` or a `main` returning it,
+which reads the cause as that one sentence — so you never `format!` an error
+into the detail:
 
 ```text
 authentication unavailable: the credential store is unreachable: <the driver's error>

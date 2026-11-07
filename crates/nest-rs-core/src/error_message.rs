@@ -153,6 +153,62 @@ where
 /// the crate's `__private`.
 pub(crate) mod __private {
     use std::error::Error;
+    use std::fmt;
+
+    use ref_cast::RefCast;
+
+    /// A failure as every reader of a chain reads it: its `Display` and its
+    /// `Debug` are what [`error_message`](fn@crate::error_message) says of it,
+    /// and it hands out nothing below.
+    ///
+    /// What a holder hands out as its `source()` where it keeps a driver's error,
+    /// or a cause, for its own `match`: a `{:?}`, an `anyhow` report and a `main`
+    /// print each link's own `Display` and `Debug`, past every
+    /// [`SafeLink`](crate::SafeLink), and a driver's quote the input it refused.
+    /// A view of the field, so the holder keeps the type it was given.
+    #[derive(RefCast)]
+    #[repr(transparent)]
+    pub struct SaidFailure<E>(E);
+
+    impl<E: HeldError> SaidFailure<E> {
+        /// `failure`, read as `error_message` says it.
+        pub fn of(failure: &E) -> &Self {
+            Self::ref_cast(failure)
+        }
+    }
+
+    impl<E: HeldError> fmt::Display for SaidFailure<E> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(&crate::error_message(self.0.held()))
+        }
+    }
+
+    impl<E: HeldError> fmt::Debug for SaidFailure<E> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt::Debug::fmt(&crate::error_message(self.0.held()), f)
+        }
+    }
+
+    impl<E: HeldError + 'static> Error for SaidFailure<E> {}
+
+    /// An error held behind a pointer that does not name its type: what a
+    /// [`SaidFailure`] views.
+    pub trait HeldError {
+        /// The error held.
+        fn held(&self) -> &(dyn Error + 'static);
+    }
+
+    impl HeldError for Box<dyn Error + Send + Sync> {
+        fn held(&self) -> &(dyn Error + 'static) {
+            &**self
+        }
+    }
+
+    impl HeldError for std::sync::Arc<dyn Error + Send + Sync> {
+        fn held(&self) -> &(dyn Error + 'static) {
+            &**self
+        }
+    }
 
     /// The first `T` in `error`'s chain, `error` itself first, down to an
     /// opaque failure's cause: how an edge finds the framework vocabulary a

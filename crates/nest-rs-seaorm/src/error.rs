@@ -1887,6 +1887,38 @@ pub(crate) mod tests {
         );
     }
 
+    /// A refused `COMMIT` or outbox write keeps its `DbErr` for the driver's
+    /// `match`, and every reader of the port's error reads it by its SQLSTATE,
+    /// never the server's message nor its detail, which quote the row.
+    #[test]
+    fn no_reader_of_a_port_failure_prints_the_row_its_database_refused() {
+        fn read_by_all(err: impl Error + Send + Sync + 'static, sentence: &str) {
+            assert_eq!(error_message(&err), sentence);
+            let printed = nest_rs_testing::printed(&err);
+            assert!(!printed.contains("ada@example.com"), "{printed}");
+            let report = format!("{:?}", anyhow::Error::new(err));
+            assert!(!report.contains("ada@example.com"), "{report}");
+            assert!(report.contains("database error 23505"), "{report}");
+        }
+        read_by_all(
+            AtomicError::Database(Box::new(taken_email())),
+            "the atomic block could not be settled: Execution Error: database error 23505 on \
+             constraint \"users_email_key\", table \"users\"",
+        );
+        read_by_all(
+            nest_rs_database::OutboxError::Database(Box::new(taken_email())),
+            "the outbox store's database failed: Execution Error: database error 23505 on \
+             constraint \"users_email_key\", table \"users\"",
+        );
+        read_by_all(
+            nest_rs_queue::QueueError::Outbox(nest_rs_database::OutboxError::Database(Box::new(
+                taken_email(),
+            ))),
+            "the unit's outbox refused the job's record: the outbox store's database failed: \
+             Execution Error: database error 23505 on constraint \"users_email_key\", table \"users\"",
+        );
+    }
+
     /// `#[error(transparent)]` hands out the error's own `source()`, skipping the
     /// error itself: what an operator's line says of the failure is that link's.
     #[test]

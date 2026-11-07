@@ -525,7 +525,7 @@ mod tests {
         assert!(err.source().and_then(Error::source).is_none());
     }
 
-    /// The cause sits beneath the detail, read through `source`, and the line
+    /// The cause sits beneath the detail, said through `source`, and the line
     /// is the whole chain; the body stays the constant.
     #[tokio::test]
     async fn a_failed_authentication_keeps_its_cause_and_files_the_chain_at_warn() {
@@ -535,7 +535,8 @@ mod tests {
             .source()
             .and_then(Error::source)
             .expect("the cause beneath the detail");
-        assert!(cause.downcast_ref::<std::io::Error>().is_some());
+        assert_eq!(cause.to_string(), "the store hung up");
+        assert!(cause.source().is_none(), "said whole, nothing beneath");
         assert_eq!(err.to_string(), "authentication failed");
 
         let resp = err.into_response();
@@ -681,5 +682,26 @@ mod tests {
         let said = nest_rs_core::error_message(err.as_ref());
         assert!(said.contains("expected u64"), "{said}");
         assert!(!said.contains("sk_live"), "{said}");
+    }
+
+    /// A `{:?}`, an `anyhow` report and a `main` returning the failure read its
+    /// cause as the line does: what the cause quoted reaches none of them.
+    #[test]
+    fn no_reader_of_an_opaque_failure_prints_what_its_cause_quotes() {
+        let failure =
+            || serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
+        fn read_by_all(err: impl Error + Send + Sync + 'static) {
+            let said = nest_rs_core::error_message(&err);
+            assert!(said.contains("expected u64"), "{said}");
+            let printed = nest_rs_testing::printed(&err);
+            assert!(!printed.contains("sk_live"), "{printed}");
+            let report = format!("{:?}", anyhow::Error::new(err));
+            assert!(!report.contains("sk_live"), "{report}");
+            assert!(report.contains("expected u64"), "{report}");
+        }
+        let detail = "the provider answered a body that does not parse";
+        read_by_all(AuthError::failed_because(detail, failure()));
+        read_by_all(AuthError::unavailable_because(detail, None, failure()));
+        read_by_all(SignError::because(detail, failure()));
     }
 }

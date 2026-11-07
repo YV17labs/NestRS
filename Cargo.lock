@@ -2780,6 +2780,7 @@ dependencies = [
  "nestrs-hooks-probe",
  "parking_lot 0.13.0",
  "pin-project-lite",
+ "ref-cast",
  "schemars",
  "sea-orm",
  "serde",
@@ -2809,7 +2810,7 @@ version = "7.0.0"
 dependencies = [
  "futures-util",
  "nest-rs-core",
- "thiserror 2.0.21",
+ "nest-rs-testing",
  "tokio",
  "uuid",
 ]

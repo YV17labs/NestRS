@@ -154,8 +154,10 @@ field or the enclosing span carries, and no two layers emit the same event.
 error through its `SafeLink`; no sentence formats a raw `ValidationErrors`, a
 serde error, a driver's error or a configured string. Held by review: no lint
 reads a `Display`. `SafeLink` is one reader of a chain, and a `{:?}` or a `main`
-returning the error another, past it: a test holds a failure carrying a marked value
-to `nest_rs_testing::printed`, every reader at once.
+returning the error another, past it: a holder keeping a driver's error or a cause
+for its own `match` hands it out as a `SaidFailure`, which reads as `error_message`
+does, and what a caller handed is said by kind, never kept. A test holds a failure
+carrying a marked value to `nest_rs_testing::printed`, every reader at once.
 
 **An edge's lines carry the server's values only**: what a client addressed
 reaches them as the server's own name for it — the route template, a method
@@ -187,9 +189,9 @@ a cause flattened into the detail with `format!`. The `error` field is
 the cause's chain reach the line together, a decode failure or a driver's
 error in it said without its value;
 the variant displays the edge's constant, and the cause sits beneath an
-`OpaqueCause` link, where an edge's search for what to answer stops;
-`ServiceError` hands every reader that link's sentence in its place, and
-`AuthError` the link. Held by each type's unit tests.
+`OpaqueCause` link, where an edge's search for what to answer stops, and which
+hands every reader the cause as `error_message` says it. Held by each type's unit
+tests.
 
 Three deviations from OpenTelemetry's log data model, each deliberate:
 

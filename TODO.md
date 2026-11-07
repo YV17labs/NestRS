@@ -223,6 +223,11 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 - DPoP and mTLS-bound tokens are refused, not verified. *seen*
 
 **Data, queue, storage, health**
+- A bare `DbErr` an app holds from `Repo` prints the server's message and
+  `detail`, the row it refused, through sea-orm's own `Debug` and `Display`;
+  every framework error holding one says it by its SQLSTATE, and `?` into a
+  `ServiceError` never meets it. Close: `Repo` answering an error of the
+  framework's, a break of every service's `?`. *seen*
 - A storage key with every policy removed answers `AccessDenied`, which reads
   like least privilege. *read*
 - No jitter above a requested `Retry-After`, and no Redis run sees a job held
@@ -266,9 +271,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 - Copies left: the "line written once" guard eight times, the site emitter
   five times, spec vectors six times; `impl Layer for X {}` beside
   `#[derive(Layer)]` in about 260 fixtures.
-- Other errors keep a raw serde, validator or driver link that a `{:?}` would
-  print (`QueueError::Serialize` and the like). Close: the sweep `ServiceError`
-  had, crate by crate, each held by `printed`.
 - Per-request trace and span ids are minted from `Uuid` with no `fast-rng`;
   cost never measured.
 
@@ -294,7 +296,9 @@ holding: real-clock budgets where only real time tells two outcomes apart;
 unlisted same-origin request; a hand-written `HttpRoutes` route validating
 nothing unasked; dataloaders off the operation's transaction; no layer on a
 hand-written MCP `ServerHandler`; `CrudService` noticed at its first query;
-a visitor's nested read answering nothing.
+a visitor's nested read answering nothing; a carrier of its author's own error
+(`HttpError`, `JobError`, `QueueError::Backend`) handing it out as given, its
+chain searched for what an edge answers.
 
 ## 7. Upstream
 

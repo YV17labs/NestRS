@@ -392,3 +392,52 @@ variant already is.
 **The limit, unchanged:** `AuthError`'s `OpaqueCause`, `AtomicError::Database`'s boxed
 `DbErr`, a bare `DbErr` an app holds from `Repo` and `QueueError::Serialize` are as that
 entry reads them, the second pass's.
+
+## 2026-11-07 — every holder of a cause or a driver's error hands it out said
+
+The limit of the two entries above, and what else a walk of every error type found,
+each seen with a marked value in hand: `AuthError`'s and `SignError`'s `OpaqueCause`
+printed the cause as it was given, a `{:?}` writing `Error("invalid type: string
+\"…\"")` beneath `authentication failed`; `AtomicError::Database` and
+`OutboxError::Database` the `DbErr` they box, its server message and its detail
+quoting the row; `QueueError`'s `InvalidJobId`, `InvalidQueueName` and
+`UniqueKeyHeld` the text a caller handed the port, **in `error_message` itself**, so
+in every line filing the chain, and `unique job cancelled` the key in a field;
+`MultipartError::Malformed` multer's sentence, `field "…" received with incomplete
+data`, through `error_message` too, and a part's bytes through `FromUtf8Error`'s
+`Debug`; the MCP mount's `SessionsError::Local` the session a client named.
+
+- **A holder keeping a driver's error or a cause hands out a
+  `nest_rs_core::__private::SaidFailure`**, a `#[repr(transparent)]` view of the
+  field whose `Display` and `Debug` are what `error_message` says of it, and which
+  hands out nothing below: `OpaqueCause` (so every `AuthError`, `SignError` and the
+  JWK Set's failure), `AtomicError`, `OutboxError`. Its `Debug` is that sentence too.
+  The field keeps its type, so a driver's `match` and downcast of its own error read
+  it as before; nothing beneath an `OpaqueCause` was ever searched
+  (`find_in_chain` stops there), and nothing beneath the port's two was.
+- **What a caller handed the port is said by kind, never kept**: a job id by what it
+  is (`it is no UUID`, `it is a UUID of another version`), a queue name by the part
+  of the rule it breaks, as a unique key already was; a held key's refusal names the
+  job holding it, the caller holding the key. `QueueError::Serialize` holds a
+  `DecodeError`, what every edge reports a serde failure as.
+- **A refusal a parser words is said by kind where it is met**: multipart by
+  multer's variant, read off the locked 3.1, an unknown one as `its parts do not
+  parse`, in the extractor's `400` and in the `InvalidData` error a part's stream
+  fails with, which a sink such as `Storage::put_stream` hands back as its source
+  (the body's own read failure is no refusal of the parser's: the extractor
+  answers it as the edge's `BodyError::Io`, and it fails that stream as the body
+  failed); rmcp's manager refusal by its `SafeLink`'s kind to every reader.
+- **Refused: a view for every carrier.** `HttpError`, `JobError`, `QueueError::Backend`,
+  `ThrottlerStoreError`, `OccurrenceLockError`, `TokenError::Server` and a factory's
+  failure hold the error a developer or a backend handed them and hand it out as it
+  is: an edge searches that chain for a `Problem`, an `Unhonoured` or a decode
+  failure it answers, which a view would hide, and what is in it is its author's own
+  error, printed by its own `Debug`. The framework puts nothing raw there: what it
+  builds into one is said already (a decode failure, a driver's error through a
+  holder above).
+
+**The limit, stated:** a bare `DbErr` an app holds from `Repo` prints the server's
+message and detail through sea-orm's own `Debug`, the one error type left that a
+framework call hands out raw. Closing it takes `Repo` answering an error of the
+framework's, a break of every service's `?`; `ServiceError::from` already says it,
+and the everyday `?` into a `ServiceError` never meets it.

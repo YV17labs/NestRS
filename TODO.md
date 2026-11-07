@@ -187,7 +187,22 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   framework's own parse of the type, as `essence` reads its name. *seen*
 
 **GraphQL**
-- A `Context` read by hand in a body is not checked at boot. *read*
+- A mutation naming one root field twice at its root, `mutation { a: write
+  a: write }`, which GraphQL §6.3.2 runs once, is refused before anything
+  runs, since async-graphql 7.2.1 runs each copy's writes. Close: merge the
+  copies of one name, arguments and directives into the first before
+  validation, as `own_key.rs` hands a set its key, through fragments, held
+  by a test that one write ran. *seen*
+- A type condition on a union applies only where that union is resolved:
+  `{ shape { ... on Either { ... on Shape { fine } } } }`, `Shape` a member
+  of `Either`, answers `{"shape": {}}` where GraphQL §6.3.2 answers `fine`,
+  since async-graphql 7.2.1's `Fields::add_set` applies a condition naming
+  the concrete type, an interface it implements or the type resolved there.
+  Close: the upstream fix (§7), or, in the pass that gives an object its key,
+  each such condition rewritten per member of the union the position may
+  take, what cannot apply to that member pruned so validation still passes;
+  the canary `null_propagation::a_condition_on_a_union_applies_only_where_that_union_is_resolved`
+  turns red when it closes. *seen*
 
 **WebSocket and MCP**
 - A frame over `max_message_bytes`, closed `1009`, runs no layer and files no
@@ -288,7 +303,15 @@ nothing unasked; dataloaders off the operation's transaction; no layer on a
 hand-written MCP `ServerHandler`; `CrudService` noticed at its first query;
 a visitor's nested read answering nothing; a carrier of its author's own error
 (`HttpError`, `JobError`, `QueueError::Backend`) handing it out as given, its
-chain searched for what an edge answers.
+chain searched for what an edge answers; a GraphQL body reading its
+`Context` by hand, which no boot can see, failing per request with the type
+on the operator's line (the declared `&DataLoader<L>`, `Ambient<T>` and
+`Scoped<T>` are checked at boot); what a GraphQL list's rows copy, bounded
+per row by `max_list_argument_bytes` and never by how many rows the list
+answers, which only its resolver knows once it ran, so a page of 100,000
+rows each copying 4 KiB still holds 400 MB and a list under a list multiplies
+by both row counts (the field's `complexity` and page bound it; closing it
+takes async-graphql sharing an argument's value across the rows, §7).
 
 ## 7. Upstream
 
@@ -300,7 +323,8 @@ is documented); async-graphql 7.2.1 (an errored field omitted from `data`;
 an interface field's error with no `path`; a field selected twice runs its
 writes twice; an argument copied at each row of a list, `Context::var_value`
 and `get_param_value` cloning, which the framework bounds meanwhile with
-`max_list_argument_bytes`); redis-rs (`PipelineSink` loses a
+`max_list_argument_bytes`; a type condition on a union applied only where
+that union is resolved, `Fields::add_set`); redis-rs (`PipelineSink` loses a
 read error with nothing in flight); sse-stream 0.2.6 (keep-alive on std's
 clock).
 

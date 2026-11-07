@@ -135,3 +135,21 @@ duplicate the boot refuses. The boot knows the registrant, so it says that.
 
 **Refused:** naming the instance in `RedisConnection<Cache>`'s remedy stays refused,
 as above: it takes a probe at the inject site.
+
+## 2026-11-07 — a `Context` a body reads by hand stays the body's, by reason
+
+`TODO.md` listed it as read: *a `Context` read by hand in a body is not checked at
+boot*. Reproduced: `loader::…::a_type_a_context_does_not_hold_answers_opaquely_and_tells_the_operator`
+boots an app whose `#[query]` reads `ctx.data::<DataLoader<CellarBottles>>()?` with the
+owner unreached, and every request selecting it answers the opaque internal error, the
+type filed at `error`. The boot cannot know the read: the body is code, and a read in it
+may go through a helper, a trait method, a generic `T` or a variable holding the
+`Context`, none of which a decorator's tokens name. A scan for `.data::<T>()` would
+check the spelling it recognised and pass every other one, a guarantee it does not give.
+
+**Kept, as a limit:** what a body reads off its `Context` by hand is its own, failing
+per request, opaquely, the type on the operator's line. Every read the framework offers
+is declared and checked at boot instead: a `&DataLoader<L>` parameter (its owner
+reached), `Ambient<T>` (a guard attaching it), `Scoped<T>` (its provider inside the
+access contract). The docs teach only those. **Refused:** a token scan of bodies, for
+the reason above.

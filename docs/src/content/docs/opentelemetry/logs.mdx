@@ -326,7 +326,10 @@ server's own answered in your own words names no status, so spell it with a `5xx
 [`Problem`](/http/errors/). An exception filter's own reply on a WebSocket changes
 what the client reads, never who failed: a catch-all's frame leaves the server's
 failure recorded, and a caller's failure it acknowledges recording nothing. A
-problem a filter answers names a status, which decides. The line and the span both read
+failure an interceptor raised in place of the handler's is the one the filter
+answered, so its class is read: a `409` swapped for an error of the server's
+records, the reverse does not. A problem a filter answers names a status, which
+decides. The line and the span both read
 what the unit decided, so a unit whose work rolls back never says `ok`. A
 request dropped before it answered is still named `{method} {route}` for the
 route the router had matched, so a backend groups it with the answered ones.

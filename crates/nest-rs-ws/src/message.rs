@@ -275,12 +275,16 @@ pub(crate) async fn unserved(
 
 /// The answer `outcome` comes to: the reply the view holds, or, for a failure
 /// nobody answered, the edge's one rule. Who failed is read off what the edge
-/// rendered, else off what it would have, never off a reply a layer wrote, which
-/// answers for nobody. What the answer withholds is filed here, once, as it goes
-/// out.
+/// rendered for the failure that reached the end, else off what it would have —
+/// a failure a layer raised in place of the one rendered says it for itself —
+/// never off a reply a layer wrote, which answers for nobody. What the answer
+/// withholds is filed here, once, as it goes out.
 fn rendered(view: WsView, outcome: Outcome, event: &str) -> Answered {
     let failed = outcome.is_err();
-    let rendered_class = view.server_failed();
+    let rendered_class = match &outcome {
+        Err(failure) => view.server_failed(failure),
+        Ok(_) => None,
+    };
     let (reply, withheld, server_failed) = match (outcome, view.into_answer()) {
         (Ok(_), (Some(reply), withheld)) => (reply, withheld, false),
         (Ok(_), (None, _)) => {
@@ -361,7 +365,8 @@ impl<G: Gateway> Tail for MessageTail<'_, G> {
                 Ok(reply) => Ok(view.respond(reply)),
                 Err(failed) => {
                     let (rendered, failure) = failed.into_parts();
-                    Err(failure.answered(view.answer_failed(rendered)))
+                    let settled = view.answer_failed(rendered, &failure);
+                    Err(failure.answered(settled))
                 }
             }
         }
@@ -369,7 +374,9 @@ impl<G: Gateway> Tail for MessageTail<'_, G> {
 
     fn answer_failure(&mut self, cx: &mut UnitContext<'_>, failure: &Failure) -> Option<Settled> {
         let rendered = failure_rendered(failure);
-        WsView::of(cx).ok().map(|view| view.answer_failed(rendered))
+        WsView::of(cx)
+            .ok()
+            .map(|view| view.answer_failed(rendered, failure))
     }
 }
 
@@ -389,7 +396,9 @@ impl Tail for UnservedTail<'_> {
 
     fn answer_failure(&mut self, cx: &mut UnitContext<'_>, failure: &Failure) -> Option<Settled> {
         let rendered = failure_rendered(failure);
-        WsView::of(cx).ok().map(|view| view.answer_failed(rendered))
+        WsView::of(cx)
+            .ok()
+            .map(|view| view.answer_failed(rendered, failure))
     }
 }
 

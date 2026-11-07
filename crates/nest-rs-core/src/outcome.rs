@@ -142,6 +142,8 @@ impl<E: Error + Send + Sync + 'static> From<E> for Failure {
 /// `outcome` is private: its tier-2 items live here, reached only through the
 /// crate's `__private`.
 pub(crate) mod __private {
+    use std::sync::Arc;
+
     use super::{Answer, Failure, Settled};
     use crate::problem::Problem;
 
@@ -158,6 +160,19 @@ pub(crate) mod __private {
             Answer::Problem(problem) => Some(problem),
             Answer::Unanswered | Answer::Answered => None,
         }
+    }
+
+    /// A second handle on `failure`, sharing its error: what an edge keeps of
+    /// the failure it rendered, to tell it later from one a layer put in its
+    /// place. Held, it keeps the error alive, so no later failure takes its
+    /// address.
+    pub fn kept(failure: &Failure) -> Failure {
+        failure.shared()
+    }
+
+    /// Whether `a` and `b` carry one error, however each was answered since.
+    pub fn is_same_failure(a: &Failure, b: &Failure) -> bool {
+        Arc::ptr_eq(&a.error, &b.error)
     }
 }
 
@@ -217,6 +232,19 @@ mod tests {
             Some(code::CONFLICT)
         );
         assert!(caught_problem(&Failure::from(LedgerRefused)).is_none());
+    }
+
+    /// A failure kept is the same failure, answered or not, and one a layer
+    /// raised in its place is another, the same error type and text included.
+    #[test]
+    fn a_kept_failure_tells_itself_from_one_raised_in_its_place() {
+        use super::__private::{is_same_failure, kept};
+
+        let failure = Failure::from(LedgerRefused);
+        let held = kept(&failure);
+        let answered = failure.answered(settled());
+        assert!(is_same_failure(&held, &answered));
+        assert!(!is_same_failure(&held, &Failure::from(LedgerRefused)));
     }
 
     #[test]

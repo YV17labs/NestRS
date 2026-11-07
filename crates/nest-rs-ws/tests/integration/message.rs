@@ -1597,3 +1597,95 @@ async fn a_filters_problem_decides_who_failed_by_its_status() {
         Some(nest_rs_core::operation_log::ERROR),
     );
 }
+
+/// Answers the message's failure with one of the server's own in its place.
+#[injectable]
+#[derive(Default)]
+struct SwapsForDisk;
+
+impl Layer for SwapsForDisk {}
+
+#[async_trait]
+impl Interceptor for SwapsForDisk {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        match next.run(cx).await {
+            Ok(settled) => Ok(settled),
+            Err(_) => Err(std::io::Error::other("the disk is gone").into()),
+        }
+    }
+}
+
+/// Answers the message's failure with one its client earned in its place.
+#[injectable]
+#[derive(Default)]
+struct SwapsForConflict;
+
+impl Layer for SwapsForConflict {}
+
+#[async_trait]
+impl Interceptor for SwapsForConflict {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        match next.run(cx).await {
+            Ok(settled) => Ok(settled),
+            Err(_) => Err(Problem::new(409, code::CONFLICT).into()),
+        }
+    }
+}
+
+#[gateway(path = "/swapped")]
+struct SwappedGateway;
+
+#[messages]
+impl SwappedGateway {
+    #[subscribe_message("conflict_swapped_for_disk")]
+    #[use_interceptors(SwapsForDisk)]
+    #[public]
+    async fn conflict_swapped_for_disk(&self) -> Result<String, Problem> {
+        Err(Problem::new(409, code::CONFLICT))
+    }
+
+    #[subscribe_message("disk_swapped_for_conflict")]
+    #[use_interceptors(SwapsForConflict)]
+    #[public]
+    async fn disk_swapped_for_conflict(&self) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("the disk is gone"))
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [
+        GlobalExceptionFilters<(PlainReply,)>,
+        SwapsForDisk,
+        SwapsForConflict,
+        SwappedGateway,
+    ],
+)]
+struct SwappedModule;
+
+/// An interceptor swapping the failure the edge rendered for another, answered
+/// by a filter's own reply: who failed is the swapped failure's, the one the
+/// filter answered, never the one it replaced.
+#[tokio::test]
+async fn a_failure_an_interceptor_swaps_says_who_failed_by_the_one_a_filter_answered() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<SwappedModule>()
+        .build_ws()
+        .await
+        .expect("an app-wide exception filter boots");
+    let mut socket = app.socket("/swapped").connect().await;
+    for event in ["conflict_swapped_for_disk", "disk_swapped_for_conflict"] {
+        socket.send(event, serde_json::Value::Null).await;
+        let frame = socket.next_envelope().await;
+        assert_eq!(frame["data"]["failed"], true, "the filter's reply: {frame}");
+    }
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    assert_span_records(
+        &logs,
+        "conflict_swapped_for_disk",
+        Some(nest_rs_core::operation_log::ERROR),
+    );
+    assert_span_records(&logs, "disk_swapped_for_conflict", None);
+}

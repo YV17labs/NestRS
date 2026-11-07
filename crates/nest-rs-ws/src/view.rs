@@ -1,6 +1,6 @@
 //! [`WsView`], the WebSocket edge's view of the message it dispatches.
 
-use nest_rs_core::__private::Withheld;
+use nest_rs_core::__private::{Withheld, is_same_failure, kept};
 use nest_rs_core::{Failure, ServedAddress, Settled, UnitContext, UnitView};
 
 use crate::envelope::{Rendered, WsReply};
@@ -40,10 +40,11 @@ pub struct WsView {
     /// What the reply withholds, filed for the operator once it goes out: set
     /// where the edge rendered a failure, dropped by a layer's own reply.
     withheld: Option<Withheld>,
-    /// Whether the failure the edge rendered is the server's own, `None` until it
-    /// rendered one: a layer's own reply changes what the client reads, never who
-    /// failed.
-    server_failed: Option<bool>,
+    /// The failure the edge rendered, and whether it is the server's own,
+    /// `None` until it rendered one: a layer's own reply changes what the
+    /// client reads, never who failed, and a failure a layer raised in its
+    /// place says it for itself.
+    rendered: Option<(Failure, bool)>,
 }
 
 impl UnitView for WsView {
@@ -61,7 +62,7 @@ impl WsView {
             data: Some(data),
             reply: None,
             withheld: None,
-            server_failed: None,
+            rendered: None,
         }
     }
 
@@ -112,20 +113,23 @@ impl WsView {
         nest_rs_core::__private::settled()
     }
 
-    /// Answer the message with the error frame `rendered` holds, what it
-    /// withholds kept for the moment the answer is final.
-    pub(crate) fn answer_failed(&mut self, rendered: Rendered) -> Settled {
+    /// Answer the message with the error frame `rendered` holds for `failure`,
+    /// what it withholds kept for the moment the answer is final.
+    pub(crate) fn answer_failed(&mut self, rendered: Rendered, failure: &Failure) -> Settled {
         let Rendered { frame, withheld } = rendered;
-        self.server_failed = Some(frame.server_failed);
+        self.rendered = Some((kept(failure), frame.server_failed));
         let settled = self.respond(WsReply::Error(frame));
         self.withheld = withheld;
         settled
     }
 
-    /// Whether the failure the edge rendered is the server's own; `None` until it
-    /// rendered one.
-    pub(crate) fn server_failed(&self) -> Option<bool> {
-        self.server_failed
+    /// Whether `failure` is the server's own, when it is the failure the edge
+    /// rendered; `None` for one it never rendered.
+    pub(crate) fn server_failed(&self, failure: &Failure) -> Option<bool> {
+        self.rendered
+            .as_ref()
+            .filter(|(rendered, _)| is_same_failure(rendered, failure))
+            .map(|(_, server_failed)| *server_failed)
     }
 
     /// The answer, and what it withholds, filed once it goes out.

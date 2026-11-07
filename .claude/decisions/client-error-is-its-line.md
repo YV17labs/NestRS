@@ -103,3 +103,18 @@ about the caller's own failure.
 - **Refused**: naming the code on the span, which no convention for either edge asks,
   and `otel.status_message`, an added field carrying a developer's sentence to an
   exporter, which is the no-payload rule's own decision and additive.
+
+## 2026-11-07 — the class the view keeps is the rendered failure's, by identity
+
+The view kept the class of the failure the edge rendered, whatever failure reached
+the end: an interceptor swapping that failure for another, which a filter then
+answered through `WsView::respond`, left the first one's class on the span — a
+client's `409` swapped for a disk error recorded nothing, a server failure swapped
+for a `409` recorded `Error`. Seen by a test, both ways. The view now keeps a
+handle on the failure it rendered (`nest_rs_core::__private::kept`, which shares
+its error, so no later failure takes its address) and reads its class only for that
+same failure (`is_same_failure`); a failure a layer raised in its place reads what
+the edge would have answered it, as one the edge never rendered always did. One
+handle per failed message, an `Arc` clone. **Refused: comparing the error's
+address alone**, which a failure dropped by the swap could hand to the next one
+allocated.

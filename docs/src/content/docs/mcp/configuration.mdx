@@ -50,6 +50,13 @@ McpModule::for_root((
 | `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` | `1024` | Live sessions one endpoint holds; from `1` to `1048576` |
 | `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS` | `300` | How long a session may stay idle before it is closed; whole seconds from `1` to `3600`, never off |
 
+The keep-alive is a comment no client answers: it keeps an idle stream through a
+proxy, but nothing on an MCP stream tells the server its client is gone. A
+client that vanished without a close is noticed when a write to it fails, once
+the kernel nearest it gives up retransmitting — about fifteen minutes on Linux —
+or, for a session nothing reaches, at its idle timeout. A WebSocket, which has a
+frame a client answers, is pinged instead ([WebSockets](/websockets/#what-bounds-a-socket)).
+
 ## The operation timeout
 
 The HTTP request timeout bounds a response's head, and most MCP operations

@@ -215,6 +215,16 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   turns red when it closes. *seen*
 
 **WebSocket and MCP**
+- An MCP event stream carries no frame its client answers, so a peer gone
+  without a close is noticed only when the kernel nearest it gives up
+  retransmitting the 15-second keep-alive (Linux: about 15 minutes), or at
+  `SESSION_IDLE_TIMEOUT_SECS` for an idle session; an `#[sse]` stream likewise.
+  The WebSocket gateway and the graphql-ws socket ping instead (the decision on
+  socket pings). Close, for a legacy session: MCP's own `ping` request, sent by
+  rmcp's peer once the session is quiet for an interval, the session ended when
+  none is answered; a stateless `subscriptions/listen` has no channel for one.
+  `TCP_USER_TIMEOUT` is no answer: behind a proxy the server's hop is the live
+  proxy. *read*
 - A WebSocket mask's `authorization denied` and `response masking failed` name
   `event` without the gateway's `path`: the reply is masked inside the
   handler's call, which holds no view. Close: the path through the masked

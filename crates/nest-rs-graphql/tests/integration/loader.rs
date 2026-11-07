@@ -756,6 +756,7 @@ mod root_parameter {
         imports = [
             GraphqlModule::for_root(GraphqlConfig {
                 federation: true,
+                federation_sdl: nest_rs_config::Surface::Open,
                 ..GraphqlConfig::default()
             }),
             AlmanacModule,
@@ -905,6 +906,7 @@ mod root_parameter {
         #[module(
             imports = [GraphqlModule::for_root(GraphqlConfig {
                 federation: true,
+                federation_sdl: nest_rs_config::Surface::Open,
                 ..GraphqlConfig::default()
             })],
             providers = [EntityReader],

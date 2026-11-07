@@ -265,12 +265,26 @@ pub struct GraphqlConfig {
     /// this is `false` **fails the boot**.
     ///
     /// Default `false`: **`_service` cannot be switched off** —
-    /// `introspection` does not cover it — so a subgraph whose guards identify
-    /// no one publishes its SDL to anyone who can reach it, and belongs behind a
-    /// router.
+    /// `introspection` does not cover it — so a subgraph needs a guard identifying
+    /// its router, or [`federation_sdl`](Self::federation_sdl) opened, to boot.
     ///
     /// Read from `<PREFIX>_GRAPHQL__FEDERATION`.
     pub federation: bool,
+    /// Whether a subgraph whose guards identify no caller boots, serving the SDL
+    /// `_service` answers to whoever reaches the endpoint: the one opening for a
+    /// subgraph only its router reaches, on a private network.
+    ///
+    /// `Default` is [`Surface::Closed`]: a subgraph boots only when a guard its
+    /// `/graphql` request runs identifies or authorizes the caller
+    /// ([`GuardPhase::Authentication`](nest_rs_guards::GuardPhase) or
+    /// `Authorization`, in the app's `GlobalGuards` or an
+    /// `EndpointGuards<GraphqlView, …>`), which then refuses an anonymous caller
+    /// the SDL. [`Surface::Open`], or `true` from
+    /// `<PREFIX>_GRAPHQL__FEDERATION_SDL`, boots it with none, said at `warn`
+    /// outside a development or test profile; [`Surface::ByProfile`] under one of
+    /// those alone. Where a guard identifies the caller it decides, whatever this
+    /// says.
+    pub federation_sdl: Surface,
     /// Maximum number of entity references one `_entities` call may carry —
     /// a count neither `max_depth`, `max_complexity` nor `max_batch_size` sees,
     /// though each reference is a full resolution run concurrently. Over the
@@ -308,6 +322,7 @@ impl Default for GraphqlConfig {
             connection_init_timeout: Duration::from_secs(DEFAULT_CONNECTION_INIT_TIMEOUT_SECS),
             max_socket_operations: Some(DEFAULT_MAX_SOCKET_OPERATIONS),
             federation: false,
+            federation_sdl: Surface::Closed,
             max_representations: Some(DEFAULT_MAX_REPRESENTATIONS),
             strict_resolver_membership: false,
         }
@@ -395,6 +410,23 @@ mod tests {
              can switch off — so being one is opted into, and an `#[entity]` \
              declared without it fails the boot rather than inheriting it",
         );
+        assert_eq!(
+            d.federation_sdl,
+            Surface::Closed,
+            "a subgraph serves its SDL to a caller no guard identified only where a line says so",
+        );
+    }
+
+    #[test]
+    fn the_subgraph_sdl_is_opened_from_the_environment() {
+        for (set, surface) in [("true", Surface::Open), ("false", Surface::Closed)] {
+            let cfg = GraphqlConfig::from_env(
+                &ConfigService::with_vars("graphql", [("FEDERATION_SDL", set)]),
+                GraphqlConfig::default(),
+            )
+            .expect("a boolean");
+            assert_eq!(cfg.federation_sdl, surface, "{set}");
+        }
     }
 
     /// `profile` declared on the process for `read`, `""` declaring none.

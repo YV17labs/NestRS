@@ -222,6 +222,7 @@ impl GadgetResolver {
         emit: Surface::Open,
         emit_path: snapshot_path("subgraph"),
         federation: true,
+        federation_sdl: nest_rs_config::Surface::Open,
         ..GraphqlConfig::default()
     }),
 ])]

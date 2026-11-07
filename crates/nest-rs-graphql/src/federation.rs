@@ -119,6 +119,50 @@ fn entities_guard_stage(
     Ok(FieldGuardStage::of(chain, DENIED_FEDERATION_FIELD))
 }
 
+/// What the boot says when a subgraph whose guards identify no caller serves its
+/// SDL in a deployment.
+const SDL_OPEN: &str =
+    "GraphQL subgraph SDL is served to callers no guard identified outside a dev profile";
+
+/// Refuse a subgraph `_service` would answer to whoever reaches it: no guard its
+/// `/graphql` request runs identifies or authorizes the caller, and the configuration
+/// does not open its SDL. An opening taking effect in a deployment is said at `warn`.
+pub(crate) fn check_sdl_exposure(
+    container: &Container,
+    config: &GraphqlConfig,
+) -> anyhow::Result<()> {
+    const SITE: &str = "POST /graphql (_service)";
+    if !config.federation {
+        return Ok(());
+    }
+    let pool = resolve_global_chain(container, SITE);
+    let carried = carried_request_chain::<GraphqlView>(container, SITE)?;
+    if pool.iter().chain(&carried).any(identifies) {
+        return Ok(());
+    }
+    if config.federation_sdl.is_open() {
+        if let Some(environment) = config.federation_sdl.opened_in_deployment() {
+            tracing::warn!(
+                target: crate::TARGET,
+                environment = environment.as_str(),
+                "{SDL_OPEN}",
+            );
+        }
+        return Ok(());
+    }
+    let opening = GraphqlConfig::FEDERATION_SDL;
+    let (field, var) = (opening.path(), opening.var(GraphqlConfig::NAMESPACE));
+    anyhow::bail!(
+        "this schema serves as a subgraph, and no guard its `/graphql` request runs \
+         identifies a caller, so `_service` would answer its whole SDL to whoever reaches \
+         the endpoint. List a guard identifying the router — an authentication or \
+         authorization guard in the app's `GlobalGuards`, or in an \
+         `EndpointGuards<GraphqlView, …>` — or, for a subgraph only its router reaches on a \
+         private network, open it: `{field}: Surface::Open` (`{var}=true`), or \
+         `Surface::ByProfile` under a development or test profile alone."
+    )
+}
+
 /// Compose both federation sites against `container`, so a layer they fold
 /// that does not resolve refuses the boot.
 pub(crate) fn compose_sites(container: &Container) -> anyhow::Result<()> {

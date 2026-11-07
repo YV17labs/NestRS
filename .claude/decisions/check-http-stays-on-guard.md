@@ -220,3 +220,9 @@ here the handler declares it cannot run without the principal, so its absence is
 whatever the guard decided, and the ambient context reads by `TypeId` since the route's fix.
 
 Left: an `Ambient` behind a type alias is not read off its spelling, on any edge.
+
+## 2026-11-07 — a subgraph whose guards identify no one refuses the boot
+
+What the 2026-11-05 entry left is closed: "`federation: true` is the line that opens it" put the opening on the line that turns federation on, so no line said the SDL was public. Seen: a subgraph under a rate limit alone booted and answered `_service` to a caller with no credential. The boot now reads `_service`'s stage, the pool and the request's `EndpointGuards`, and refuses a subgraph none of whose guards identifies or authorizes a caller (`identifies`), naming the guard to add and the one opening, `GraphqlConfig::federation_sdl`, a `Surface`, the vocabulary the configuration already reads for what a deployment opens to anyone: `Closed` by default, `Open` (`<PREFIX>_GRAPHQL__FEDERATION_SDL=true`) for a subgraph only its router reaches, said at `warn` outside a development or test profile, `ByProfile` for a router run beside it in development alone. Where a guard identifies the caller it decides whatever the key says. `_entities` needs nothing new: each `#[entity]` states its posture, and an `#[authorize]` one with no ability guard already refuses the boot. Decided on Security; the developer's cost is one line, read at the first boot, in development as in production.
+
+**Refused: `ByProfile` by default**, the shape introspection takes. Introspection is a development tool; an anonymous SDL is a deployment's posture, and a subgraph met first in production would refuse there rather than at its developer's first run. **Refused: a variant of `federation`** (`Federation::Subgraph` and an open one): it would move the variable's `true` to a word, and the opening stays a separate, greppable line.

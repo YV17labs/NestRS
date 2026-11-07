@@ -524,7 +524,10 @@ app's filters and interceptors around it. `_entities`' guard stage is the app-wi
 since the field belongs to no resolver and each `#[entity]` states its posture;
 `_service`'s adds what else its request ran that identifies or authorizes a caller,
 since no member's posture stands behind its answer, so such a guard reading the request
-decides in `check_http`, its `check` failing closed on a unit holding none. An
+decides in `check_http`, its `check` failing closed on a unit holding none, and a
+subgraph whose request runs no such guard refuses the boot unless
+`GraphqlConfig::federation_sdl` opens its SDL to anyone, a `Surface` closed by default
+(`.claude/decisions/check-http-stays-on-guard.md`). An
 `#[entity]` body therefore composes everything but the pool, and a
 `#[field_resolver]` too, naming where the pool ran (the root field that produced
 its parent) — never once per parent row; its resolver's own `#[use_guards]` still

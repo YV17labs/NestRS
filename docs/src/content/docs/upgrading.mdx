@@ -1413,6 +1413,12 @@ lists what the boot, a log or the wire shows when one is missed.
   socket, a key repeated with thousands of arguments among them. `max_complexity: None`
   leaves a fragment's repeats at ten million. Spread less, or raise the limit, which also
   holds a score under one that its repeats pass.
+- **A GraphQL subgraph whose guards identify no caller**, `federation: true` under a rate
+  limit alone or no guard at all, fails the boot, where it served its SDL through `_service`
+  to anyone. List a guard identifying the router, an authentication or authorization guard in
+  `GlobalGuards` or an `EndpointGuards<GraphqlView, …>`, or, for a subgraph only its router
+  reaches on a private network, open it: `federation_sdl: Surface::Open`
+  (`<PREFIX>_GRAPHQL__FEDERATION_SDL=true`).
 - **A GraphQL document whose fields below a list read more than 4 KiB of arguments**,
   which each row reads again, `query($v: String) { rows { f(x: $v) } }` with a large
   `$v`, reads `Query is too complex.` and runs nothing, where every row copied the value.

@@ -59,6 +59,9 @@ pub struct GraphqlConfig {
     pub max_socket_operations: Option<usize>,
     /// Serve as an Apollo subgraph. Default `false`.
     pub federation: bool,
+    /// Boot a subgraph whose guards identify no caller, its SDL served to anyone.
+    /// `Closed` in `Default`: such a subgraph fails the boot.
+    pub federation_sdl: Surface,
     /// Bound on a federation `_entities` request. Default `100`; `None`
     /// unlimited.
     pub max_representations: Option<usize>,
@@ -85,6 +88,7 @@ pub struct GraphqlConfig {
 | `max_representations` | `<PREFIX>_GRAPHQL__MAX_REPRESENTATIONS` | `100` | Bound on the `representations` a federation `_entities` call may ask for in one request, from `1` to `100000`. `None` disables it, as `0` does from the environment; a pinned `Some(0)` fails the boot. |
 | `strict_resolver_membership` | `<PREFIX>_GRAPHQL__STRICT_RESOLVER_MEMBERSHIP` | `false` | When `true`, a resolver no imported module owns fails the boot instead of warning. |
 | `federation` | `<PREFIX>_GRAPHQL__FEDERATION` | `false` | Serve as an Apollo subgraph: declares the federation directives and exports the subgraph SDL form. An `#[entity]` declared while this is `false` fails the boot. See [Federation](/graphql/federation/). |
+| `federation_sdl` | `<PREFIX>_GRAPHQL__FEDERATION_SDL` | `Surface::Closed` | Whether a subgraph whose guards identify no caller boots, serving `_service`'s SDL to whoever reaches it: closed, it fails the boot naming the guard to add; `Surface::Open`, or `true` from the environment, is the opening for a subgraph only its router reaches, said at `warn` outside a development or test profile; `Surface::ByProfile` opens it under one of those alone. See [Federation](/graphql/federation/#turning-it-on). |
 
 <Aside type="caution">
 **The playground and introspection are the API's documentation**, public to

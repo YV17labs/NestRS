@@ -61,3 +61,5 @@ development surface and serves it in no deployment. `GraphqlConfig::defaults()`,
 named above, went with the hook. Each key still reads a boolean, and a deployment
 opening a surface is still honoured and said at `warn`: what this decision settled
 for production has not moved.
+
+**2026-11-07 — `_service` is no longer served to anyone by default.** A subgraph whose guards identify no caller refuses the boot unless `GraphqlConfig::federation_sdl` opens it (`check-http-stays-on-guard.md`, the entry of that date), so "stays behind a router" is now the boot's to hold, not the reader's.

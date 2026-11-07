@@ -97,6 +97,7 @@ impl SprocketsResolver {
 
 #[module(imports = [GraphqlModule::for_root(GraphqlConfig {
     federation: true,
+    federation_sdl: nest_rs_config::Surface::Open,
     introspection: nest_rs_config::Surface::Open,
     ..GraphqlConfig::default()
 })], providers = [WidgetsResolver, SprocketsResolver])]
@@ -507,6 +508,103 @@ impl CountedResolver {
 
 #[module(imports = [subgraph()], providers = [CountedResolver, Counting])]
 struct CountedModule;
+
+#[module(imports = [GraphqlModule::for_root(GraphqlConfig {
+    federation: true,
+    ..GraphqlConfig::default()
+})], providers = [WidgetsResolver])]
+struct UnguardedSubgraphModule;
+
+#[module(
+    imports = [GraphqlModule::for_root(GraphqlConfig {
+        federation: true,
+        ..GraphqlConfig::default()
+    })],
+    providers = [WidgetsResolver, Closed, GlobalGuards<(Closed,)>],
+)]
+struct UnidentifyingSubgraphModule;
+
+/// `_service` answers the whole SDL, and no posture stands behind it: a subgraph
+/// whose guards identify no caller would serve it to whoever reaches `/graphql`, so
+/// it refuses the boot naming the guard to add and the one opening.
+#[tokio::test]
+async fn a_subgraph_whose_guards_identify_no_caller_refuses_the_boot() {
+    for refused in [
+        TestApp::for_module::<UnguardedSubgraphModule>().await.err(),
+        TestApp::for_module::<UnidentifyingSubgraphModule>()
+            .await
+            .err(),
+    ] {
+        let message = format!("{:#}", refused.expect("an SDL open to anyone is refused"));
+        for named in [
+            "_service",
+            "federation_sdl: Surface::Open",
+            &nest_rs_config::var_name("graphql", "FEDERATION_SDL"),
+            "GlobalGuards",
+            "EndpointGuards",
+        ] {
+            assert!(message.contains(named), "names {named}: {message}");
+        }
+    }
+}
+
+#[module(imports = [GraphqlModule::for_root(GraphqlConfig {
+    federation: true,
+    federation_sdl: nest_rs_config::Surface::ByProfile,
+    ..GraphqlConfig::default()
+})], providers = [WidgetsResolver])]
+struct DevelopmentSubgraphModule;
+
+/// The SDL opened in the configuration, a subgraph only its router reaches boots,
+/// and serves it to a caller nothing identified; `ByProfile` opens it under a
+/// development or test profile alone, and an opening taking effect in a deployment
+/// is said at `warn`.
+#[test]
+fn an_opened_sdl_boots_a_subgraph_whose_guards_identify_no_caller() {
+    for (profile, boots) in [("development", true), ("test", true), ("production", false)] {
+        let booted = in_profile(profile, || async {
+            TestApp::for_module::<DevelopmentSubgraphModule>()
+                .await
+                .is_ok()
+        });
+        assert_eq!(booted, boots, "{profile}");
+    }
+    let logs = nest_rs_testing::LogCapture::install();
+    let sdl = in_profile("production", || async {
+        let app = TestApp::for_module::<FederatedModule>()
+            .await
+            .expect("an SDL opened in code boots in a deployment");
+        service_sdl(&app).await
+    });
+    assert!(sdl.contains("@key"), "{sdl}");
+    let said = logs.expect_one(
+        "nest_rs::graphql",
+        "GraphQL subgraph SDL is served to callers no guard identified outside a dev profile",
+    );
+    assert_eq!(said.field("environment").as_deref(), Some("production"));
+}
+
+/// Runs `boot` in a process declaring `profile`, which the boot reads off the
+/// process environment `figment::Jail` scopes.
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn in_profile<F: std::future::Future>(profile: &str, boot: impl FnOnce() -> F) -> F::Output {
+    let mut out = None;
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(nest_rs_config::Environment::var_name(), profile);
+        out = Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(boot()),
+        );
+        Ok(())
+    });
+    out.expect("the jailed boot ran")
+}
 
 /// async-graphql serves `_service` and `_entities` the moment an entity
 /// resolver exists, so `federation: false` beside one fails the boot.
@@ -1110,6 +1208,7 @@ fn the_env_var_drives_the_ceiling() {
 fn capped(max: Option<usize>) -> nest_rs_graphql::GraphqlSetup {
     GraphqlModule::for_root(GraphqlConfig {
         federation: true,
+        federation_sdl: nest_rs_config::Surface::Open,
         max_representations: max,
         ..GraphqlConfig::default()
     })

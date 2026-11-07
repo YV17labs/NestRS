@@ -199,7 +199,8 @@ fn wire_schema(container: &Container) -> anyhow::Result<()> {
         );
     }
     compose_sites(container, &reachable)?;
-    crate::federation::compose_sites(container)
+    crate::federation::compose_sites(container)?;
+    crate::federation::check_sdl_exposure(container, &config)
 }
 
 /// A linked `#[resolver]` no reachable module lists is filtered out of the

@@ -1366,6 +1366,7 @@ impl EntityMaskResolver {
 #[module(
     imports = [GraphqlModule::for_root(nest_rs_graphql::GraphqlConfig {
         federation: true,
+        federation_sdl: nest_rs_config::Surface::Open,
         ..Default::default()
     })],
     providers = [

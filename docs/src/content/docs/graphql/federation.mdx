@@ -116,6 +116,26 @@ What the flag itself decides:
 - **The directives are declared even with no entity yet**, so `_service` answers
   for a subgraph that has not written its first key. (`_entities` does not exist
   until one does — there would be nothing for it to return.)
+- **A guard identifying the router is owed.** `_service` answers the whole SDL and no
+  posture stands behind it, so a subgraph whose `/graphql` request runs no guard of
+  `GuardPhase::Authentication` or `Authorization` — in `GlobalGuards` or an
+  `EndpointGuards<GraphqlView, …>` — **fails the boot**, naming the guard to add and the
+  one opening below.
+
+A subgraph only its router reaches, on a private network, opens its SDL in one line:
+
+```rust title="apps/api/src/module.rs"
+GraphqlModule::for_root(GraphqlConfig {
+    federation: true,
+    federation_sdl: Surface::Open,
+    ..GraphqlConfig::default()
+})
+```
+
+or `<PREFIX>_GRAPHQL__FEDERATION_SDL=true`, said at `warn` at each boot outside a
+development or test profile. `Surface::ByProfile` opens it under one of those alone,
+for a router run beside the subgraph in development. Where a guard identifies the
+caller, it decides whatever this says.
 
 One key shape, one entity resolver: two claims on the same shape **fail the
 boot**, naming both. An entity is addressed by `@key` rather than by name, so
@@ -219,11 +239,11 @@ impl GuardFor<HttpView> for RequireApiKey {}
 
 <Aside type="danger" title="A subgraph sits behind a router, not on the internet">
 **`_service` is not covered by `<PREFIX>_GRAPHQL__INTROSPECTION`** — that
-switch gates `__schema`, and `_service`'s field is unconditionally visible. A
-subgraph whose guards identify no one therefore publishes its own SDL to anyone who
-can reach it, introspection on or off. An authentication guard closes that (above);
-the network is still the outer answer — serve a subgraph where the router is, and let
-the router be the thing clients reach.
+switch gates `__schema`, and `_service`'s field is unconditionally visible. So a
+subgraph boots only with a guard identifying its router, or with `federation_sdl`
+opened (above), which publishes its SDL to anyone who can reach it, introspection on or
+off. The network is still the outer answer — serve a subgraph where the router is, and
+let the router be the thing clients reach.
 
 That is why federation is opt-in and why the demo app in this repo leaves it
 off: it is a standalone API on a public address with no router in front of it,

@@ -1146,6 +1146,16 @@ mod graphql {
     )]
     struct RateLimitAloneSubgraphApp;
 
+    #[module(
+        imports = [GraphqlModule::for_root(GraphqlConfig {
+            federation: true,
+            federation_sdl: nest_rs_config::Surface::Open,
+            ..GraphqlConfig::default()
+        })],
+        providers = [RateLimit, WidgetsResolver, EndpointGuards<GraphqlView, (RateLimit,)>],
+    )]
+    struct RateLimitAloneOpenedSubgraphApp;
+
     /// `SDL` over `/graphql`, under `key` when the router presents one.
     async fn read_sdl_with_key(app: &TestApp, key: Option<&str>) -> TestResponse {
         let mut request = app.http().post("/graphql");
@@ -1229,12 +1239,22 @@ mod graphql {
         assert_anonymous_refused(&anonymous, "_service");
     }
 
-    /// With no guard identifying anyone, `federation: true` is the line that opens the SDL.
+    /// A rate limit identifies no one, so beside it alone a subgraph would serve its SDL
+    /// to anyone: the boot refuses it, and `federation_sdl` is the line that opens it.
     #[tokio::test]
-    async fn a_subgraph_whose_guards_identify_no_one_serves_the_sdl_past_them() {
-        let app = TestApp::for_module::<RateLimitAloneSubgraphApp>()
+    async fn a_subgraph_whose_guards_identify_no_one_serves_the_sdl_only_where_it_says_so() {
+        let refused = TestApp::for_module::<RateLimitAloneSubgraphApp>()
             .await
-            .expect("a subgraph under EndpointGuards boots");
+            .err()
+            .expect("no guard identifies the router");
+        assert!(
+            format!("{refused:#}").contains("federation_sdl"),
+            "{refused:#}"
+        );
+
+        let app = TestApp::for_module::<RateLimitAloneOpenedSubgraphApp>()
+            .await
+            .expect("a subgraph whose SDL is opened boots");
 
         let anonymous = subgraph_answer(&app, SDL, None).await;
         assert!(

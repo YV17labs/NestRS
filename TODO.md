@@ -168,9 +168,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   clippy. *seen*
 - No test reads through `Repo::scoped(Manage)` on Postgres or reaches a
   `bind` under `Manage`. *read*
-- A subgraph whose guards identify no one publishes its SDL (on purpose for a
-  private network). Close: refuse `federation: true` with no identifying
-  guard, which breaks that case. *seen*
 - `AbilityGuard` alone at a unit under `#[authorize]` boots and answers `401`
   on every call. *read*
 - `cannot(Read)` beside `can(Manage)`: settled (a `Manage` site needs every

@@ -205,11 +205,18 @@ socket. When it elapses the server ends the socket, so the peer
 re-upgrades, which re-runs the guard chain and re-checks the token's
 `exp`. Set it to `0` to disable the ceiling.
 
-The server sends no Ping, so a peer gone without a close reads as a quiet one:
-with nothing pushed to it, it holds its socket until this ceiling. A proxy's idle
-timeout is the client's to beat. A browser's `WebSocket` cannot send a Ping, so it
-sends `graphql-transport-ws`'s own `ping`, which the server answers with a `pong`; any
-other client can send a Ping too, which the server answers.
+A peer can vanish without a close, and its TCP connection says nothing of it.
+So once a peer has sent nothing for `<PREFIX>_GRAPHQL__PING_INTERVAL_SECS`, the
+server sends it a WebSocket Ping (RFC 6455 §5.5.2), which every client answers
+as it reads, a browser's `WebSocket` included, whatever the subprotocol. Any
+frame from the peer counts as its answer, so a socket in use is never pinged. A
+peer that sends nothing back within `<PREFIX>_GRAPHQL__PING_TIMEOUT_SECS` is
+taken for gone: its socket is dropped without a close, its subscriptions ended,
+its line filed `cancelled`, and one `warn` on `nest_rs::graphql` names the
+mount by `host` and `path`. Both default to 20 seconds, so a vanished peer is
+released within 40 of its last frame; with the Pings off, it holds its socket
+until this ceiling. A client may still send `graphql-transport-ws`'s own `ping`,
+which the server answers with a `pong`, or a WebSocket Ping, answered too.
 
 A query or a mutation sent over the socket is a unit of its own, as on
 `POST`: a mutation opens its transaction inside the socket's pool unit and
@@ -235,6 +242,8 @@ authorised for:
 |---|---|---|---|
 | A message's size | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | 64 KiB, from 1 to a gibibyte | the frame is refused before it is buffered, and the socket closes `1009 Message Too Big` |
 | The wait for `connection_init` | `<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS` | 3 s, from 1 to 60 | the socket closes `4408 Connection initialisation timeout` |
+| A peer's silence | `<PREFIX>_GRAPHQL__PING_INTERVAL_SECS` | 20 s, from 1 to 3600, `0` ⇒ none | the server sends it a Ping |
+| The wait for an answer to that Ping | `<PREFIX>_GRAPHQL__PING_TIMEOUT_SECS` | 20 s, from 1 to 3600, never off | the socket is dropped without a close, as its peer's |
 | Operations running at once | `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS` | 100, from 1 to 10 000, `0` ⇒ unlimited | the `subscribe` is answered an `error` message for its id, and the socket stays |
 
 A `subscribe` reusing the id of an operation still running closes the socket

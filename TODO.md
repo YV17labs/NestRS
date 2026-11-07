@@ -219,8 +219,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   `ws.message`. *read*
 - A failure swapped by an interceptor then answered by a filter keeps the
   first one's class. *read*
-- A vanished peer is not simulated; the server sends no Ping, so a peer gone
-  without a close holds its socket until the connection's maximum age. *read*
 
 **Auth**
 - A token `sign` mints carries `client_id` only when the claims name one,
@@ -301,7 +299,7 @@ it today); a refresh grant on `OAuthClient`; `Repo::restore`;
 `App::run_task`; public `ResourceBinding`; `nestrs generate guard` and
 `interceptor`; a public `RetiredKey`; bench tiers beyond HTTP; a lease port;
 named storage disks; `ModuleRef`; `AppLifecycle::spawn`; ETag / If-Match;
-client TLS reload; WebSocket keep-alive pings.
+client TLS reload.
 
 ## 6. Limits kept on purpose
 

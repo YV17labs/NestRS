@@ -205,8 +205,9 @@ pub use http::uri::Scheme;
 pub use body::Body;
 pub use client_ip::{ClientIp, ClientOrigin};
 pub use config::{
-    DEFAULT_MAX_CONNECTION, DEFAULT_SSE_KEEP_ALIVE, DEFAULT_UNIT_TIMEOUT, HttpConfig,
-    MAX_CONNECTION_BOUNDS, MAX_MESSAGE_BYTES_BOUNDS, SSE_KEEP_ALIVE_BOUNDS, UNIT_TIMEOUT_BOUNDS,
+    DEFAULT_MAX_CONNECTION, DEFAULT_PING_INTERVAL, DEFAULT_PING_TIMEOUT, DEFAULT_SSE_KEEP_ALIVE,
+    DEFAULT_UNIT_TIMEOUT, HttpConfig, MAX_CONNECTION_BOUNDS, MAX_MESSAGE_BYTES_BOUNDS,
+    PING_INTERVAL_BOUNDS, PING_TIMEOUT_BOUNDS, SSE_KEEP_ALIVE_BOUNDS, UNIT_TIMEOUT_BOUNDS,
 };
 pub use controller::{HttpControllerMeta, HttpRouteMeta, RequestBodyMeta, SchemaFn};
 pub use cors::HttpCors;
@@ -300,15 +301,15 @@ pub mod __private {
     pub use tracing;
 
     /// Whether a request asks for a WebSocket and, behind the `websocket`
-    /// feature, the opening handshake on hyper's upgrade, the socket above it
-    /// and the codes it closes with, for the edges that speak one.
+    /// feature, the opening handshake on hyper's upgrade, the socket above it,
+    /// the codes it closes with and its keepalive, for the edges that speak one.
     pub mod websocket {
         #[cfg(feature = "websocket")]
         pub use crate::error::HandshakeRefused;
         pub use crate::websocket::requested;
         #[cfg(feature = "websocket")]
         pub use crate::websocket::{
-            CloseCode, Error, Message, Utf8Bytes, WebSocketLimits, WebSocketStream,
+            CloseCode, Due, Error, KeepAlive, Message, Utf8Bytes, WebSocketLimits, WebSocketStream,
             WebSocketUpgrade, close_frame, read_failed,
         };
     }

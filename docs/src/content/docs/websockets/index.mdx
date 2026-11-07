@@ -149,12 +149,22 @@ each field:
 | `<PREFIX>_WS__MESSAGE_TIMEOUT_SECS` | `20` | one message — its guards, pipes and handler — counted once its envelope is decoded; whole seconds from `1` to `3600`, `0` ⇒ none |
 | `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` | `20` | the `#[on_connect]` hook, on the message timeout's range |
 | `<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS` | `20` | the `#[on_disconnect]` hook, on the message timeout's range |
+| `<PREFIX>_WS__PING_INTERVAL_SECS` | `20` | how long the peer may send nothing before the server sends it a Ping; whole seconds from `1` to `3600`, `0` ⇒ none |
+| `<PREFIX>_WS__PING_TIMEOUT_SECS` | `20` | how long that Ping waits for any frame back before the peer is dropped; whole seconds from `1` to `3600`, never off |
 
-The server sends no Ping, so a peer gone without a close reads as a quiet one:
-with nothing pushed to it, it holds its socket until
-`<PREFIX>_WS__MAX_CONNECTION_SECS`, four hours by default. A proxy's idle timeout
-is the client's to beat. A browser's `WebSocket` cannot send a Ping, so it sends a
-message of its own, an event the gateway answers; any other client can send a Ping,
+A peer can vanish without a close — a phone that lost its network, a laptop
+closed mid-session — and its TCP connection says nothing of it. So once a peer
+has sent nothing for the Ping interval, the server sends it a Ping (RFC 6455
+§5.5.2), which every client answers as it reads, a browser's `WebSocket`
+included, with no code of yours. Any frame from the peer counts as its answer,
+so a socket in use is never pinged. A peer that sends nothing back within the
+Ping timeout is taken for gone: its socket is dropped without a close, its
+`#[on_disconnect]` hook runs, and one `warn` on `nest_rs::ws` names the gateway
+by `host` and `path`. A vanished peer is so released within 40 seconds of its
+last frame by default, and the Pings keep a proxy's idle timeout — sixty
+seconds on nginx and a cloud load balancer — from closing a quiet socket. With
+the Pings off, a peer gone without a close holds its socket until
+`<PREFIX>_WS__MAX_CONNECTION_SECS`. A client may send a Ping of its own too,
 which the server answers.
 
 A socket answers one message at a time, so a handler that never returns would
@@ -221,6 +231,7 @@ so a client can tell a deliberate close from the `1006` a network fault leaves:
 | `<PREFIX>_WS__MAX_CONNECTION_SECS` elapsed | `1001 Going Away` | re-upgrades, and is authenticated again |
 | The client stopped reading and its outbox filled | `1008 Policy Violation` | drains faster, or is shed again |
 | The client took nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s) | none can reach it — it reads `1006` | reconnects |
+| The client sent nothing back within `<PREFIX>_WS__PING_TIMEOUT_SECS` of a Ping | none is sent, RFC 6455 §7.1.7 — it reads `1006`, if anything | reconnects |
 | A message past `<PREFIX>_WS__MAX_MESSAGE_BYTES` | `1009 Message Too Big` | sends smaller messages |
 | A read failed on broken framing | `1011 Internal Error` | reconnects |
 | `#[on_connect]` panicked, or outlasted `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` | `1011 Internal Error` | reconnects |

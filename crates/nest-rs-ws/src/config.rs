@@ -10,11 +10,20 @@
 //! [`connect_timeout`](WsConfig::connect_timeout) and
 //! [`disconnect_timeout`](WsConfig::disconnect_timeout) bound the connection
 //! hooks the same way, each unit by its own deadline.
+//!
+//! [`ping_interval`](WsConfig::ping_interval) and
+//! [`ping_timeout`](WsConfig::ping_timeout) bound what a peer gone without a
+//! close holds: a socket's TCP connection reports nothing of a peer that
+//! vanished, so the socket asks with a Ping (RFC 6455 §5.5.2) and drops a peer
+//! that sends nothing back.
 
 use std::time::Duration;
 
 use nest_rs_config::config;
-use nest_rs_http::{MAX_CONNECTION_BOUNDS, MAX_MESSAGE_BYTES_BOUNDS, UNIT_TIMEOUT_BOUNDS};
+use nest_rs_http::{
+    MAX_CONNECTION_BOUNDS, MAX_MESSAGE_BYTES_BOUNDS, PING_INTERVAL_BOUNDS, PING_TIMEOUT_BOUNDS,
+    UNIT_TIMEOUT_BOUNDS,
+};
 
 /// Default per-message byte cap: 64 KiB, against tungstenite's own 64 MiB.
 pub(crate) const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
@@ -61,6 +70,25 @@ pub struct WsConfig {
     /// `message_timeout`'s range and with its default, 20 seconds.
     #[config(bounds = UNIT_TIMEOUT_BOUNDS)]
     pub disconnect_timeout: Option<Duration>,
+    /// How long the peer may send nothing before the socket sends it a Ping
+    /// (RFC 6455 §5.5.2), which a client answers as it reads; any frame from
+    /// the peer counts, so a socket in use is never pinged. `None` ⇒ no Ping,
+    /// and a peer gone without a close holds its socket to
+    /// [`max_connection`](Self::max_connection). Read from
+    /// `<PREFIX>_WS__PING_INTERVAL_SECS`, whole seconds from 1 to 3600 or `0`
+    /// for none — refused outside, from the environment and from the pinned
+    /// struct alike; defaults to 20 seconds, [`nest_rs_http::DEFAULT_PING_INTERVAL`].
+    #[config(bounds = PING_INTERVAL_BOUNDS)]
+    pub ping_interval: Option<Duration>,
+    /// How long a Ping waits for any frame back; past it the peer is taken for
+    /// gone and its socket dropped without a Close, its disconnect hook run. A
+    /// peer that vanished is so released within the interval and this timeout
+    /// of its last frame. Read from `<PREFIX>_WS__PING_TIMEOUT_SECS`, whole
+    /// seconds from 1 to 3600, never off — refused outside, from the
+    /// environment and from the pinned struct alike; defaults to 20 seconds,
+    /// [`nest_rs_http::DEFAULT_PING_TIMEOUT`].
+    #[config(bounds = PING_TIMEOUT_BOUNDS)]
+    pub ping_timeout: Duration,
 }
 
 impl Default for WsConfig {
@@ -71,6 +99,8 @@ impl Default for WsConfig {
             message_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
             connect_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
             disconnect_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
+            ping_interval: Some(nest_rs_http::DEFAULT_PING_INTERVAL),
+            ping_timeout: nest_rs_http::DEFAULT_PING_TIMEOUT,
         }
     }
 }
@@ -127,6 +157,8 @@ mod tests {
             message_timeout: Some(Duration::from_secs(5)),
             connect_timeout: Some(Duration::from_secs(6)),
             disconnect_timeout: Some(Duration::from_secs(7)),
+            ping_interval: Some(Duration::from_secs(8)),
+            ping_timeout: Duration::from_secs(9),
         };
         let cfg = WsConfig::from_env(
             &ConfigService::with_vars("ws", [("MAX_MESSAGE_BYTES", "2048")]),
@@ -239,6 +271,71 @@ mod tests {
             .to_string();
             assert!(refused.contains(&var), "{refused}");
         }
+    }
+
+    /// A socket pings a silent peer, and drops one that sends nothing back, on
+    /// the values the HTTP transport exports for every socket edge.
+    #[test]
+    fn a_socket_pings_on_the_transports_defaults() {
+        let d = WsConfig::default();
+        assert_eq!(d.ping_interval, Some(nest_rs_http::DEFAULT_PING_INTERVAL));
+        assert_eq!(d.ping_timeout, nest_rs_http::DEFAULT_PING_TIMEOUT);
+    }
+
+    #[test]
+    fn each_ping_setting_reads_its_own_variable_and_the_interval_turns_off_at_zero() {
+        let cfg = WsConfig::from_env(
+            &ConfigService::with_vars(
+                "ws",
+                [("PING_INTERVAL_SECS", "45"), ("PING_TIMEOUT_SECS", "10")],
+            ),
+            Default::default(),
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.ping_interval, Some(Duration::from_secs(45)));
+        assert_eq!(cfg.ping_timeout, Duration::from_secs(10));
+
+        let off = WsConfig::from_env(
+            &ConfigService::with_vars("ws", [("PING_INTERVAL_SECS", "0")]),
+            Default::default(),
+        )
+        .expect("the overlay resolves");
+        assert_eq!(off.ping_interval, None, "`0` is the off sentinel");
+        assert_eq!(off.ping_timeout, nest_rs_http::DEFAULT_PING_TIMEOUT);
+    }
+
+    /// A second to an hour each, naming the variable; the timeout has no off, so
+    /// a zero from either side is refused.
+    #[test]
+    fn the_ping_settings_are_held_to_their_ranges_from_either_side() {
+        for (setting, raw) in [
+            ("PING_INTERVAL_SECS", "3601"),
+            ("PING_TIMEOUT_SECS", "3601"),
+            ("PING_TIMEOUT_SECS", "0"),
+        ] {
+            let var = nest_rs_config::var_name("ws", setting);
+            let refused = WsConfig::from_env(
+                &ConfigService::with_vars("ws", [(setting, raw)]),
+                Default::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(refused.contains(&var), "{refused}");
+        }
+        let pinned = WsConfig::from_env(
+            &ConfigService::with_vars("ws", []),
+            WsConfig {
+                ping_interval: Some(Duration::ZERO),
+                ..WsConfig::default()
+            },
+        )
+        .expect_err("a pinned zero interval")
+        .to_string();
+        assert!(
+            pinned.contains(&nest_rs_config::var_name("ws", "PING_INTERVAL_SECS"))
+                && pinned.contains("`None` turns it off"),
+            "{pinned}"
+        );
     }
 
     #[test]

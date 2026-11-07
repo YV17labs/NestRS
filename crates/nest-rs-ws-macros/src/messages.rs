@@ -659,6 +659,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                                 __messages,
                                 __container,
                                 ::core::clone::Clone::clone(&__carried),
+                                #gateway_name,
+                                &__path,
                             );
                             __routes.route(
                                 ::nest_rs_ws::__private::nest_rs_http::Method::GET,

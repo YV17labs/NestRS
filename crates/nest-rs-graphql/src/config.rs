@@ -257,6 +257,28 @@ pub struct GraphqlConfig {
     /// environment; a pinned `Some(0)` fails the boot, as for every count here.
     #[config(bounds = MAX_SOCKET_OPERATIONS)]
     pub max_socket_operations: Option<usize>,
+    /// How long a graphql-ws socket's peer may send nothing before the socket
+    /// sends it a Ping (RFC 6455 §5.5.2), which a browser's `WebSocket` and
+    /// every other client answer as they read; any frame from the peer counts,
+    /// so a socket in use is never pinged. `None` ⇒ no Ping, and a peer gone
+    /// without a close holds its socket to
+    /// [`max_connection`](Self::max_connection).
+    ///
+    /// Read from `<PREFIX>_GRAPHQL__PING_INTERVAL_SECS`, whole seconds from 1 to
+    /// 3600 or `0` for none; defaults to 20 seconds, as
+    /// `<PREFIX>_WS__PING_INTERVAL_SECS` does
+    /// ([`nest_rs_http::DEFAULT_PING_INTERVAL`]).
+    #[config(bounds = nest_rs_http::PING_INTERVAL_BOUNDS)]
+    pub ping_interval: Option<Duration>,
+    /// How long a Ping waits for any frame back; past it the peer is taken for
+    /// gone and its socket dropped without a Close, its subscriptions ended.
+    ///
+    /// Read from `<PREFIX>_GRAPHQL__PING_TIMEOUT_SECS`, whole seconds from 1 to
+    /// 3600, never off; defaults to 20 seconds, as
+    /// `<PREFIX>_WS__PING_TIMEOUT_SECS` does
+    /// ([`nest_rs_http::DEFAULT_PING_TIMEOUT`]).
+    #[config(bounds = nest_rs_http::PING_TIMEOUT_BOUNDS)]
+    pub ping_timeout: Duration,
     /// Serve this schema as an Apollo **subgraph**: the federation directives
     /// are declared, and the emitted SDL is the subgraph form.
     ///
@@ -321,6 +343,8 @@ impl Default for GraphqlConfig {
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             connection_init_timeout: Duration::from_secs(DEFAULT_CONNECTION_INIT_TIMEOUT_SECS),
             max_socket_operations: Some(DEFAULT_MAX_SOCKET_OPERATIONS),
+            ping_interval: Some(nest_rs_http::DEFAULT_PING_INTERVAL),
+            ping_timeout: nest_rs_http::DEFAULT_PING_TIMEOUT,
             federation: false,
             federation_sdl: Surface::Closed,
             max_representations: Some(DEFAULT_MAX_REPRESENTATIONS),
@@ -866,6 +890,39 @@ mod tests {
             .expect("a pin inside the range");
         assert_eq!(kept.connection_init_timeout, Duration::from_secs(30));
         assert_eq!(kept.max_socket_operations, Some(7));
+    }
+
+    /// A subscription socket pings a silent peer, and drops one that sends
+    /// nothing back, on the values the HTTP transport exports for every socket
+    /// edge, each read from its own variable, the interval off at `0`, the
+    /// timeout never.
+    #[test]
+    fn the_socket_pings_on_the_transports_defaults_each_overlaid_by_its_variable() {
+        let d = GraphqlConfig::default();
+        assert_eq!(d.ping_interval, Some(nest_rs_http::DEFAULT_PING_INTERVAL));
+        assert_eq!(d.ping_timeout, nest_rs_http::DEFAULT_PING_TIMEOUT);
+
+        let cfg = GraphqlConfig::from_env(
+            &ConfigService::with_vars(
+                "graphql",
+                [("PING_INTERVAL_SECS", "0"), ("PING_TIMEOUT_SECS", "10")],
+            ),
+            GraphqlConfig::default(),
+        )
+        .expect("every bound inside its range");
+        assert_eq!(cfg.ping_interval, None, "`0` is the off sentinel");
+        assert_eq!(cfg.ping_timeout, Duration::from_secs(10));
+
+        for (setting, raw) in [("PING_INTERVAL_SECS", "3601"), ("PING_TIMEOUT_SECS", "0")] {
+            let var = nest_rs_config::var_name("graphql", setting);
+            let refused = GraphqlConfig::from_env(
+                &ConfigService::with_vars("graphql", [(setting, raw)]),
+                GraphqlConfig::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(refused.contains(&var), "{refused}");
+        }
     }
 
     #[test]

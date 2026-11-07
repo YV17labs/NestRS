@@ -351,7 +351,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `GraphqlModule::for_root(GraphqlConfig { …, ..Default::default() })` expecting the playground or introspection in development | nothing to change: a pin closes nothing it does not name |
    | a suite asserting that `GraphqlModule`, bare or pinned over `..Default::default()`, answers a plain `GET` with `405`, or refuses introspection, under the test profile | pin `playground: Surface::Closed` or `introspection: Surface::Closed`: the test profile opens both |
    | `OpenApiModule::for_root(OpenApiConfig { …, ..OpenApiConfig::default() })` expecting `/api` served | served in development and test only; `enabled: Surface::Open` written in the pin opens it everywhere |
-   | an `HttpConfig`, `StorageConfig`, `AuthnConfig`, `GraphqlConfig`, `WsConfig`, `McpConfig`, `OAuthClientConfig` or `OpenTelemetryConfig` literal written out whole | the same, ending in `..Default::default()` — each gained fields (`shutdown_timeout`; `operation_timeout`, `read_timeout`, `tls`; `jwks_uri`, `algorithms`, `tls`; the graphql-ws bounds; `message_timeout`, `connect_timeout`, `disconnect_timeout`; `operation_timeout`, `max_concurrent_sessions`, `session_idle_timeout`; `tls`) |
+   | an `HttpConfig`, `StorageConfig`, `AuthnConfig`, `GraphqlConfig`, `WsConfig`, `McpConfig`, `OAuthClientConfig` or `OpenTelemetryConfig` literal written out whole | the same, ending in `..Default::default()` — each gained fields (`shutdown_timeout`; `operation_timeout`, `read_timeout`, `tls`; `jwks_uri`, `algorithms`, `tls`; the graphql-ws bounds, `ping_interval`, `ping_timeout`; `message_timeout`, `connect_timeout`, `disconnect_timeout`, `ping_interval`, `ping_timeout`; `operation_timeout`, `max_concurrent_sessions`, `session_idle_timeout`; `tls`) |
    | `McpModule::for_root(McpOptions { server: Some(identity), .. })` | `McpModule::for_root(identity)` |
    | `McpModule::for_root(McpOptions { config: Some(cfg), server: Some(identity) })` | `McpModule::for_root((identity, cfg))` — the declaration first, the config last; `McpAccess::Public` leads when the app opens the endpoint, `(McpAccess::Public, identity, cfg)` |
    | `env.get("KEY")` and `env.list("KEY", default)` in a `from_env` | `env.get("KEY")?` and `env.list("KEY", default)?` — a `_FILE` read can fail |
@@ -1250,6 +1250,12 @@ lists what the boot, a log or the wire shows when one is missed.
       fetching a token first), and caps a message at 64 KiB and a socket at 100
       operations (`<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES`,
       `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS`).
+    - **A socket pings a silent peer**: a gateway's and a graphql-ws one send a
+      Ping once the peer has sent nothing for 20 s, and drop a peer that sends
+      nothing back within 20 s more (`<PREFIX>_WS__PING_INTERVAL_SECS`,
+      `PING_TIMEOUT_SECS`, and the same under `<PREFIX>_GRAPHQL__`). Every
+      client answers a Ping as it reads, a browser included; a client that holds
+      a socket without reading it turns the Pings off with `0`.
     - **A browser's `Origin` is checked** at both WebSocket upgrades and at
       `/mcp`, CORS on or off: a browser app on another origin is listed in
       `<PREFIX>_HTTP__CORS_ORIGINS`, and behind a proxy that terminates TLS or

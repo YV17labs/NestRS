@@ -14,7 +14,7 @@ use nest_rs_core::{
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_guards::__private::GuardSpec;
 use nest_rs_http::__private::websocket::{
-    self, CloseCode, Message, WebSocketLimits, WebSocketUpgrade,
+    self, CloseCode, Due, KeepAlive, Message, WebSocketLimits, WebSocketUpgrade,
 };
 use nest_rs_http::{BoxEndpoint, DetachedWork, Endpoint, Request, Response};
 use nest_rs_pipes::__private::PipeSpec;
@@ -93,13 +93,17 @@ pub const GATEWAY_LABEL: &str = "ws";
 /// The endpoint a gateway's upgrade mounts at, assembled from the gateway, its
 /// messages, the container it mounts from, and the [`DetachedWork`] its
 /// `HttpEndpointMeta` declares; what each connection needs from the container
-/// is resolved here, once. Called by `#[messages]`-generated mount code.
+/// is resolved here, once. `host` and `path` name the gateway as its `mounted`
+/// lines do, on every line its sockets file. Called by `#[messages]`-generated
+/// mount code.
 pub fn gateway_endpoint<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
     messages: MessageTable,
     container: &Container,
     sockets: DetachedWork,
+    host: &'static str,
+    path: &str,
 ) -> BoxEndpoint {
     BoxEndpoint::new(GatewayEndpoint {
         gateway,
@@ -110,7 +114,18 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
         config: container.get::<WsConfig>().unwrap_or_default(),
         scopes: RequestScopes::new(container.clone()),
         sockets,
+        site: SocketSite {
+            host,
+            path: Arc::from(path),
+        },
     })
+}
+
+/// The gateway a socket's lines name, in the fields of its `mounted` lines.
+#[derive(Clone)]
+pub(crate) struct SocketSite {
+    pub(crate) host: &'static str,
+    pub(crate) path: Arc<str>,
 }
 
 /// The wiring `#[messages]` attaches for the gateway at `path`: its
@@ -156,6 +171,7 @@ struct GatewayEndpoint<G, N: 'static> {
     /// Every socket this gateway serves: an upgraded socket outlives the HTTP
     /// connection the shutdown window waits on, so the window waits on this too.
     sockets: DetachedWork,
+    site: SocketSite,
 }
 
 impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
@@ -178,10 +194,13 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             message_timeout: self.config.message_timeout,
             connect_timeout: self.config.connect_timeout,
             disconnect_timeout: self.config.disconnect_timeout,
+            site: self.site.clone(),
         };
         let limits = SocketLimits {
             max_lifetime,
             max_message_bytes,
+            ping_interval: self.config.ping_interval,
+            ping_timeout: self.config.ping_timeout,
         };
         let sockets = self.sockets.clone();
         // At the protocol layer, so tungstenite never buffers past the cap.
@@ -221,6 +240,8 @@ struct DispatchWiring {
     connect_timeout: Option<Duration>,
     /// What the disconnect hook may hold the close for; `None` ⇒ no deadline.
     disconnect_timeout: Option<Duration>,
+    /// The gateway the socket's lines name.
+    site: SocketSite,
 }
 
 /// Per-socket limits resolved once at upgrade from [`WsConfig`].
@@ -230,6 +251,10 @@ struct SocketLimits {
     max_lifetime: Option<Duration>,
     /// Per-message byte cap (also enforced at the protocol layer).
     max_message_bytes: usize,
+    /// The peer's silence that earns it a Ping; `None` ⇒ no Ping.
+    ping_interval: Option<Duration>,
+    /// What a Ping waits for any frame back.
+    ping_timeout: Duration,
 }
 
 /// RAII cleanup for a connection's [`WsServer`] registry entry, so it cannot
@@ -270,15 +295,29 @@ async fn serve_connection<G, N, S>(
     let (outbox, mut rx) =
         tokio::sync::mpsc::channel::<crate::server::Frame>(crate::server::OUTBOX_CAPACITY);
     let conn_id = server.connect(outbox.clone());
+    let site = &wiring.site;
 
     // The `Sink` comes back when the outbox closes, so the Close frame is written
     // after every reply already queued. A frame that cannot be written ends the
     // socket: a peer that stops reading sends nothing either.
     let (writer_ends, mut writer_stopped) = tokio::sync::oneshot::channel::<()>();
+    // The read loop owns the keepalive; the Ping it owes goes out here, beside
+    // the replies, since this task owns the `Sink`.
+    let ping = Arc::new(tokio::sync::Notify::new());
+    let pinged = Arc::clone(&ping);
+    let writer_site = site.clone();
     let mut writer = Writer(tokio::spawn(nest_rs_core::panic::contain(async move {
-        while let Some(frame) = rx.recv().await {
-            if let Err(error) = sink.send(Message::Text(frame)).await {
-                stopped_writing(conn_id, &error);
+        loop {
+            let frame = tokio::select! {
+                biased;
+                frame = rx.recv() => match frame {
+                    Some(frame) => Message::Text(frame),
+                    None => break,
+                },
+                () = pinged.notified() => Message::Ping(Default::default()),
+            };
+            if let Err(error) = sink.send(frame).await {
+                stopped_writing(&writer_site, conn_id, &error);
                 break;
             }
         }
@@ -313,6 +352,7 @@ async fn serve_connection<G, N, S>(
     let mut lifetime = limits
         .max_lifetime
         .map(|ttl| Box::pin(tokio::time::sleep(ttl)));
+    let mut keep_alive = KeepAlive::new(limits.ping_interval, limits.ping_timeout);
 
     let mut going_away = std::pin::pin!(going_away);
     let closure = loop {
@@ -326,6 +366,8 @@ async fn serve_connection<G, N, S>(
                 // `debug`: shutdown is logged once; a line per socket is noise.
                 tracing::debug!(
                     target: crate::TARGET,
+                    host = site.host,
+                    path = &*site.path,
                     conn_id,
                     close_code = u16::from(CloseCode::Away),
                     "closing socket: the server is going away",
@@ -341,6 +383,8 @@ async fn serve_connection<G, N, S>(
             } => {
                 tracing::info!(
                     target: crate::TARGET,
+                    host = site.host,
+                    path = &*site.path,
                     conn_id,
                     close_code = u16::from(CloseCode::Away),
                     "closing socket: max lifetime reached",
@@ -351,6 +395,9 @@ async fn serve_connection<G, N, S>(
             _ = &mut writer_stopped => break Closure::WriterStopped,
             message = stream.next() => {
                 let Some(message) = message else { break Closure::PeerGone };
+                if message.is_ok() {
+                    keep_alive.heard();
+                }
                 let reply = match message {
                     // The boundary case the protocol-layer cap lets through; framing is
                     // intact, so the socket survives and the refusal goes in band.
@@ -376,26 +423,21 @@ async fn serve_connection<G, N, S>(
                     // tungstenite queues the Pong before a Ping reaches this loop,
                     // and a raw frame is never read.
                     Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => None,
-                    Err(err) => {
-                        let (code, reason) = websocket::read_failed(&err);
-                        tracing::debug!(
-                            target: crate::TARGET,
-                            conn_id,
-                            error = %nest_rs_core::error_message(&err),
-                            close_code = u16::from(code),
-                            "websocket read error",
-                        );
-                        break Closure::Server(code, reason);
-                    }
+                    Err(err) => break read_failed(site, conn_id, &err, limits.max_message_bytes),
                 };
                 // The pushes' outbox, so ordering with broadcasts the handler
                 // triggered is preserved.
                 if let Some(reply) = reply
                     && outbox.try_send(reply.into()).is_err()
                 {
-                    break stalled_outbox(conn_id);
+                    break stalled_outbox(site, conn_id);
                 }
             }
+            // Last, so a frame that arrived in the same instant answers the Ping.
+            due = keep_alive.due() => match due {
+                Due::Ping => ping.notify_one(),
+                Due::Silent => break peer_silent(site, conn_id, limits.ping_timeout),
+            },
         }
     };
 
@@ -421,13 +463,15 @@ async fn serve_connection<G, N, S>(
         // Without the `Sink`, which went down with the task, the peer reads 1006
         // (RFC 6455 §7.4.1).
         if let Some(sink) = writer_ended((&mut writer.0).await, conn_id) {
-            close_socket(sink, closure, conn_id).await;
+            close_socket(sink, closure, site, conn_id).await;
         }
     })
     .await;
     if closed.is_err() {
         tracing::debug!(
             target: crate::TARGET,
+            host = site.host,
+            path = &*site.path,
             conn_id,
             close_grace_ms = u64::try_from(DetachedWork::CLOSE_GRACE.as_millis()).unwrap_or(u64::MAX),
             "socket dropped: the peer did not take its replies and close within the grace",
@@ -471,10 +515,12 @@ fn writer_ended<S>(joined: Result<Written<S>, tokio::task::JoinError>, conn_id: 
 type WsSink<S> = futures_util::stream::SplitSink<S, Message>;
 
 /// The writer could not put a frame on the wire, and the socket ends with it.
-fn stopped_writing(conn_id: ConnId, error: &websocket::Error) {
+fn stopped_writing(site: &SocketSite, conn_id: ConnId, error: &websocket::Error) {
     if matches!(error, websocket::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut) {
         tracing::warn!(
             target: crate::TARGET,
+            host = site.host,
+            path = &*site.path,
             conn_id,
             error = %nest_rs_core::error_message(error),
             "the peer took nothing within the send deadline; it is cut off",
@@ -482,6 +528,8 @@ fn stopped_writing(conn_id: ConnId, error: &websocket::Error) {
     } else {
         tracing::debug!(
             target: crate::TARGET,
+            host = site.host,
+            path = &*site.path,
             conn_id,
             error = %nest_rs_core::error_message(error),
             "closing socket: a frame could not be written",
@@ -490,14 +538,51 @@ fn stopped_writing(conn_id: ConnId, error: &websocket::Error) {
 }
 
 /// Close a socket whose peer stopped draining its full outbox.
-fn stalled_outbox(conn_id: u64) -> Closure {
+fn stalled_outbox(site: &SocketSite, conn_id: u64) -> Closure {
     tracing::warn!(
         target: crate::TARGET,
+        host = site.host,
+        path = &*site.path,
         conn_id,
         close_code = u16::from(CloseCode::Policy),
         "closing socket: the peer stopped draining and the outbox is full",
     );
     Closure::Server(CloseCode::Policy, OUTBOX_STALLED)
+}
+
+/// Close a socket whose read failed, under the code [`websocket::read_failed`]
+/// reads off the failure.
+fn read_failed(
+    site: &SocketSite,
+    conn_id: ConnId,
+    error: &websocket::Error,
+    max_message_bytes: usize,
+) -> Closure {
+    let (code, reason) = websocket::read_failed(error);
+    tracing::debug!(
+        target: crate::TARGET,
+        host = site.host,
+        path = &*site.path,
+        conn_id,
+        error = %nest_rs_core::error_message(error),
+        close_code = u16::from(code),
+        max_message_bytes,
+        "websocket read error",
+    );
+    Closure::Server(code, reason)
+}
+
+/// Drop a socket whose peer sent nothing back within the Ping's timeout.
+fn peer_silent(site: &SocketSite, conn_id: ConnId, ping_timeout: Duration) -> Closure {
+    tracing::warn!(
+        target: crate::TARGET,
+        host = site.host,
+        path = &*site.path,
+        conn_id,
+        ping_timeout_ms = ping_timeout.as_millis(),
+        "closing socket: the peer sent nothing back within the ping timeout",
+    );
+    Closure::PeerSilent
 }
 
 /// Why the socket is ending, and — when the server is the one ending it — the
@@ -514,6 +599,10 @@ enum Closure {
     /// deadline, most often — so a Close frame would not get through either:
     /// the peer reads 1006.
     WriterStopped,
+    /// The peer sent nothing back within its Ping's timeout, so it is taken
+    /// for gone and sent no Close, which §7.1.7 lets an endpoint omit when the
+    /// peer is unlikely to read it: it reads 1006, if anything.
+    PeerSilent,
     /// The server ended it, under the code §7.4.1 defines for the cause.
     Server(CloseCode, &'static str),
 }
@@ -534,11 +623,11 @@ const OUTBOX_STALLED: &str = "outbox full, the client is not draining its messag
 
 /// Put the Close frame on the wire, then flush — the flush also drives out the
 /// echo queued for [`Closure::Echo`]. Best-effort: a gone peer is logged at `debug`.
-async fn close_socket<S>(mut sink: WsSink<S>, closure: Closure, conn_id: ConnId)
+async fn close_socket<S>(mut sink: WsSink<S>, closure: Closure, site: &SocketSite, conn_id: ConnId)
 where
     S: Sink<Message, Error = websocket::Error>,
 {
-    if let Closure::WriterStopped = closure {
+    if let Closure::WriterStopped | Closure::PeerSilent = closure {
         return;
     }
     if let Closure::Server(code, reason) = closure
@@ -546,6 +635,8 @@ where
     {
         tracing::debug!(
             target: crate::TARGET,
+            host = site.host,
+            path = &*site.path,
             conn_id,
             error = %nest_rs_core::error_message(&err),
             "websocket close frame undelivered",
@@ -555,6 +646,8 @@ where
     if let Err(err) = SinkExt::close(&mut sink).await {
         tracing::debug!(
             target: crate::TARGET,
+            host = site.host,
+            path = &*site.path,
             conn_id,
             error = %nest_rs_core::error_message(&err),
             "websocket close handshake unfinished",
@@ -1283,6 +1376,10 @@ mod tests {
             message_timeout: None,
             connect_timeout: None,
             disconnect_timeout: None,
+            site: SocketSite {
+                host: "Echo",
+                path: Arc::from("/echo"),
+            },
         }
     }
 
@@ -1582,6 +1679,8 @@ mod tests {
             SocketLimits {
                 max_lifetime: None,
                 max_message_bytes: 1024,
+                ping_interval: None,
+                ping_timeout: nest_rs_http::DEFAULT_PING_TIMEOUT,
             },
             server_socket.with(
                 |_: Message| -> std::future::Ready<Result<Message, websocket::Error>> {
@@ -1625,12 +1724,115 @@ mod tests {
         );
     }
 
+    /// A peer answering every Ping keeps its socket, pinged once per interval of
+    /// its silence; once it answers none, past the Ping's timeout the socket is
+    /// dropped without a Close, the disconnect hook runs and the registry lets it
+    /// go. Over an in-memory pipe, so paused time never outruns a frame in
+    /// flight, as it does a kernel's.
+    #[tokio::test(start_paused = true)]
+    async fn a_peer_answering_its_pings_keeps_its_socket_and_one_answering_none_is_dropped() {
+        use tokio::time::Instant;
+        use tokio_tungstenite::tungstenite::protocol::Role;
+
+        const INTERVAL: Duration = Duration::from_secs(20);
+        const TIMEOUT: Duration = Duration::from_secs(5);
+        const ROUNDS: u32 = 30;
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let (server_end, client_end) = tokio::io::duplex(64 * 1024);
+        let server_socket =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(server_end, Role::Server, None)
+                .await;
+        let mut client =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(client_end, Role::Client, None)
+                .await;
+        let server = Arc::new(WsServer::<crate::server::Global>::default());
+        let start = Instant::now();
+        let mut serving = tokio::spawn(serve_connection(
+            Arc::new(Echo),
+            Arc::clone(&server),
+            Arc::new(no_message()),
+            wiring(),
+            SocketLimits {
+                max_lifetime: None,
+                max_message_bytes: 1024,
+                ping_interval: Some(INTERVAL),
+                ping_timeout: TIMEOUT,
+            },
+            server_socket,
+            std::future::pending(),
+        ));
+
+        // Each read flushes the Pong tungstenite queued for the Ping before it.
+        let mut pinged_at = Vec::new();
+        let answering = tokio::time::sleep(INTERVAL * ROUNDS + INTERVAL / 2);
+        tokio::pin!(answering);
+        loop {
+            tokio::select! {
+                () = &mut answering => break,
+                read = client.next() => match read {
+                    Some(Ok(Message::Ping(_))) => pinged_at.push(Instant::now() - start),
+                    other => panic!("only Pings reach a quiet peer: {other:?}"),
+                },
+            }
+        }
+        let expected: Vec<Duration> = (1..=ROUNDS).map(|round| INTERVAL * round).collect();
+        assert_eq!(
+            pinged_at, expected,
+            "once per interval of the peer's silence"
+        );
+        assert_eq!(
+            server.connection_count(),
+            1,
+            "an answering peer keeps its socket"
+        );
+
+        let last_ping = *pinged_at.last().expect("pinged");
+        let dropped = tokio::time::timeout(INTERVAL * 2 + TIMEOUT, &mut serving)
+            .await
+            .expect("the socket is dropped once its peer answers no Ping");
+        assert!(dropped.is_ok(), "the connection task itself never panics");
+        assert_eq!(
+            Instant::now() - start,
+            last_ping + INTERVAL + TIMEOUT,
+            "past the Ping the peer never answered, by its timeout",
+        );
+        assert_eq!(server.connection_count(), 0, "the registry let it go");
+        let mut read = Vec::new();
+        while let Some(frame) = client.next().await {
+            let failed = frame.is_err();
+            read.push(frame);
+            if failed {
+                break;
+            }
+        }
+        assert!(
+            matches!(read.as_slice(), [Ok(Message::Ping(_)), ..])
+                && !read
+                    .iter()
+                    .any(|frame| matches!(frame, Ok(Message::Close(_)))),
+            "its last Ping, then the end of the stream with no Close: {read:?}",
+        );
+        let line = logs.expect_one(
+            crate::TARGET,
+            "closing socket: the peer sent nothing back within the ping timeout",
+        );
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("host").as_deref(), Some("Echo"));
+        assert_eq!(line.field("path").as_deref(), Some("/echo"));
+        let left = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::DISCONNECT.name(),
+        );
+        assert_eq!(left.field("outcome").as_deref(), Some(operation_log::OK));
+    }
+
     /// Pins the event, not the path: every `try_send` failure routes through
     /// `stalled_outbox`.
     #[test]
     fn a_peer_that_stops_draining_is_closed_with_a_reason() {
         let logs = nest_rs_testing::LogCapture::install();
-        let closure = stalled_outbox(7);
+        let closure = stalled_outbox(&wiring().site, 7);
 
         assert!(matches!(
             closure,

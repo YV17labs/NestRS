@@ -4,9 +4,9 @@
 //! A subscription goes through the same gate as every operation, decided once at
 //! subscribe, so every item is filtered against the ability captured then
 //! ([`keep_masked_item`]). The socket is bounded as a gateway's is: a browser
-//! origin checked at the upgrade, a lifetime ceiling, a message cap, a wait
-//! for `connection_init` and a count of operations running at once
-//! ([`GraphqlConfig`]).
+//! origin checked at the upgrade, a lifetime ceiling, a message cap, a Ping to
+//! a silent peer and a wait for its answer, a wait for `connection_init` and a
+//! count of operations running at once ([`GraphqlConfig`]).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -26,7 +26,8 @@ use nest_rs_core::__private::Site;
 use nest_rs_core::anyhow;
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
 use nest_rs_http::__private::websocket::{
-    self, CloseCode, HandshakeRefused, Message, WebSocketLimits, WebSocketStream, WebSocketUpgrade,
+    self, CloseCode, Due, HandshakeRefused, KeepAlive, Message, WebSocketLimits, WebSocketStream,
+    WebSocketUpgrade,
 };
 use nest_rs_http::{DetachedWork, Endpoint, Request, Response};
 use tracing::Instrument;
@@ -207,23 +208,31 @@ enum Refusal {
     /// The read failed — a frame past the message cap (1009), or broken framing
     /// (1011) — with the close the gateway's socket ends with too.
     ReadFailed(CloseCode, &'static str),
+    /// The peer sent nothing back within its Ping's timeout: taken for gone, it
+    /// is sent no Close, which RFC 6455 §7.1.7 lets an endpoint omit when the
+    /// peer is unlikely to read it, as the gateway's socket is not.
+    Silent,
 }
 
 impl Refusal {
-    fn close(self) -> (CloseCode, &'static str) {
+    /// The Close the peer is told the refusal in; `None` for a peer taken for
+    /// gone.
+    fn close(self) -> Option<(CloseCode, &'static str)> {
         match self {
-            Self::InitTimeout => (CloseCode::from(4408), "Connection initialisation timeout"),
-            Self::SubscriberExists => (CloseCode::from(4409), "Subscriber already exists"),
-            Self::ReadFailed(code, reason) => (code, reason),
+            Self::InitTimeout => Some((CloseCode::from(4408), "Connection initialisation timeout")),
+            Self::SubscriberExists => Some((CloseCode::from(4409), "Subscriber already exists")),
+            Self::ReadFailed(code, reason) => Some((code, reason)),
+            Self::Silent => None,
         }
     }
 
     /// How the socket's line files it: a read that failed is most often the
-    /// connection gone, which a peer ends.
+    /// connection gone, which a peer ends; a silent peer the server dropped.
     fn ended(self) -> Ended {
         match self {
             Self::InitTimeout | Self::SubscriberExists => Ended::Refused,
             Self::ReadFailed(..) => Ended::ByPeer,
+            Self::Silent => Ended::ByServer,
         }
     }
 }
@@ -252,6 +261,10 @@ struct SocketBounds {
     connection_init_timeout: Duration,
     /// Operations running at once; `None` ⇒ unlimited.
     max_operations: Option<usize>,
+    /// The peer's silence that earns it a Ping; `None` ⇒ no Ping.
+    ping_interval: Option<Duration>,
+    /// What a Ping waits for any frame back.
+    ping_timeout: Duration,
 }
 
 impl SocketBounds {
@@ -261,14 +274,40 @@ impl SocketBounds {
             max_message_bytes: config.max_message_bytes,
             connection_init_timeout: config.connection_init_timeout,
             max_operations: config.max_socket_operations,
+            ping_interval: config.ping_interval,
+            ping_timeout: config.ping_timeout,
         }
+    }
+}
+
+/// The mount a socket's lines name, in the fields of its `mounted endpoint`
+/// line: the endpoint's host, and the path its upgrade matched.
+#[derive(Clone)]
+struct SocketSite {
+    path: Arc<str>,
+}
+
+impl SocketSite {
+    /// The upgrade `req`'s, the endpoint's address before it is routed.
+    fn of(req: &Request) -> Self {
+        Self {
+            path: Arc::from(req.route().unwrap_or(ENDPOINT.address())),
+        }
+    }
+
+    fn host(&self) -> &'static str {
+        ENDPOINT.host_name()
     }
 }
 
 /// The end the socket's server half arms: the shutdown signal, or the lifetime
 /// ceiling (`None` ⇒ none), whichever comes first. The deadline is **absolute**,
 /// not an idle timeout, so traffic never pushes it out.
-async fn ends_at(going_away: impl Future<Output = ()>, ttl: Option<Duration>) -> Ending {
+async fn ends_at(
+    going_away: impl Future<Output = ()>,
+    ttl: Option<Duration>,
+    site: SocketSite,
+) -> Ending {
     let ceiling = async {
         match ttl {
             Some(ttl) => tokio::time::sleep(ttl).await,
@@ -281,6 +320,8 @@ async fn ends_at(going_away: impl Future<Output = ()>, ttl: Option<Duration>) ->
             // `debug`: shutdown is logged once; a line per socket is noise.
             tracing::debug!(
                 target: crate::TARGET,
+                host = site.host(),
+                path = &*site.path,
                 close_code = u16::from(CloseCode::Away),
                 "closing subscription socket: the server is going away",
             );
@@ -289,6 +330,8 @@ async fn ends_at(going_away: impl Future<Output = ()>, ttl: Option<Duration>) ->
         () = ceiling => {
             tracing::info!(
                 target: crate::TARGET,
+                host = site.host(),
+                path = &*site.path,
                 max_connection_ms = ttl.map_or(0, |ttl| ttl.as_millis()),
                 close_code = u16::from(CloseCode::Away),
                 "closing subscription socket: max lifetime reached",
@@ -358,6 +401,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 &ALL_WEBSOCKET_PROTOCOLS,
             ))?;
         let pipes = SocketPipes::of(&self.bridge, &req);
+        let site = SocketSite::of(&req);
         // What the upgrade's guards attached reaches the socket the way it
         // reaches a POST: forwarded by the seeds, carried by the connection.
         // Never the upgrade's scope nor its transaction: the socket's own
@@ -381,13 +425,13 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 // boundaries from this crate.
                 let span = nest_rs_core::operation_span!(crate::unit::SUBSCRIPTION, &correlation,);
                 let line = SubscriptionLine::new(correlation.clone(), span.clone());
-                let end = ends_at(sockets.going_away(), bounds.max_connection);
+                let end = ends_at(sockets.going_away(), bounds.max_connection, site.clone());
                 // A local slot, since the executor scope wraps a `()` future.
                 let mut ended: Option<Ended> = None;
                 let serving: crate::BoxFuture<'_, ()> = Box::pin(async {
                     let served = MESSAGE_BYTES.scope(
                         bounds.max_message_bytes,
-                        serve_socket(stream, executor, protocol, data, end, bounds, pipes),
+                        serve_socket(stream, executor, protocol, data, end, bounds, pipes, site),
                     );
                     ended = Some(match bounds.max_connection {
                         // A peer that stopped reading cannot hold the socket past
@@ -442,6 +486,10 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
 /// A `subscribe` past the operation cap, or one whose variables a global pipe
 /// refuses, never reaches the engine: this loop answers it the protocol's
 /// `error` for its id.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one socket's parts, each read once at the upgrade"
+)]
 async fn serve_socket<E: Executor>(
     stream: WebSocketStream,
     executor: E,
@@ -450,13 +498,15 @@ async fn serve_socket<E: Executor>(
     end: impl Future<Output = Ending> + Send + 'static,
     bounds: SocketBounds,
     pipes: Option<SocketPipes>,
+    site: SocketSite,
 ) -> Ended {
     let (mut sink, socket) = stream.split();
-    let inbound = Inbound::new(socket, end, bounds, pipes);
+    let inbound = Inbound::new(socket, end, bounds, pipes, site);
     let started = Arc::clone(&inbound.started);
     let ending = Arc::clone(&inbound.ending);
     let refusal = Arc::clone(&inbound.refusal);
     let withheld = Arc::clone(&inbound.withheld);
+    let ping = Arc::clone(&inbound.ping);
     let mut engine =
         async_graphql::http::WebSocket::from_message_stream(executor, inbound, protocol)
             .connection_data(data);
@@ -471,6 +521,13 @@ async fn serve_socket<E: Executor>(
         // the socket with 1011.
         let next = tokio::select! {
             () = withheld.ready.notified() => continue,
+            // The peer's half owns the keepalive; this half owns the `Sink`.
+            () = ping.notified() => {
+                if let Err(error) = sink.send(Message::Ping(Default::default())).await {
+                    return stopped_writing(&error);
+                }
+                continue;
+            }
             next = nest_rs_core::panic::contain(engine.next()) => next,
         };
         let next = match next {
@@ -497,8 +554,9 @@ async fn serve_socket<E: Executor>(
         }
     }
     if let Some(refusal) = refusal.get() {
-        let (code, reason) = refusal.close();
-        close_socket(&mut sink, code, reason).await;
+        if let Some((code, reason)) = refusal.close() {
+            close_socket(&mut sink, code, reason).await;
+        }
         return refusal.ended();
     }
     match ending.get() {
@@ -687,6 +745,12 @@ struct Inbound<S> {
     refusal: Arc<OnceLock<Refusal>>,
     /// The global pipes each operation's variables go through, if any.
     pipes: Option<SocketPipes>,
+    /// Every frame the peer sends is heard here, the one reader of the socket.
+    keep_alive: KeepAlive,
+    ping_timeout: Duration,
+    /// Wakes the loop to send the Ping the keepalive owes.
+    ping: Arc<tokio::sync::Notify>,
+    site: SocketSite,
 }
 
 impl<S> Inbound<S> {
@@ -695,6 +759,7 @@ impl<S> Inbound<S> {
         end: impl Future<Output = Ending> + Send + 'static,
         bounds: SocketBounds,
         pipes: Option<SocketPipes>,
+        site: SocketSite,
     ) -> Self {
         Self {
             socket,
@@ -707,6 +772,10 @@ impl<S> Inbound<S> {
             withheld: Arc::default(),
             refusal: Arc::default(),
             pipes,
+            keep_alive: KeepAlive::new(bounds.ping_interval, bounds.ping_timeout),
+            ping_timeout: bounds.ping_timeout,
+            ping: Arc::default(),
+            site,
         }
     }
 
@@ -765,6 +834,21 @@ where
             );
             return this.refuse(Refusal::InitTimeout);
         }
+        match this.keep_alive.poll_due(cx) {
+            Poll::Ready(Due::Ping) => this.ping.notify_one(),
+            Poll::Ready(Due::Silent) => {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    host = this.site.host(),
+                    path = &*this.site.path,
+                    ping_timeout_ms = this.ping_timeout.as_millis(),
+                    "closing subscription socket: the peer sent nothing back within the ping \
+                     timeout",
+                );
+                return this.refuse(Refusal::Silent);
+            }
+            Poll::Pending => {}
+        }
         // The loop answers the withheld `subscribe`, then polls the engine again.
         if this.withheld.waits() {
             return Poll::Pending;
@@ -777,6 +861,8 @@ where
                     let (code, reason) = websocket::read_failed(&error);
                     tracing::debug!(
                         target: crate::TARGET,
+                        host = this.site.host(),
+                        path = &*this.site.path,
                         error = %nest_rs_core::error_message(&error),
                         close_code = u16::from(code),
                         "subscription socket read failed",
@@ -784,6 +870,7 @@ where
                     return this.refuse(Refusal::ReadFailed(code, reason));
                 }
                 Poll::Ready(Some(Ok(message))) => {
+                    this.keep_alive.heard();
                     if !(message.is_text() || message.is_binary()) {
                         continue;
                     }
@@ -1263,6 +1350,76 @@ mod tests {
         SocketBounds::of(&GraphqlConfig::default())
     }
 
+    /// The peer's half asks the loop for a Ping once the peer has been silent for
+    /// the interval, takes any frame back as its answer, and once none comes
+    /// within the timeout ends, refusing the socket as a silent peer's. Fed from
+    /// a channel, so paused time never outruns a frame in flight.
+    #[tokio::test(start_paused = true)]
+    async fn the_peers_half_pings_a_silent_peer_and_gives_it_up_unanswered() {
+        use tokio::time::Instant;
+
+        const ROUNDS: u32 = 30;
+        let interval = nest_rs_http::DEFAULT_PING_INTERVAL;
+        let timeout = nest_rs_http::DEFAULT_PING_TIMEOUT;
+
+        let (peer, mut frames) = tokio::sync::mpsc::unbounded_channel();
+        let socket = futures_util::stream::poll_fn(move |cx| frames.poll_recv(cx));
+        let mut inbound = Inbound::new(
+            socket,
+            std::future::pending(),
+            bounds(),
+            None,
+            SocketSite {
+                path: Arc::from("/graphql"),
+            },
+        );
+        let ping = Arc::clone(&inbound.ping);
+        let refusal = Arc::clone(&inbound.refusal);
+        peer.send(Ok(Message::text(r#"{"type":"connection_init"}"#)))
+            .expect("open");
+        assert!(matches!(
+            inbound.next().await,
+            Some(Ok(ClientMessage::ConnectionInit { .. }))
+        ));
+        let start = Instant::now();
+
+        let mut pinged_at = Vec::new();
+        while pinged_at.len() < ROUNDS as usize {
+            tokio::select! {
+                read = inbound.next() => panic!(
+                    "nothing reaches the engine, the socket not ended: {}",
+                    read.is_some(),
+                ),
+                () = ping.notified() => {
+                    pinged_at.push(Instant::now() - start);
+                    peer.send(Ok(Message::Pong(Default::default()))).expect("open");
+                }
+            }
+        }
+        let expected: Vec<Duration> = (1..=ROUNDS).map(|round| interval * round).collect();
+        assert_eq!(
+            pinged_at, expected,
+            "once per interval of the peer's silence"
+        );
+
+        let last_ping = *pinged_at.last().expect("pinged");
+        assert!(
+            inbound.next().await.is_none(),
+            "a peer answering none ends the peer's half"
+        );
+        assert_eq!(
+            Instant::now() - start,
+            last_ping + interval + timeout,
+            "past the Ping the peer never answered, by its timeout",
+        );
+        assert_eq!(refusal.get(), Some(&Refusal::Silent));
+        assert_eq!(
+            Refusal::Silent.close(),
+            None,
+            "a silent peer is sent no Close"
+        );
+    }
+
     /// The engine runs a document's one operation without its name, so the
     /// socket's end must complete it like any other subscription.
     #[test]
@@ -1299,6 +1456,9 @@ mod tests {
             },
             bounds(),
             None,
+            SocketSite {
+                path: Arc::from("/graphql"),
+            },
         );
         let ending = Arc::clone(&inbound.ending);
         for _ in 0..4 {
@@ -1348,6 +1508,9 @@ mod tests {
             },
             bounds(),
             None,
+            SocketSite {
+                path: Arc::from("/graphql"),
+            },
         );
         let started = Arc::clone(&inbound.started);
         for _ in 0..3 {

@@ -184,17 +184,19 @@ impl HttpGuardStage {
     /// handler reads, or one a later guard requires — whose absence on a
     /// `#[public]` route is the caller's `401`.
     fn producing_a_needed_principal(&self) -> Option<&ResolvedLayer<dyn Guard>> {
-        let required = self
-            .guards
-            .iter()
-            .filter_map(|entry| entry.layer.expected_principal())
-            .filter(|claim| !claim.or_visitor)
-            .map(|claim| claim.type_id);
         self.needed
-            .map(|needed| needed.principal)
-            .into_iter()
-            .chain(required)
-            .find_map(|principal| self.guards.iter().find(|entry| produces(entry, principal)))
+            .and_then(|needed| self.guards.get(needed.guard))
+            .or_else(|| {
+                self.guards
+                    .iter()
+                    .filter_map(|entry| entry.layer.expected_principal())
+                    .filter(|claim| !claim.or_visitor)
+                    .find_map(|claim| {
+                        self.guards
+                            .iter()
+                            .find(|entry| produces(entry, claim.type_id))
+                    })
+            })
     }
 
     /// The stage refusing, once its guards passed, a caller they admitted

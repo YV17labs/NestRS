@@ -448,16 +448,10 @@ impl<'a> Iterator for ForwardedPairs<'a> {
             self.rest = None;
             return None;
         }
-        Some(match Self::pair(text) {
-            Ok((pair, rest)) => {
-                self.rest = Some(rest);
-                Ok(pair)
-            }
-            Err(unreadable) => {
-                self.rest = None;
-                Err(unreadable)
-            }
-        })
+        let read = Self::pair(text);
+        // Past a refusal nothing is read.
+        self.rest = read.as_ref().ok().map(|&(_, rest)| rest);
+        Some(read.map(|(pair, _)| pair))
     }
 }
 

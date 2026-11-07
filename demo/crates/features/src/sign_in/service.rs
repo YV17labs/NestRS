@@ -3,6 +3,7 @@ use std::sync::Arc;
 use nest_rs::authn::{AuthError, JwtService, PrincipalIdentity};
 use nest_rs::config::{ConfigError, Namespaced};
 use nest_rs::core::{async_trait, hooks, injectable};
+use nest_rs::oauth::client::TokenSet;
 use nest_rs::oauth::server::{
     AccessTokenRequest, AccessTokenResponse, OAuthServerConfig, TokenError,
 };
@@ -146,6 +147,7 @@ impl SocialSignIn for SignInService {
     async fn sign_in(
         &self,
         profile: SocialProfile,
+        _tokens: TokenSet,
         resource: Option<&str>,
     ) -> Result<Caller, AuthError> {
         let user = self

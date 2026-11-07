@@ -65,6 +65,25 @@ neither is deployment config until you need more than sign-in. Each entry is one
 RFC 6749 §3.3 `scope-token`: `SCOPES="openid email"` is one entry holding a space,
 and fails the boot naming the variable — write `openid,email`.
 
+What a provider reads beyond the client's own parameters goes in
+`<PREFIX>_SOCIAL__<PROVIDER>__AUTHORIZATION_PARAMETERS`, a JSON object under the names
+the provider documents. Google issues a refresh token only to a request saying
+`access_type=offline`, and on a consent already given only with `prompt=consent`:
+
+```bash
+NESTRS_SOCIAL__GOOGLE__AUTHORIZATION_PARAMETERS='{"access_type":"offline","prompt":"consent"}'
+NESTRS_SOCIAL__GITHUB__AUTHORIZATION_PARAMETERS='{"prompt":"select_account"}'
+```
+
+The client sends `response_type`, `client_id`, `redirect_uri`, `scope`, `state`,
+`code_challenge` and `code_challenge_method` itself, and reads the answer where
+`response_mode`, `request` and `request_uri` would move it, so naming one of those —
+or `nonce`, in any case — fails the boot, as does a parameter with no value or named
+twice. So does a credential of the client's, `client_secret`, `client_assertion` or
+`client_assertion_type`, and its PKCE `code_verifier`: those go to the token endpoint
+alone, never into the authorization URL every browser is redirected to. The refresh
+token reaches your `SocialSignIn` with the provider's access token.
+
 Three outcomes per imported provider, and no fourth:
 
 | Config for `<PREFIX>_SOCIAL__<PROVIDER>__*` | Outcome |
@@ -116,8 +135,8 @@ Two legs, both dispatched by a `{provider}` path segment:
 - `GET /social/{provider}/callback` — the redirect URI, guarded by
   `AuthnGuard<SocialStrategy<S>>`. The strategy reads RFC 6749 §4.1.2's
   response against the transaction cookie, exchanges the code, fetches the
-  profile, and hands it to your `SocialSignIn`, which says who that profile
-  is here; the handler reads the principal as `Ambient<…>` and issues this app's
+  profile, and hands it, with the provider's tokens, to your `SocialSignIn`,
+  which says who that profile is here; the handler reads the principal as `Ambient<…>` and issues this app's
   token. A forged, expired or foreign transaction, or another `state`, is a
   `401` before anything else in the response is read. A provider's own
   refusal (§4.1.2.1's `error`: `access_denied` when the user cancelled),
@@ -137,6 +156,7 @@ impl SocialSignIn for SignInService {
     async fn sign_in(
         &self,
         profile: SocialProfile,
+        _tokens: TokenSet,
         resource: Option<&str>,
     ) -> Result<Caller, AuthError> {
         let user = self
@@ -289,7 +309,10 @@ credential, so the GitHub and Google configs write their `Debug` and show it
 through `nest_rs::config::endpoint_shown`; yours does the same.
 
 The config also composes the `OAuthClientConfig` the shared client takes:
-your provider's endpoints, the deployment's credentials and its redirect.
+your provider's endpoints, the deployment's credentials and its redirect, and the
+`AuthorizationParameters` a field of yours reads under `#[config(json)]`, whose
+`refusal()` is the validation code a custom validator of yours refuses it with, as the
+GitHub and Google configs do.
 Refuse the redirect there, under your own variable — the client refuses a
 plaintext one too, but by `<PREFIX>_OAUTH__CLIENT__REDIRECT_URL`, a name
 your deployment never set:
@@ -312,6 +335,7 @@ impl AcmeSocialConfig {
             redirect_url: self.redirect_url.clone(),
             userinfo_url: "https://api.acme.dev/me".into(),
             scopes: self.scopes.clone(),
+            authorization_parameters: self.authorization_parameters.clone(),
             tls: ClientTls::default(),
         })
     }

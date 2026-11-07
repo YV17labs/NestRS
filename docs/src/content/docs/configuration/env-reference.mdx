@@ -289,6 +289,7 @@ boot naming the field:
 | `REDIRECT_URL` | this app's callback the provider returns to; `https`, or `http` on `localhost`, `127.0.0.1` or `[::1]` (RFC 8252 §7.3) in a declared development or test profile (`<PREFIX>_ENV`) alone |
 | `USERINFO_URL` | provider endpoint the profile is fetched from; `https` only (RFC 6750 §5.3) |
 | `SCOPES` | comma-separated scopes requested at authorization (empty by default), each an RFC 6749 §3.3 `scope-token`: one holding a space or a `"` fails the boot |
+| `AUTHORIZATION_PARAMETERS` | a JSON object of strings the authorization request carries beside the client's own, under the provider's names (`{"access_type":"offline","prompt":"consent"}`); none by default. A name outside RFC 6749 §8.2's grammar (letters, digits, `-`, `.`, `_`), a parameter the client sends itself — `response_type`, `client_id`, `redirect_uri`, `scope`, `state`, `code_challenge`, `code_challenge_method`, `nonce`, `response_mode`, `request`, `request_uri` — or sends the token endpoint alone — `client_secret`, `client_assertion`, `client_assertion_type`, `code_verifier` — in any case, and one with no value or named twice fails the boot |
 | `TLS_CA_CERT` | PEM certificates of the authorities the provider's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate fails the boot |
 | `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a provider that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither |
 
@@ -352,6 +353,7 @@ with a boot `warn`, partial ⇒ the boot fails naming the provider.
 | `CLIENT_ID` / `CLIENT_SECRET` | the provider's OAuth app credentials |
 | `REDIRECT_URL` | the registered callback this app is returned to |
 | `SCOPES` | comma-separated scopes; each provider has a sensible default when unset. Each is an RFC 6749 §3.3 `scope-token`: one holding a space or a `"` fails the boot |
+| `AUTHORIZATION_PARAMETERS` | a JSON object of strings the provider's authorization request carries beside the client's own (`{"access_type":"offline","prompt":"consent"}` for a refresh token from Google); none by default, refused as the OAuth client's `AUTHORIZATION_PARAMETERS` is |
 
 The endpoint URLs are provider constants, not config — see
 [Social login](/security/authentication/social-login/).

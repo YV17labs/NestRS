@@ -34,6 +34,7 @@ impl ProbeSocialConfig {
             redirect_url: "https://app.example/social/probe/callback".into(),
             userinfo_url: "https://probe.example/me".into(),
             scopes: Vec::new(),
+            authorization_parameters: Default::default(),
             tls: ClientTls::default(),
         }
     }

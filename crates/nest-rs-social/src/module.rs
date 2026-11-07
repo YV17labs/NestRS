@@ -55,6 +55,7 @@ mod tests {
                 client_secret: "seeded-secret".into(),
                 redirect_url: "https://acme.example.com/auth/github/callback".into(),
                 scopes: Vec::new(),
+                authorization_parameters: Default::default(),
             })
             .build()
             .await

@@ -1,7 +1,7 @@
 use nest_rs_authn::AuthError;
 use nest_rs_config::{ClientTls, Namespaced, config, endpoint_shown};
 use nest_rs_core::Secret;
-use nest_rs_oauth_client::{OAuthClientConfig, refuse_plaintext_redirect};
+use nest_rs_oauth_client::{AuthorizationParameters, OAuthClientConfig, refuse_plaintext_redirect};
 
 use crate::registry::SocialProviderConfig;
 
@@ -28,6 +28,13 @@ pub struct GithubSocialConfig {
     /// `scope-token`, so one holding a space or a `"` fails the boot.
     #[validate(custom(function = "crate::providers::scope_tokens"))]
     pub scopes: Vec<String>,
+    /// What the authorization request carries beside the client's own
+    /// parameters (key `AUTHORIZATION_PARAMETERS`, a JSON object of strings);
+    /// none by default. A parameter the client sends itself fails the boot
+    /// ([`AuthorizationParameters`]).
+    #[config(json)]
+    #[validate(custom(function = "crate::providers::sendable"))]
+    pub authorization_parameters: AuthorizationParameters,
 }
 
 impl GithubSocialConfig {
@@ -63,6 +70,7 @@ impl GithubSocialConfig {
             redirect_url: self.redirect_url.clone(),
             userinfo_url: Self::USERINFO_URL.to_owned(),
             scopes: self.scopes_or_default(),
+            authorization_parameters: self.authorization_parameters.clone(),
             tls: ClientTls::default(),
         })
     }
@@ -75,18 +83,21 @@ impl std::fmt::Debug for GithubSocialConfig {
             client_secret,
             redirect_url,
             scopes,
+            authorization_parameters,
         } = self;
         f.debug_struct("GithubSocialConfig")
             .field("client_id", client_id)
             .field("client_secret", client_secret)
             .field("redirect_url", &endpoint_shown(redirect_url))
             .field("scopes", scopes)
+            .field("authorization_parameters", authorization_parameters)
             .finish()
     }
 }
 
 impl SocialProviderConfig for GithubSocialConfig {
-    /// `scopes` alone does not count as configuration — it has a default, so a
+    /// `scopes` and `authorization_parameters` alone do not count as
+    /// configuration — neither names an app, so a
     /// deployment that sets only scopes still has no GitHub app to talk to.
     fn is_unconfigured(&self) -> bool {
         self.client_id.is_empty()
@@ -105,6 +116,7 @@ mod tests {
             client_secret: "secret".into(),
             redirect_url: "https://app.example/social/github/callback".into(),
             scopes: vec![],
+            authorization_parameters: Default::default(),
         }
     }
 
@@ -132,6 +144,66 @@ mod tests {
             );
             assert!(!rendered.contains("never"), "{rendered}");
         }
+    }
+
+    /// The parameters a deployment sets under the provider's own variable reach
+    /// the provider's authorization request beside the client's own.
+    #[test]
+    fn the_authorization_parameters_set_reach_the_providers_request() {
+        use nest_rs_config::{Config, ConfigService};
+
+        let env = ConfigService::with_vars(
+            "social__github",
+            [(
+                "AUTHORIZATION_PARAMETERS",
+                r#"{"prompt":"select_account","allow_signup":"false"}"#,
+            )],
+        );
+        let config = GithubSocialConfig::from_env(&env, complete()).expect("the variable reads");
+        let jwt = nest_rs_authn::JwtService::new(nest_rs_authn::JwtOptions::new(
+            "a-secret-padded-to-thirty-two-bytes",
+        ))
+        .expect("a signer");
+
+        let client =
+            nest_rs_oauth_client::OAuthClient::new(config.oauth2_config().expect("composes"))
+                .expect("builds");
+        let redirect = client.authorize(&jwt, "github", None).expect("authorize");
+
+        let pairs: Vec<&str> = redirect.url().split(['?', '&']).skip(1).collect();
+        for sent in ["prompt=select_account", "allow_signup=false"] {
+            assert!(pairs.contains(&sent), "{sent}: {pairs:?}");
+        }
+    }
+
+    /// A parameter the client sends itself is refused under the provider's own
+    /// variable.
+    #[test]
+    fn a_parameter_the_client_sends_itself_is_refused_naming_the_providers_variable() {
+        use nest_rs_config::{Config, ConfigService};
+        use validator::Validate;
+
+        let env = ConfigService::with_vars(
+            "social__github",
+            [(
+                "AUTHORIZATION_PARAMETERS",
+                r#"{"redirect_uri":"https://never.example"}"#,
+            )],
+        );
+        let config = GithubSocialConfig::from_env(&env, complete()).expect("the variable reads");
+        let rendered = nest_rs_config::ConfigError::validation(
+            GithubSocialConfig::NAMESPACE,
+            config.validate().expect_err("refused"),
+        )
+        .to_string();
+        assert!(
+            rendered.contains(&format!(
+                "authorization_parameters ({}): sent_by_the_client",
+                nest_rs_config::var_name("social__github", "AUTHORIZATION_PARAMETERS")
+            )),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("never"), "{rendered}");
     }
 
     #[test]

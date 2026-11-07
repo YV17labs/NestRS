@@ -72,6 +72,43 @@ fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
     assert_eq!(tx.provider, "acme");
 }
 
+/// A provider asking for a parameter this client does not send — Google's
+/// `access_type=offline` for a refresh token, `prompt=consent` to ask the
+/// consent again — is set under the parameter's own name, and the request
+/// carries it beside the client's own.
+#[test]
+fn the_authorization_parameters_a_deployment_sets_reach_the_provider() {
+    let env = ConfigService::with_vars(
+        OAuthClientConfig::NAMESPACE,
+        [(
+            "AUTHORIZATION_PARAMETERS",
+            r#"{"access_type":"offline","prompt":"consent","ui_locales":"fr en"}"#,
+        )],
+    );
+    let config = OAuthClientConfig::from_env(&env, valid_config()).expect("the variable reads");
+
+    let url = OAuthClient::new(config)
+        .expect("client builds")
+        .authorize(&crate::jwt(), "acme", None)
+        .expect("authorize")
+        .url()
+        .to_owned();
+
+    let pairs: Vec<&str> = url.split(['?', '&']).skip(1).collect();
+    for sent in ["access_type=offline", "prompt=consent", "ui_locales=fr+en"] {
+        assert!(pairs.contains(&sent), "{sent}: {url}");
+    }
+    assert!(pairs.contains(&"client_id=demo-client"), "{url}");
+    assert_eq!(
+        pairs
+            .iter()
+            .filter(|pair| pair.starts_with("state="))
+            .count(),
+        1,
+        "{url}"
+    );
+}
+
 /// The cookie is signed by the same service, key, `aud` and `iss` as an access
 /// token: the media type (RFC 9068 §2.1) is the only thing telling them apart.
 #[tokio::test]

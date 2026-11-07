@@ -49,7 +49,7 @@ impl SocialProvider for StubProvider {
     fn exchange(&self, response: AuthorizationResponse) -> TokenFuture<'_> {
         Box::pin(async move {
             assert_eq!(response.code().expose_secret(), CODE);
-            Ok(TokenSet::new("provider-access-token"))
+            Ok(TokenSet::new("provider-access-token").with_refresh_token("provider-refresh-token"))
         })
     }
 
@@ -71,6 +71,7 @@ fn stub_provider() -> StubProvider {
             redirect_url: "https://app.example/social/callback-stub/callback".into(),
             userinfo_url: "https://provider.example/userinfo".into(),
             scopes: vec!["read".into()],
+            authorization_parameters: Default::default(),
             tls: nest_rs_config::ClientTls::default(),
         })
         .expect("a valid client"),
@@ -101,6 +102,7 @@ fn seeded_github_config() -> GithubSocialConfig {
         client_secret: "seeded-secret".into(),
         redirect_url: "https://acme.example.com/auth/github/callback".into(),
         scopes: Vec::new(),
+        authorization_parameters: Default::default(),
     }
 }
 
@@ -110,6 +112,7 @@ fn seeded_google_config() -> GoogleSocialConfig {
         client_secret: "seeded-secret".into(),
         redirect_url: "https://acme.example.com/auth/google/callback".into(),
         scopes: Vec::new(),
+        authorization_parameters: Default::default(),
     }
 }
 

@@ -118,6 +118,7 @@ fn sign_in_app_serving(
             client_secret: "github-secret".into(),
             redirect_url: "https://auth.example.com/social/github/callback".into(),
             scopes: Vec::new(),
+            authorization_parameters: Default::default(),
         })
 }
 

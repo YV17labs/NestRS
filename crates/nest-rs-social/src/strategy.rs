@@ -7,7 +7,7 @@ use std::sync::Arc;
 use nest_rs_authn::{AuthError, JwtService, PrincipalIdentity, Strategy};
 use nest_rs_core::{AmbientValue, async_trait, injectable};
 use nest_rs_http::{Request, header};
-use nest_rs_oauth_client::OAuthClient;
+use nest_rs_oauth_client::{OAuthClient, TokenSet};
 
 use crate::provider::SocialProfile;
 use crate::registry::SocialRegistry;
@@ -19,6 +19,7 @@ use crate::registry::SocialRegistry;
 /// ```
 /// use nest_rs_authn::{AuthError, PrincipalIdentity};
 /// use nest_rs_core::{async_trait, injectable};
+/// use nest_rs_oauth_client::TokenSet;
 /// use nest_rs_social::{SocialProfile, SocialSignIn};
 ///
 /// #[derive(Clone, PrincipalIdentity)]
@@ -39,6 +40,7 @@ use crate::registry::SocialRegistry;
 ///     async fn sign_in(
 ///         &self,
 ///         profile: SocialProfile,
+///         _tokens: TokenSet,
 ///         resource: Option<&str>,
 ///     ) -> Result<Member, AuthError> {
 ///         Ok(Member {
@@ -55,14 +57,19 @@ pub trait SocialSignIn: Send + Sync + 'static {
     type Principal: PrincipalIdentity + AmbientValue + Clone;
 
     /// The principal `profile` signs in as, keyed on its
-    /// [`subject`](SocialProfile::subject), never its email. `resource` is the
-    /// one (RFC 8707) the flow's own access token was asked for when it began
-    /// ([`SocialProvider::authorize`](crate::SocialProvider::authorize)),
+    /// [`subject`](SocialProfile::subject), never its email. `tokens` are what
+    /// the provider answered the exchange with — its access token, and the
+    /// refresh token it issued when the request asked for one (Google's
+    /// `access_type=offline`, an [`AuthorizationParameters`](nest_rs_oauth_client::AuthorizationParameters)
+    /// entry) — for a product calling the provider on the user's behalf to keep.
+    /// `resource` is the one (RFC 8707) the flow's own access token was asked
+    /// for when it began ([`SocialProvider::authorize`](crate::SocialProvider::authorize)),
     /// carried across the provider in the signed transaction; `None` when it
     /// named none.
     async fn sign_in(
         &self,
         profile: SocialProfile,
+        tokens: TokenSet,
         resource: Option<&str>,
     ) -> Result<Self::Principal, AuthError>;
 }
@@ -72,7 +79,7 @@ pub trait SocialSignIn: Send + Sync + 'static {
 /// `AuthnGuard<SocialStrategy<S>>`. It reads RFC 6749 §4.1.2's response
 /// against the transaction cookie that began the flow
 /// ([`OAuthClient::callback`]), trades the code for the provider's tokens and
-/// profile, and hands the profile to the product's [`SocialSignIn`].
+/// profile, and hands both to the product's [`SocialSignIn`].
 ///
 /// A provider's own refusal (§4.1.2.1's `error`) is read only once the
 /// response matches its transaction, and is refused as what it says:
@@ -131,6 +138,8 @@ impl<S: SocialSignIn> Strategy for SocialStrategy<S> {
         let resource = response.resource().map(str::to_owned);
         let tokens = provider.exchange(response).await?;
         let profile = provider.profile(&tokens).await?;
-        self.sign_in.sign_in(profile, resource.as_deref()).await
+        self.sign_in
+            .sign_in(profile, tokens, resource.as_deref())
+            .await
     }
 }

@@ -10,6 +10,7 @@ use nest_rs_authn::{
 };
 use nest_rs_core::{Ambient, AmbientValue, async_trait, injectable, module};
 use nest_rs_http::{HttpModule, IntoResponse as _, Json, StatusCode, controller, header, routes};
+use nest_rs_oauth_client::TokenSet;
 use nest_rs_social::{SocialModule, SocialProfile, SocialProvider, SocialSignIn, SocialStrategy};
 use nest_rs_testing::{TestApp, TestResponse};
 
@@ -18,6 +19,7 @@ use crate::{CODE, KEY, MCP, SECRET, StubSocialModule, stub_provider};
 #[derive(Clone)]
 struct Member {
     subject: String,
+    refresh_token: Option<String>,
     resource: Option<String>,
 }
 
@@ -43,11 +45,15 @@ impl SocialSignIn for MembersSignIn {
     async fn sign_in(
         &self,
         profile: SocialProfile,
+        tokens: TokenSet,
         resource: Option<&str>,
     ) -> Result<Member, AuthError> {
         self.signed_in.fetch_add(1, Ordering::SeqCst);
         Ok(Member {
             subject: format!("{}:{}", profile.provider, profile.subject),
+            refresh_token: tokens
+                .refresh_token
+                .map(|token| token.expose_secret().clone()),
             resource: resource.map(str::to_owned),
         })
     }
@@ -65,6 +71,7 @@ impl CallbackController {
     async fn callback(&self, member: Ambient<Member>) -> Json<serde_json::Value> {
         Json(serde_json::json!({
             "subject": member.subject,
+            "refresh_token": member.refresh_token,
             "resource": member.resource,
         }))
     }
@@ -143,6 +150,7 @@ async fn a_matched_response_signs_the_profile_in_for_the_resource_the_flow_asked
         response
             .assert_json(serde_json::json!({
                 "subject": format!("{KEY}:provider-subject-42"),
+                "refresh_token": "provider-refresh-token",
                 "resource": resource,
             }))
             .await;

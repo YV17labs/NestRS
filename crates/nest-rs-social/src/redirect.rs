@@ -82,6 +82,7 @@ mod tests {
             redirect_url: "https://app.example/callback".into(),
             userinfo_url: "https://provider.example/userinfo".into(),
             scopes: vec!["read".into()],
+            authorization_parameters: Default::default(),
             tls: nest_rs_config::ClientTls::default(),
         })
         .expect("a valid client");

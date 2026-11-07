@@ -7,6 +7,8 @@ use nest_rs_core::Secret;
 use nest_rs_guards::__private::is_scope_token;
 use oauth2::url::Url;
 
+use crate::AuthorizationParameters;
+
 // A family puts its name first in its namespace: 6.x read `oauth_client`.
 nest_rs_core::inventory::submit! {
     RetiredKeys::under("oauth_client", &[
@@ -57,6 +59,14 @@ pub struct OAuthClientConfig {
     /// ASCII fails the boot.
     #[validate(custom(function = "scope_tokens"))]
     pub scopes: Vec<String>,
+    /// What the authorization request carries beside the client's own
+    /// parameters (key `AUTHORIZATION_PARAMETERS`, a JSON object of strings) —
+    /// `{"access_type":"offline","prompt":"consent"}` for a refresh token from
+    /// Google; none by default. A parameter the client sends itself fails the
+    /// boot ([`AuthorizationParameters`]).
+    #[config(json)]
+    #[validate(custom(function = "sendable"))]
+    pub authorization_parameters: AuthorizationParameters,
     /// What the provider's certificate must chain to — the system's authorities
     /// unless `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` names others, which replace
     /// them — and the certificate presented to a provider requiring one
@@ -74,6 +84,7 @@ impl std::fmt::Debug for OAuthClientConfig {
             redirect_url,
             userinfo_url,
             scopes,
+            authorization_parameters,
             tls,
         } = self;
         f.debug_struct("OAuthClientConfig")
@@ -84,6 +95,7 @@ impl std::fmt::Debug for OAuthClientConfig {
             .field("redirect_url", &endpoint_shown(redirect_url))
             .field("userinfo_url", &endpoint_shown(userinfo_url))
             .field("scopes", scopes)
+            .field("authorization_parameters", authorization_parameters)
             .field("tls", tls)
             .finish()
     }
@@ -103,6 +115,14 @@ fn scope_tokens(scopes: &[String]) -> Result<(), validator::ValidationError> {
         Ok(())
     } else {
         Err(validator::ValidationError::new("not_a_scope_token"))
+    }
+}
+
+/// [`AuthorizationParameters::refusal`] as a validation error.
+fn sendable(parameters: &AuthorizationParameters) -> Result<(), validator::ValidationError> {
+    match parameters.refusal() {
+        Some(code) => Err(validator::ValidationError::new(code)),
+        None => Ok(()),
     }
 }
 
@@ -249,6 +269,7 @@ mod tests {
             redirect_url: "https://app.example/oauth/callback".into(),
             userinfo_url: "https://auth.example/oauth/userinfo".into(),
             scopes: vec!["read".into()],
+            authorization_parameters: AuthorizationParameters::default(),
             tls: ClientTls::default(),
         }
     }
@@ -577,6 +598,99 @@ mod tests {
                 "{said}"
             );
             assert!(!said.contains("never") && !said.contains("nevér"), "{said}");
+        }
+    }
+
+    /// `AUTHORIZATION_PARAMETERS`, read as a JSON object, rendered as a boot
+    /// refusal would say it.
+    fn parameters_refusal(json: &str) -> String {
+        let env = ConfigService::with_vars(
+            OAuthClientConfig::NAMESPACE,
+            [("AUTHORIZATION_PARAMETERS", json)],
+        );
+        let config = <OAuthClientConfig as nest_rs_config::Config>::from_env(&env, complete())
+            .expect("the variable reads");
+        let errors = config.validate().expect_err("refused");
+        nest_rs_config::ConfigError::validation(OAuthClientConfig::NAMESPACE, errors).to_string()
+    }
+
+    /// What this client sends itself, or what decides how the provider reads the
+    /// request or answers it, is the client's: a deployment setting one — in any
+    /// case — would send it twice or move the answer where no callback reads it.
+    /// Its credentials and its verifier are sent at the token endpoint alone: in
+    /// the authorization URL, the `Location` every browser is handed, a secret
+    /// reaches its history, a `Referer` and the provider's access log, which RFC
+    /// 6749 §2.3.1 forbids.
+    #[test]
+    fn a_parameter_the_client_sends_itself_is_refused_naming_the_key() {
+        for owned in [
+            "response_type",
+            "client_id",
+            "redirect_uri",
+            "scope",
+            "state",
+            "code_challenge",
+            "code_challenge_method",
+            "nonce",
+            "response_mode",
+            "request",
+            "request_uri",
+            "client_secret",
+            "client_assertion",
+            "client_assertion_type",
+            "code_verifier",
+            "STATE",
+            "Client_Secret",
+        ] {
+            let rendered = parameters_refusal(&format!(r#"{{"{owned}":"never-shown"}}"#));
+            assert!(
+                rendered.contains(&format!(
+                    "authorization_parameters ({}): sent_by_the_client",
+                    nest_rs_config::var_name("oauth__client", "AUTHORIZATION_PARAMETERS")
+                )),
+                "{owned}: {rendered}"
+            );
+            assert!(!rendered.contains("never-shown"), "{rendered}");
+
+            let composed = OAuthClientConfig {
+                authorization_parameters: AuthorizationParameters::from([(owned, "never-shown")]),
+                ..complete()
+            };
+            assert!(
+                OAuthClient::from_variables(composed).is_err(),
+                "{owned}: a client is built to send it"
+            );
+        }
+    }
+
+    /// RFC 6749 §8.2's `param-name`, a value to send (§3.1: one sent without a
+    /// value is as if omitted), and each parameter once (§3.1 again), in any
+    /// case, since a provider may read a name loosely.
+    #[test]
+    fn a_parameter_no_request_can_carry_is_refused_by_what_is_wrong() {
+        for (json, code) in [
+            (r#"{"never shown":"offline"}"#, "not_a_parameter_name"),
+            (r#"{"":"offline"}"#, "not_a_parameter_name"),
+            (r#"{"never=shown":"offline"}"#, "not_a_parameter_name"),
+            (r#"{"access_type":""}"#, "no_value"),
+            (
+                r#"{"prompt":"consent","prompt":"never-shown"}"#,
+                "named_twice",
+            ),
+            (
+                r#"{"prompt":"consent","PROMPT":"never-shown"}"#,
+                "named_twice",
+            ),
+        ] {
+            let rendered = parameters_refusal(json);
+            assert!(
+                rendered.contains(&format!(
+                    "authorization_parameters ({}): {code}",
+                    nest_rs_config::var_name("oauth__client", "AUTHORIZATION_PARAMETERS")
+                )),
+                "{json}: {rendered}"
+            );
+            assert!(!rendered.contains("never"), "{rendered}");
         }
     }
 

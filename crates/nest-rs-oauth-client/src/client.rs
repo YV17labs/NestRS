@@ -658,9 +658,11 @@ impl OAuthClient {
     /// Begin the flow: the [`AuthorizationRedirect`] a handler returns, its
     /// signed transaction bound to `provider` and carrying `resource`, the one
     /// (RFC 8707) the flow's own access token is asked for —
-    /// [`AuthorizationResponse::resource`] reads it back at the callback. A
-    /// transaction `jwt` cannot sign is the server's failure, which a caller
-    /// is never answered as its own.
+    /// [`AuthorizationResponse::resource`] reads it back at the callback. The
+    /// request carries the configured
+    /// [`authorization_parameters`](OAuthClientConfig::authorization_parameters)
+    /// after the client's own. A transaction `jwt` cannot sign is the server's
+    /// failure, which a caller is never answered as its own.
     pub fn authorize(
         &self,
         jwt: &JwtService,
@@ -673,6 +675,9 @@ impl OAuthClient {
         let mut request = client.authorize_url(CsrfToken::new_random);
         for scope in &self.config.scopes {
             request = request.add_scope(Scope::new(scope.clone()));
+        }
+        for (name, value) in self.config.authorization_parameters.iter() {
+            request = request.add_extra_param(name, value);
         }
         let (url, csrf) = request.set_pkce_challenge(challenge).url();
         let transaction = jwt.sign_handshake(
@@ -890,6 +895,7 @@ mod tests {
             redirect_url: "https://app.example/callback".into(),
             userinfo_url: "https://provider.example/userinfo".into(),
             scopes: vec!["read".into()],
+            authorization_parameters: Default::default(),
             tls: ClientTls::default(),
         }
     }

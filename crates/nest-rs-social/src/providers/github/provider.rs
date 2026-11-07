@@ -248,6 +248,7 @@ mod tests {
                 client_secret: "secret".into(),
                 redirect_url: "https://app.example/social/github/callback".into(),
                 scopes: Vec::new(),
+                authorization_parameters: Default::default(),
             }
             .oauth2_config()
             .expect("an https redirect composes")

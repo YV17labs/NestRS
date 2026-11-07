@@ -19,11 +19,13 @@
 /// refusal, token exchange, userinfo.
 pub const TARGET: &str = "nest_rs::oauth::client";
 
+mod authorization_parameters;
 mod client;
 mod config;
 mod module;
 mod redirect;
 
+pub use authorization_parameters::AuthorizationParameters;
 pub use client::{AuthorizationResponse, OAuthClient, TokenSet};
 pub use config::{OAuthClientConfig, refuse_plaintext_redirect};
 pub use module::{OAuthClientModule, OAuthClientSetup};

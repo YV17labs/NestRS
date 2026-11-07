@@ -32,6 +32,17 @@ pub(crate) fn scope_tokens(scopes: &[String]) -> Result<(), validator::Validatio
     }
 }
 
+/// The configured authorization parameters, refused as
+/// [`AuthorizationParameters::refusal`](nest_rs_oauth_client::AuthorizationParameters::refusal) says.
+pub(crate) fn sendable(
+    parameters: &nest_rs_oauth_client::AuthorizationParameters,
+) -> Result<(), validator::ValidationError> {
+    match parameters.refusal() {
+        Some(code) => Err(validator::ValidationError::new(code)),
+        None => Ok(()),
+    }
+}
+
 /// [`not_blank`] for a credential held as a [`Secret`](nest_rs_core::Secret).
 pub(crate) fn not_blank_secret(
     value: &nest_rs_core::Secret<String>,

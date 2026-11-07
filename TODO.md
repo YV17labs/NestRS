@@ -92,11 +92,6 @@ otherwise.
    of the right phase boots without `AuthnGuard`. Recommended: keep the demo
    without a pool; one line per root puts it back, and brings back the
    probes' `503` during an authentication outage.
-6. **A GraphQL argument costs `rows × value` of memory** with no credential:
-   1,037 MiB for a 1 MiB body over 1,000 rows (**seen**). A
-   `#[graphql(validator(max_length = …))]` bounds it (36 MiB). Recommended:
-   ship with that remedy documented, and report upstream that
-   `Context::var_value` clones.
 
 ## 3. Field-level authorization — the main design left
 
@@ -312,7 +307,9 @@ instead of `503`; positional reads of `JsonRpcResponse`); sqlx-core 0.9
 (`TryInsert::exec_with_returning` answers `RecordNotFound` where `Conflicted`
 is documented); async-graphql 7.2.1 (an errored field omitted from `data`;
 an interface field's error with no `path`; a field selected twice runs its
-writes twice; `Context::var_value` clones); redis-rs (`PipelineSink` loses a
+writes twice; an argument copied at each row of a list, `Context::var_value`
+and `get_param_value` cloning, which the framework bounds meanwhile with
+`max_list_argument_bytes`); redis-rs (`PipelineSink` loses a
 read error with nothing in flight); sse-stream 0.2.6 (keep-alive on std's
 clock).
 

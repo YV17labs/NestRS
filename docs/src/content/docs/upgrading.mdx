@@ -1413,6 +1413,12 @@ lists what the boot, a log or the wire shows when one is missed.
   socket, a key repeated with thousands of arguments among them. `max_complexity: None`
   leaves a fragment's repeats at ten million. Spread less, or raise the limit, which also
   holds a score under one that its repeats pass.
+- **A GraphQL document whose fields below a list read more than 4 KiB of arguments**,
+  which each row reads again, `query($v: String) { rows { f(x: $v) } }` with a large
+  `$v`, reads `Query is too complex.` and runs nothing, where every row copied the value.
+  Read the value once, on a root field or one only objects stand above, or raise
+  `max_list_argument_bytes` (`<PREFIX>_GRAPHQL__MAX_LIST_ARGUMENT_BYTES`), `None` or `0`
+  to turn it off.
 - **A GraphQL document holding a fragment no operation spreads** reads `Fragment "F" is
   never used` for the first in its text alone, where validation listed each beside the
   document's other errors. It was refused either way.

@@ -40,6 +40,10 @@ pub struct GraphqlConfig {
     /// Reject queries whose complexity score exceeds this. Default
     /// `Some(2000)` (production-safe); set `None` to disable. See Query limits.
     pub max_complexity: Option<usize>,
+    /// Reject a document whose fields below a list read more than this many
+    /// bytes of arguments, which each row reads again. Default `Some(4096)`;
+    /// set `None` to disable. See Query limits.
+    pub max_list_argument_bytes: Option<usize>,
     /// Answer introspection queries. `ByProfile` in `Default`: on in development
     /// and test.
     pub introspection: Surface,
@@ -71,6 +75,7 @@ pub struct GraphqlConfig {
 | `emit_path` | `<PREFIX>_GRAPHQL__EMIT_PATH` | `schema.graphql` | Where the SDL gets written; a relative path is the app crate's ([SDL emission](#sdl-emission)). |
 | `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` | `15` | Bound on AST nesting depth, from `1` to `33`, where async-graphql's own recursion bound takes over; `None` disables, as `0` does from the environment. See [Query limits](/graphql/query-limits/). |
 | `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` | `2000` | Bound on query complexity score and on what a fragment's repeats add, from `1` to `10000000`; `None` disables the score, as `0` does from the environment, and leaves the repeats at ten million. See [Query limits](/graphql/query-limits/#what-fragments-and-variables-multiply). |
+| `max_list_argument_bytes` | `<PREFIX>_GRAPHQL__MAX_LIST_ARGUMENT_BYTES` | `4096` | Bound on what the arguments of the fields a list stands above weigh, which each of its rows reads again, from `1` to `1073741824` (a gibibyte); `None` disables it, as `0` does from the environment, and a pinned `Some(0)` fails the boot. A root field's arguments are read once and never counted. See [Query limits](/graphql/query-limits/#what-fragments-and-variables-multiply). |
 | `introspection` | `<PREFIX>_GRAPHQL__INTROSPECTION` | `Surface::ByProfile`: open in development and test | When open, the schema answers introspection queries (`__schema`, `__type`). |
 | `max_batch_size` | `<PREFIX>_GRAPHQL__MAX_BATCH_SIZE` | `10` | Maximum operations in a single HTTP batch request, from `1` to `1024`, never off. |
 | `max_connection` | `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` | `14400` (4 h) | Ceiling on a subscription's lifetime. A **security** control: a socket authenticates once and replays those privileges for as long as it stays open. `0` disables it. |

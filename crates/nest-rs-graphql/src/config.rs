@@ -100,6 +100,22 @@ const MAX_REPRESENTATIONS: CountBounds = CountBounds::new(
     ),
 );
 
+/// Four kibibytes of argument values below a list: a cursor, a page size and a
+/// filter at each of several connections, read again at every row.
+const DEFAULT_MAX_LIST_ARGUMENT_BYTES: usize = 4 * 1024;
+
+const MAX_LIST_ARGUMENT_BYTES: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "a bound of no bytes refuses every argument a field below a list reads",
+    ),
+    Bound::new(
+        1 << 30,
+        "each row of a list holds its own copy at once, so past a gibibyte a thousand rows \
+         hold a terabyte; a deployment that means no bound turns it off",
+    ),
+);
+
 /// What the boot says when a deployment serves the playground.
 const PLAYGROUND_OPEN: &str = "GraphQL playground is enabled and public outside a dev profile";
 
@@ -183,6 +199,18 @@ pub struct GraphqlConfig {
     /// a worker for minutes.
     #[config(bounds = MAX_COMPLEXITY)]
     pub max_complexity: Option<usize>,
+    /// Most bytes the argument values of the fields below a list may weigh, which
+    /// each row of the list reads, and so copies, again, all held at once: a field's
+    /// own arguments, its directives', through its fragments, a variable counted at
+    /// each reference. Defaults to `Some(4096)`, from 1 to a gibibyte; `None`
+    /// disables the check, as `0` does from `<PREFIX>_GRAPHQL__MAX_LIST_ARGUMENT_BYTES`.
+    ///
+    /// A root field, or one only objects stand above, reads its arguments once, so
+    /// a mutation's large input is never counted here. A document past it is refused
+    /// before anything runs, `Query is too complex.`, the sentence of the other
+    /// limits on a document.
+    #[config(bounds = MAX_LIST_ARGUMENT_BYTES)]
+    pub max_list_argument_bytes: Option<usize>,
     /// Answer introspection queries. The schema is the API's documentation, so
     /// `Default` leaves this to the profile: answered under a declared
     /// development or test profile alone. Answering them outside one,
@@ -272,6 +300,7 @@ impl Default for GraphqlConfig {
             emit_path: "schema.graphql".into(),
             max_depth: Some(15),
             max_complexity: Some(2000),
+            max_list_argument_bytes: Some(DEFAULT_MAX_LIST_ARGUMENT_BYTES),
             introspection: Surface::ByProfile,
             max_batch_size: 10,
             max_connection: Some(nest_rs_http::DEFAULT_MAX_CONNECTION),
@@ -358,6 +387,7 @@ mod tests {
         assert_eq!(d.emit_path, PathBuf::from("schema.graphql"));
         assert_eq!(d.max_depth, Some(15));
         assert_eq!(d.max_complexity, Some(2000));
+        assert_eq!(d.max_list_argument_bytes, Some(4096));
         assert_eq!(d.max_batch_size, 10);
         assert!(
             !d.federation,
@@ -571,6 +601,7 @@ mod tests {
         let keys = [
             "MAX_DEPTH",
             "MAX_COMPLEXITY",
+            "MAX_LIST_ARGUMENT_BYTES",
             "MAX_SOCKET_OPERATIONS",
             "MAX_REPRESENTATIONS",
         ];
@@ -583,12 +614,17 @@ mod tests {
             [
                 unlimited.max_depth,
                 unlimited.max_complexity,
+                unlimited.max_list_argument_bytes,
                 unlimited.max_socket_operations,
                 unlimited.max_representations,
             ],
-            [None; 4]
+            [None; 5]
         );
         for pinned in [
+            GraphqlConfig {
+                max_list_argument_bytes: Some(0),
+                ..GraphqlConfig::default()
+            },
             GraphqlConfig {
                 max_socket_operations: Some(0),
                 ..GraphqlConfig::default()
@@ -612,11 +648,20 @@ mod tests {
     #[test]
     fn every_count_is_held_to_its_range_from_either_side() {
         type Pin = fn(usize) -> GraphqlConfig;
-        let cases: [(&str, &str, &str, Pin); 6] = [
+        let cases: [(&str, &str, &str, Pin); 7] = [
             ("MAX_DEPTH", "34", "33", |count| GraphqlConfig {
                 max_depth: Some(count),
                 ..GraphqlConfig::default()
             }),
+            (
+                "MAX_LIST_ARGUMENT_BYTES",
+                "1073741825",
+                "1073741824",
+                |count| GraphqlConfig {
+                    max_list_argument_bytes: Some(count),
+                    ..GraphqlConfig::default()
+                },
+            ),
             ("MAX_COMPLEXITY", "10000001", "10000000", |count| {
                 GraphqlConfig {
                     max_complexity: Some(count),

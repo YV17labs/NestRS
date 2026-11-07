@@ -14,6 +14,7 @@ use async_graphql::extensions::{
 };
 use async_graphql::{Request, ServerError, ServerResult, ValidationResult};
 
+use crate::config::GraphqlConfig;
 use crate::document_cost::{self, DocumentLimits};
 use crate::filed_once::FiledOnce;
 use crate::loader::LoaderSeeds;
@@ -25,12 +26,13 @@ use crate::redact::unparsed;
 pub(crate) struct RequestExtensionFactory(Arc<RequestExtension>);
 
 impl RequestExtensionFactory {
-    /// Each request seeded from `seeds`, what spreading a fragment again adds to its
-    /// document held to `repeated_selections`.
-    pub(crate) fn new(seeds: LoaderSeeds, repeated_selections: usize) -> Self {
+    /// Each request seeded from `seeds`, what its document adds to its text held to
+    /// what `config` bounds.
+    pub(crate) fn new(seeds: LoaderSeeds, config: &GraphqlConfig) -> Self {
         Self(Arc::new(RequestExtension {
             seeds,
-            repeated_selections,
+            repeated_selections: config.repeated_selections(),
+            list_argument_bytes: config.max_list_argument_bytes.unwrap_or(usize::MAX),
         }))
     }
 }
@@ -44,6 +46,7 @@ impl ExtensionFactory for RequestExtensionFactory {
 struct RequestExtension {
     seeds: LoaderSeeds,
     repeated_selections: usize,
+    list_argument_bytes: usize,
 }
 
 impl RequestExtension {
@@ -54,6 +57,7 @@ impl RequestExtension {
         DocumentLimits {
             repeated_selections: self.repeated_selections,
             copied_bytes: crate::subscription::current_request_limit().saturating_mul(2),
+            list_argument_bytes: self.list_argument_bytes,
         }
     }
 }
@@ -71,9 +75,13 @@ impl Extension for RequestExtension {
         // The operation's read cached a parse that passed; one that failed runs again
         // here, and the refusal says only what this one left.
         let refusal = match request.parsed_query() {
-            Ok(document) => {
-                document_cost::refusal(document, operation.as_deref(), &variables, self.limits())
-            }
+            Ok(document) => document_cost::refusal(
+                document,
+                operation.as_deref(),
+                &variables,
+                self.limits(),
+                &ctx.schema_env.registry,
+            ),
             Err(refused) => Some(unparsed(refused)),
         };
         request.variables = variables;

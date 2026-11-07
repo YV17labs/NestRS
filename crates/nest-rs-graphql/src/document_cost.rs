@@ -20,19 +20,26 @@
 //! selection, so a field the schema scores below one stays the visitor's to score. A
 //! fragment nothing reached is refused here, as validation would.
 //!
-//! How many rows a list answers is known only once it ran, so what a field under one
-//! copies at each row is the one cost no read of a document can hold
+//! A field below a list reads its arguments again at each row, copying a literal
+//! and a variable's value each time (`Context::get_param_value`'s `.cloned()`,
+//! `Context::var_value`'s), every row's copy held at once while the rows resolve
+//! together. How many rows a list answers is known only once it ran, so what those
+//! fields read is held per row, before anything runs: what stands below a field at
+//! all is read without the schema, and only past the bound are the schema's types
+//! read for which of those fields a list stands above
 //! (`.claude/decisions/graphql-transactions.md`).
 
 use std::collections::HashMap;
-use std::convert::Infallible;
 
 use async_graphql::parser::types::{
-    Directive, ExecutableDocument, Field, FragmentDefinition, Selection, SelectionSet,
+    Directive, ExecutableDocument, Field, FragmentDefinition, OperationType, Selection,
+    SelectionSet,
 };
+use async_graphql::registry::{MetaTypeName, Registry};
 use async_graphql::{Name, Pos, Positioned, ServerError, Value, Variables};
+use async_graphql_value::Value as Written;
 
-use crate::operation_units::{RECURSIVE_DEPTH, selected_operation};
+use crate::operation_units::{RECURSIVE_DEPTH, is_skipped, selected_operation};
 
 /// async-graphql's (`7.2.1`) refusal of a document past `max_complexity`, which a
 /// document past a limit here answers word for word.
@@ -47,21 +54,27 @@ pub(crate) struct DocumentLimits {
     /// on its own, a step of a scan counting as a byte: as its fragments expand them
     /// and its variables fill them.
     pub(crate) copied_bytes: usize,
+    /// What the arguments of the fields a list stands above may copy, which each of
+    /// its rows copies again; `usize::MAX` when off.
+    pub(crate) list_argument_bytes: usize,
 }
 
 /// The refusal of `document`, should it cost past `limits`, nest past what
 /// async-graphql runs, or hold a fragment nothing reaches. `operation` is the name
-/// the request selects its operation by, if any.
+/// the request selects its operation by, if any, and `registry` the schema's types,
+/// read only for what a list's rows copy past its bound.
 pub(crate) fn refusal(
     document: &ExecutableDocument,
     operation: Option<&str>,
     variables: &Variables,
     limits: DocumentLimits,
+    registry: &Registry,
 ) -> Option<ServerError> {
-    DocumentCost::new(document, operation, variables, limits)
+    let mut cost = DocumentCost::new(document, operation, variables, limits);
+    let refused = cost
         .of_document(document)
-        .err()
-        .map(ServerError::from)
+        .and_then(|()| cost.of_rows(document, variables, registry));
+    refused.err().map(ServerError::from)
 }
 
 /// Why a count stopped, each said in async-graphql's (`7.2.1`) own words.
@@ -100,6 +113,9 @@ struct Weight {
     scanned: usize,
     /// What its references and its text copy, should an operation run it.
     copied: usize,
+    /// Of what it copies, what stands below a field of its own: all a list's rows
+    /// could copy again, whichever of those fields a list stands above.
+    below: usize,
 }
 
 impl Weight {
@@ -107,6 +123,16 @@ impl Weight {
         self.selections = self.selections.saturating_add(other.selections);
         self.scanned = self.scanned.saturating_add(other.scanned);
         self.copied = self.copied.saturating_add(other.copied);
+        self.below = self.below.saturating_add(other.below);
+    }
+
+    /// What it holds as a field's selection set, every copy of which stands below
+    /// that field.
+    fn below_a_field(self) -> Self {
+        Self {
+            below: self.copied,
+            ..self
+        }
     }
 }
 
@@ -121,8 +147,9 @@ struct DocumentCost<'d> {
     /// What one reference to each variable costs.
     references: HashMap<&'d str, usize>,
     /// Whether a value can cost past its text: with no fragment to repeat it and no
-    /// variable to copy, reading one would pay for nothing.
-    reads_values: bool,
+    /// variable to copy, what the document copies is its text, which the request's
+    /// own cap holds.
+    multiplies: bool,
     /// Whether what is being read stands in a fragment.
     in_fragment: bool,
     /// What the arguments written in fragments copy, each read once.
@@ -133,6 +160,8 @@ struct DocumentCost<'d> {
     scanned: usize,
     /// What the arguments the document runs copy, once it was read.
     copied: usize,
+    /// What the arguments of the operations it runs copy below a field.
+    below: usize,
 }
 
 impl<'d> DocumentCost<'d> {
@@ -148,13 +177,14 @@ impl<'d> DocumentCost<'d> {
             limits,
             operation,
             read: HashMap::with_capacity(document.fragments.len()),
-            reads_values: !document.fragments.is_empty() || !references.is_empty(),
+            multiplies: !document.fragments.is_empty() || !references.is_empty(),
             references,
             in_fragment: false,
             in_fragments: 0,
             repeated: 0,
             scanned: 0,
             copied: 0,
+            below: 0,
         }
     }
 
@@ -176,6 +206,7 @@ impl<'d> DocumentCost<'d> {
                 .is_none_or(|wanted| name.is_some_and(|name| name.as_str() == wanted));
             if selected {
                 runs = runs.saturating_add(weight.copied);
+                self.below = self.below.max(weight.below);
             }
         }
         self.copied = runs.max(self.in_fragments);
@@ -189,10 +220,48 @@ impl<'d> DocumentCost<'d> {
                 return Err(Past::Unspread(name, fragment.pos));
             }
         }
-        if self.copied > self.limits.copied_bytes {
+        if self.multiplies && self.copied > self.limits.copied_bytes {
             return Err(Past::Limit);
         }
         Ok(())
+    }
+
+    /// Whether what the rows of a list copy stays within its bound, once the document
+    /// was read: what stands below a field at all bounds it, and only past the bound
+    /// is the schema read for the fields a list stands above, in the operation the
+    /// request runs.
+    fn of_rows(
+        &self,
+        document: &'d ExecutableDocument,
+        variables: &'d Variables,
+        registry: &Registry,
+    ) -> Result<(), Past<'d>> {
+        let bound = self.limits.list_argument_bytes;
+        if self.below <= bound {
+            return Ok(());
+        }
+        let Some((_, operation)) = selected_operation(document, self.operation) else {
+            return Ok(());
+        };
+        let root = match operation.node.ty {
+            OperationType::Query => Some(registry.query_type.as_str()),
+            OperationType::Mutation => registry.mutation_type.as_deref(),
+            OperationType::Subscription => registry.subscription_type.as_deref(),
+        };
+        let Some(root) = root else {
+            return Ok(());
+        };
+        let mut rows = Rows {
+            fragments: self.fragments,
+            references: &self.references,
+            variables,
+            registry,
+            read: HashMap::new(),
+        };
+        match rows.of_set(&operation.node.selection_set.node, root, false) > bound {
+            true => Err(Past::Limit),
+            false => Ok(()),
+        }
     }
 
     /// What `set`, `depth` selection sets down, holds: a field counts one and what it
@@ -214,7 +283,8 @@ impl<'d> DocumentCost<'d> {
         for selection in &set.node.items {
             let (selected, field) = match &selection.node {
                 Selection::Field(field) => (
-                    self.of_set(&field.node.selection_set, depth + 1)?,
+                    self.of_set(&field.node.selection_set, depth + 1)?
+                        .below_a_field(),
                     Some(&field.node),
                 ),
                 Selection::InlineFragment(fragment) => {
@@ -272,30 +342,24 @@ impl<'d> DocumentCost<'d> {
         let scanned = held.saturating_mul(held);
         self.scanned = self.scanned.saturating_add(scanned);
         self.within_limits()?;
-        let mut copied = 0_usize;
-        if self.reads_values {
-            let written = directives
-                .iter()
-                .flat_map(|directive| &directive.node.arguments);
-            let named = field.into_iter().flat_map(|field| &field.arguments);
-            for (_, value) in named.chain(written) {
-                // Built as async-graphql builds it, since async-graphql re-exports only
-                // the const `Value`, each reference standing in for what it costs.
-                let Ok(value) = value.node.clone().into_const_with::<Infallible>(|name| {
-                    let cost = self.references.get(name.as_str()).copied().unwrap_or(0);
-                    copied = copied.saturating_add(cost);
-                    Ok(Value::Null)
-                });
-                copied = copied.saturating_add(size_of(&value));
-            }
-            if self.in_fragment {
-                self.in_fragments = self.in_fragments.saturating_add(copied);
-            }
+        let written = directives
+            .iter()
+            .flat_map(|directive| &directive.node.arguments);
+        let copied = copies(
+            &self.references,
+            field
+                .into_iter()
+                .flat_map(|field| &field.arguments)
+                .chain(written),
+        );
+        if self.in_fragment {
+            self.in_fragments = self.in_fragments.saturating_add(copied);
         }
         Ok(Weight {
             selections: 0,
             scanned,
             copied,
+            below: 0,
         })
     }
 
@@ -306,6 +370,133 @@ impl<'d> DocumentCost<'d> {
             return Err(Past::Limit);
         }
         Ok(())
+    }
+}
+
+/// What the fields a list stands above copy at each of its rows, read against the
+/// schema's types once the count found the document within every other limit, so
+/// each fragment is read at most twice, as it stands below a list or does not.
+struct Rows<'a, 'd> {
+    fragments: &'d HashMap<Name, Positioned<FragmentDefinition>>,
+    references: &'a HashMap<&'d str, usize>,
+    variables: &'d Variables,
+    registry: &'a Registry,
+    /// What each fragment read so far copies at a row, by whether a list stands above
+    /// its spread; one still being read, a cycle validation refuses, copies nothing.
+    read: HashMap<(&'d str, bool), usize>,
+}
+
+impl<'d> Rows<'_, 'd> {
+    /// What `set`, selected on `parent`, copies at each row: everything when `listed`,
+    /// a list standing above it, and otherwise what stands below a field of a list's
+    /// type within it. A selection `@skip` or `@include` leaves out runs nothing, and
+    /// those two are read once, before anything runs, so their own arguments copy
+    /// nothing at a row. A field the schema does not declare is validation's to refuse.
+    fn of_set(&mut self, set: &'d SelectionSet, parent: &str, listed: bool) -> usize {
+        let mut copied = 0_usize;
+        for selection in &set.items {
+            if is_skipped(selection.node.directives(), self.variables) {
+                continue;
+            }
+            let read = match &selection.node {
+                Selection::Field(field) => {
+                    let field = &field.node;
+                    let Some(ty) = self
+                        .registry
+                        .types
+                        .get(parent)
+                        .and_then(|ty| ty.field_by_name(&field.name.node))
+                        .map(|declared| declared.ty.as_str())
+                    else {
+                        continue;
+                    };
+                    let own = match listed {
+                        true => {
+                            let read = field
+                                .directives
+                                .iter()
+                                .filter(|directive| {
+                                    !matches!(directive.node.name.node.as_str(), "skip" | "include")
+                                })
+                                .flat_map(|directive| &directive.node.arguments);
+                            copies(self.references, field.arguments.iter().chain(read))
+                        }
+                        false => 0,
+                    };
+                    let below = self.of_set(
+                        &field.selection_set.node,
+                        MetaTypeName::concrete_typename(ty),
+                        listed || MetaTypeName::create(ty).is_list(),
+                    );
+                    own.saturating_add(below)
+                }
+                Selection::InlineFragment(fragment) => {
+                    let on = fragment
+                        .node
+                        .type_condition
+                        .as_ref()
+                        .map_or(parent, |condition| condition.node.on.node.as_str());
+                    self.of_set(&fragment.node.selection_set.node, on, listed)
+                }
+                Selection::FragmentSpread(spread) => {
+                    self.of_spread(spread.node.fragment_name.node.as_str(), listed)
+                }
+            };
+            copied = copied.saturating_add(read);
+        }
+        copied
+    }
+
+    fn of_spread(&mut self, name: &'d str, listed: bool) -> usize {
+        if let Some(read) = self.read.get(&(name, listed)) {
+            return *read;
+        }
+        let Some(fragment) = self.fragments.get(name) else {
+            return 0;
+        };
+        self.read.insert((name, listed), 0);
+        let on = fragment.node.type_condition.node.on.node.as_str();
+        let read = self.of_set(&fragment.node.selection_set.node, on, listed);
+        self.read.insert((name, listed), read);
+        read
+    }
+}
+
+/// What `arguments` copy where async-graphql reads them: what each value weighs as
+/// text, a reference what its variable costs, beside the `null` its place in the
+/// value would weigh.
+fn copies<'v>(
+    references: &HashMap<&str, usize>,
+    arguments: impl Iterator<Item = &'v (Positioned<Name>, Positioned<Written>)>,
+) -> usize {
+    arguments.fold(0, |copied, (_, value)| {
+        copied.saturating_add(weight_of(&value.node, references))
+    })
+}
+
+/// What `value`, as a document writes it, weighs as [`size_of`] counts it, each
+/// variable weighing what one reference to it costs, beside the `null` it stands for.
+fn weight_of(value: &Written, references: &HashMap<&str, usize>) -> usize {
+    match value {
+        Written::Variable(name) => references
+            .get(name.as_str())
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(1),
+        Written::Null | Written::Boolean(_) | Written::Number(_) => 1,
+        Written::String(text) => text.len(),
+        Written::Enum(name) => name.len(),
+        Written::Binary(bytes) => bytes.len(),
+        Written::List(items) => items.iter().fold(1_usize, |weight, item| {
+            weight.saturating_add(weight_of(item, references).saturating_add(1))
+        }),
+        Written::Object(members) => members.iter().fold(1_usize, |weight, (key, member)| {
+            weight.saturating_add(
+                key.len()
+                    .saturating_add(weight_of(member, references))
+                    .saturating_add(2),
+            )
+        }),
     }
 }
 
@@ -356,7 +547,7 @@ mod tests {
     use std::time::Duration;
 
     use async_graphql::parser::parse_query;
-    use async_graphql::{EmptyMutation, EmptySubscription, Object, Request, Schema};
+    use async_graphql::{EmptyMutation, EmptySubscription, Object, OutputType, Request, Schema};
 
     use super::*;
     use crate::testing::thread_cpu_time;
@@ -377,6 +568,7 @@ mod tests {
         let limits = DocumentLimits {
             repeated_selections: repeated,
             copied_bytes: NO_COPIES_COUNTED,
+            list_argument_bytes: usize::MAX,
         };
         let mut cost = DocumentCost::new(&document, None, &variables, limits);
         match cost.of_document(&document) {
@@ -402,6 +594,7 @@ mod tests {
         let limits = DocumentLimits {
             repeated_selections: usize::MAX,
             copied_bytes: NO_COPIES_COUNTED,
+            list_argument_bytes: usize::MAX,
         };
         let mut cost = DocumentCost::new(&document, name, &variables, limits);
         cost.of_document(&document).expect("nothing past a limit");
@@ -415,6 +608,7 @@ mod tests {
         let limits = DocumentLimits {
             repeated_selections: usize::MAX,
             copied_bytes: NO_COPIES_COUNTED,
+            list_argument_bytes: usize::MAX,
         };
         let mut cost = DocumentCost::new(&document, name, &variables, limits);
         cost.of_document(&document).expect("nothing past a limit");
@@ -444,21 +638,37 @@ mod tests {
         fan_out(links - 1, 1, "leaf")
     }
 
-    /// Past the limit by its values and within it by its arguments: reading the values
-    /// of a document nothing multiplies would pay for nothing.
+    /// Past the limit by its values and within it by its arguments: what a document
+    /// nothing multiplies copies is its text, which the request's own cap holds.
     #[test]
-    fn a_document_with_no_fragment_and_no_variable_reads_no_value() {
+    fn a_document_nothing_multiplies_is_held_by_its_text_alone() {
         let wide = format!("query {{ {} }}", "a(x: \"text\") ".repeat(100));
         let limits = DocumentLimits {
             repeated_selections: 0,
             copied_bytes: 100,
+            list_argument_bytes: usize::MAX,
         };
         let document = parse_query(&wide).expect("the document parses");
-        assert!(refusal(&document, None, &Variables::default(), limits).is_none());
+        assert!(
+            refusal(
+                &document,
+                None,
+                &Variables::default(),
+                limits,
+                &Registry::default()
+            )
+            .is_none()
+        );
 
         let defining = wide.replacen("query", "query($unused: Int)", 1);
         let document = parse_query(&defining).expect("the document parses");
-        let refused = refusal(&document, None, &Variables::default(), limits);
+        let refused = refusal(
+            &document,
+            None,
+            &Variables::default(),
+            limits,
+            &Registry::default(),
+        );
         assert_eq!(refused.expect("past the limit").message, TOO_COMPLEX);
     }
 
@@ -495,8 +705,14 @@ mod tests {
             "{ ...A } fragment A on Q { a }\nfragment U on Q { ...V }\nfragment V on Q { b }",
         )
         .expect("the document parses");
-        let refused =
-            refusal(&document, None, &Variables::default(), LIMITS).expect("two unreached");
+        let refused = refusal(
+            &document,
+            None,
+            &Variables::default(),
+            LIMITS,
+            &Registry::default(),
+        )
+        .expect("two unreached");
         assert_eq!(refused.message, r#"Fragment "U" is never used"#);
         assert_eq!(refused.locations, [Pos { line: 2, column: 1 }]);
     }
@@ -504,6 +720,7 @@ mod tests {
     const LIMITS: DocumentLimits = DocumentLimits {
         repeated_selections: 2000,
         copied_bytes: 4 * 1024 * 1024,
+        list_argument_bytes: usize::MAX,
     };
 
     #[test]
@@ -549,8 +766,14 @@ mod tests {
         assert_eq!(counted(&chain(32), 2000), Ok(0));
         for links in [33, 1_000] {
             let document = parse_query(chain(links)).expect("the document parses");
-            let refused =
-                refusal(&document, None, &Variables::default(), LIMITS).expect("past the depth");
+            let refused = refusal(
+                &document,
+                None,
+                &Variables::default(),
+                LIMITS,
+                &Registry::default(),
+            )
+            .expect("past the depth");
             assert_eq!(
                 refused.message,
                 "The recursion depth of the query cannot be greater than `32`"
@@ -573,8 +796,14 @@ mod tests {
     #[test]
     fn a_refusal_is_worded_as_async_graphql_words_it() {
         let document = parse_query(fan_out(16, 2, "leaf")).expect("the document parses");
-        let refused =
-            refusal(&document, None, &Variables::default(), LIMITS).expect("past the limit");
+        let refused = refusal(
+            &document,
+            None,
+            &Variables::default(),
+            LIMITS,
+            &Registry::default(),
+        )
+        .expect("past the limit");
         assert_eq!(refused.message, TOO_COMPLEX);
         assert!(refused.locations.is_empty());
         assert!(refused.path.is_empty());
@@ -673,11 +902,27 @@ mod tests {
         let limits = |copied_bytes| DocumentLimits {
             repeated_selections: 2000,
             copied_bytes,
+            list_argument_bytes: usize::MAX,
         };
         let exactly = 2 * (1_000 + FIRST) + 5;
-        assert!(refusal(&document, None, &variables, limits(exactly)).is_none());
-        let refused =
-            refusal(&document, None, &variables, limits(exactly - 1)).expect("one byte past");
+        assert!(
+            refusal(
+                &document,
+                None,
+                &variables,
+                limits(exactly),
+                &Registry::default()
+            )
+            .is_none()
+        );
+        let refused = refusal(
+            &document,
+            None,
+            &variables,
+            limits(exactly - 1),
+            &Registry::default(),
+        )
+        .expect("one byte past");
         assert_eq!(refused.message, TOO_COMPLEX);
     }
 
@@ -704,9 +949,11 @@ mod tests {
         let limits = |copied_bytes| DocumentLimits {
             repeated_selections: 2000,
             copied_bytes,
+            list_argument_bytes: usize::MAX,
         };
-        assert!(refusal(&document, None, &variables, limits(8)).is_none());
-        let refused = refusal(&document, None, &variables, limits(7)).expect("one step past");
+        assert!(refusal(&document, None, &variables, limits(8), &Registry::default()).is_none());
+        let refused = refusal(&document, None, &variables, limits(7), &Registry::default())
+            .expect("one step past");
         assert_eq!(refused.message, TOO_COMPLEX);
     }
 
@@ -773,6 +1020,7 @@ mod tests {
         let limits = DocumentLimits {
             repeated_selections: 2000,
             copied_bytes: usize::MAX,
+            list_argument_bytes: usize::MAX,
         };
         let value = variables.get("v").expect("the request sent it");
 
@@ -790,6 +1038,137 @@ mod tests {
             counting < walking,
             "counted in {counting:?}, walked 64 times in {walking:?}"
         );
+    }
+
+    struct Listed;
+
+    #[Object]
+    impl Listed {
+        async fn read(&self, x: Option<String>) -> usize {
+            x.map_or(0, |x| x.len())
+        }
+
+        async fn more(&self) -> Vec<Listed> {
+            Vec::new()
+        }
+
+        async fn one(&self) -> Option<Listed> {
+            None
+        }
+    }
+
+    struct Lists;
+
+    #[Object]
+    impl Lists {
+        async fn rows(&self) -> Option<Vec<Option<Listed>>> {
+            None
+        }
+
+        async fn row(&self) -> Listed {
+            Listed
+        }
+
+        async fn grid(&self) -> Vec<Vec<Listed>> {
+            Vec::new()
+        }
+    }
+
+    /// The types of a schema whose root is [`Lists`].
+    fn lists() -> Registry {
+        let mut registry = Registry::default();
+        let root = Lists::create_type_info(&mut registry);
+        registry.query_type = MetaTypeName::concrete_typename(&root).to_owned();
+        registry
+    }
+
+    /// What `document`, `$v` holding `size` bytes, answers under a bound of `bound`
+    /// bytes a row.
+    fn below_the_bound(document: &str, size: usize, bound: usize) -> bool {
+        let document = parse_query(document).expect("the document parses");
+        let limits = DocumentLimits {
+            list_argument_bytes: bound,
+            ..LIMITS
+        };
+        refusal(&document, None, &variables(size), limits, &lists()).is_none()
+    }
+
+    /// What a field a list stands above reads, through any nesting, wherever it is
+    /// spread, against a bound read at its byte.
+    #[test]
+    fn what_a_lists_rows_copy_is_held_to_its_bound() {
+        let reference = 1_000 + FIRST + NULL;
+        for document in [
+            "query($v: String) { rows { read(x: $v) } }",
+            "query($v: String) { row { more { read(x: $v) } } }",
+            "query($v: String) { rows { one { read(x: $v) } } }",
+            "query($v: String) { grid { read(x: $v) } }",
+            "query($v: String) { rows { ... on Listed { read(x: $v) } } }",
+            "query($v: String) { rows { ... { read(x: $v) } } }",
+            "query($v: String) { rows { ...F } } fragment F on Listed { read(x: $v) }",
+            "query($v: String) { row { ...F } } fragment F on Listed { more { read(x: $v) } }",
+            "query($v: String) { rows { ...F } } fragment F on Listed { ...G } \
+             fragment G on Listed { read(x: $v) }",
+        ] {
+            assert!(below_the_bound(document, 1_000, reference), "{document}");
+            assert!(
+                !below_the_bound(document, 1_000, reference - 1),
+                "{document}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_field_no_list_stands_above_reads_its_arguments_once() {
+        for document in [
+            "query($v: String) { row { read(x: $v) } }",
+            "query($v: String) { row { one { read(x: $v) } } }",
+            "query($v: String) { row { ...F } } fragment F on Listed { read(x: $v) }",
+            "query($v: String) { row { read(x: $v) } rows { one { __typename } } }",
+            "query($v: String) { rows @include(if: $v) { one { __typename } } }",
+        ] {
+            assert!(below_the_bound(document, 100_000, 1), "{document}");
+        }
+    }
+
+    /// A spread read where a list stands above it and where none does is counted each
+    /// way, so the one copying at each row is never read as the other.
+    #[test]
+    fn a_fragment_spread_above_and_below_a_list_is_counted_where_it_stands() {
+        let document = "query($v: String) { row { ...F } rows { ...F } } \
+                        fragment F on Listed { read(x: $v) }";
+        assert!(!below_the_bound(document, 1_000, 1_000));
+        let document = "query($v: String) { rows { ...F } row { ...F } } \
+                        fragment F on Listed { read(x: $v) }";
+        assert!(!below_the_bound(document, 1_000, 1_000));
+    }
+
+    /// A selection left out runs nothing, and `@skip` and `@include` are read once,
+    /// before anything runs, so neither copies at a row.
+    #[test]
+    fn a_selection_left_out_and_its_directive_copy_nothing_at_a_row() {
+        let large = "x".repeat(10_000);
+        for document in [
+            "query($v: String) { rows { read(x: $v) @skip(if: true) } }".to_owned(),
+            "query($v: String) { rows { ... @include(if: false) { read(x: $v) } } }".to_owned(),
+            format!(r#"query {{ rows {{ read(x: "{large}") @skip(if: true) }} }}"#),
+        ] {
+            assert!(below_the_bound(&document, 10_000, 100), "{document}");
+        }
+    }
+
+    /// The other limits' sentence: a client has no reason to tell the checks apart.
+    #[test]
+    fn a_document_past_the_bound_is_refused_as_any_limit_refuses() {
+        let document = parse_query("query($v: String) { rows { read(x: $v) } }").expect("parses");
+        let limits = DocumentLimits {
+            list_argument_bytes: 10,
+            ..LIMITS
+        };
+        let refused =
+            refusal(&document, None, &variables(100), limits, &lists()).expect("past the bound");
+        assert_eq!(refused.message, TOO_COMPLEX);
+        assert!(refused.locations.is_empty());
     }
 
     struct Query;
@@ -817,7 +1196,7 @@ mod tests {
         let document = request.parsed_query().expect("the document parses");
         let parsing = thread_cpu_time() - started;
         let started = thread_cpu_time();
-        if refusal(document, None, &variables, LIMITS).is_none() {
+        if refusal(document, None, &variables, LIMITS, &Registry::default()).is_none() {
             drop(schema.execute(request).await);
         }
         (parsing, thread_cpu_time() - started)

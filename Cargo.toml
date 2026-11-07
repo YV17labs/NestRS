@@ -99,6 +99,10 @@ parking_lot = "0.13"
 # error: a `?` in a resolver body would otherwise ship a foreign error's
 # sentence before the wrapper could answer it opaquely.
 async-graphql = { version = "=7.2", default-features = false, features = ["custom-error-conversion", "dataloader", "playground"] }
+# `=` beside async-graphql, whose parser hands a document's argument values in
+# this crate's `Value`, which async-graphql re-exports only in its const form: a
+# document is read by reference, never cloned to be counted.
+async-graphql-value = { version = "=7.2", default-features = false }
 inventory = "0.3"  # public
 
 argon2 = "0.6"

@@ -6,8 +6,8 @@
 //! regression: each proves its order by the answer, which a walk reaching its end
 //! changes, on a document that costs nothing to walk, before any that would not end.
 
-use async_graphql::SimpleObject;
 use async_graphql::futures_util::stream::{self, Stream};
+use async_graphql::{Object, SimpleObject};
 use nest_rs_config::Surface;
 use nest_rs_core::{Module, module};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
@@ -22,6 +22,29 @@ struct Leaf {
     label: String,
 }
 
+/// A row of a list, each of which reads its field's argument again.
+struct Row;
+
+#[Object]
+impl Row {
+    async fn read(&self, x: Option<String>) -> usize {
+        x.map_or(0, |x| x.len())
+    }
+
+    async fn inner(&self) -> Leaf {
+        Leaf {
+            label: "inner".into(),
+        }
+    }
+
+    async fn more(&self) -> Vec<Row> {
+        vec![Row, Row]
+    }
+}
+
+/// How many rows `rows` answers.
+const ROWS: usize = 3;
+
 #[resolver]
 struct ExpansionResolver;
 
@@ -33,6 +56,24 @@ impl ExpansionResolver {
         Leaf {
             label: "root".into(),
         }
+    }
+
+    #[query]
+    #[public]
+    async fn rows(&self) -> Vec<Row> {
+        (0..ROWS).map(|_| Row).collect()
+    }
+
+    #[query]
+    #[public]
+    async fn row(&self) -> Option<Row> {
+        Some(Row)
+    }
+
+    #[mutation]
+    #[public]
+    async fn put(&self, x: Option<String>) -> usize {
+        x.map_or(0, |x| x.len())
     }
 
     #[query]
@@ -87,6 +128,27 @@ struct AppLimitsOff;
     ExpansionFeatureModule,
 ])]
 struct AppIntrospected;
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        max_list_argument_bytes: None,
+        ..Default::default()
+    }),
+    ExpansionFeatureModule,
+])]
+struct AppRowsUnbounded;
+
+/// A bound pinned under the default.
+const PINNED_ROW_BYTES: usize = 100;
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        max_list_argument_bytes: Some(PINNED_ROW_BYTES),
+        ..Default::default()
+    }),
+    ExpansionFeatureModule,
+])]
+struct AppRowsPinned;
 
 /// The body cap the promise of a variable's two references is read at, small enough
 /// for a list of numbers filling it to cost a test nothing.
@@ -363,6 +425,128 @@ async fn a_default_copies_at_each_reference() {
     };
     assert_eq!(answer(&app, &echo(100)).await, refused);
     assert_eq!(answer(&app, &echo(2)).await["data"]["echo"], 2);
+}
+
+/// What a request sends `$v` as, for `document`.
+fn sending(document: &str, value: &str) -> Value {
+    json!({ "query": document, "variables": { "v": value } })
+}
+
+/// Past the default bound by a little, within it by a little.
+const PAST_THE_BOUND: usize = 5_000;
+const WITHIN_THE_BOUND: usize = 1_000;
+
+/// async-graphql reads a field's arguments again at each row of a list above it,
+/// copying the variable each time (`Context::var_value`'s `.cloned()`), so a 1 MiB
+/// value over 1,000 rows peaked past a gigabyte with no credential. What the fields
+/// below a list read is held to a bound before anything runs, however the document
+/// reaches them.
+#[tokio::test]
+async fn what_the_rows_of_a_list_copy_is_held_to_a_bound() {
+    let app = boot::<AppDefaults>().await;
+    let refused = answer_past_the_limit(&app).await;
+    let past = "x".repeat(PAST_THE_BOUND);
+    for document in [
+        "query($v: String) { rows { read(x: $v) } }",
+        "query($v: String) { rows { inner { label } more { read(x: $v) } } }",
+        "query($v: String) { row { more { read(x: $v) } } }",
+        "query($v: String) { rows { ... on Row { read(x: $v) } } }",
+        "query($v: String) { rows { ...R } } fragment R on Row { read(x: $v) }",
+        "query($v: String) { rows { ...M } } fragment M on Row { more { read(x: $v) } }",
+        "query($v: String) { row { ...L } } fragment L on Row { more { read(x: $v) } }",
+    ] {
+        assert_eq!(
+            post(&app, &sending(document, &past)).await,
+            refused,
+            "{document}"
+        );
+    }
+    let literal = format!(r#"{{ rows {{ read(x: "{past}") }} }}"#);
+    assert_eq!(
+        answer(&app, &literal).await,
+        refused,
+        "a literal is copied too"
+    );
+
+    let within = "x".repeat(WITHIN_THE_BOUND);
+    let answered = post(
+        &app,
+        &sending("query($v: String) { rows { read(x: $v) } }", &within),
+    )
+    .await;
+    assert_eq!(
+        answered["data"]["rows"],
+        json!(vec![json!({ "read": WITHIN_THE_BOUND }); ROWS]),
+        "{answered:.300}"
+    );
+}
+
+/// The bound is `max_list_argument_bytes`: pinned, it is read at its byte, and off,
+/// a list's rows read what they are sent.
+#[tokio::test]
+async fn the_bound_is_what_max_list_argument_bytes_says() {
+    let document = "query($v: String) { rows { read(x: $v) } }";
+    let pinned = boot::<AppRowsPinned>().await;
+    let refused = answer_past_the_limit(&pinned).await;
+    // The reference stands in for a `null` and scans one definition.
+    let within = "x".repeat(PINNED_ROW_BYTES - 2);
+    let answered = post(&pinned, &sending(document, &within)).await;
+    assert_eq!(
+        answered["data"]["rows"][0]["read"],
+        within.len(),
+        "{answered}"
+    );
+    let past = "x".repeat(PINNED_ROW_BYTES - 1);
+    assert_eq!(post(&pinned, &sending(document, &past)).await, refused);
+
+    let unbounded = boot::<AppRowsUnbounded>().await;
+    let large = "x".repeat(PAST_THE_BOUND);
+    let answered = post(&unbounded, &sending(document, &large)).await;
+    assert_eq!(
+        answered["data"]["rows"][0]["read"], PAST_THE_BOUND,
+        "{answered:.300}"
+    );
+}
+
+/// The socket's operations are read by the same extension.
+#[tokio::test]
+async fn over_graphql_ws_what_the_rows_of_a_list_copy_is_held_to_the_bound() {
+    let app = boot::<AppDefaults>().await;
+    let refused = answer_past_the_limit(&app).await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    let past = "x".repeat(PAST_THE_BOUND);
+    socket.subscribe("rows", &format!(r#"{{ rows {{ read(x: "{past}") }} }}"#));
+    let item = socket
+        .next_item("rows")
+        .await
+        .expect("the operation answers");
+    assert_eq!(item, refused);
+}
+
+/// A field no list stands above reads its arguments once, so what it reads is the
+/// request's own size, which its body cap and the copies already hold.
+#[tokio::test]
+async fn an_argument_no_list_stands_above_is_read_once_whatever_it_weighs() {
+    let app = boot::<AppDefaults>().await;
+    let large = "x".repeat(500_000);
+    for (document, read) in [
+        (
+            "mutation($v: String) { put(x: $v) }",
+            json!({ "put": 500_000 }),
+        ),
+        (
+            "query($v: String) { row { read(x: $v) } }",
+            json!({ "row": { "read": 500_000 } }),
+        ),
+        (
+            "query($v: String) { row { ...R } } fragment R on Row { read(x: $v) }",
+            json!({ "row": { "read": 500_000 } }),
+        ),
+    ] {
+        let answered = post(&app, &sending(document, &large)).await;
+        assert_eq!(answered["data"], read, "{document}: {answered:.300}");
+    }
 }
 
 /// A reference scans the definitions down to its own, at execution, past every limit

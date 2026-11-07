@@ -585,9 +585,10 @@ router parses. The rewrite is skipped when nothing is versioned.
   is held to `max_complexity`, or the most it may say when off, what its arguments
   copy and scan to twice what the request may carry, a value counted at no more than
   its text weighs, and a fragment no operation reaches is refused unread. A read of a
-  document ahead of that count reads each fragment once and copies no variable. What a
-  list's rows copy no read of a document can see, and is the field's to bound
-  (`.claude/decisions/graphql-transactions.md`).
+  document ahead of that count reads each fragment once and copies no variable. What
+  the fields a list stands above read, which each row reads again, is held to
+  `max_list_argument_bytes`, the schema's types read only for a document past it by what
+  stands below any field (`.claude/decisions/graphql-transactions.md`).
 - **A transport is activated by the host that serves on it**: a listed host
   brings its edge's module bare (`container.md`, *Discovery and its gate*) —
   `HttpModule` for HTTP, both it and `WsModule` for a gateway, `GraphqlModule`,

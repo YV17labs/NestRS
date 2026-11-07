@@ -8,7 +8,7 @@
 //! nor stays silent on work that stands.
 
 use std::collections::{HashMap, HashSet};
-use std::convert::{Infallible, identity};
+use std::convert::identity;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
@@ -35,6 +35,8 @@ use nest_rs_database::{
 };
 use nest_rs_http::__private::RequestDeadline;
 use tracing::Instrument;
+
+use async_graphql_value::Value as Written;
 
 use crate::error::AnsweredError;
 use crate::loader::BatchSpan;
@@ -534,15 +536,12 @@ pub(crate) fn is_skipped(directives: &[Positioned<Directive>], variables: &Varia
             _ => return false,
         };
         directive.node.get_argument("if").is_some_and(|condition| {
-            let value = condition
-                .node
-                .clone()
-                .into_const_with::<Infallible>(|name| {
-                    Ok(Value::Boolean(
-                        variables.get(&name) == Some(&Value::Boolean(true)),
-                    ))
-                });
-            include != matches!(value, Ok(Value::Boolean(true)))
+            let set = match &condition.node {
+                Written::Boolean(set) => *set,
+                Written::Variable(name) => variables.get(name) == Some(&Value::Boolean(true)),
+                _ => false,
+            };
+            include != set
         })
     })
 }

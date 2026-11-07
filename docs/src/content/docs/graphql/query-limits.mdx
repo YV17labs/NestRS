@@ -8,8 +8,8 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 A GraphQL endpoint accepts whatever the client asks for. Without a
-ceiling, four shapes of query can take a production app down before
-a resolver even runs:
+ceiling, five shapes of query can take a production app down, the first
+four before a resolver even runs:
 
 - **Recursive** — `{ a { a { a { … 50 levels … } } } }`. Tiny payload,
   massive resolve work.
@@ -20,9 +20,12 @@ a resolver even runs:
 - **Fragment repeats** — `fragment A on Query { ...B ...B }` at each of
   a few dozen levels. Under a kilobyte of text, billions of selections to
   read before any ceiling answers.
+- **Rows' copies** — `query($v: String) { rows { f(x: $v) } }`. Each row
+  reads its arguments again, so 1,000 rows of a 1 MiB variable held a
+  gigabyte at once, scoring 2.
 
 nestrs wraps async-graphql's two validation visitors that cover the
-first three, and [counts the fourth before anything reads it](#what-fragments-and-variables-multiply).
+first three, and [counts the other two before anything runs](#what-fragments-and-variables-multiply).
 All of it is on by default; tune the ceilings to your
 traffic. A subscription socket has bounds of its own — its message size,
 its wait for `connection_init` and the operations it runs at once — on
@@ -124,6 +127,16 @@ fragment and once per variable, in time linear in the document:
   `max_body_bytes` on a `POST`, `max_message_bytes` on a graphql-ws socket. A value
   counts what its text weighs and a step of a scan a byte, so every variable may be
   referred to twice. There is no key of its own to tune.
+- **A field below a list** reads its arguments again at each row, every row's copy
+  held at once while the rows resolve together, so `query($v: String) { rows { f(x:
+  $v) } }` over 1,000 rows and a 1 MiB `$v` peaked past a gigabyte, scoring 2. What
+  the fields a list stands above read, their own arguments, their fragments' and each
+  reference's value, is held to `max_list_argument_bytes` (`<PREFIX>_GRAPHQL__MAX_LIST_ARGUMENT_BYTES`),
+  4 KiB by default, from `1` to a gibibyte, `None` or `0` off: a cursor, a page size
+  and a filter at each of several connections stay far below it. A root field, or a
+  field only objects stand above, reads its arguments once, so a mutation's large
+  input is never counted. The schema's types are read only for a document whose
+  fields below another field read past the bound.
 - **A response key repeated** looks each of its arguments up in the other's, so two
   selections holding thousands cost their square. Each field's arguments, squared,
   are held to that same limit, which the few a schema declares never come near.
@@ -295,16 +308,11 @@ right behaviour for anti-DoS.
 - **One unused fragment at a time.** A document holding several, or another
   validation error beside one, reads the first in its text alone, where validation
   would have listed them all.
-- **What a list's rows copy.** A field under a list reads its arguments again at
-  each row, value and scan alike, so `query($v: String) { rows { f(x: $v) } }` over
-  1,000 rows and a 1 MiB `$v`, a 1 MiB body scoring 2, peaks past a gigabyte. How many
-  rows a list answers is known only once it ran, so no count of the document holds
-  it. Hold both factors on the field: [a `complexity`](#the-auto-emitted-hasmany-factor)
-  scoring the list by its rows, and a rule on the argument, such as
-  `#[validate(length(max = …))]` on its input, which refuses each row's copy before
-  the next: that request then peaks at 45 MiB. Closing it in the framework takes
-  async-graphql sharing a variable's value rather than cloning it; a budget read as
-  each field runs would cut legitimate pages short.
+- **A list's rows are bounded by what one row copies, not by how many there are.**
+  How many rows a list answers is known only once it ran, so a page of 100,000 rows
+  each reading 4 KiB still holds 400 MB of copies at once. Score the list by its rows
+  with [a `complexity`](#the-auto-emitted-hasmany-factor), which `#[expose]` writes for
+  a relation, and page what a field answers.
 - **A value is counted as text, and held in memory as values.** A list of a million
   small numbers fills a 2 MB body, and may be referred to twice as any variable may:
   that request peaks at 233 MiB, 160 MiB of it before any copy, where a count of what
@@ -324,17 +332,19 @@ for the full reference.
 
 ## Reference
 
-- `crates/nest-rs-graphql/src/config.rs` — the two `Option<usize>`
-  config fields and their env parsing.
+- `crates/nest-rs-graphql/src/config.rs` — the `Option<usize>` limits
+  `max_depth`, `max_complexity` and `max_list_argument_bytes`, and their env
+  parsing.
 - `crates/nest-rs-graphql/src/resolver.rs` — `build_schema` applies
   the limits to the `SchemaBuilder` before `.finish()`.
 - `crates/nest-rs-graphql/src/document_cost.rs` — what a document's
-  fragments and variables add, counted before anything walks them.
+  fragments and variables add, and what a list's rows copy, counted before
+  anything walks them.
 - `crates/nest-rs-seaorm-macros/src/relations.rs` — the
   `DEFAULT_HAS_MANY_COMPLEXITY` constant; `attr.rs` beside it — the
   `#[expose(complexity = …)]` parsing.
 
 ## Going further
 
-- [Configuration](/graphql/configuration/) — where `max_depth` and `max_complexity` are set.
+- [Configuration](/graphql/configuration/) — where `max_depth`, `max_complexity` and `max_list_argument_bytes` are set.
 - [Relations](/graphql/relations/) — the auto-emitted `HasMany` connection and its complexity formula.

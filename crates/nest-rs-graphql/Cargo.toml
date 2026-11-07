@@ -31,6 +31,9 @@ validator.workspace = true
 # `websocket` is the graphql-ws socket's handshake and frames.
 nest-rs-http = { workspace = true, features = ["websocket"] }
 async-graphql.workspace = true
+# The value a parsed document's arguments hold, which async-graphql names in
+# its AST and does not re-export: what a document copies is read off it in place.
+async-graphql-value.workspace = true
 # Every operation's argument is checked against the rules its type declares
 # through the re-exported `ValidateProbe`, so a resolver's crate needs no
 # nest-rs-pipes dep of its own; a refusal renders from its `PipeError`.

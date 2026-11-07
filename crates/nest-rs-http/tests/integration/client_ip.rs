@@ -115,3 +115,51 @@ async fn a_composition_root_pins_an_address_and_a_range() {
             .await;
     }
 }
+
+/// How many times a listed peer's `GET /who` with `headers`, answered as its
+/// proxy's, was said to name no client.
+async fn refusals_filed(headers: &[(&str, &str)]) -> usize {
+    let app = TestApp::builder()
+        .module::<PinnedProxiesModule>()
+        .build()
+        .await
+        .expect("the app boots");
+    let logs = nest_rs_testing::LogCapture::install();
+    let mut request = app
+        .http()
+        .get("/who")
+        .peer_addr("10.0.0.1:40000".parse().unwrap());
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    request
+        .send()
+        .await
+        .assert_text("10.0.0.1 forwarded=false")
+        .await;
+    [
+        "forwarding header unreadable — no client is believed",
+        "forwarding headers disagree about the client — neither is believed",
+    ]
+    .iter()
+    .map(|message| logs.find("nest_rs::http", message).len())
+    .sum()
+}
+
+/// One request, one line: the edge resolves who sent it once, and a route
+/// reading `ClientIp` reads that resolution rather than filing its own.
+#[tokio::test]
+async fn a_request_whose_headers_name_no_client_is_said_so_once() {
+    for headers in [
+        &[(
+            "forwarded",
+            "for=198.51.100.99;x=\", for=203.0.113.7;host=\",a\"",
+        )][..],
+        &[
+            ("forwarded", "for=198.51.100.99"),
+            ("x-forwarded-for", "203.0.113.7"),
+        ],
+    ] {
+        assert_eq!(refusals_filed(headers).await, 1, "{headers:?}");
+    }
+}

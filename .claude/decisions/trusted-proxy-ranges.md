@@ -65,3 +65,37 @@ two-line form and leave the one-line form open, for an API break.
 Left, and named: a proxy appending to the caller's own line a quoted value of its own that
 starts with a separator (`host=",a"`) still closes the caller's quote there. The bytes hold
 the ambiguity; a proxy that strips the caller's line has none.
+
+## 2026-11-07: a header is read whole or not at all
+
+The residual named above, run: `Forwarded: for=198.51.100.99;x=", for=203.0.113.7;host=",a"` from
+a listed peer answered `198.51.100.99`, the caller's hop. Two more members answered it too: a hop
+the parser skipped handed the client's position to the hop on its left, the caller's
+(`X-Forwarded-For: 198.51.100.99, garbage`; `Forwarded: for=198.51.100.99, for=unknown`, the proxy
+withholding the client), and an unreadable `Forwarded` beside a caller's `X-Forwarded-For` left
+the answer to the latter. Security decided:
+
+- **A header the parser cannot read whole is no chain, and the proxy stands** (`TrustedProxy`),
+  whatever the other headers say, with one `warn` naming the header and the peer, never a hop.
+  The grammar refuses what reads two ways: a quote no quote closes, a quote inside a value, a
+  closing quote followed by anything but a separator, a pair with no `=` or no name, an empty
+  value, a hop that is no node (RFC 7239 §6), bytes no text holds. A proxy's appended part is
+  well-formed, so with the caller's quote left open its quotes shift by one and the value ends
+  inside a string: the refusal is certain, not heuristic.
+- **A client position holding `unknown` or an obfuscated identifier names no client**: what sits
+  left of it, or in another header, is the caller's own to write.
+- **Whitespace and characters outside `tchar` in an unquoted value pass**: they read one way, and a
+  hand-written proxy rule emits `for=[2001:db8::1]:8080` unquoted.
+- **`ClientOrigin::of` returns the edge's resolution**, so a request files one line, not one per
+  reader (`ClientIp`, the throttler).
+
+Refused:
+
+- **Reading only the unreadable header as absent.** Behind a proxy appending to `Forwarded` and
+  passing `X-Forwarded-For` through, the caller's own `X-Forwarded-For` would decide.
+- **Reading a chain from the right and stopping at the client**, which would read the residual
+  right and never look at a caller's bytes. It is safe for `X-Forwarded-For`, and holds for
+  `Forwarded` only on a backslash-parity scan from the right; one rule for the three headers, read
+  whole, costs a caller sending a malformed header of its own the proxy's bucket and nothing else.
+- **Refusing the request.** The client's address is observational (`ClientIp`'s own caveat); the
+  request is served as the proxy's.

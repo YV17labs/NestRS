@@ -208,8 +208,16 @@ forwarding header when that peer is a proxy you listed:
    proxy, the outermost answers. If the two chains name different clients neither is
    believed, and if no header names a usable hop the proxy's own address answers, both
    with `forwarded = false`. Hops parse as a bare
-   IP, `IP:port`, or a bracketed IPv6 (`[ip]`, `[ip]:port`); a `Forwarded`
-   node of `unknown` or an obfuscated `_id` names no address and is skipped.
+   IP, `IP:port`, or a bracketed IPv6 (`[ip]`, `[ip]:port`); `unknown` or an
+   obfuscated `_id` names no address, so where it stands for the client, the
+   proxy withheld it and no client is named.
+
+A header is read whole or not at all. One the parser cannot read — a quote no
+quote closes, a pair with no `=`, a hop that is no address — names no client,
+whatever the other headers say: the proxy's own address answers, and one `warn`
+on `nest_rs::http` names the header, never what it held. A quote left open is
+the reason: a proxy appending a quoted value to a caller's line would close the
+caller's quote, and the caller's own hop would read as the rightmost.
 
 With no trusted proxy configured — the default — step 2 always wins, so
 `forwarded` stays `false` and a header a caller sets changes nothing.

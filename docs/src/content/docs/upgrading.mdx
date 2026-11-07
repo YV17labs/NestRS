@@ -2167,6 +2167,11 @@ lists what the boot, a log or the wire shows when one is missed.
   range with address bits set past its prefix (`10.0.0.1/8`) fails the boot
   naming the entry's place. Name your proxies' own range, written from its first
   address.
+- **A listed proxy writing a forwarding header the parser cannot read** — a
+  hostname or an IPv6 zone (`%eth0`) as a hop, a quote it left open — has every
+  caller behind it read as the proxy, one throttler bucket for all, and files
+  `forwarding header unreadable — no client is believed` naming the header.
+  Write each hop as RFC 7239 §6 spells a node (`for="[2001:db8::1]:4711"`).
 - **A cap or a deadline of `0`** — `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`,
   `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS`, an idle or send timeout — fails the
   boot naming the variable. A replica at its connection cap files

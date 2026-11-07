@@ -183,9 +183,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   smallest set. *read*
 
 **HTTP and CORS**
-- A proxy appending to the caller's `Forwarded` line a quoted value starting
-  with a separator still closes the caller's quote. Close: the proxy strips
-  the caller's line, as `extractors.mdx` asks. *seen*
 - `0.0.0.0/1` plus `128.0.0.0/1` trusts all of IPv4; a range pinned in a
   `#[module]` panics on a typo. *read*
 - A `#[public]` route requiring `Ambient<P>` behind a rejected token answers

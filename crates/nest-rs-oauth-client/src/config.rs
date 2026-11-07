@@ -4,6 +4,7 @@ use nest_rs_authn::AuthError;
 use nest_rs_config::__private::{RetiredKey, RetiredKeys, is_loopback};
 use nest_rs_config::{ClientTls, ConfigService, Environment, Field, config, endpoint_shown};
 use nest_rs_core::Secret;
+use nest_rs_guards::__private::is_scope_token;
 use oauth2::url::Url;
 
 // A family puts its name first in its namespace: 6.x read `oauth_client`.
@@ -50,7 +51,11 @@ pub struct OAuthClientConfig {
     /// Provider userinfo endpoint used to fetch the caller's profile.
     #[validate(length(min = 1), custom(function = "not_blank"))]
     pub userinfo_url: String,
-    /// Scopes requested at authorization; empty by default.
+    /// Scopes requested at authorization; empty by default. Each is an RFC 6749
+    /// §3.3 `scope-token`, so the request's space-joined list names the scopes
+    /// listed: one holding a space, a `"`, a `\\` or anything but printable
+    /// ASCII fails the boot.
+    #[validate(custom(function = "scope_tokens"))]
     pub scopes: Vec<String>,
     /// What the provider's certificate must chain to — the system's authorities
     /// unless `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` names others, which replace
@@ -90,6 +95,15 @@ fn not_blank(value: &str) -> Result<(), validator::ValidationError> {
         return Err(validator::ValidationError::new("blank"));
     }
     Ok(())
+}
+
+/// RFC 6749 §3.3: every scope a `scope-token`.
+fn scope_tokens(scopes: &[String]) -> Result<(), validator::ValidationError> {
+    if scopes.iter().all(|scope| is_scope_token(scope)) {
+        Ok(())
+    } else {
+        Err(validator::ValidationError::new("not_a_scope_token"))
+    }
 }
 
 /// [`not_blank`] for a credential held as a [`Secret`].
@@ -222,6 +236,7 @@ fn refused(setting: &str, why: &str) -> AuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OAuthClient;
     use nest_rs_config::Namespaced;
     use validator::Validate;
 
@@ -524,6 +539,44 @@ mod tests {
                 err.field_errors().contains_key(field),
                 "a blank {field} did not trip validation: {err:?}",
             );
+        }
+    }
+
+    /// RFC 6749 §3.3: the request joins the scopes with spaces, so `"a b"` asks
+    /// for two and `a"b` for none the grammar allows; the boot refuses both,
+    /// naming the key and quoting neither.
+    #[test]
+    fn a_scope_outside_the_token_grammar_is_refused_naming_the_key() {
+        for scope in [
+            "never-shown two",
+            "",
+            "never\"shown",
+            "never\\shown",
+            "nevér",
+        ] {
+            let config = OAuthClientConfig {
+                scopes: vec!["read".into(), scope.into()],
+                ..complete()
+            };
+            let err = config.validate().expect_err("refused");
+            let codes: Vec<_> = err.field_errors()["scopes"]
+                .iter()
+                .map(|error| error.code.to_string())
+                .collect();
+            assert_eq!(codes, ["not_a_scope_token"], "{scope:?}");
+
+            let Err(refused) = OAuthClient::from_variables(config) else {
+                panic!("{scope:?} boots");
+            };
+            let said = nest_rs_core::error_message(&refused);
+            assert!(
+                said.contains(&format!(
+                    "scopes ({}): not_a_scope_token",
+                    nest_rs_config::var_name("oauth__client", "SCOPES")
+                )),
+                "{said}"
+            );
+            assert!(!said.contains("never") && !said.contains("nevér"), "{said}");
         }
     }
 

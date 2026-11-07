@@ -141,7 +141,7 @@ follow the dual-path rule.
 | `token_url` | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL` | an `https` URL |
 | `redirect_url` | `<PREFIX>_OAUTH__CLIENT__REDIRECT_URL` | an `https` URL, or `http` on a loopback address in a development or test profile |
 | `userinfo_url` | `<PREFIX>_OAUTH__CLIENT__USERINFO_URL` | an `https` URL |
-| `scopes` | `<PREFIX>_OAUTH__CLIENT__SCOPES` | comma-separated list |
+| `scopes` | `<PREFIX>_OAUTH__CLIENT__SCOPES` | comma-separated list, each an RFC 6749 §3.3 `scope-token` |
 | `tls` | `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` | PEM, each with its `_FILE` spelling |
 
 `OAuthClient::new` runs `validate()` first, then holds every URL to TLS,

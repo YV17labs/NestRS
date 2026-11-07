@@ -61,7 +61,9 @@ NESTRS_SOCIAL__GOOGLE__REDIRECT_URL=https://auth.example/social/google/callback
 
 `<PREFIX>_SOCIAL__GITHUB__SCOPES` and `<PREFIX>_SOCIAL__GOOGLE__SCOPES` take a
 comma-separated list and default to each provider's canonical login set, so
-neither is deployment config until you need more than sign-in.
+neither is deployment config until you need more than sign-in. Each entry is one
+RFC 6749 §3.3 `scope-token`: `SCOPES="openid email"` is one entry holding a space,
+and fails the boot naming the variable — write `openid,email`.
 
 Three outcomes per imported provider, and no fourth:
 

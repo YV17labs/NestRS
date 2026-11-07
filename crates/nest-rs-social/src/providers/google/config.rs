@@ -24,7 +24,9 @@ pub struct GoogleSocialConfig {
     /// The registered redirect URL the callback returns to.
     #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
     pub redirect_url: String,
-    /// Defaults to `openid email profile` when unset.
+    /// Defaults to `openid email profile` when unset; each an RFC 6749 §3.3
+    /// `scope-token`, so one holding a space or a `"` fails the boot.
+    #[validate(custom(function = "crate::providers::scope_tokens"))]
     pub scopes: Vec<String>,
 }
 
@@ -159,6 +161,32 @@ mod tests {
             ..complete()
         };
         assert!(config.oauth2_config().is_ok());
+    }
+
+    /// A deployment writes the scopes as a list, `SCOPES=a,b`: one entry holding
+    /// a space or a `"` is no scope RFC 6749 §3.3 can carry, refused at boot
+    /// naming the provider's own variable, never the scope.
+    #[test]
+    fn a_scope_outside_the_token_grammar_is_refused_naming_the_providers_variable() {
+        use nest_rs_config::{Config, ConfigService};
+        use validator::Validate;
+
+        for scopes in ["openid email", "openid,never\"shown"] {
+            let env = ConfigService::with_vars("social__google", [("SCOPES", scopes)]);
+            let config = GoogleSocialConfig::from_env(&env, complete()).expect("the list reads");
+            let err = config.validate().expect_err("refused");
+            let rendered =
+                nest_rs_config::ConfigError::validation(GoogleSocialConfig::NAMESPACE, err)
+                    .to_string();
+            assert!(
+                rendered.contains(&format!(
+                    "scopes ({}): not_a_scope_token",
+                    nest_rs_config::var_name("social__google", "SCOPES")
+                )),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("never"), "{rendered}");
+        }
     }
 
     #[test]

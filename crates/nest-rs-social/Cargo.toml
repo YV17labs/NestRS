@@ -20,6 +20,8 @@ nest-rs-oauth-client.workspace = true
 nest-rs-config = { workspace = true, features = ["tls"] }
 # `SocialStrategy` is an authn `Strategy`, reading the callback's request.
 nest-rs-http.workspace = true
+# A provider's configured scope is held to RFC 6749 §3.3's `scope-token`.
+nest-rs-guards.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

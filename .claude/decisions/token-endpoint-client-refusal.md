@@ -175,3 +175,18 @@ On the owner's mandate of 2026-11-05. Each seen run first.
 - **Not covered:** `OAuthClientConfig::scopes` and each social provider's, which a provider
   reads and this server never grants; a refusal there would refuse what works today, so it
   waits for a caller it harms.
+
+## 2026-11-07 — the scopes a client requests are held to §3.3's grammar too
+
+Reopens the "Not covered" line above, settled by the owner's mandate of 2026-11-07 (close what
+`TODO.md` lists), which covers the break. Seen run: `OAuthClientConfig`, `GoogleSocialConfig` and
+`GithubSocialConfig` each validated a scope `"a b"` and one holding a `"`, and the client booted.
+
+**`OAuthClientConfig::scopes` and each social provider's `scopes` are held to RFC 6749 §3.3's
+`scope-token` at boot**, `not_a_scope_token` on `scopes`, naming the variable and never the scope,
+through the predicate the guards' `Scope` is checked by. "What works today" was a list the config
+does not read as written: `SCOPES="openid email"` is one entry that the request happened to join
+into two, and the next reader of that config — a log, a scope comparison — sees one scope that
+does not exist; a `"` or a `\` is a scope no provider can be asked for. Kept: a list is
+comma-separated, one way to write it; splitting an entry on its spaces is refused, a second
+spelling of the same list.

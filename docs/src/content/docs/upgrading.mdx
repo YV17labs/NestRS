@@ -2332,6 +2332,11 @@ lists what the boot, a log or the wire shows when one is missed.
   — a space, a `"`, an empty string — fails the boot on `clients[<id>].scopes`, where
   `"a b"` was granted whole when no scope was asked and refused when asked by name.
   List the two scopes.
+- **`<PREFIX>_OAUTH__CLIENT__SCOPES`, `<PREFIX>_SOCIAL__GITHUB__SCOPES` or
+  `<PREFIX>_SOCIAL__GOOGLE__SCOPES` holding an entry outside RFC 6749 §3.3's grammar**
+  — `"openid email"`, one entry with a space, or a `"` — fails the boot on `scopes`
+  with `not_a_scope_token`, as does an `OAuthClientConfig` pinned with one, where it was
+  sent as written. Separate the scopes with commas.
 - **`requires_scope("…")`** no longer compiles (`E0308`, expected `Scope`,
   found `&str`): declare the scope as a `Scope` constant.
 - **A `.fields` on `Update`, `Create` or `Manage`** now holds a write to its list. A write

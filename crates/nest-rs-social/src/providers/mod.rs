@@ -19,6 +19,19 @@ pub(crate) fn not_blank(value: &str) -> Result<(), validator::ValidationError> {
     Ok(())
 }
 
+/// RFC 6749 §3.3: every configured scope a `scope-token`, so the request's
+/// space-joined list names the scopes listed.
+pub(crate) fn scope_tokens(scopes: &[String]) -> Result<(), validator::ValidationError> {
+    if scopes
+        .iter()
+        .all(|scope| nest_rs_guards::__private::is_scope_token(scope))
+    {
+        Ok(())
+    } else {
+        Err(validator::ValidationError::new("not_a_scope_token"))
+    }
+}
+
 /// [`not_blank`] for a credential held as a [`Secret`](nest_rs_core::Secret).
 pub(crate) fn not_blank_secret(
     value: &nest_rs_core::Secret<String>,

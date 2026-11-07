@@ -288,7 +288,7 @@ boot naming the field:
 | `TOKEN_URL` | provider token endpoint (code → tokens); `https` only (RFC 6749 §3.2) |
 | `REDIRECT_URL` | this app's callback the provider returns to; `https`, or `http` on `localhost`, `127.0.0.1` or `[::1]` (RFC 8252 §7.3) in a declared development or test profile (`<PREFIX>_ENV`) alone |
 | `USERINFO_URL` | provider endpoint the profile is fetched from; `https` only (RFC 6750 §5.3) |
-| `SCOPES` | comma-separated scopes requested at authorization (empty by default) |
+| `SCOPES` | comma-separated scopes requested at authorization (empty by default), each an RFC 6749 §3.3 `scope-token`: one holding a space or a `"` fails the boot |
 | `TLS_CA_CERT` | PEM certificates of the authorities the provider's certificate must chain to, replacing the system's; `TLS_CA_CERT_FILE` reads them from a path instead. Holding no certificate fails the boot |
 | `TLS_CERT` / `TLS_KEY` | PEM client certificate chain, leaf first, and its private key, presented to a provider that requires one; `TLS_CERT_FILE` / `TLS_KEY_FILE` read them from a path instead. Both or neither |
 
@@ -351,7 +351,7 @@ with a boot `warn`, partial ⇒ the boot fails naming the provider.
 |---|---|
 | `CLIENT_ID` / `CLIENT_SECRET` | the provider's OAuth app credentials |
 | `REDIRECT_URL` | the registered callback this app is returned to |
-| `SCOPES` | comma-separated scopes; each provider has a sensible default when unset |
+| `SCOPES` | comma-separated scopes; each provider has a sensible default when unset. Each is an RFC 6749 §3.3 `scope-token`: one holding a space or a `"` fails the boot |
 
 The endpoint URLs are provider constants, not config — see
 [Social login](/security/authentication/social-login/).

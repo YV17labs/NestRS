@@ -183,8 +183,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   smallest set. *read*
 
 **HTTP and CORS**
-- `0.0.0.0/1` plus `128.0.0.0/1` trusts all of IPv4; a range pinned in a
-  `#[module]` panics on a typo. *read*
 - A `#[public]` route requiring `Ambient<P>` behind a rejected token answers
   `401`, absent from its document. *seen*
 - `413` on a route with no body, hyper's connection refusals, and a bare

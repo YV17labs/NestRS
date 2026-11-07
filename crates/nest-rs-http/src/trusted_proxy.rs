@@ -17,8 +17,9 @@ use crate::error::NotATrustedProxy;
 /// this type holds a range of every address: `/0` is refused, since it would
 /// believe every caller's forwarding headers.
 ///
-/// A `?` needs a function returning `Result`, and a `#[module]`'s imports are
-/// none: there a range is `.parse().expect("a CIDR range")`, as `pinned` writes it.
+/// In code a literal is [`trusted_proxy!`](macro@crate::trusted_proxy), checked as the
+/// program compiles, so a typo fails the build rather than the boot; a value read
+/// at run time is `.parse()?`.
 ///
 /// ```
 /// use std::net::IpAddr;
@@ -35,8 +36,8 @@ use crate::error::NotATrustedProxy;
 ///
 /// let pinned = HttpConfig {
 ///     trusted_proxies: vec![
-///         IpAddr::from([10, 0, 0, 1]).into(),
-///         "10.42.0.0/16".parse().expect("a CIDR range"),
+///         nest_rs_http::trusted_proxy!("10.0.0.1"),
+///         nest_rs_http::trusted_proxy!("10.42.0.0/16"),
 ///     ],
 ///     ..HttpConfig::default()
 /// };
@@ -53,14 +54,13 @@ pub struct TrustedProxy {
 impl TrustedProxy {
     /// `address` and its `prefix` length, a mapped range being the IPv4 range
     /// it carries; or the way they are no range this type holds.
-    fn range(address: IpAddr, prefix: u8) -> Result<Self, NotATrustedProxy> {
-        let (network, prefix) = if let IpAddr::V6(v6) = address
-            && prefix >= MAPPED_PREFIX
-            && let Some(v4) = v6.to_ipv4_mapped()
-        {
-            (IpAddr::V4(v4), prefix - MAPPED_PREFIX)
-        } else {
-            (address, prefix)
+    const fn range(address: IpAddr, prefix: u8) -> Result<Self, NotATrustedProxy> {
+        let (network, prefix) = match address {
+            IpAddr::V6(v6) if prefix >= MAPPED_PREFIX => match v6.to_ipv4_mapped() {
+                Some(v4) => (IpAddr::V4(v4), prefix - MAPPED_PREFIX),
+                None => (address, prefix),
+            },
+            _ => (address, prefix),
         };
         if prefix > full_length(network) {
             return Err(NotATrustedProxy::PrefixLength);
@@ -69,13 +69,39 @@ impl TrustedProxy {
             return Err(NotATrustedProxy::EveryAddress);
         }
         let past_the_prefix = match network {
-            IpAddr::V4(v4) => v4.to_bits().checked_shl(prefix.into()).unwrap_or(0) != 0,
-            IpAddr::V6(v6) => v6.to_bits().checked_shl(prefix.into()).unwrap_or(0) != 0,
+            IpAddr::V4(v4) => match v4.to_bits().checked_shl(prefix as u32) {
+                Some(rest) => rest != 0,
+                None => false,
+            },
+            IpAddr::V6(v6) => match v6.to_bits().checked_shl(prefix as u32) {
+                Some(rest) => rest != 0,
+                None => false,
+            },
         };
         if past_the_prefix {
             return Err(NotATrustedProxy::BitsPastPrefix);
         }
         Ok(Self { network, prefix })
+    }
+
+    /// The proxy at `address` alone.
+    const fn address(address: IpAddr) -> Self {
+        let network = address.to_canonical();
+        Self {
+            network,
+            prefix: full_length(network),
+        }
+    }
+
+    /// The first and the last address this entry holds, as its family's bits.
+    fn span(self) -> (u128, u128) {
+        let (first, length) = match self.network {
+            IpAddr::V4(v4) => (u128::from(v4.to_bits()), 32),
+            IpAddr::V6(v6) => (v6.to_bits(), 128),
+        };
+        // From 1, the prefix leaves at most 127 bits: a valid shift.
+        let host_bits = u32::from(length - self.prefix);
+        (first, first | ((1_u128 << host_bits) - 1))
     }
 
     /// Whether `ip`, in canonical form, is this proxy or lies in this range.
@@ -94,6 +120,25 @@ impl TrustedProxy {
     }
 }
 
+/// What [`trusted_proxy!`](macro@crate::trusted_proxy) expands to: the entry its
+/// literal parsed to, `None` for one that is neither form, checked as the
+/// constant it initializes is evaluated, so a refusal fails the build.
+#[expect(
+    clippy::panic,
+    reason = "evaluated only as a constant, where a panic is the compile error"
+)]
+pub const fn literal(parsed: Option<(IpAddr, Option<u8>)>) -> TrustedProxy {
+    let refused = match parsed {
+        Some((address, None)) => return TrustedProxy::address(address),
+        Some((address, Some(prefix))) => match TrustedProxy::range(address, prefix) {
+            Ok(range) => return range,
+            Err(refused) => refused,
+        },
+        None => NotATrustedProxy::Grammar,
+    };
+    panic!("{}", refused.sentence())
+}
+
 /// `::ffff:0:0/96`, the prefix every IPv4-mapped address shares (RFC 4291
 /// §2.5.5.2).
 const MAPPED_PREFIX: u8 = 96;
@@ -106,6 +151,37 @@ const fn full_length(network: IpAddr) -> u8 {
     }
 }
 
+/// The family every address of which `proxies` hold between them, a `/0` in all
+/// but name (`0.0.0.0/1` and `128.0.0.0/1`), which the boot refuses as it does a
+/// `/0`: under it every caller could forge the address it is attributed to.
+pub(crate) fn whole_family(proxies: &[TrustedProxy]) -> Option<&'static str> {
+    [
+        ("IPv4", false, u128::from(u32::MAX)),
+        ("IPv6", true, u128::MAX),
+    ]
+    .into_iter()
+    .find_map(|(family, v6, last)| {
+        let mut spans: Vec<_> = proxies
+            .iter()
+            .filter(|proxy| proxy.network.is_ipv6() == v6)
+            .map(|proxy| proxy.span())
+            .collect();
+        spans.sort_unstable();
+        // The first address no span before this one holds.
+        let mut unheld = 0;
+        for (first, end) in spans {
+            if first > unheld {
+                return None;
+            }
+            if end >= last {
+                return Some(family);
+            }
+            unheld = unheld.max(end + 1);
+        }
+        None
+    })
+}
+
 /// Whether `proxies` name `ip`, the one comparison every reader of the list
 /// makes: a mapped address reads as the IPv4 address it carries.
 pub(crate) fn lists(proxies: &[TrustedProxy], ip: IpAddr) -> bool {
@@ -116,11 +192,7 @@ pub(crate) fn lists(proxies: &[TrustedProxy], ip: IpAddr) -> bool {
 impl From<IpAddr> for TrustedProxy {
     /// The proxy at `address` alone.
     fn from(address: IpAddr) -> Self {
-        let network = address.to_canonical();
-        Self {
-            network,
-            prefix: full_length(network),
-        }
+        Self::address(address)
     }
 }
 
@@ -239,6 +311,45 @@ mod tests {
         ] {
             assert_eq!(entry.parse::<TrustedProxy>(), Err(kind), "{entry:?}");
         }
+    }
+
+    #[test]
+    fn ranges_holding_every_address_of_a_family_between_them_are_found() {
+        let list = |entries: &[&str]| entries.iter().map(|entry| proxy(entry)).collect::<Vec<_>>();
+        for (entries, family) in [
+            (&["0.0.0.0/1", "128.0.0.0/1"][..], Some("IPv4")),
+            (&["128.0.0.0/1", "0.0.0.0/2", "64.0.0.0/2"], Some("IPv4")),
+            (&["0.0.0.0/1", "0.0.0.0/2", "128.0.0.0/1"], Some("IPv4")),
+            (&["::/1", "8000::/1"], Some("IPv6")),
+            (&["::ffff:0.0.0.0/97", "::ffff:128.0.0.0/97"], Some("IPv4")),
+            (&["0.0.0.0/1", "128.0.0.0/2"], None),
+            (&["0.0.0.0/1", "192.0.0.0/2"], None),
+            (&["0.0.0.0/1", "::/1", "8000::/2"], None),
+            (
+                &["255.255.255.255", "0.0.0.0/1", "128.0.0.0/2", "192.0.0.0/3"],
+                None,
+            ),
+            (&[], None),
+        ] {
+            assert_eq!(whole_family(&list(entries)), family, "{entries:?}");
+        }
+    }
+
+    #[test]
+    fn a_literal_is_the_entry_its_text_parses_to() {
+        assert_eq!(
+            literal(Some((ip("10.42.0.0"), Some(16)))),
+            proxy("10.42.0.0/16")
+        );
+        assert_eq!(
+            literal(Some((ip("::ffff:10.0.0.1"), None))),
+            proxy("10.0.0.1")
+        );
+        const CHECKED: TrustedProxy = literal(Some((
+            IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 0)),
+            Some(8),
+        )));
+        assert_eq!(CHECKED, proxy("10.0.0.0/8"));
     }
 
     /// The error alone, what an app's own `?` prints, says what it refused and

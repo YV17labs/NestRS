@@ -99,3 +99,26 @@ Refused:
   whole, costs a caller sending a malformed header of its own the proxy's bucket and nothing else.
 - **Refusing the request.** The client's address is observational (`ClientIp`'s own caveat); the
   request is served as the proxy's.
+
+## 2026-11-07: a list holding a whole family is a `/0`, and a literal is checked as it compiles
+
+Run: `0.0.0.0/1,128.0.0.0/1` booted, believing every IPv4 caller as `/0` does, and the spelling
+this entry gave for a `#[module]`'s imports, `"10.42.0.0/61".parse().expect("a CIDR range")`,
+panicked at the boot. Security and the developer decided:
+
+- **Ranges holding every address of a family between them are refused at boot**, from the
+  environment and from code alike (`HttpConfig`'s `trusted_proxies` reader), naming the variable
+  or the field and never an entry. The check is a sort and a sweep over each family's spans, once.
+  A list missing only the mapped `::ffff:0:0/96` still believes every IPv6 caller and boots: no
+  one writes it by accident, and the refusal states a fact rather than a threshold.
+- **A literal is `trusted_proxy!("10.42.0.0/16")`**, which reads the text as the macro expands
+  and builds the entry in a constant item, through the same `const fn` checks `FromStr` runs: a
+  refusal is a compile error in the boot's words, which `cargo check` and an editor show. An
+  inline `const { }` would wait for a build. This revises the refused "range constructor beside
+  the parse": the text is still the one way to write a range, and the parse still the one
+  checker; the macro only moves a literal's check to compile time. `ip.into()` stays for an
+  address a value holds, and `.parse()?` for text read at run time.
+
+Refused: **a `const fn` parsing the text itself**, which would re-implement the standard library's
+address grammar for one literal; **a range's breadth past the whole family** (a `/1` alone): where
+to draw a line short of every address is the deployment's statement, not a fact.

@@ -10,7 +10,7 @@ use crate::cors::HttpCors;
 use crate::raw_body::RawBody;
 use crate::security_headers::HttpSecurityHeaders;
 use crate::tls::HttpTls;
-use crate::trusted_proxy::TrustedProxy;
+use crate::trusted_proxy::{TrustedProxy, whole_family};
 use crate::versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, VersionSelector};
 
 const DEFAULT_HOST: &str = "0.0.0.0";
@@ -318,8 +318,11 @@ pub struct HttpConfig {
     /// browser-origin check of the WebSocket gateways, the graphql-ws upgrade
     /// and `/mcp`, where a trusted proxy's `Forwarded` (`proto=`, `host=`) or
     /// `X-Forwarded-Proto` / `X-Forwarded-Host` set the request's own origin;
-    /// an entry that is no [`TrustedProxy`], a `/0` among them, aborts the boot.
-    /// See `ClientOrigin` for the resolution rule.
+    /// an entry that is no [`TrustedProxy`], a `/0` among them, aborts the boot,
+    /// and so do ranges holding every address of a family between them
+    /// (`0.0.0.0/1,128.0.0.0/1`), from the environment and from code alike. See
+    /// `ClientOrigin` for the resolution rule.
+    #[config(with = trusted_proxies)]
     pub trusted_proxies: Vec<TrustedProxy>,
     /// Maximum lifetime of a single `#[sse]` stream: when it elapses the stream
     /// ends, so the client's `EventSource` reconnects through the guard chain.
@@ -621,6 +624,32 @@ nest_rs_core::inventory::submit! {
     ])
 }
 
+/// The trusted proxies, refused from either side when their ranges hold every
+/// address of a family between them, never quoting an entry.
+fn trusted_proxies(
+    env: &ConfigService,
+    field: Field,
+    base: Vec<TrustedProxy>,
+) -> Result<Vec<TrustedProxy>> {
+    let from_env = env.setting(field.key())?;
+    let proxies =
+        <Vec<TrustedProxy> as nest_rs_config::ConfigField>::overlay(env, field.key(), base)?;
+    let Some(family) = whole_family(&proxies) else {
+        return Ok(proxies);
+    };
+    let refused = format!(
+        "holds ranges that between them hold every {family} address, under which every caller \
+         could forge the address it is attributed to; name your proxies' own ranges"
+    );
+    Err(match from_env {
+        Some(setting) => setting.refuse(format_args!("is a list that {refused}")),
+        None => nest_rs_config::ConfigError::parse(
+            env.var_name(field.key()),
+            format!("is not set, and `{}` set in code {refused}", field.path()),
+        ),
+    })
+}
+
 /// The global prefix, trimmed; blank is none.
 fn global_prefix(
     env: &ConfigService,
@@ -879,6 +908,55 @@ mod tests {
             d.trusted_proxies.is_empty(),
             "no proxy is believed until the deployment names one",
         );
+    }
+
+    /// Two ranges holding every address of a family between them believe every
+    /// caller, as `/0` would: refused at boot, from the environment and from
+    /// code alike, naming the variable and never the list.
+    #[test]
+    fn a_list_whose_ranges_hold_a_whole_family_fails_the_boot() {
+        for list in [
+            "0.0.0.0/1,128.0.0.0/1",
+            "10.0.0.1,128.0.0.0/2,0.0.0.0/1,192.0.0.0/2",
+            "::/1,8000::/1",
+        ] {
+            let env = ConfigService::with_vars("http", [("TRUSTED_PROXIES", list)]);
+            let refused = HttpConfig::from_env(&env, HttpConfig::default())
+                .expect_err(list)
+                .to_string();
+            assert!(refused.contains("TRUSTED_PROXIES"), "{refused}");
+            assert!(refused.contains("every"), "{refused}");
+            assert!(
+                !refused.contains("0.0.0.0/1") && !refused.contains("::/1"),
+                "{refused}"
+            );
+
+            let pinned = HttpConfig {
+                trusted_proxies: list
+                    .split(',')
+                    .map(|entry| entry.parse().unwrap())
+                    .collect(),
+                ..HttpConfig::default()
+            };
+            let refused = HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned)
+                .expect_err(list)
+                .to_string();
+            assert!(
+                refused.contains("`HttpConfig::trusted_proxies` set in code"),
+                "{refused}"
+            );
+        }
+        for list in [
+            "0.0.0.0/1",
+            "0.0.0.0/1,128.0.0.0/2,10.0.0.0/8",
+            "::/1,10.0.0.0/8",
+        ] {
+            let env = ConfigService::with_vars("http", [("TRUSTED_PROXIES", list)]);
+            assert!(
+                HttpConfig::from_env(&env, HttpConfig::default()).is_ok(),
+                "{list}"
+            );
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@
 use std::net::IpAddr;
 
 use nest_rs_core::module;
-use nest_rs_http::{ClientIp, HttpConfig, HttpModule, controller, routes};
+use nest_rs_http::{ClientIp, HttpConfig, HttpModule, controller, routes, trusted_proxy};
 use nest_rs_testing::TestApp;
 use tokio::io::AsyncWriteExt;
 
@@ -84,12 +84,13 @@ async fn a_listed_proxy_s_own_field_line_outranks_the_caller_s() {
     );
 }
 
-/// The list as a composition root pins it, where no `?` reaches a `Result`.
+/// The list as a composition root pins it, where no `?` reaches a `Result`: a
+/// literal checked as the module compiles, and an address a value holds.
 #[module(
     imports = [HttpModule::for_root(HttpConfig {
         trusted_proxies: vec![
             IpAddr::from([10, 0, 0, 1]).into(),
-            "10.42.0.0/16".parse().expect("a CIDR range"),
+            trusted_proxy!("10.42.0.0/16"),
         ],
         ..HttpConfig::default()
     })],

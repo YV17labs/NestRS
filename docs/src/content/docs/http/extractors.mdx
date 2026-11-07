@@ -227,14 +227,16 @@ With no trusted proxy configured — the default — step 2 always wins, so
 NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.42.0.0/16
 ```
 
-An entry is an address or a CIDR range, and in code a `TrustedProxy`: `ip.into()`
-for an address, and for a range `"10.42.0.0/16".parse().expect("a CIDR range")` in
-a `#[module]`'s imports, or `"10.42.0.0/16".parse()?` in a function returning
-`Result`. An ingress whose pods move is named by their range. Everything inside
-one is believed, so it names your proxies and
-nothing a caller connects from. A `/0` fails the boot, since it would believe every caller, and so does a range with address bits
-set past its prefix (`10.0.0.1/8`), which could mean the one proxy or the whole
-range. A listener on `[::]` reports an IPv4 peer as `::ffff:10.0.0.1`: that is
+An entry is an address or a CIDR range, and in code a `TrustedProxy`:
+`trusted_proxy!("10.42.0.0/16")` for a literal, checked as the program compiles,
+so a typo in a `#[module]`'s imports fails the build rather than the boot;
+`ip.into()` for an address a value holds, and `"10.42.0.0/16".parse()?` for text
+read at run time. An ingress whose pods move is named by their range. Everything
+inside one is believed, so it names your proxies and nothing a caller connects
+from. A `/0` fails the boot, since it would believe every caller, and so do ranges
+holding every address of a family between them (`0.0.0.0/1,128.0.0.0/1`), from
+the environment and from code alike; so does a range with address bits set past
+its prefix (`10.0.0.1/8`), which could mean the one proxy or the whole range. A listener on `[::]` reports an IPv4 peer as `::ffff:10.0.0.1`: that is
 `10.0.0.1`, to this list and in the address `ClientIp` answers.
 
 **Rightmost, not leftmost.** A proxy appends the address it received the request

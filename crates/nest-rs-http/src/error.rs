@@ -1279,26 +1279,39 @@ impl NotATrustedProxy {
     /// What the value is, to read after the words naming it: `entry 2 of the
     /// list`, at a boot's refusal.
     pub(crate) const fn predicate(self) -> &'static str {
+        self.sentence().split_at(REFUSED_ENTRY.len()).1
+    }
+
+    /// The refusal read on its own, what `Display` writes and a build refusing a
+    /// [`trusted_proxy!`](macro@crate::trusted_proxy) literal says: the entry, then the
+    /// [`predicate`](Self::predicate).
+    pub(crate) const fn sentence(self) -> &'static str {
         match self {
-            Self::Grammar => "is neither an IP address nor a CIDR range (`10.0.0.0/8`)",
+            Self::Grammar => {
+                "this trusted proxy entry is neither an IP address nor a CIDR range (`10.0.0.0/8`)"
+            }
             Self::PrefixLength => {
-                "is a CIDR range whose prefix length is past the bits its address holds"
+                "this trusted proxy entry is a CIDR range whose prefix length is past the bits \
+                 its address holds"
             }
             Self::EveryAddress => {
-                "is a `/0` range, under which every caller could forge the address it is \
-                 attributed to; name your proxies' own range"
+                "this trusted proxy entry is a `/0` range, under which every caller could forge \
+                 the address it is attributed to; name your proxies' own range"
             }
             Self::BitsPastPrefix => {
-                "is a CIDR range with address bits set past its prefix; write the range's first \
-                 address, or the proxy's address alone"
+                "this trusted proxy entry is a CIDR range with address bits set past its prefix; \
+                 write the range's first address, or the proxy's address alone"
             }
         }
     }
 }
 
+/// The words every [`NotATrustedProxy::sentence`] opens with.
+const REFUSED_ENTRY: &str = "this trusted proxy entry ";
+
 impl fmt::Display for NotATrustedProxy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "this trusted proxy entry {}", self.predicate())
+        f.write_str(self.sentence())
     }
 }
 

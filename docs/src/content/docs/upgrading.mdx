@@ -562,7 +562,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `Box::new(http_transport).serve(cancel)` driven by hand | `http_transport.listen().await?` first; the port it bound is in `Listening::addresses` |
    | `TestClient::new(transport.take_endpoint()?)` on a hand-booted transport | `transport.take_endpoint()?.call(request)`, or `TestApp` |
    | `HttpCors { .. }.into_middleware()` | nothing: set `HttpConfig::cors`, which the transport checks at boot |
-   | `HttpConfig { trusted_proxies: vec![ip], .. }` | `vec![ip.into()]`, or `vec!["10.42.0.0/16".parse().expect("a CIDR range")]` for a range in a `#[module]`'s imports (`?` in a function returning `Result`): an entry is a `TrustedProxy` |
+   | `HttpConfig { trusted_proxies: vec![ip], .. }` | `vec![ip.into()]`, or `vec![trusted_proxy!("10.42.0.0/16")]` for a literal, checked as the program compiles (`"…".parse()?` for a value read at run time): an entry is a `TrustedProxy` |
    | `ClientOrigin::resolve(forwarded, forwarded_for, real_ip, peer, &[ip])` | `&[ip.into()]` for the last argument |
    | `ClientIp`'s `ip` compared with `::ffff:a.b.c.d` on a listener on `[::]` | `a.b.c.d`: a mapped address is the IPv4 address it carries — not a compile error |
    | an `OPTIONS` from a listed origin that relied on the CORS layer's `403` | nothing, or a guard: it reaches its route now, `405` with `Allow` where none answers — not a compile error |
@@ -2165,8 +2165,10 @@ lists what the boot, a log or the wire shows when one is missed.
   included: list it as the browser sends it.
 - **`<PREFIX>_HTTP__TRUSTED_PROXIES`** with a `/0` (`0.0.0.0/0`, `::/0`) or a
   range with address bits set past its prefix (`10.0.0.1/8`) fails the boot
-  naming the entry's place. Name your proxies' own range, written from its first
-  address.
+  naming the entry's place, and ranges holding every address of a family between
+  them (`0.0.0.0/1,128.0.0.0/1`) fail it naming the variable, as a list pinned in
+  code does. Name your proxies' own range, written from its first address; in
+  code, a `trusted_proxy!` literal the type refuses does not compile.
 - **A listed proxy writing a forwarding header the parser cannot read** — a
   hostname or an IPv6 zone (`%eth0`) as a hop, a quote it left open — has every
   caller behind it read as the proxy, one throttler bucket for all, and files

@@ -205,7 +205,8 @@ The rest of the rule:
 - An entry of `TRUSTED_PROXIES` that is no address or CIDR range, a `/0`, or a
   range with address bits set past its prefix (`10.0.0.1/8`), **aborts the boot**
   naming the variable and the entry's place in the list, never its value — never
-  a silent skip.
+  a silent skip — and so do ranges holding every address of a family between them
+  (`0.0.0.0/1,128.0.0.0/1`), a `/0` in all but name.
 - A request with no peer addr (synthetic, in-process) is counted
   against a literal `"global"` bucket.
 

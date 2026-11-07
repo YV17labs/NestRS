@@ -290,6 +290,7 @@ pub mod __private {
     pub use crate::transport::{
         join_path, literal_mount_path, normalize_mount_path, version_path, versions_declare,
     };
+    pub use crate::trusted_proxy::literal as trusted_proxy_literal;
     pub use crate::versioning::{VersionLocation, declared_versions, version_location};
     pub use crate::view::with_view;
     pub use nest_rs_pipes::__private::{
@@ -388,6 +389,31 @@ pub use nest_rs_http_macros::routes;
 /// it names off that service and its entity's `#[expose]`, and declares its
 /// posture with `#[authorize(Action, Entity)]`.
 pub use nest_rs_http_macros::crud;
+
+/// `trusted_proxy!("10.42.0.0/16")` — a [`TrustedProxy`] from a literal, an
+/// address or a CIDR range, checked as the program compiles: a `#[module]`'s
+/// imports pin one where no `?` reaches a `Result`, and a typo fails the build
+/// rather than the boot.
+///
+/// ```
+/// use nest_rs_core::module;
+/// use nest_rs_http::{HttpConfig, HttpModule, trusted_proxy};
+///
+/// #[module(imports = [HttpModule::for_root(HttpConfig {
+///     trusted_proxies: vec![trusted_proxy!("10.0.0.1"), trusted_proxy!("10.42.0.0/16")],
+///     ..HttpConfig::default()
+/// })])]
+/// struct AppModule;
+/// # assert_eq!(trusted_proxy!("::ffff:10.0.0.1"), trusted_proxy!("10.0.0.1"));
+/// ```
+///
+/// An entry [`TrustedProxy`] refuses does not compile, in the words the boot
+/// would have used:
+///
+/// ```compile_fail
+/// let ingress = nest_rs_http::trusted_proxy!("10.42.0.0/61");
+/// ```
+pub use nest_rs_http_macros::trusted_proxy;
 
 pub use nest_rs_http_macros::http_code;
 pub use nest_rs_http_macros::redirect;

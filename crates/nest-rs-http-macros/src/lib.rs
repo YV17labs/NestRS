@@ -10,6 +10,7 @@ mod controller;
 mod crud;
 mod response;
 mod routes;
+mod trusted_proxy;
 
 /// Generates `pub const PATH`, `pub const VERSIONS` (empty when unversioned)
 /// and a hidden constructor the boot builds the controller with.
@@ -197,4 +198,18 @@ pub fn response_header(_args: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn redirect(_args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(response::unread("redirect", item).into()).into()
+}
+
+/// `trusted_proxy!("10.42.0.0/16")` — a `TrustedProxy` from a literal, an
+/// address or a CIDR range, checked as the program compiles.
+///
+/// # Expands to
+///
+/// A block evaluating a constant `TrustedProxy`, so an entry the type refuses —
+/// neither form, a `/0`, a prefix past its address, bits set past the prefix —
+/// is a compile error in the words the boot would have used. Anything but a
+/// string literal is a compile error naming `.parse()?`.
+#[proc_macro]
+pub fn trusted_proxy(input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(trusted_proxy::expand(input.into())).into()
 }

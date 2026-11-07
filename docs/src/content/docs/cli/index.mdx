@@ -134,9 +134,10 @@ because a recipe shells out to it:
 Rustup is what reads that file. On a toolchain installed any other way it is
 inert — point `LLVM_COV` and `LLVM_PROFDATA` at your own binaries instead.
 
-**`clippy.toml`** refuses raw SQL (`Expr::cust` and every other call writing text
-unescaped) in `nestrs run lint`: no type tells it from a condition, and a fragment can
-read past the ability's filter ([Raw SQL in a filter](/database/repo-and-executor/#raw-sql-in-a-filter)).
+**`clippy.toml`** names raw SQL (`Expr::cust` and every other call writing text
+unescaped) in `nestrs run lint`, where it is written: no type tells it from a
+condition, and `Repo` refuses a fragment that would read past the ability's filter only
+when the query runs ([Raw SQL in a filter](/database/repo-and-executor/#raw-sql-in-a-filter)).
 `crates/migrations` holds an empty one of its own, which lets a migration write raw DDL.
 
 ### One starter, no template flag

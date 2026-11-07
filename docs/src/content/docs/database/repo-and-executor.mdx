@@ -104,25 +104,45 @@ executor is a wiring bug, not a silent miss.
 #### Raw SQL in a filter
 
 `filter` takes what any SeaORM condition is, and sea-query's `Expr::cust` builds
-the same `Expr` a column's `.eq()` does, so no type can refuse it there. Its text
-is SQL: `sea-query` wraps it in parentheses, and a fragment closing them gets
-out, so `.filter(Expr::cust("1 = 1) OR (1 = 1"))` reads every row the ability
-withheld:
+the same `Expr` a column's `.eq()` does, so no type tells raw text from a
+condition. `Repo` holds it where it lands instead: your condition goes into the
+statement as one parenthesized operand beside the ability's, and its text, read as
+Postgres reads it, has to close every parenthesis, string and quoted identifier it
+opens, with no comment in it. A fragment that does not is refused before any
+statement is sent:
 
 ```sql title="what reaches Postgres"
-WHERE "org_id" = $1 AND (1 = 1) OR (1 = 1)
+-- .filter(Column::Title.eq(name))
+WHERE "org_id" = $1 AND ("posts"."title" = $2)
+
+-- .filter(Expr::cust("1 = 1) OR (1 = 1"))
+-- nothing: the query is refused
 ```
 
-Clippy refuses it instead, as the SQL-injection class it is. The `clippy.toml`
-`nestrs new` writes lists `Expr::cust` and every other call through which sea-query
-writes text unescaped, and `nestrs run lint` runs it with `-D warnings`. That is a
-review-level guard: it holds where clippy runs with that file, and a project running
-no clippy compiles the fragment. Write the condition with sea-query's typed builders
-(`Func::lower`, `PgFunc::to_tsquery`, `Condition`), whose values are bound. `PgFunc`'s
-JSON builders are the exception, a JSON path being written as text, so `json_value`,
-`json_query`, `json_exists` and `json_table` are on the list too. Where only raw text
-can say it, the opening is one line a review finds, and a value goes through
-`cust_with_values`, never into the text:
+The refused query runs nothing and answers the opaque `500` every unexpected
+database failure answers, and one `warn` on `nest_rs::orm` names the entity and
+why it was refused (`reason="unbalanced_parenthesis"`), never the text. Text holding an `OR`
+stays inside its parentheses, so a `sea_query::Enum` literal or a hand-written
+`impl Iden` whose text reaches past its column still reads within what the ability
+allows. A page's `extra` condition goes through the same check, and so does an
+order by field; a write refuses a value whose enum type name would leave its
+quotes.
+
+What you write when no typed builder reaches it keeps working, with nothing new
+to write: a function call, a full-text search, a string holding a parenthesis. Two
+spellings are refused although Postgres reads them: dollar quoting (`$$…$$`), and a
+backslash in a plain `'…'` string, which escapes the next character wherever a
+server sets `standard_conforming_strings` off. Write `E'…'`, or better, bind the
+value.
+
+Clippy names the same fragments where you write them. The `clippy.toml` `nestrs new`
+writes lists `Expr::cust` and every other call through which sea-query writes text
+unescaped, and `nestrs run lint` runs it with `-D warnings`. Write the condition with
+sea-query's typed builders (`Func::lower`, `PgFunc::to_tsquery`, `Condition`), whose
+values are bound. `PgFunc`'s JSON builders are the exception, a JSON path being
+written as text, so `json_value`, `json_query`, `json_exists` and `json_table` are on
+the list too. Where only raw text can say it, the opening is one line a review finds,
+and a value goes through `cust_with_values`, never into the text:
 
 ```rust title="crates/features/src/posts/service.rs"
 #[expect(
@@ -148,10 +168,9 @@ A `DeriveActiveEnum` on a native enum with no `rs_type` expands to `sea_query::E
 the same way, which takes `clippy::disallowed_types` beside it; with `rs_type =
 "String"` it expands to nothing the list names and needs no opening.
 
-Clippy names calls and types, so two spellings stay yours to read in a review: a
-`sea_query::Enum` literal through its full path or a glob, whose `type_name` reaches
-the statement as written even with its value bound, and a hand-written `impl Iden`
-whose `quoted` borrows its text.
+Clippy names calls and types, so a `sea_query::Enum` literal through its full path
+or a glob, and a hand-written `impl Iden` whose `quoted` borrows its text, pass it;
+`Repo`'s check is what holds those.
 
 A project that started before this file has none: copy it from a new scaffold. A
 migration stays free to write raw DDL: `crates/migrations` holds an empty

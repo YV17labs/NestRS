@@ -1,9 +1,10 @@
-use sea_orm::sea_query::{IntoCondition, NullOrdering, Order};
+use sea_orm::sea_query::{Condition, IntoCondition, NullOrdering, Order};
 use sea_orm::{
     DbBackend, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
     QueryTrait, Select, SelectExt, Statement,
 };
 
+use crate::contained::{Uncontained, contained, contained_order, refused};
 use crate::repo::Repo;
 
 /// A query [`Repo`] built — [`scoped`](Repo::scoped), an escape such as
@@ -104,8 +105,8 @@ use crate::repo::Repo;
 /// ```
 ///
 /// An order key is a column of the entity, never an expression, so an order
-/// computes nothing over a hidden column; `Order::Field`, which writes its values
-/// into the statement, is clippy's.
+/// computes nothing over a hidden column; an `Order::Field`, which writes its values
+/// into the statement, refuses one whose enum type name would leave its quotes.
 ///
 /// ```compile_fail,E0308
 /// # use nest_rs_authz::Action;
@@ -120,51 +121,143 @@ use crate::repo::Repo;
 #[must_use = "a select runs nothing until `all`, `one`, `count` or `exists`"]
 pub struct RepoSelect<E: EntityTrait> {
     select: Select<E>,
+    refused: Option<Uncontained>,
 }
 
 impl<E: EntityTrait> RepoSelect<E> {
     /// `select`, as `Repo` filtered it.
     pub(crate) fn new(select: Select<E>) -> Self {
-        Self { select }
+        Self {
+            select,
+            refused: None,
+        }
     }
 
-    /// Narrows the query by `condition`, conjoined with what it holds.
+    /// Narrows the query by a condition the framework built — a scope, a key —
+    /// which holds no text of the developer's.
+    pub(crate) fn within(self, condition: impl IntoCondition) -> Self {
+        Self {
+            select: self.select.filter(condition),
+            ..self
+        }
+    }
+
+    /// The query, refused for `why`: it builds `FALSE` and runs nothing.
+    pub(crate) fn refusing(self, why: Uncontained) -> Self {
+        Self {
+            select: self.select.filter(Condition::any()),
+            refused: self.refused.or(Some(why)),
+        }
+    }
+
+    /// The query, refused for `why` when there is one.
+    fn refusing_for(self, why: Option<Uncontained>) -> Self {
+        match why {
+            Some(why) => self.refusing(why),
+            None => self,
+        }
+    }
+
+    /// Narrows the query by `condition`, conjoined with what it holds as one
+    /// parenthesized operand, so nothing it holds reaches past what `Repo` filtered.
     ///
-    /// Raw SQL (`Expr::cust`) is the one way past `Repo`'s filter left here, no
-    /// type telling it from a condition, so clippy refuses it.
+    /// A raw fragment (`Expr::cust`, and every call writing text unescaped) keeps
+    /// working when its text closes every parenthesis, string and identifier it
+    /// opens and holds no comment, as a function call or a full-text search does;
+    /// one that does not is refused before any statement, the query then running
+    /// nothing and answering an opaque error, said at `warn` by its entity and never
+    /// by its text.
+    ///
+    /// ```no_run
+    /// # mod post {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    /// #     #[sea_orm(table_name = "posts")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key)]
+    /// #         pub id: i32,
+    /// #         pub body: String,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {}
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// use nest_rs_authz::Action;
+    /// use nest_rs_seaorm::Repo;
+    /// use sea_orm::sea_query::Expr;
+    ///
+    /// # async fn search(words: &str) -> Result<(), sea_orm::DbErr> {
+    /// #[expect(clippy::disallowed_methods, reason = "full-text search, its words bound")]
+    /// let matching = Expr::cust_with_values(
+    ///     r#"to_tsvector('english', "posts"."body") @@ plainto_tsquery('english', $1)"#,
+    ///     [words],
+    /// );
+    /// let posts = Repo::<post::Entity>::scoped(Action::Read)
+    ///     .filter(matching)
+    ///     .all()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn filter(self, condition: impl IntoCondition) -> Self {
-        Self::new(self.select.filter(condition))
+        match contained(condition.into_condition()) {
+            Ok(None) => self,
+            Ok(Some(operand)) => self.within(operand),
+            Err(why) => self.refusing(why),
+        }
     }
 
     /// Orders the rows by `column`, `order`; each order breaks the ties of the
     /// one before it.
     pub fn order_by(self, column: E::Column, order: Order) -> Self {
-        Self::new(self.select.order_by(column, order))
+        let refusal = contained_order(&order).err();
+        Self {
+            select: self.select.order_by(column, order),
+            ..self
+        }
+        .refusing_for(refusal)
     }
 
     /// Orders the rows by `column`, ascending.
     pub fn order_by_asc(self, column: E::Column) -> Self {
-        Self::new(self.select.order_by_asc(column))
+        Self {
+            select: self.select.order_by_asc(column),
+            ..self
+        }
     }
 
     /// Orders the rows by `column`, descending.
     pub fn order_by_desc(self, column: E::Column) -> Self {
-        Self::new(self.select.order_by_desc(column))
+        Self {
+            select: self.select.order_by_desc(column),
+            ..self
+        }
     }
 
     /// Orders the rows by `column`, `order`, with its `NULL`s where `nulls` says.
     pub fn order_by_with_nulls(self, column: E::Column, order: Order, nulls: NullOrdering) -> Self {
-        Self::new(self.select.order_by_with_nulls(column, order, nulls))
+        let refusal = contained_order(&order).err();
+        Self {
+            select: self.select.order_by_with_nulls(column, order, nulls),
+            ..self
+        }
+        .refusing_for(refusal)
     }
 
     /// Keeps at most `limit` rows; `None` keeps them all.
     pub fn limit(self, limit: impl Into<Option<u64>>) -> Self {
-        Self::new(self.select.limit(limit))
+        Self {
+            select: self.select.limit(limit),
+            ..self
+        }
     }
 
     /// Skips the first `offset` rows; `None` skips none.
     pub fn offset(self, offset: impl Into<Option<u64>>) -> Self {
-        Self::new(self.select.offset(offset))
+        Self {
+            select: self.select.offset(offset),
+            ..self
+        }
     }
 
     /// Applies `narrow` with the value `value` holds, the query as it is on `None`.
@@ -175,19 +268,28 @@ impl<E: EntityTrait> RepoSelect<E> {
         }
     }
 
-    /// The statement the query runs on `backend`, to read: nothing here runs one.
+    /// The statement the query runs on `backend`, to read: nothing here runs one. A
+    /// query [`filter`](Self::filter) refused builds `FALSE` in that condition's place.
     pub fn build(&self, backend: DbBackend) -> Statement {
         self.select.build(backend)
     }
 
+    /// The select to run, or the refusal [`filter`](Self::filter) met.
+    fn runnable(self) -> Result<Select<E>, DbErr> {
+        match self.refused {
+            Some(why) => Err(refused::<E>(why)),
+            None => Ok(self.select),
+        }
+    }
+
     /// Every row the query matches.
     pub async fn all(self) -> Result<Vec<E::Model>, DbErr> {
-        self.select.all(&Repo::<E>::conn()?).await
+        self.runnable()?.all(&Repo::<E>::conn()?).await
     }
 
     /// The first row the query matches, or `None`.
     pub async fn one(self) -> Result<Option<E::Model>, DbErr> {
-        self.select.one(&Repo::<E>::conn()?).await
+        self.runnable()?.one(&Repo::<E>::conn()?).await
     }
 
     /// How many rows the query matches.
@@ -195,12 +297,12 @@ impl<E: EntityTrait> RepoSelect<E> {
     where
         E::Model: Sync,
     {
-        self.select.count(&Repo::<E>::conn()?).await
+        self.runnable()?.count(&Repo::<E>::conn()?).await
     }
 
     /// Whether the query matches any row.
     pub async fn exists(self) -> Result<bool, DbErr> {
-        self.select.exists(&Repo::<E>::conn()?).await
+        self.runnable()?.exists(&Repo::<E>::conn()?).await
     }
 }
 
@@ -214,7 +316,7 @@ mod tests {
         NullOrdering, OnConflict, OptionEnum, Order, OrderedStatement, OverStatement, PgFunc,
         Query, SelectStatement, SubQueryStatement, Value, Values, WindowStatement,
     };
-    use sea_orm::{ColumnTrait, DbBackend, DbErr};
+    use sea_orm::{ColumnTrait, DbBackend, DbErr, EntityTrait, QueryFilter, QueryTrait};
 
     use super::RepoSelect;
     use crate::repo::Repo;
@@ -322,10 +424,26 @@ mod tests {
     }
 
     #[test]
-    fn a_filter_conjoins_with_what_repo_filtered() {
+    fn a_filter_conjoins_with_what_repo_filtered_as_one_operand() {
         assert_eq!(
             sql(Widgets::scoped(Action::Read).filter(Column::Id.eq(7))),
-            format!(r#"{SELECT} WHERE (1 = 0) AND "widgets"."id" = 7"#),
+            format!(r#"{SELECT} WHERE (1 = 0) AND ("widgets"."id" = 7)"#),
+        );
+        assert_eq!(
+            sql(Widgets::unscoped()
+                .filter(Column::Id.eq(7))
+                .filter(Column::Rank.is_null())),
+            format!(r#"{SELECT} WHERE ("widgets"."id" = 7) AND ("widgets"."rank" IS NULL)"#),
+        );
+        assert_eq!(
+            sql(Widgets::unscoped().filter(Condition::all())),
+            SELECT,
+            "an empty `all` is TRUE, and adds nothing",
+        );
+        assert_eq!(
+            sql(Widgets::unscoped().filter(Condition::any())),
+            format!("{SELECT} WHERE (FALSE)"),
+            "an empty `any` is FALSE, and stays",
         );
     }
 
@@ -335,6 +453,111 @@ mod tests {
         assert_eq!(
             sql(Widgets::scoped(Action::Read).filter(either)),
             format!(r#"{SELECT} WHERE (1 = 0) AND ("widgets"."id" = 7 OR "widgets"."id" = 8)"#),
+        );
+    }
+
+    /// Text closing what holds it, a parenthesis at any depth or a comment reading the
+    /// rest of the statement as its own, is refused: the query builds `FALSE` in its
+    /// place and runs nothing, before it needs an executor.
+    #[tokio::test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the fragments under test: what the scan exists to refuse"
+    )]
+    async fn a_raw_fragment_closing_its_operand_is_refused_before_any_statement() {
+        for fragment in [
+            "1 = 1) OR (1 = 1",
+            "1 = 1)) OR ((1 = 1",
+            "1 = 1 OR true --",
+            "1 = 1 /* ) OR ( */",
+            "'a' = 'a",
+            "1 = $$) OR ($$",
+        ] {
+            let refused = Widgets::scoped(Action::Read).filter(Expr::cust(fragment));
+            assert_eq!(
+                sql(refused.clone()),
+                format!("{SELECT} WHERE (1 = 0) AND FALSE"),
+                "{fragment}",
+            );
+            let answer = refused.all().await;
+            assert!(
+                matches!(&answer, Err(DbErr::Custom(said))
+                    if said.contains("refused before any statement") && !said.contains(fragment)),
+                "{fragment}: {answer:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[expect(clippy::disallowed_methods, reason = "the fragment under test")]
+    async fn a_refusal_is_said_at_warn_by_entity_and_reason_never_by_its_text() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let fragment = "1 = 1) OR (1 = 1";
+        let answer = Widgets::unscoped()
+            .filter(Expr::cust(fragment))
+            .count()
+            .await;
+
+        assert!(answer.is_err(), "{answer:?}");
+        let event = logs.expect_one(
+            crate::target::ORM,
+            "a condition or value handed to Repo refused — its text would not stay where Repo puts it",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("entity").as_deref(), Some("widgets"));
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("unbalanced_parenthesis")
+        );
+        assert!(!format!("{event:?}").contains(fragment), "{event:#?}");
+    }
+
+    /// What reads past a column without closing anything: an `OR` the text holds, which
+    /// precedence would read past the scope beside it, stays inside the operand.
+    #[test]
+    #[expect(clippy::disallowed_methods, reason = "the fragment under test")]
+    fn a_balanced_fragment_holding_an_or_stays_one_operand_beside_the_scope() {
+        assert_eq!(
+            sql(Widgets::scoped(Action::Read).filter(Expr::cust("a = 1 OR b = 2"))),
+            format!("{SELECT} WHERE (1 = 0) AND (a = 1 OR b = 2)"),
+        );
+        let reaching = Column::Id.eq(7).or(Expr::cust("1 = 1"));
+        assert_eq!(
+            sql(Widgets::scoped(Action::Read).filter(reaching)),
+            format!(r#"{SELECT} WHERE (1 = 0) AND ("widgets"."id" = 7 OR (1 = 1))"#),
+        );
+    }
+
+    /// What a developer writes when no typed call reaches it keeps working, with
+    /// nothing new to write: a function call, a full-text search, a string holding
+    /// what the scan would refuse outside it.
+    #[test]
+    #[expect(clippy::disallowed_methods, reason = "the fragments under test")]
+    fn a_fragment_closing_all_it_opens_keeps_working() {
+        let searched = Expr::cust_with_values(
+            r#"to_tsvector('english', "widgets"."name") @@ plainto_tsquery('english', $1)"#,
+            ["tea -- or ) coffee"],
+        );
+        assert_eq!(
+            sql(Widgets::scoped(Action::Read).filter(searched)),
+            format!(
+                r#"{SELECT} WHERE (1 = 0) AND (to_tsvector('english', "widgets"."name") @@ plainto_tsquery('english', 'tea -- or ) coffee'))"#
+            ),
+        );
+        let called = Expr::expr(Func::cust("width_bucket").args([
+            Expr::col(Column::Rank),
+            Expr::val(0),
+            Expr::val(100),
+            Expr::val(4),
+        ]))
+        .eq(2);
+        assert_eq!(
+            sql(Widgets::unscoped().filter(called)),
+            format!(r#"{SELECT} WHERE (width_bucket("rank", 0, 100, 4) = 2)"#),
+        );
+        assert_eq!(
+            sql(Widgets::unscoped().filter(Expr::cust("note = ') OR (' AND \"a) OR (b\" = 1"))),
+            format!(r#"{SELECT} WHERE (note = ') OR (' AND "a) OR (b" = 1)"#),
         );
     }
 
@@ -365,7 +588,10 @@ mod tests {
         let by = |id: Option<i32>| {
             sql(Widgets::unscoped().apply_if(id, |select, id| select.filter(Column::Id.eq(id))))
         };
-        assert_eq!(by(Some(7)), format!(r#"{SELECT} WHERE "widgets"."id" = 7"#));
+        assert_eq!(
+            by(Some(7)),
+            format!(r#"{SELECT} WHERE ("widgets"."id" = 7)"#)
+        );
         assert_eq!(by(None), SELECT);
     }
 
@@ -475,40 +701,57 @@ mod tests {
         let mut fragments = Vec::from(splicing);
         fragments.push(Expr::val(named()));
         for fragment in fragments {
-            let rendered = sql(Widgets::unscoped().filter(fragment));
+            let rendered = widget::Entity::find()
+                .filter(fragment)
+                .build(DbBackend::Postgres)
+                .to_string();
             assert!(rendered.contains(RAW), "{rendered}");
         }
     }
 
-    /// What the list cannot name, which the decision's limits say: a literal is no
-    /// call, so one through its full path passes clippy, bound or written inline.
-    #[test]
-    fn an_enum_literal_through_its_full_path_splices_its_type_name_past_clippy() {
-        let widening = || sea_orm::sea_query::Enum {
-            type_name: r#"text" OR 1 = 1 --"#.into(),
+    /// What the list cannot name: a literal is no call, so one through its full path
+    /// passes clippy, and so does a hand-written `Iden` borrowing its text. The text
+    /// each writes stays inside the operand, or leaves it and is refused.
+    #[tokio::test]
+    async fn an_enum_literal_through_its_full_path_stays_inside_its_operand() {
+        let named = |type_name: &str| sea_orm::sea_query::Enum {
+            type_name: type_name.into(),
             value: "a".into(),
         };
 
         assert_eq!(
-            sql(Widgets::scoped(Action::Read).filter(Column::Id.eq(widening()))),
-            format!(r#"{SELECT} WHERE (1 = 0) AND "widgets"."id" = 'a'::"text" OR 1 = 1 --""#),
+            sql(Widgets::scoped(Action::Read)
+                .filter(Column::Id.eq(named(r#"text" = 'a' OR 1 = 1 OR 'a'::"text"#)))),
+            format!(
+                r#"{SELECT} WHERE (1 = 0) AND ("widgets"."id" = 'a'::"text" = 'a' OR 1 = 1 OR 'a'::"text")"#
+            ),
         );
+
+        let commenting =
+            Widgets::scoped(Action::Read).filter(Column::Id.eq(named(r#"text" OR 1 = 1 --"#)));
+        assert_eq!(
+            sql(commenting.clone()),
+            format!("{SELECT} WHERE (1 = 0) AND FALSE")
+        );
+        assert!(commenting.one().await.is_err());
 
         let ordered = Widgets::unscoped().order_by(
             Column::Id,
             #[expect(clippy::disallowed_methods, reason = "the order under test")]
-            Order::Field(Values(vec![widening().into()])),
+            Order::Field(Values(vec![named(r#"text" OR 1 = 1 --"#).into()])),
         );
-        assert!(
-            sql(ordered).contains(r#"'a'::"text" OR 1 = 1 --""#),
-            "a select's `order_by` takes the `Order` that writes it",
+        assert_eq!(
+            sql(ordered.clone()),
+            format!(
+                r#"{SELECT} WHERE FALSE ORDER BY CASE WHEN "widgets"."id"='a'::"text" OR 1 = 1 --" THEN 0 ELSE 1 END"#
+            ),
+            "an order by field writes its values inline, and one leaving its quotes is refused",
         );
+        assert!(ordered.all().await.is_err());
     }
 
-    /// The other limit: an `Iden` the developer writes by hand decides whether it is
-    /// escaped, `'static` text alone, and implementing a trait is no call to name.
     #[test]
-    fn a_hand_written_iden_borrowing_its_text_is_written_as_it_is() {
+    fn a_hand_written_iden_borrowing_its_text_stays_inside_its_operand() {
         struct Widening;
 
         impl Iden for Widening {
@@ -523,7 +766,7 @@ mod tests {
 
         assert_eq!(
             sql(Widgets::scoped(Action::Read).filter(Expr::col(Widening).is_not_null())),
-            format!(r#"{SELECT} WHERE (1 = 0) AND "id" OR 1 = 1 OR "id" IS NOT NULL"#),
+            format!(r#"{SELECT} WHERE (1 = 0) AND ("id" OR 1 = 1 OR "id" IS NOT NULL)"#),
         );
     }
 
@@ -542,44 +785,6 @@ mod tests {
         assert_eq!(
             sea_orm::ActiveEnum::to_value(&native_enum_as_a_string::Tea::Green),
             "green",
-        );
-    }
-
-    /// Why clippy holds `Expr::cust`, and why nothing here could hold it instead:
-    /// sea-query parenthesizes the fragment, and its text closes any depth of
-    /// parentheses a select would add, since text is all it is.
-    #[test]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the fragment under test: what the lint exists to refuse"
-    )]
-    fn a_raw_fragment_closing_its_parenthesis_widens_the_filter_at_any_depth() {
-        let scoped = || Widgets::scoped(Action::Read);
-
-        let contained = scoped().filter(Expr::cust("1 = 1 OR 1 = 1"));
-        assert_eq!(
-            sql(contained),
-            format!("{SELECT} WHERE (1 = 0) AND (1 = 1 OR 1 = 1)"),
-        );
-
-        let widened = scoped().filter(Expr::cust("1 = 1) OR (1 = 1"));
-        assert_eq!(
-            sql(widened),
-            format!("{SELECT} WHERE (1 = 0) AND (1 = 1) OR (1 = 1)"),
-        );
-
-        let one_pair_more = |fragment| Expr::tuple([Expr::tuple([Expr::cust(fragment)])]);
-
-        let parenthesized = one_pair_more("1 = 1) OR (1 = 1");
-        assert_eq!(
-            sql(scoped().filter(parenthesized)),
-            format!("{SELECT} WHERE (1 = 0) AND ((1 = 1) OR (1 = 1))"),
-        );
-
-        let closing_that_too = one_pair_more("1 = 1)) OR ((1 = 1");
-        assert_eq!(
-            sql(scoped().filter(closing_that_too)),
-            format!("{SELECT} WHERE (1 = 0) AND ((1 = 1)) OR ((1 = 1))"),
         );
     }
 }

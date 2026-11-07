@@ -12,6 +12,7 @@ use sea_orm::{
 };
 
 use crate::column_default::fill_column_defaults;
+use crate::contained::{contained_values, refused};
 use crate::error::{AtomicDbError, write_refused};
 use crate::executor::{SeaOrmExecutor, current_executor};
 use crate::insertion::Insertion;
@@ -269,7 +270,7 @@ impl<E: EntityTrait> Repo<E> {
     /// ([`scope_for`]).
     pub async fn can(action: Action, model: &E::Model) -> Result<bool, DbErr> {
         let allowed = Self::scoped(action)
-            .filter(pk_condition::<E>(model))
+            .within(pk_condition::<E>(model))
             .exists()
             .await?;
         tracing::trace!(
@@ -332,7 +333,7 @@ impl<E: EntityTrait> Repo<E> {
             entity = E::default().table_name(),
             "insert unscoped",
         );
-        active.insert(&conn).await
+        insert_contained::<E>(active, &conn).await
     }
 
     /// [`insert_unscoped`](Self::insert_unscoped), unless a live row already
@@ -408,6 +409,7 @@ impl<E: EntityTrait> Repo<E> {
         fill_column_defaults::<E>(&mut active);
         holding_key_of::<E>(&active, key)?;
         let active = E::ActiveModel::before_save(active, &conn, true).await?;
+        contained_values(&active).map_err(refused::<E>)?;
         let held = holding_key_of::<E>(&active, key)?;
         let entity = E::default().table_name();
         // sea-orm 2.0's single-row `exec_with_returning`, `TryInsert`'s included,
@@ -419,7 +421,7 @@ impl<E: EntityTrait> Repo<E> {
         let model = match inserted.into_iter().next() {
             Some(model) => model,
             None => {
-                if let Some(existing) = Self::unscoped().filter(held).one().await? {
+                if let Some(existing) = Self::unscoped().within(held).one().await? {
                     tracing::trace!(target: crate::target::ORM, entity, "insert unscoped met its key");
                     return Ok(Insertion::Existing(existing));
                 }
@@ -480,6 +482,7 @@ impl<E: EntityTrait> Repo<E> {
             _ => scope_for::<E>(action),
         };
         let active = A::before_save(active, &conn, false).await?;
+        contained_values(&active).map_err(refused::<E>)?;
         let key = active.get_primary_key_value();
         let update = Update::one(active).validate()?;
         // Setting nothing, sea-orm sends no `UPDATE` and reads the row back by its key
@@ -562,6 +565,23 @@ fn absorbing_conflicts_on<E: EntityTrait>(
         on_conflict.target_and_where(Expr::col(tombstone).is_null());
     }
     E::insert(active).on_conflict(on_conflict)
+}
+
+/// `active`'s insert, its hooks run around it as sea-orm's `insert` runs them, refused
+/// before any statement when a value its hook leaves would not stay bound.
+pub(crate) async fn insert_contained<E>(
+    active: E::ActiveModel,
+    conn: &SeaOrmExecutor,
+) -> Result<E::Model, DbErr>
+where
+    E: EntityTrait,
+    E::ActiveModel: ActiveModelBehavior + Send,
+    E::Model: IntoActiveModel<E::ActiveModel>,
+{
+    let active = E::ActiveModel::before_save(active, conn, true).await?;
+    contained_values(&active).map_err(refused::<E>)?;
+    let model = E::insert(active).exec_with_returning(conn).await?;
+    E::ActiveModel::after_save(model, conn, true).await
 }
 
 /// `select`, without the tombstones of a soft-deletable `E`.
@@ -1551,6 +1571,86 @@ mod tests {
             matches!(&narrowed, Err(DbErr::AccessDenied { resource, .. }) if resource == "stamped(note)"),
             "{narrowed:?}",
         );
+    }
+
+    /// A column holding `sea_query::Enum` itself, which sea-orm reads and writes as
+    /// it is: what names its type is the value, not a derive.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the column under test: its type name is the value's"
+    )]
+    mod labelled {
+        use sea_orm::entity::prelude::*;
+        use sea_orm::sea_query::Enum;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "labelled")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            #[sea_orm(column_type = "Text")]
+            pub label: Enum,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+
+        /// A value whose type name holds a `"`, which ends the quotes sea-query writes
+        /// it between, and a comment that reads the rest of the statement as text.
+        pub(super) fn escaping() -> Enum {
+            Enum {
+                type_name: r#"text" OR true --"#.into(),
+                value: "a".into(),
+            }
+        }
+    }
+
+    #[expect(clippy::disallowed_types, reason = "the column under test")]
+    fn labelled_row(label: sea_orm::sea_query::Enum) -> labelled::ActiveModel {
+        labelled::ActiveModel {
+            id: Set(1),
+            label: Set(label),
+        }
+    }
+
+    #[test]
+    #[expect(clippy::disallowed_methods, reason = "a scope denying every row")]
+    fn an_enum_type_name_leaving_its_quotes_would_drop_a_writes_scope() {
+        let deny = || Condition::all().add(Expr::cust("1 = 0"));
+        let update = Update::one(labelled_row(labelled::escaping()))
+            .validate()
+            .expect("a PK-bearing active model validates")
+            .filter(deny())
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+        assert!(
+            update.contains(r#"SET "label" = 'a'::"text" OR true --" WHERE"#),
+            "every row is written: {update}",
+        );
+    }
+
+    /// Each write sends nothing for such a value: an update or a soft delete, its hook
+    /// run first, and an insert. A key cannot hold one: sea-orm reads no key into it.
+    #[tokio::test]
+    async fn a_write_carrying_an_enum_type_name_leaving_its_quotes_sends_nothing() {
+        let refused = |answer: &DbErr| answer.to_string().contains("refused before any statement");
+        type Labelled = Repo<labelled::Entity>;
+        let answers = with_job_executor(pool(), async {
+            let carrying = || labelled_row(labelled::escaping());
+            [
+                Labelled::update(carrying()).await.map(drop),
+                Labelled::insert_unscoped(carrying()).await.map(drop),
+                Labelled::insert_unscoped_or_existing(carrying(), [labelled::Column::Id])
+                    .await
+                    .map(drop),
+            ]
+        })
+        .await;
+        for answer in answers {
+            assert!(answer.as_ref().is_err_and(refused), "{answer:?}");
+        }
     }
 
     /// The `WHERE` of `written`'s statement, as `Repo::update` sends it.

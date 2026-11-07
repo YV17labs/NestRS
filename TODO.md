@@ -162,10 +162,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   order key, the guards suite's `404` and `405`, seaorm's listener e2e). *read*
 
 **Authorization, posture, mask** (beyond section 3)
-- Raw SQL in a `Repo` filter is held by clippy's `disallowed-methods` only: a
-  project without that `clippy.toml` compiles a fragment that widens a filter;
-  a `sea_query::Enum` literal by full path or a hand-written `Iden` passes
-  clippy. *seen*
 - No test reads through `Repo::scoped(Manage)` on Postgres or reaches a
   `bind` under `Manage`. *read*
 - `AbilityGuard` alone at a unit under `#[authorize]` boots and answers `401`
@@ -333,7 +329,12 @@ per row by `max_list_argument_bytes` and never by how many rows the list
 answers, which only its resolver knows once it ran, so a page of 100,000
 rows each copying 4 KiB still holds 400 MB and a list under a list multiplies
 by both row counts (the field's `complexity` and page bound it; closing it
-takes async-graphql sharing an argument's value across the rows, §7).
+takes async-graphql sharing an argument's value across the rows, §7); a
+rule's `when` predicate written into `Repo`'s scope unscanned, where a value
+typed `sea_query::Enum` whose type name holds a `"` widens the rows that rule
+admits (policy the factory writes once, while the call site's condition,
+which changes per query, is scanned; closing it costs every scoped query a
+second render of its scope).
 
 ## 7. Upstream
 

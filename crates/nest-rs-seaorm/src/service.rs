@@ -15,7 +15,9 @@ use nest_rs_database::atomic;
 use crate::column_default::fill_column_defaults;
 use crate::error::AtomicDbError;
 use crate::page::{Page, PageCursor};
-use crate::repo::{Repo, ability_scope, barred_from_class, pk_condition, write_scope};
+use crate::repo::{
+    Repo, ability_scope, barred_from_class, insert_contained, pk_condition, write_scope,
+};
 use crate::select::RepoSelect;
 
 /// Build a fresh `ActiveModel` from a create-input DTO. Implemented by `#[expose]`
@@ -392,7 +394,7 @@ where
     {
         let entity = Self::entity_name();
         if let Some(model) = Repo::<Self::Entity>::unscoped_by_id(id)
-            .filter(ability_scope::<Self::Entity>(action))
+            .within(ability_scope::<Self::Entity>(action))
             .one()
             .await?
         {
@@ -543,9 +545,9 @@ where
     E::Model: IntoActiveModel<E::ActiveModel>,
 {
     fill_column_defaults::<E>(&mut active);
-    let model = active.insert(&Repo::<E>::conn()?).await?;
+    let model = insert_contained::<E>(active, &Repo::<E>::conn()?).await?;
     let in_scope = RepoSelect::new(E::find().filter(scope))
-        .filter(pk_condition::<E>(&model))
+        .within(pk_condition::<E>(&model))
         .exists()
         .await?;
     if !in_scope {

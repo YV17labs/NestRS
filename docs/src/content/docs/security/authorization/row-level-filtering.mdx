@@ -193,8 +193,8 @@ let everyone = user::Entity::find().all(&conn).await?;
 The framework's posture: handlers do not write SQL. They call
 services. Services go through `Repo`, which hands out no connection, and
 `Repo::scoped(...)` adds the filter, on a select that hands out no statement
-to rewrite. The path of "leak rows" stays closed but for raw SQL in a filter,
-which clippy refuses.
+to rewrite. Raw SQL in a filter stays inside the condition it is part of: text
+that would reach past it is refused before the query runs.
 
 ## When you really do need a custom query
 
@@ -224,8 +224,9 @@ The handler calls `search` and never sees a connection. A condition on
 another entity — a subquery over `orgs` — takes that entity's own filter from
 `scope_for::<Orgs>(Action::Read)`, so every table the query reads is
 filtered. The select hands out no statement, so `.query()` and `.select_only()`
-do not compile on it, and a raw `Expr::cust` in its filter is what clippy refuses
-([A custom query](/database/repo-and-executor/#a-custom-query)).
+do not compile on it, and a raw `Expr::cust` in its filter stays one operand beside
+the ability's, refused when its text would leave it
+([Raw SQL in a filter](/database/repo-and-executor/#raw-sql-in-a-filter)).
 
 ## Going further
 

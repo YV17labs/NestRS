@@ -34,6 +34,7 @@ mod queue;
 mod relational_authz;
 mod repo;
 mod scope;
+mod select;
 mod service;
 mod soft_delete;
 mod unique_key;

@@ -446,9 +446,9 @@ fn no_generated_manifest_names_the_server_library() {
     }
 }
 
-/// Raw SQL is the injection class and its text can widen a `Repo` filter, so a new
-/// workspace's clippy refuses every call writing it, each saying what to write, and
-/// says where the opening goes when a derive expands to one.
+/// Raw SQL is the injection class, so a new workspace's clippy names every call
+/// writing it where it is written, beside `Repo`'s refusal when it runs, each saying
+/// what to write, and says where the opening goes when a derive expands to one.
 #[test]
 fn a_new_workspace_refuses_raw_sql_through_its_clippy_config() {
     let dir = tempfile::tempdir().unwrap();

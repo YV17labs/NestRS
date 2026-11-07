@@ -28,15 +28,15 @@ to its driver, so a downcast of the port's reader finds nothing to run a stateme
 on; a `RepoSelect` implements none of sea-orm's traits, so nothing rewrites what
 `Repo` filtered or moves a hidden column into an exposed slot, and an order key is
 a column of the entity (`.claude/decisions/repo-hands-out-no-connection.md`).
-The one way past it the types leave is a raw fragment in `filter` (`Expr::cust`
-and every other call writing text unescaped), whose text can close the parenthesis
-around it and widen the filter. It is the SQL-injection class, and it is held at
-review level: `disallowed-methods` and `disallowed-types` in the root `clippy.toml`
-and in the one `nestrs new` writes, an `#[expect]` the visible opening, on the module
-when a derive expands to the call, which binds only where an app runs clippy with
-that config; what no call writes is the decision's *Limits*. A scaffold's migrations
-crate carries an empty file of its own, a migration being DDL no request's value
-reaches.
+What the types leave, raw text in a condition (`Expr::cust` and every other call
+writing text unescaped), `Repo` holds where it lands: a condition is one parenthesized
+operand beside the scope, and text that would leave it is refused before any statement
+(held by `select.rs`'s, `page.rs`'s and `repo.rs`'s tests, on Postgres by the e2e's
+`select.rs`). Clippy names the same calls where they are written —
+`disallowed-methods` and `disallowed-types` in the root `clippy.toml` and in the one
+`nestrs new` writes, an `#[expect]` the visible opening, on the module when a derive
+expands to the call. A scaffold's migrations crate carries an empty file of its own, a
+migration being DDL no request's value reaches.
 
 **The named exceptions — there are no others.** The ability filter is dropped
 only through a named escape, and each escape's rustdoc states the bar its

@@ -276,3 +276,76 @@ rule of 2026-11-05 that a fix does not make everyday code harder. The generated
 - **What a select no longer offers**: `lock_exclusive`, `lock_shared`, `group_by`,
   `distinct`, and an order by an expression. None has a caller in the tree, and each is
   an inherent method, additive, when one comes.
+
+## 2026-11-07 — a condition stays one operand, and text leaving it is refused
+
+Under the owner's words of 2026-11-07 (take up every subject the open list names, by
+the best solution, security first), the 2026-11-05 entry's "a raw fragment stays
+clippy's" is replaced. Clippy held it only where an app runs clippy with that file, and
+two spellings passed it whatever the app ran: a `sea_query::Enum` literal through its
+full path and a hand-written `impl Iden`, each read every row on Postgres (the B-196
+runs). A third shape needed no closing at all: text holding an `OR` inside an operand
+sea-query writes bare, a column or a value's type name, read past the scope's `AND` by
+precedence (`(1 = 0) AND "id" OR 1 = 1 OR "id" IS NOT NULL`).
+
+`RepoSelect::filter`, and a page's and a relation page's `extra`, now render the
+condition alone with sea-query's own Postgres writer, its values left as placeholders,
+and scan that text; text passing is pushed as one `Expr::Tuple`, one pair of
+parentheses sea-query writes around it, so the statement reads `scope AND (text)`. The
+scan reads only what decides whether text stays inside that pair: every `(` closes
+inside it and no `)` closes what it did not open, every `'…'`, `E'…'` and `"…"` closes,
+and there is no comment, no dollar quoting, no `$` but a placeholder, no backslash in a
+plain string and no NUL. Text failing makes the select build `FALSE` and its run answer
+`DbErr::Custom` before it reads an executor, said at `warn` on `nest_rs::orm` by entity
+and `reason`, never by its text. An order by field and a write's values (update, soft
+delete, both unscoped inserts, `Creatable`, each after its hook) refuse an enum value
+whose type name holds a `"`, the one text a bound value or an inline one writes beside
+the quotes sea-query puts around it; a key cannot hold one, sea-orm reading no key into
+a `sea_query::Enum`.
+
+Why it holds where the four refusals of 2026-11-05 did not:
+
+- **Parentheses at the select** failed alone, a fragment counting what to close. With
+  the scan, a fragment cannot close the pair: its own text balances.
+- **Scanning the rendered text, "a SQL lexer of our own, and a miss is silent"**: the
+  scan reads no grammar, only the lexical regions Postgres's own lexer defines, its ten
+  start conditions (`src/backend/parser/scan.l`). `xq`, `xqs`, `xus`, `xb` and `xh`
+  close at a lone `'`, `xe` at a lone `'` with each backslash escaping the next byte,
+  `xd` and `xui` at a lone `"`; `xc` (and `--`) and `xdolq` are refused, as is a
+  backslash in `xq`, whose reading `standard_conforming_strings` decides. Its token
+  boundaries are scan.l's: `$` continues an identifier, `E'` opens `xe` only where `E`
+  is a token of its own. A region it does not read, it refuses, so a miss fails loud.
+  Postgres's lexer is the standard it reads off, not one invented.
+- **A walk of the tree** still stops at `CaseStatement` and a sub-select; the text is
+  what reaches Postgres, every splice in it (`Iden`, type names, `BinOper::Custom`).
+- **A derived table** is not needed: the operand holds an `OR`, and `UNION` needs a `)`.
+
+The condition renders twice, alone for the scan and again in the statement, and both
+read one tree: `filter` moves the expression it scanned into the statement, and every
+text in it was fixed when it was built. sea-query 1.0 reads an `impl Iden` once, as the
+expression is built (`From<T: Iden> for DynIden` stores `iden.quoted()`), and keeps a
+custom fragment, an operator and a type name as strings; the two renders differ only in
+the placeholders' numbers, which the scan reads alike.
+
+Cost, measured in release on a three-clause condition (a column equality, a `LIKE`, an
+`any` of two): the check takes about 0.56 µs beside the statement's own 0.79 µs render,
+a fraction of a percent of a round trip. The scope and a key `Repo` builds itself go
+through a crate-private `within` and pay nothing, and an empty `all` adds nothing.
+
+The clippy lists stay as a second rung: they say it where it is written, at compile
+time, where the scan says it when the query runs. Their reasons now say so.
+
+**Refused:**
+
+- **`filter` answering `Result`**: every chain would take a `?`, everyday code harder
+  (the owner's rule of 2026-11-05). The refusal travels in the select to its run, which
+  answers `Result` already.
+- **Closed comments and dollar quotes read as Postgres reads them**: nesting `/* */`,
+  matching `$tag$` and the token boundaries around them are what a scan reads wrong
+  silently, and a condition needs neither.
+- **Checking the ability's own condition**: the factory writes it once, as policy, and
+  the call site's condition is what changes per query; scanning the scope too would cost
+  every scoped query a second render for text no caller hands it. Its limit, kept and
+  listed among the limits kept on purpose: a rule's `when` predicate is typed, the
+  entity's columns and bound values, but a value typed `sea_query::Enum` writes its type
+  name into the scope unchecked, so one holding a `"` widens the rows that rule admits.

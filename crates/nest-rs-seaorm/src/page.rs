@@ -15,6 +15,7 @@ use sea_orm::{
 
 use nest_rs_authz::Action;
 
+use crate::contained::{contained, refused};
 use crate::repo::{Repo, scope_for};
 
 /// One keyset page. `next_cursor` is the last row's primary key, present only
@@ -270,12 +271,15 @@ where
 {
     /// A keyset page of readable rows, ascending by primary key, starting after
     /// `after`. Fetches one extra row to decide `has_more` and `next_cursor`.
-    /// `extra` is ANDed onto the scope (e.g. a tenant predicate).
+    /// `extra` is ANDed onto the scope (e.g. a tenant predicate) as one operand,
+    /// refused before any statement as [`RepoSelect::filter`](crate::RepoSelect::filter)
+    /// refuses a condition.
     pub async fn page(
         first: u64,
         after: Option<PageCursor>,
         extra: Condition,
     ) -> Result<Page<E::Model>, DbErr> {
+        let extra = operand::<E>(extra)?;
         let conn = Self::conn()?;
         let limit = clamp_page_size(first);
 
@@ -366,6 +370,7 @@ where
             return Ok(pages);
         }
 
+        let extra = operand::<E>(extra)?;
         let conn = Self::conn()?;
         let limit = clamp_page_size(first);
         let pk_col = Self::keyset_column()?;
@@ -411,9 +416,20 @@ where
     }
 }
 
+/// `extra` as the one operand [`RepoSelect::filter`](crate::RepoSelect::filter) makes
+/// of a condition, or its refusal.
+fn operand<E: EntityTrait>(extra: Condition) -> Result<Condition, DbErr> {
+    match contained(extra) {
+        Ok(Some(operand)) => Ok(Condition::all().add(operand)),
+        Ok(None) => Ok(Condition::all()),
+        Err(why) => Err(refused::<E>(why)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::__private::SeaOrmExecutor;
 
     mod child {
         use sea_orm::entity::prelude::*;
@@ -552,6 +568,32 @@ mod tests {
             after,
         )
         .to_string(PostgresQueryBuilder)
+    }
+
+    /// What `extra` holds goes through the check a select's `filter` makes, on a page
+    /// and on a relation's batch alike: one leaving its operand sends nothing.
+    #[tokio::test]
+    #[expect(clippy::disallowed_methods, reason = "the fragment under test")]
+    async fn a_page_refuses_an_extra_condition_leaving_its_operand_before_any_statement() {
+        let pool = SeaOrmExecutor::Pool(sea_orm::DatabaseConnection::default()).into();
+        let widening = || Condition::all().add(Expr::cust("1 = 1) OR (1 = 1"));
+        let refused = |answer: &DbErr| answer.to_string().contains("refused before any statement");
+
+        let (page, pages) = nest_rs_database::__private::with_job_executor(pool, async {
+            let page = Repo::<child::Entity>::page(10, None, widening()).await;
+            let pages = Repo::<child::Entity>::relation_pages(
+                child::Column::ParentId,
+                &[Uuid::nil()],
+                10,
+                None,
+                widening(),
+            )
+            .await;
+            (page.map(drop), pages.map(drop))
+        })
+        .await;
+        assert!(page.as_ref().is_err_and(refused), "{page:?}");
+        assert!(pages.as_ref().is_err_and(refused), "{pages:?}");
     }
 
     #[test]

@@ -2296,8 +2296,13 @@ lists what the boot, a log or the wire shows when one is missed.
   left beside it** warns `unused import`, which `-D warnings` refuses.
 - **`Expr::cust` under the scaffold's `clippy.toml`** fails `nestrs run lint`,
   `use of a disallowed method`, with what to write instead. A project with no such
-  file compiles it as before, and a fragment closing its parenthesis widens the
-  filter: copy the file from a new scaffold.
+  file compiles it: copy the file from a new scaffold to be told where it is written.
+- **A query answers `500` with `a condition or value handed to Repo refused` at `warn`**
+  on `nest_rs::orm`, its `reason` field naming why: a raw fragment in its condition
+  closes a parenthesis, a string or an identifier it did not open, leaves one open, or
+  holds a comment, dollar quoting or a backslash in a plain `'…'` string. Close what it
+  opens, write the string `E'…'`, or better, bind the value (`cust_with_values`). A
+  statement a log or a test reads now holds each condition in parentheses of its own.
 - **A derive expanding to a listed call** fails the same way with `this error
   originates in the derive macro`, and an `#[expect]` on the struct adds `this lint
   expectation is unfulfilled`: it goes on the module holding the entity.

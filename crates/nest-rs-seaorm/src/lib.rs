@@ -60,6 +60,7 @@ mod atomic;
 mod bind;
 mod column_default;
 mod config;
+mod contained;
 mod database;
 mod error;
 mod executor;

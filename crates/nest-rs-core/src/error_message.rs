@@ -165,50 +165,37 @@ pub(crate) mod __private {
     /// or a cause, for its own `match`: a `{:?}`, an `anyhow` report and a `main`
     /// print each link's own `Display` and `Debug`, past every
     /// [`SafeLink`](crate::SafeLink), and a driver's quote the input it refused.
-    /// A view of the field, so the holder keeps the type it was given.
+    /// A view of the field, so the holder keeps the type it was given; a source
+    /// no `match` reads is held as one ([`new`](Self::new)).
     #[derive(RefCast)]
     #[repr(transparent)]
     pub struct SaidFailure<E>(E);
 
-    impl<E: HeldError> SaidFailure<E> {
+    impl<E: AsRef<dyn Error + Send + Sync>> SaidFailure<E> {
         /// `failure`, read as `error_message` says it.
         pub fn of(failure: &E) -> &Self {
             Self::ref_cast(failure)
         }
+
+        /// `failure`, held to be read as `error_message` says it.
+        pub fn new(failure: E) -> Self {
+            Self(failure)
+        }
     }
 
-    impl<E: HeldError> fmt::Display for SaidFailure<E> {
+    impl<E: AsRef<dyn Error + Send + Sync>> fmt::Display for SaidFailure<E> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str(&crate::error_message(self.0.held()))
+            f.write_str(&crate::error_message(self.0.as_ref()))
         }
     }
 
-    impl<E: HeldError> fmt::Debug for SaidFailure<E> {
+    impl<E: AsRef<dyn Error + Send + Sync>> fmt::Debug for SaidFailure<E> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            fmt::Debug::fmt(&crate::error_message(self.0.held()), f)
+            fmt::Debug::fmt(&crate::error_message(self.0.as_ref()), f)
         }
     }
 
-    impl<E: HeldError + 'static> Error for SaidFailure<E> {}
-
-    /// An error held behind a pointer that does not name its type: what a
-    /// [`SaidFailure`] views.
-    pub trait HeldError {
-        /// The error held.
-        fn held(&self) -> &(dyn Error + 'static);
-    }
-
-    impl HeldError for Box<dyn Error + Send + Sync> {
-        fn held(&self) -> &(dyn Error + 'static) {
-            &**self
-        }
-    }
-
-    impl HeldError for std::sync::Arc<dyn Error + Send + Sync> {
-        fn held(&self) -> &(dyn Error + 'static) {
-            &**self
-        }
-    }
+    impl<E: AsRef<dyn Error + Send + Sync>> Error for SaidFailure<E> {}
 
     /// The first `T` in `error`'s chain, `error` itself first, down to an
     /// opaque failure's cause: how an edge finds the framework vocabulary a

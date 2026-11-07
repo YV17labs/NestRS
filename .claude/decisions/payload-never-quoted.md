@@ -426,7 +426,8 @@ data`, through `error_message` too, and a part's bytes through `FromUtf8Error`'s
   fails with, which a sink such as `Storage::put_stream` hands back as its source
   (the body's own read failure is no refusal of the parser's: the extractor
   answers it as the edge's `BodyError::Io`, and it fails that stream as the body
-  failed); rmcp's manager refusal by its `SafeLink`'s kind to every reader.
+  failed); rmcp's manager refusal by its `SafeLink`'s kind to every reader, a
+  `SaidFailure` holding it whole, since no `match` reads it.
 - **Refused: a view for every carrier.** `HttpError`, `JobError`, `QueueError::Backend`,
   `ThrottlerStoreError`, `OccurrenceLockError`, `TokenError::Server` and a factory's
   failure hold the error a developer or a backend handed them and hand it out as it

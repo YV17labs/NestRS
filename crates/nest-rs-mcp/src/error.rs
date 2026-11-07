@@ -53,7 +53,7 @@
 
 use std::error::Error as StdError;
 
-use nest_rs_core::__private::{Withheld, caught_problem, find_in_chain};
+use nest_rs_core::__private::{SaidFailure, Withheld, caught_problem, find_in_chain};
 use nest_rs_core::{Code, DecodeError, Failure, Problem, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
@@ -751,35 +751,18 @@ pub(crate) enum SessionsError {
     /// The app's session store failed to say whose a session is.
     #[error("the session store failed")]
     Store(#[source] SessionStoreError),
-    /// rmcp's local session manager refused.
+    /// rmcp's local session manager refused, said to every reader of the chain
+    /// by [`say_session`]'s kind: its own `Display` and `Debug` name the session
+    /// a client named.
     #[error("the session manager failed")]
-    Local(#[source] ManagerRefused),
+    Local(#[source] SaidFailure<Box<dyn StdError + Send + Sync>>),
 }
 
 impl From<LocalSessionManagerError> for SessionsError {
     fn from(refused: LocalSessionManagerError) -> Self {
-        Self::Local(ManagerRefused(refused))
+        Self::Local(SaidFailure::new(Box::new(refused)))
     }
 }
-
-/// rmcp's manager refusal as every reader of the chain reads it, by
-/// [`say_session`]'s kind: its own `Display` and `Debug` name the session a
-/// client named.
-pub(crate) struct ManagerRefused(LocalSessionManagerError);
-
-impl std::fmt::Display for ManagerRefused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&nest_rs_core::error_message(&self.0))
-    }
-}
-
-impl std::fmt::Debug for ManagerRefused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&nest_rs_core::error_message(&self.0), f)
-    }
-}
-
-impl std::error::Error for ManagerRefused {}
 
 nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say_session) }
 

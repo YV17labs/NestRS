@@ -66,20 +66,15 @@ pub(crate) mod __private {
         }
     }
 
-    impl OpaqueCause {
-        /// The cause, as the type it was given.
-        fn cause(&self) -> Option<&(dyn Error + 'static)> {
-            self.source
-                .as_deref()
-                .map(|source| source as &(dyn Error + 'static))
-        }
-    }
-
     /// The detail, said without what a decode failure or a driver's error in the
     /// cause quotes wherever the detail spells it.
     impl fmt::Display for OpaqueCause {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str(&crate::DecodeError::redact(&self.detail, self.cause()))
+            let cause = self
+                .source
+                .as_deref()
+                .map(|cause| cause as &(dyn Error + 'static));
+            f.write_str(&crate::DecodeError::redact(&self.detail, cause))
         }
     }
 

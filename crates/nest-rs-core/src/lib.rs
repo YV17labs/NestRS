@@ -255,7 +255,7 @@ pub mod __private {
     pub use crate::discoverable::__private::Residency;
     pub use crate::dispatch::{ClassGate, GuardStage, GuardStageFactory, Tail, dispatch};
     pub use crate::env_prefix::__private::RETIRED_VARIABLE;
-    pub use crate::error_message::__private::{HeldError, SaidFailure, find_in_chain};
+    pub use crate::error_message::__private::{SaidFailure, find_in_chain};
     pub use crate::exception_filter::__private::ErasedExceptionFilter;
     pub use crate::exception_filter::{ExceptionFilterSpec, exception_filter};
     pub use crate::handler::{

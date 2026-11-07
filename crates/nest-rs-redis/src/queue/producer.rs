@@ -157,7 +157,7 @@ impl<I: Instance> JobProducer for RedisQueueProducer<I> {
             let id = envelope.id().to_string();
             let unique = envelope.unique_key().unwrap_or_default().to_owned();
             let record = serde_json::to_vec(&envelope.into_json())?;
-            push.arg(id).arg(record).arg(&unique);
+            push.arg(id).arg(record).arg(unique);
         }
         let answer: redis::Value = self.conn.invoke(&push).await.map_err(QueueError::backend)?;
         match answer {

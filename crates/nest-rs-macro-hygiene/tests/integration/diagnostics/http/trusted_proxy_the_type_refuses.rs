@@ -1,6 +1,6 @@
 //! `trusted_proxy!` given an entry `TrustedProxy` refuses, and given no literal.
-//! Each refusal is the boot's own sentence, said as the program compiles; text
-//! read at run time is `.parse()?`.
+//! Each refusal is the boot's own sentence, the macro in front, said as the
+//! program compiles; text read at run time is `.parse()?`.
 
 use nest_rs::http::{TrustedProxy, trusted_proxy};
 

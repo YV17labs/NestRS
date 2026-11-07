@@ -41,6 +41,7 @@ mod sse;
 mod tls;
 mod trace_context;
 mod transport;
+mod trusted_proxy;
 mod versioning;
 mod websocket;
 

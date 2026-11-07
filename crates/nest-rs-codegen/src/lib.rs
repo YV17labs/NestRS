@@ -88,6 +88,7 @@ mod root;
 mod route_path;
 mod specs;
 mod time_zone;
+mod trusted_proxy;
 mod ty;
 mod ungrouped;
 mod unit_of_work;
@@ -169,6 +170,7 @@ pub mod __private {
         exception_filter_specs, force_guard_typeids, interceptor_specs, scoped_specs,
     };
     pub use crate::time_zone::invalid_time_zone;
+    pub use crate::trusted_proxy::trusted_proxy_entry;
     pub use crate::ty::{
         HostBorrow, TailParam, answer_span, await_if_async, concrete_signature, generic_args,
         impl_self_ident, last_segment_ident, nth_generic_type, path_label, payload_arg_type,

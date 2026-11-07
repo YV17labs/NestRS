@@ -408,7 +408,7 @@ pub use nest_rs_http_macros::crud;
 /// ```
 ///
 /// An entry [`TrustedProxy`] refuses does not compile, in the words the boot
-/// would have used:
+/// would have used, the macro's name in front:
 ///
 /// ```compile_fail
 /// let ingress = nest_rs_http::trusted_proxy!("10.42.0.0/61");

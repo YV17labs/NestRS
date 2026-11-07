@@ -1282,29 +1282,40 @@ impl NotATrustedProxy {
         self.sentence().split_at(REFUSED_ENTRY.len()).1
     }
 
-    /// The refusal read on its own, what `Display` writes and a build refusing a
-    /// [`trusted_proxy!`](macro@crate::trusted_proxy) literal says: the entry, then the
+    /// The refusal read on its own, what `Display` writes: the entry, then the
     /// [`predicate`](Self::predicate).
     pub(crate) const fn sentence(self) -> &'static str {
+        self.literal_refusal().split_at(LITERAL_SITE.len()).1
+    }
+
+    /// What a build refusing a [`trusted_proxy!`](macro@crate::trusted_proxy)
+    /// literal says: the [`sentence`](Self::sentence), the macro in front. The
+    /// one place each refusal is worded, since a constant's panic formats a
+    /// `&str` and nothing else.
+    pub(crate) const fn literal_refusal(self) -> &'static str {
         match self {
             Self::Grammar => {
-                "this trusted proxy entry is neither an IP address nor a CIDR range (`10.0.0.0/8`)"
+                "`trusted_proxy!`: this trusted proxy entry is neither an IP address nor a CIDR \
+                 range (`10.0.0.0/8`)"
             }
             Self::PrefixLength => {
-                "this trusted proxy entry is a CIDR range whose prefix length is past the bits \
-                 its address holds"
+                "`trusted_proxy!`: this trusted proxy entry is a CIDR range whose prefix length \
+                 is past the bits its address holds"
             }
             Self::EveryAddress => {
-                "this trusted proxy entry is a `/0` range, under which every caller could forge \
-                 the address it is attributed to; name your proxies' own range"
+                "`trusted_proxy!`: this trusted proxy entry is a `/0` range, under which every \
+                 caller could forge the address it is attributed to; name your proxies' own range"
             }
             Self::BitsPastPrefix => {
-                "this trusted proxy entry is a CIDR range with address bits set past its prefix; \
-                 write the range's first address, or the proxy's address alone"
+                "`trusted_proxy!`: this trusted proxy entry is a CIDR range with address bits set \
+                 past its prefix; write the range's first address, or the proxy's address alone"
             }
         }
     }
 }
+
+/// The site every [`NotATrustedProxy::literal_refusal`] opens with.
+const LITERAL_SITE: &str = "`trusted_proxy!`: ";
 
 /// The words every [`NotATrustedProxy::sentence`] opens with.
 const REFUSED_ENTRY: &str = "this trusted proxy entry ";

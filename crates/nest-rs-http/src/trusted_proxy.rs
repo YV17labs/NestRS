@@ -134,7 +134,7 @@ pub const fn literal(parsed: Option<(IpAddr, Option<u8>)>) -> TrustedProxy {
         },
         None => NotATrustedProxy::Grammar,
     };
-    panic!("{}", refused.sentence())
+    panic!("{}", refused.literal_refusal())
 }
 
 /// `::ffff:0:0/96`, the prefix every IPv4-mapped address shares (RFC 4291

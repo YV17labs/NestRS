@@ -1,8 +1,8 @@
 # The demo's checks — its lint, its suites in process and against Postgres,
-# Valkey and S3 — on every change to what its build or its services read: its
-# tree, the framework it builds on by path, the dev container files the
-# services start from. The demo is its own workspace with its own commands;
-# this runs them.
+# Valkey and S3, its chart's render cases — on every change to what its build or
+# its services read: its tree, the framework it builds on by path, the dev
+# container files the services start from. The demo is its own workspace with
+# its own commands; this runs them.
 
 name: Demo
 
@@ -100,4 +100,34 @@ jobs:
       - run: just test unit
         working-directory: demo
       - run: just test e2e
+        working-directory: demo
+
+  # Renders the Helm chart as an operator would: what each app's Secret holds, and
+  # each install it refuses because an app could not run on it.
+  chart:
+    name: chart
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Fetched by version and checked against its digest; yq is the runner's.
+      - name: Install helm
+        env:
+          VERSION: 4.3.1
+          SHA256: 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
+        run: |
+          archive="helm-v${VERSION}-linux-amd64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" "https://get.helm.sh/$archive"
+          echo "$SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$HOME/.local/bin" --strip-components=1 linux-amd64/helm
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: just@1
+      - run: just chart
         working-directory: demo

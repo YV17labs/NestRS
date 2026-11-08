@@ -42,12 +42,13 @@ From the host, with the dev container started:
 docker compose -f .devcontainer/compose/base.yml exec -T dev bash -lc 'flock /tmp/nestrs-live.lock just ci'
 docker compose -f .devcontainer/compose/base.yml exec -T dev bash -lc \
   'cargo build --locked -p nest-rs-cli && export PATH=$CARGO_TARGET_DIR/debug:$PATH \
-   && cd demo && just lint && just test unit && flock /tmp/nestrs-live.lock just test e2e'
+   && cd demo && just lint && just chart && just test unit && flock /tmp/nestrs-live.lock just test e2e'
 docker compose -f .devcontainer/compose/base.yml exec -T -w /workspaces/nestrs/docs dev bash -lc 'npm ci && npm run build'
 ```
 
-Valkey Sentinel and Cluster, and Postgres with mutual TLS, are dev container
-environments of their own (`CLAUDE.md`, *Testing*).
+`just chart` needs the dev container's `helm` and `yq`, which a container built
+before 2026-11-08 lacks: rebuild it. Valkey Sentinel and Cluster, and Postgres with
+mutual TLS, are dev container environments of their own (`CLAUDE.md`, *Testing*).
 
 ## 1. Before publishing 7.0
 
@@ -66,6 +67,17 @@ environments of their own (`CLAUDE.md`, *Testing*).
   live services**, and `migrate up` never applied a migration from it: the
   distroless image trusts no development authority. Close: run it on the
   compose network with a certificate bundle mounted.
+- **No app has booted on what the demo chart 0.7.0 renders**, each on a
+  Secret of its own: what each app reads is read off its modules and 0.6.0's
+  per-key boots. Close: `helm template` the install line, read each
+  workload's env off the render (the ConfigMap, its `env`, its own Secret),
+  start each binary in the dev container on that env alone against the live
+  services, on a database of its own, and see `app ready`; `migrate up` exits
+  0 on its hook Secret alone. *read*
+- **`helm install` never ran against a cluster**: the chart is linted and
+  rendered client-side alone (`nestrs run chart`). Close: install it on a
+  local cluster (kind, k3d) with the demo's image loaded and the services
+  reachable, then `helm test`.
 - **`async-graphql = "=7.2"`'s floor, 7.2.0, never built**: every lockfile
   holds 7.2.1. Close: a minimal-versions resolution.
 
@@ -267,9 +279,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   runbook in `bench/` on a dedicated Linux host. *read*
 - Windows is not proven: no job compiles `way_down.rs`'s `not(unix)` branch.
   *read*
-- The chart refuses only a missing database at install; the other keys at
-  each app's boot. Its shared Secret hands every app the OAuth clients and
-  social secrets. *seen*
 - Five docs pages exceed the 300-line budget (`guards.mdx`,
   `http/configuration.mdx`, `cli/index.mdx`, `testing/e2e.mdx`,
   `schedule/index.mdx`). Close: split each.
@@ -339,7 +348,11 @@ action reach, `missing_scopes` at a `Manage` site naming the smallest set it
 met, which a scope lifting every action, declared after each action's own
 grants, leaves larger than the smallest (closing it: an exact search, which
 grows as the fourth power of the grants per refused action, on the refusal
-path).
+path); the demo chart's `checksum/secret`, one sum over every Secret the
+chart writes, which an install handing the chart one weak secret and nothing
+else (every other app on an `existingSecret`) publishes unsalted to whoever
+reads its pods (closing it: a salt kept in the cluster, which `helm
+template` cannot read).
 
 ## 7. Upstream
 

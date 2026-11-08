@@ -6,11 +6,11 @@ and a `pre-install`/`pre-upgrade` hook so the schema is current before any
 deployment is updated. Ordering is the hook's, not this map's — Helm renders
 `apps` alphabetically.
 
-A job carries its own copy of the credentials rather than the release's Secret:
-a `pre-install` hook runs before the release's own resources exist, and on
-`pre-upgrade` that Secret still holds the *previous* revision's values. The copy
-is deleted as soon as the hook succeeds. A Secret you manage yourself
-(`existingSecret`) has neither problem and is used directly.
+A job reads a copy of its Secret rather than a deployment's: a `pre-install` hook
+runs before the release's own resources exist, and on `pre-upgrade` those still hold
+the *previous* revision's values. The copy holds only what the job reads, as every
+app's Secret does, and is deleted as soon as the hook succeeds. A Secret you manage
+yourself (`existingSecret`) has neither problem and is used directly.
 */}}
 {{- $jobs := dict }}
 {{- range $app, $_ := .Values.apps }}
@@ -19,25 +19,26 @@ is deleted as soon as the hook succeeds. A Secret you manage yourself
 {{- $_ := set $jobs $app $cfg }}
 {{- end }}
 {{- end }}
-{{- if $jobs }}
-{{- if not .Values.existingSecret }}
+{{- range $app, $cfg := $jobs }}
+{{- $data := fromYaml (include "demo.appSecrets" (dict "ctx" $ "app" $app)) }}
+{{- if $data }}
+---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ printf "%s-job" (include "demo.fullname" .) }}
+  name: {{ include "demo.appSecretName" (dict "ctx" $ "app" $app) }}
   labels:
-    {{- include "demo.labels" . | nindent 4 }}
+    {{- include "demo.appLabels" (dict "ctx" $ "app" $app) | nindent 4 }}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 type: Opaque
 stringData:
-  {{- range $key, $value := .Values.secrets }}
-  {{- if ne $key (include "demo.issuerKey" $) }}
+  {{- range $key, $value := $data }}
   {{ printf "%s_%s" $.Values.envPrefix $key }}: {{ $value | quote }}
   {{- end }}
-  {{- end }}
+{{- end }}
 {{- end }}
 {{- range $app, $cfg := $jobs }}
 ---
@@ -87,9 +88,10 @@ spec:
           {{- end }}
           env:
             {{- include "demo.env" (dict "ctx" $ "app" $app) | nindent 12 }}
+          {{- with include "demo.secretRef" (dict "ctx" $ "app" $app) | trim }}
           envFrom:
-            - secretRef:
-                name: {{ default (printf "%s-job" (include "demo.fullname" $)) $.Values.existingSecret }}
+            {{- . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml $cfg.resources | nindent 12 }}
       {{- with $cfg.nodeSelector }}
@@ -100,5 +102,4 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-{{- end }}
 {{- end }}

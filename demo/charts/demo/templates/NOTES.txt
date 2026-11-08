@@ -21,9 +21,9 @@ No Ingress is enabled. Reach an app directly:
 
   ! apps.{{ $app }}.host is unset, so it has no Ingress — and whichever cross-app
     URLs derive from it (issuer, audience, sign-in resources, MCP allowed hosts,
-    social redirects) are unset too. `auth` refuses a boot with no resource (no
-    app's hostname), `assistant` one with no resource of its own or no issuer
-    (`apps.auth.host`). Set the hostname rather than pinning those URLs in `config`.
+    social redirects) are unset too. The chart refused the install where an app
+    could not run without one; set the hostname rather than pinning those URLs in
+    `config`.
 {{- end }}
 {{- end }}
 {{- $worker := fromYaml (include "demo.appConfig" (dict "ctx" . "app" "worker")) }}

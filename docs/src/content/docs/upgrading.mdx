@@ -2299,12 +2299,22 @@ lists what the boot, a log or the wire shows when one is missed.
   process, or declare `<PREFIX>_ENV=development` against the dev container. An app
   of yours modelled on those files moves what authenticates anyone to its
   `.env.development` and `.env.test` the same way.
-- **The demo chart with a social provider's client id in `existingSecret` or
-  `apps.auth.extraEnv`**: since 0.6.0 the chart derives a provider's redirect only from
-  a client id it reads, in `secrets`, `config` or `apps.auth.config`, so `auth` refuses
+- **The demo chart with a social provider's client id in `auth`'s `existingSecret`**:
+  since 0.6.0 the chart derives a provider's redirect only from a client id it sees, in
+  `secrets`, `config` or `apps.auth.config` (since 0.7.0 in `auth`'s `extraEnv` too, and
+  as `<KEY>_FILE`), so `auth` refuses
   ``social provider `github` is linked but misconfigured``, naming
   `<PREFIX>_SOCIAL__GITHUB__REDIRECT_URL`. Set `SOCIAL__GITHUB__REDIRECT_URL` in the
   chart's `config`.
+- **The demo chart's `existingSecret`** refuses the install since 0.7.0, naming
+  `defaults.existingSecret`: every app has a Secret of its own, `<release>-<app>`, holding
+  only what its `reads` names, where one Secret, `<release>-env`, handed every app all of
+  `secrets`. `defaults.existingSecret: <yours>` keeps one Secret for every app; an
+  `apps.<app>.existingSecret` per app keeps each to its own keys. A key of `secrets` no
+  app reads, a required one an app is not handed, and one an app is handed both as
+  `<KEY>` and as `<KEY>_FILE` now refuse the install, naming the key and the apps that
+  read it: add a key your own module reads under that app's `reads`. A tool reading
+  `<release>-env` or `<release>-issuer` as a Secret reads `<release>-<app>`.
 - **A development-only route kept in a deployment**: an app listing
   `DevelopmentOnlyGuard` refuses its boot unless `<PREFIX>_ENV` declares
   `development` or `test` — `DevelopmentOnlyGuard guards a route only

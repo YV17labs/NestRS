@@ -33,8 +33,9 @@ environment: production
 scheme: https
 
 # Non-secret settings, written into a ConfigMap. Keys are spelled WITHOUT the
-# prefix; the chart prepends `envPrefix`. Anything set here wins over the values
-# the chart derives from the app hostnames (see `templates/_helpers.tpl`).
+# prefix; the chart prepends `envPrefix`. Anything set here, under its name or as
+# `<KEY>_FILE`, wins over the values the chart derives from the app hostnames (see
+# `templates/_helpers.tpl`).
 config:
   STORAGE__URL: s3://nestrs
   STORAGE__REGION: us-east-1
@@ -43,40 +44,38 @@ config:
   # because a log shipper reads it and nobody should have to know the profile.
   LOG_FORMAT: json
 
-# Secret settings, written into a Secret this chart owns. Same spelling rule as
-# `config`. Leave empty and set `existingSecret` to bring your own.
+# Secret settings, each written into the Secret of every app whose `reads` names it
+# (below), and of no other: an app holds only what it reads, so `auth`'s signing key
+# and registered clients reach `auth` alone. Same spelling rule as `config`. A key no
+# app reads refuses the render rather than going nowhere; an app with its own
+# `existingSecret` reads that Secret alone.
 #
-# Required (here or in `existingSecret`):
-#   SEAORM__URL              postgres://user:pass@host:5432/db
-#   REDIS__URL               rediss://host:6379
-#   REDIS__TRANSCODES__URL   rediss://cache:6379 — the audio feature's records,
-#                            each expiring on its own; a server evicting them is
-#                            never REDIS__URL's, whose schedule needs `noeviction`
-#   AUTHN__PRIVATE_KEY       PEM, Ed25519 — generate your own, never the repo's;
-#                            written into a Secret of its own that only `auth`
-#                            reads (with `existingSecret`, keep it out of yours
-#                            and hand it to `auth` alone through its `extraEnv`);
-#                            `auth` boots without it, its token endpoint answering 500
-#   AUTHN__PUBLIC_KEY        PEM, its matching half
-#   STORAGE__ACCESS_KEY      the object store's access key id
+# Required (here, or in the `existingSecret` of each app reading it), each refused at
+# install when nothing the chart renders hands it to an app that reads it:
+#   SEAORM__URL              postgres://user:pass@host:5432/db — every app, `migrate` too
+#   REDIS__URL               rediss://host:6379 — api, assistant, worker
+#   REDIS__TRANSCODES__URL   rediss://cache:6379 — api, assistant, worker: the audio
+#                            feature's records, each expiring on its own; a server
+#                            evicting them is never REDIS__URL's, whose schedule needs
+#                            `noeviction`
+#   STORAGE__ACCESS_KEY      the object store's access key id — api, assistant, worker
 #   STORAGE__SECRET_KEY      and its secret
+#   AUTHN__PUBLIC_KEY        PEM, Ed25519 — api, assistant, auth, live
+#   AUTHN__PRIVATE_KEY       its private half — auth alone; generate your own, never the
+#                            repo's. `auth` boots without it, its token endpoint
+#                            answering 500, so the chart refuses that too
 #   OAUTH__SERVER__CLIENTS   JSON array, the clients `auth`'s token endpoint
-#                            registers; an empty registry refuses `auth`'s boot
-# Also required, under `apps`: the `host` of `auth`, `api`, `assistant` and `live`.
+#                            registers — auth alone
+# Also required, under `apps`: the `host` of `auth` and of `assistant`, from which the
+# chart derives the URLs the apps name each other by (see `host` below).
 #
-# Optional: SOCIAL__GITHUB__CLIENT_ID / __CLIENT_SECRET, SOCIAL__GOOGLE__*. A
-# provider is on once it names its CLIENT_ID here, in `config` or in
-# `apps.auth.config`, the chart deriving its redirect from `apps.auth.host`. An id
-# in `existingSecret` or `apps.auth.extraEnv`, which the chart does not read, takes
+# Optional, `auth` alone: SOCIAL__GITHUB__CLIENT_ID / __CLIENT_SECRET, SOCIAL__GOOGLE__*.
+# A provider is on once `auth` is handed both, here, in `config` or in its own
+# `config` or `extraEnv`, each under its name or as `<KEY>_FILE`, the chart deriving
+# its redirect from `apps.auth.host`; one half alone refuses the render. An id in
+# `auth`'s `existingSecret`, which the chart does not read, takes
 # SOCIAL__<PROVIDER>__REDIRECT_URL in `config` too.
-#
-# All but the signing key sit in one Secret every app reads, the migration job's
-# copy included: the clients and the social secrets reach apps that never use them.
 secrets: {}
-
-# Name of a Secret you manage yourself. Set it and `secrets` must stay empty:
-# the two are alternatives, not layers.
-existingSecret: ""
 
 # --- shared pod settings ------------------------------------------------------
 serviceAccount:
@@ -105,6 +104,13 @@ defaults:
   #                renders the entries in alphabetical order.
   kind: deployment
   replicas: 1
+  # A Secret of yours this app reads in place of the one the chart writes for it from
+  # `secrets`; set here, every app reads the same one, each key you put in it included.
+  existingSecret: ""
+  # The settings this app reads that a deployment hands it: `required` ones refuse
+  # the render when nothing the chart renders for the app carries them, `optional`
+  # ones are only routed. A key of `secrets` reaches exactly the apps naming it here.
+  reads: {}
   # `kind: job` only. `hookWeight` orders the jobs among themselves; every one of
   # them runs before the deployments either way.
   args: []
@@ -184,6 +190,8 @@ defaults:
 #        resource of its own or no issuer (`auth`'s `host`).
 # `config` this app's own settings, spelled like the top-level `config` and laid
 #        over it for this app alone — what `apps/<app>/.env` holds locally
+# `reads` what the app's modules load from a deployment, read off its `module.rs`:
+#        add a key here when your own module reads one, and its secret reaches it
 apps:
   # Schema migrations. An app like any other — the same image, another binary —
   # that runs to completion before any deployment is updated.
@@ -192,6 +200,8 @@ apps:
     bin: migrate
     args:
       - up
+    reads:
+      SEAORM__URL: required
 
   api:
     bin: api
@@ -201,24 +211,55 @@ apps:
     config:
       # The api compresses its own responses, as it does in a local run.
       HTTP__COMPRESSION: "true"
+    reads:
+      SEAORM__URL: required
+      REDIS__URL: required
+      REDIS__TRANSCODES__URL: required
+      STORAGE__URL: required
+      STORAGE__ACCESS_KEY: required
+      STORAGE__SECRET_KEY: required
+      AUTHN__PUBLIC_KEY: required
 
   auth:
     bin: auth
     port: 3001
     host: ""
     ingress: true
+    reads:
+      SEAORM__URL: required
+      AUTHN__PUBLIC_KEY: required
+      AUTHN__PRIVATE_KEY: required
+      OAUTH__SERVER__CLIENTS: required
+      SIGN_IN__RESOURCES: required
+      SOCIAL__GITHUB__CLIENT_ID: optional
+      SOCIAL__GITHUB__CLIENT_SECRET: optional
+      SOCIAL__GOOGLE__CLIENT_ID: optional
+      SOCIAL__GOOGLE__CLIENT_SECRET: optional
 
   assistant:
     bin: assistant
     port: 3003
     host: ""
     ingress: true
+    reads:
+      SEAORM__URL: required
+      REDIS__URL: required
+      REDIS__TRANSCODES__URL: required
+      STORAGE__URL: required
+      STORAGE__ACCESS_KEY: required
+      STORAGE__SECRET_KEY: required
+      AUTHN__PUBLIC_KEY: required
+      OAUTH__RESOURCE__RESOURCE: required
+      OAUTH__RESOURCE__AUTHORIZATION_SERVERS: required
 
   live:
     bin: live
     port: 3004
     host: ""
     ingress: true
+    reads:
+      SEAORM__URL: required
+      AUTHN__PUBLIC_KEY: required
     # WebSocket. Sockets live up to NESTRS_WS__MAX_CONNECTION_SECS (4h by
     # default), so a rollout closes them and clients reconnect — CPU is a poor
     # signal for a connection-bound edge, hence no autoscaling here by default.
@@ -229,6 +270,13 @@ apps:
     port: 3005
     host: ""
     ingress: false
+    reads:
+      SEAORM__URL: required
+      REDIS__URL: required
+      REDIS__TRANSCODES__URL: required
+      STORAGE__URL: required
+      STORAGE__ACCESS_KEY: required
+      STORAGE__SECRET_KEY: required
     # Two facts about this worker, both from the framework's own source:
     #
     # 1. A `#[process]` method runs as many jobs at once as its `concurrency`

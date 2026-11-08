@@ -3,3 +3,5 @@
 .gitignore
 *.tmproj
 .vscode/
+# The render cases run against the chart; they are no part of it.
+ci/

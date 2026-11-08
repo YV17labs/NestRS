@@ -28,11 +28,14 @@ helm install demo demo/charts/demo \
 The secrets are the *Required* list in [`values.yaml`](values.yaml): a cluster's own services, the
 object store's credentials, the signing keypair, and `clients.json`, the array of clients
 `auth` registers, each with its `client_id`, `client_secret`, `payload`, `scopes` and
-`resources`. An app refuses to boot without each of them but the signing key: `auth` boots
-without that one, and its token endpoint answers `500`. The hostnames are what the chart
-derives the cross-app URLs from: with none, `auth` refuses a boot with no resource to mint
-for, and `assistant` one with no resource of its own. Social sign-in stays optional: a
-provider is on once a deployment names its `CLIENT_ID` and `CLIENT_SECRET`.
+`resources`. The chart derives the cross-app URLs from the hostnames. Leave out a secret,
+or `auth`'s or the assistant's hostname, and the install is refused, naming each setting
+and the apps that cannot run without it: an app reading one refuses its boot without it,
+but for the signing key, without which `auth` boots and its token endpoint answers `500`.
+Without `api`'s or `live`'s hostname the install goes through, that app unreachable from
+outside, as the install notes warn. Social sign-in stays optional: a provider is on once
+a deployment names its `CLIENT_ID` and `CLIENT_SECRET`, and one of the two alone is
+refused like a missing secret.
 
 `helm template` renders against the Kubernetes version its Helm was built with,
 which may sit below this chart's floor — pass `--kube-version 1.31.0` when
@@ -60,15 +63,25 @@ sets variables — `.env` is a local convenience the image does not carry.
 - `config` — non-secret keys, spelled **without** the prefix, written to a
   ConfigMap. `LOG_FORMAT: json` becomes `NESTRS_LOG_FORMAT`. The ecosystem's
   unprefixed variables, `RUST_LOG` and `OTEL_*`, go in `extraEnv`.
-- `secrets` — same spelling, written to a Secret this chart owns. Bring your own
-  with `existingSecret` instead; the two are alternatives, not layers. The
-  signing key, `AUTHN__PRIVATE_KEY`, goes into a Secret of its own that only
-  `auth` reads: a resource server holding it could mint a token for any app.
-  With `existingSecret`, every app reads yours, so keep the key out of it and
-  hand it to `auth` alone through its `extraEnv`. The rest of `secrets` is
-  shared: `auth`'s registered clients and any social secret reach every app, the
-  migration job's copy included, though only `auth` uses them. To keep one from
-  them, leave it out of `secrets` and hand it to `auth` the same way.
+- `secrets` — same spelling, each written into the Secret of the apps that read it,
+  and only theirs: every app has a Secret of its own, `<release>-<app>`, holding the keys
+  its `reads` names in `values.yaml`, so `auth`'s signing key and registered clients
+  reach `auth` alone, and the migration job holds the database URL and nothing else. A
+  key changed rolls every app reading a Secret the chart writes: their pods carry one
+  checksum over all of those Secrets, since a pod is read where a Secret is not, and a
+  checksum of one app's alone would let anyone reading pods test a guess at the secret it
+  holds. A key no app reads refuses the install rather than going nowhere.
+- `apps.<name>.reads` — what that app's modules load from a deployment, each
+  `required` or `optional`. A key of `secrets` reaches exactly the apps naming it, and a
+  `required` one nothing hands an app — in `secrets`, `config`, its own `config` or
+  `extraEnv`, under its name or as `<KEY>_FILE` — refuses the install, and so does one
+  handed under both, which an app refuses at boot. Your own module reading a key adds it
+  here.
+- `apps.<name>.existingSecret` — a Secret of yours that app reads in place of the one
+  the chart writes, for an operator or a secrets manager that owns them. Set it per app
+  to keep each to its own keys; `defaults.existingSecret` hands every app the same one,
+  and with it every key you put in it. The chart cannot read a Secret it does not write,
+  so an app with one is checked for nothing.
 - `apps.<name>.config` — that app's own keys, same spelling, laid over `config`
   for it alone: what `apps/<name>/.env` holds in a local run, which a
   deployment never reads. The api's `HTTP__COMPRESSION` is one.
@@ -82,12 +95,13 @@ minted a token for, the social redirect URIs — and every one of those is some
 app's public origin. The chart derives them from `apps.<name>.host`, so renaming
 a hostname cannot leave half the pair behind. Each app requires its own origin
 as a token's audience, so a token `auth` mints for one app is refused by every
-other (RFC 8707). Anything in `config` still wins.
+other (RFC 8707). Anything in `config` still wins, under its name or as `<KEY>_FILE`.
 
-A social redirect is derived only for a provider whose client id the chart reads, in
-`secrets`, `config` or `apps.auth.config`, since a redirect with no client is a
-half-configured provider, which refuses `auth`'s boot. An id in `existingSecret` or
-`apps.auth.extraEnv`, which the chart does not read, takes
+A social redirect is derived only for a provider whose client id `auth` is handed where
+the chart sees it — `secrets`, `config`, or its own `config` or `extraEnv`, under its name
+or as `<KEY>_FILE` — since a redirect with no client is a half-configured provider, which
+refuses `auth`'s boot. An id
+in `auth`'s `existingSecret`, which the chart does not read, takes
 `SOCIAL__<PROVIDER>__REDIRECT_URL` in `config`.
 
 ## Scaling the queue worker

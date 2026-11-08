@@ -35,3 +35,15 @@ edges, and the one path two of them share. An app added or gone, a change to an
 app's `module.rs`, or a controller or gateway path moved updates the figure in
 the same commit. Held by review, never by a script
 (`.claude/decisions/modular-monolith-per-workload.md`).
+
+## The chart hands each app what it reads, and nothing else
+
+Each app of `charts/demo` has a Secret of its own holding the keys of `secrets` its
+`reads` names in `values.yaml`, so no app holds another's credentials; a `required`
+setting nothing hands an app refuses the install. A pod is read where a Secret is not,
+so its `checksum/secret` sums every Secret the chart writes, never one app's alone.
+`reads` is read off the app's `module.rs` and the features it imports: a module that
+starts or stops loading a deployment setting moves that app's `reads` in the same
+change. The render cases (`charts/demo/ci/render.sh`, `nestrs run chart`) hold what
+the chart does with `reads`; review holds `reads` to the code
+(`.claude/decisions/each-app-holds-its-own-secrets.md`).

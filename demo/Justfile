@@ -27,6 +27,10 @@ lint:
     cargo fmt --all --check
     nestrs lint
 
+# The Helm chart: its lint, then the render cases (each app's Secret, each refused install). Needs helm and yq.
+chart:
+    charts/demo/ci/render.sh
+
 # Apply rustfmt across the workspace
 fmt:
     cargo fmt --all

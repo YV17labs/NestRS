@@ -30,10 +30,8 @@ mod widget {
 /// Answers for an ability and attaches none: what the boot cannot tell from a guard
 /// that does, so the gate fails closed.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AttachesNothing;
-
-impl Layer for AttachesNothing {}
 
 #[async_trait]
 impl Guard for AttachesNothing {
@@ -141,10 +139,8 @@ mod gate_order {
 
     /// Grants `Read` on secrets to a caller sending `x-read`, nothing otherwise.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Grants;
-
-    impl Layer for Grants {}
 
     #[async_trait]
     impl Guard for Grants {
@@ -181,10 +177,8 @@ mod gate_order {
     /// A cache answering every request from its store, as a route-scoped
     /// caching interceptor does on a hit.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Stored;
-
-    impl Layer for Stored {}
 
     #[async_trait]
     impl Interceptor for Stored {
@@ -203,10 +197,8 @@ mod gate_order {
 
     /// Maps every error its route returns to a success, counting each.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Swallow;
-
-    impl Layer for Swallow {}
 
     #[async_trait]
     impl ExceptionFilter for Swallow {

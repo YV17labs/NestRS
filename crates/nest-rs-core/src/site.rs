@@ -451,6 +451,7 @@ fn report_unit_stage_duplicate<L: Layer + ?Sized>(entry: &ResolvedLayer<L>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Layer;
     use crate::container::ContainerBuilder;
     use crate::discoverable::Discoverable;
     use crate::exception_filter::{GlobalExceptionFilters, exception_filter};
@@ -657,8 +658,8 @@ mod tests {
     }
 
     /// Declines every failure; `M` gives each one a type of its own.
-    struct Declines<M>(std::marker::PhantomData<fn() -> M>);
-    impl<M: 'static> Layer for Declines<M> {}
+    #[derive(Layer)]
+    struct Declines<M: 'static>(std::marker::PhantomData<fn() -> M>);
 
     provided_by_hand!(Declines<M>);
 

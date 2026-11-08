@@ -123,10 +123,8 @@ impl AmbientValue for Caller {}
 /// Stands in for the authentication guard: a token attaches [`Caller`]; none
 /// admits a visitor on what `#[public]` opens and at an in-band request.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CallerGuard;
-
-impl Layer for CallerGuard {}
 
 #[async_trait]
 impl Guard for CallerGuard {

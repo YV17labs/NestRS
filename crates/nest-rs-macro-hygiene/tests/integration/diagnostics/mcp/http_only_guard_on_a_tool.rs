@@ -8,10 +8,8 @@ use nest_rs::http::HttpView;
 use nest_rs::mcp::{McpError, mcp, tools};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct HttpOnlyGuard;
-
-impl Layer for HttpOnlyGuard {}
 
 #[async_trait]
 impl Guard for HttpOnlyGuard {

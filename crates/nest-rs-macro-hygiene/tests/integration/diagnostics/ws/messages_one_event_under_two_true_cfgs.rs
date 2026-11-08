@@ -8,10 +8,8 @@ use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::ws::{WsView, gateway, messages};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Deny;
-
-impl Layer for Deny {}
 
 #[async_trait]
 impl Guard for Deny {

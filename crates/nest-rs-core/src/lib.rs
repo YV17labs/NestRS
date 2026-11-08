@@ -97,6 +97,10 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
+// The kernel's unit tests write the framework's derives, which name `::nest_rs_core`.
+#[cfg(test)]
+extern crate self as nest_rs_core;
+
 mod access;
 mod ambient;
 mod answer;

@@ -17,10 +17,8 @@ use nest_rs_mcp::{ServerHandler, mcp};
 use nest_rs_ws::{WsModule, gateway, messages};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AuthzGuard;
-
-impl Layer for AuthzGuard {}
 
 #[async_trait]
 impl Guard for AuthzGuard {

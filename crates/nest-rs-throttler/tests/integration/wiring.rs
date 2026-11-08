@@ -184,12 +184,11 @@ mod under_the_pool {
 trait Nowhere: Send + Sync {}
 
 #[injectable]
+#[derive(Layer)]
 struct UnprovidedGuard {
     #[inject]
     _dep: Arc<dyn Nowhere>,
 }
-
-impl Layer for UnprovidedGuard {}
 
 #[async_trait]
 impl Guard for UnprovidedGuard {

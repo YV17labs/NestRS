@@ -4,9 +4,7 @@
 use nest_rs::core::{Layer, interceptor};
 
 #[interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Forgetful;
-
-impl Layer for Forgetful {}
 
 fn main() {}

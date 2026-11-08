@@ -5,9 +5,8 @@ use nest_rs::core::{
     GlobalInterceptors, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, module,
 };
 
+#[derive(Layer)]
 struct Audit;
-
-impl Layer for Audit {}
 
 #[async_trait]
 impl Interceptor for Audit {

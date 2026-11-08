@@ -69,10 +69,8 @@ static RAN: AtomicUsize = AtomicUsize::new(0);
 
 /// Writes down what the job's view says, then runs the rest of the unit.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Reading;
-
-impl Layer for Reading {}
 
 #[async_trait]
 impl Interceptor for Reading {
@@ -96,10 +94,8 @@ impl Interceptor for Reading {
 
 /// Settles the job without running it: the inbox pattern.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Acknowledging;
-
-impl Layer for Acknowledging {}
 
 #[async_trait]
 impl Interceptor for Acknowledging {
@@ -118,10 +114,8 @@ struct NotAWave;
 
 /// Answers [`NotAWave`] with a `422`: the client's error, never cleared by a retry.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Unprocessable;
-
-impl Layer for Unprocessable {}
 
 #[async_trait]
 impl ExceptionFilter for Unprocessable {
@@ -134,10 +128,8 @@ impl ExceptionFilter for Unprocessable {
 
 /// Answers [`NotAWave`] with a `503`: a condition another attempt may clear.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Unavailable;
-
-impl Layer for Unavailable {}
 
 #[async_trait]
 impl ExceptionFilter for Unavailable {
@@ -150,10 +142,8 @@ impl ExceptionFilter for Unavailable {
 
 /// Answers [`NotAWave`] with a `503` asking 30 seconds of the next attempt.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Throttling;
-
-impl Layer for Throttling {}
 
 #[async_trait]
 impl ExceptionFilter for Throttling {
@@ -166,10 +156,8 @@ impl ExceptionFilter for Throttling {
 
 /// Answers every failure by acknowledging its job.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Forgiving;
-
-impl Layer for Forgiving {}
 
 #[async_trait]
 impl ExceptionFilter for Forgiving {
@@ -436,10 +424,8 @@ async fn a_filter_acknowledging_a_failed_job_completes_it_and_says_so() {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AppReading;
-
-impl Layer for AppReading {}
 
 #[async_trait]
 impl Interceptor for AppReading {
@@ -550,10 +536,8 @@ struct PerAttemptQueue;
 
 /// Built per request: no job's site, composed once at boot, can hold it.
 #[injectable(scope = request)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PerAttempt;
-
-impl Layer for PerAttempt {}
 
 #[async_trait]
 impl Interceptor for PerAttempt {
@@ -601,10 +585,8 @@ struct PerUseQueue;
 /// Rebuilt on every resolution: a job's site, composed once at boot, would
 /// build it once and share it with every attempt.
 #[injectable(scope = transient)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PerUse;
-
-impl Layer for PerUse {}
 
 #[async_trait]
 impl Interceptor for PerUse {

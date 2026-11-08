@@ -31,6 +31,7 @@ static UPGRADE: Handler = declare_handler(HandlerDeclaration {
 /// A guard whose decision is fixed at construction: `None` allows, `Some(d)`
 /// denies with `d`. Increments a shared counter each time it runs, so a test
 /// can prove a chained guard executed (or was short-circuited).
+#[derive(Layer)]
 struct DecisionGuard {
     denial: Option<Denial>,
     ran: Arc<AtomicU32>,
@@ -47,8 +48,6 @@ impl DecisionGuard {
         }
     }
 }
-
-impl Layer for DecisionGuard {}
 
 #[async_trait]
 impl Guard for DecisionGuard {
@@ -247,10 +246,8 @@ mod declaration {
 
     /// Declares a success among what it refuses with.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct DeclaresASuccess;
-
-    impl Layer for DeclaresASuccess {}
 
     #[async_trait]
     impl Guard for DeclaresASuccess {

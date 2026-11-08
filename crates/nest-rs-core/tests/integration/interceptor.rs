@@ -39,12 +39,11 @@ impl Trail {
 macro_rules! recording {
     ($name:ident, $step:literal, $declared:meta) => {
         #[$declared]
+        #[derive(Layer)]
         struct $name {
             #[inject]
             trail: Arc<Trail>,
         }
-
-        impl Layer for $name {}
 
         #[async_trait]
         impl Interceptor for $name {
@@ -208,13 +207,12 @@ async fn an_interceptor_at_the_unit_stage_the_app_also_lists_runs_once() {
 
 /// Counts the units it saw, on itself.
 #[injectable]
+#[derive(Layer)]
 struct Counting {
     #[inject]
     trail: Arc<Trail>,
     seen: AtomicUsize,
 }
-
-impl Layer for Counting {}
 
 #[async_trait]
 impl Interceptor for Counting {

@@ -11,10 +11,8 @@ use serde_json::{Value, json};
 
 /// The caller's ability, by the `x-role` a test sends; no header is a visitor's.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 pub(crate) struct RoleGuard;
-
-impl Layer for RoleGuard {}
 
 #[async_trait]
 impl Guard for RoleGuard {

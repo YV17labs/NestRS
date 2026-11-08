@@ -978,10 +978,8 @@ async fn the_boot_log_names_the_address_a_client_connects_to() {
 // names the gateway whose upgrade chain ran.
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct V1Guard;
-
-impl Layer for V1Guard {}
 
 #[async_trait]
 impl Guard for V1Guard {
@@ -997,10 +995,8 @@ impl Guard for V1Guard {
 impl GuardFor<nest_rs_http::HttpView> for V1Guard {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct V2Guard;
-
-impl Layer for V2Guard {}
 
 #[async_trait]
 impl Guard for V2Guard {
@@ -1747,10 +1743,8 @@ async fn an_unknown_event_answers_once_and_leaves_the_socket_open() {
 
 /// Uppercases `data.msg`, and refuses the `boom` event outright.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ShoutPipe;
-
-impl Layer for ShoutPipe {}
 
 /// What each pipe call was handed: the input, the unit's edge, the site's
 /// address, and the event the view holds.
@@ -2508,10 +2502,8 @@ async fn a_socket_whose_client_stops_reading_is_closed_at_the_send_deadline() {
 /// Refuses every message, and declares no `GuardFor<WsView>`: the global pool
 /// is `Arc<dyn Guard>`, with no declaration to consult.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct UnmarkedWsGuard;
-
-impl Layer for UnmarkedWsGuard {}
 
 #[async_trait]
 impl Guard for UnmarkedWsGuard {
@@ -2557,10 +2549,8 @@ async fn a_pooled_guard_declaring_no_ws_view_still_checks_every_message() {
 /// Refuses every message with an internal denial whose text names the server's
 /// own address.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct LeakyInternalGuard;
-
-impl Layer for LeakyInternalGuard {}
 
 #[async_trait]
 impl Guard for LeakyInternalGuard {
@@ -2573,10 +2563,8 @@ impl GuardFor<nest_rs_ws::WsView> for LeakyInternalGuard {}
 
 /// Refuses every message as a rate limit lifting in seven seconds.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct SevenSecondsGuard;
-
-impl Layer for SevenSecondsGuard {}
 
 #[async_trait]
 impl Guard for SevenSecondsGuard {
@@ -2695,10 +2683,8 @@ impl nest_rs_core::AmbientValue for Caller {}
 /// Adds the caller around the upgrade request, at its unit stage, as a
 /// guard's attachment does.
 #[nest_rs_core::interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CallerInterceptor;
-
-impl Layer for CallerInterceptor {}
 
 #[async_trait]
 impl nest_rs_core::Interceptor for CallerInterceptor {
@@ -3041,10 +3027,8 @@ impl nest_rs_core::AmbientValue for Admitted {}
 
 /// Admits every upgrade, attaching who it admitted.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AdmittingGuard;
-
-impl Layer for AdmittingGuard {}
 
 #[async_trait]
 impl Guard for AdmittingGuard {
@@ -3195,10 +3179,8 @@ const INSUFFICIENT_STORAGE: nest_rs_core::Code = nest_rs_core::Code::new("INSUFF
 
 /// Refuses every message it checks, for a cause of the server's own.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct StoreDown;
-
-impl Layer for StoreDown {}
 
 #[async_trait]
 impl Guard for StoreDown {
@@ -3211,10 +3193,8 @@ impl GuardFor<WsView> for StoreDown {}
 
 /// Refuses every message it checks: the caller may not.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Forbids;
-
-impl Layer for Forbids {}
 
 #[async_trait]
 impl Guard for Forbids {

@@ -103,10 +103,8 @@ fn role_of(cx: &mut UnitContext<'_>) -> Result<String, Denial> {
 
 /// Attaches the ability of the role the request names.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ManagerToken;
-
-impl Layer for ManagerToken {}
 
 #[async_trait]
 impl Guard for ManagerToken {
@@ -134,10 +132,8 @@ impl GuardFor<HttpView> for ManagerToken {}
 /// Attaches the visitor's rules the request names. It declares no phase and so
 /// identifies no one: `#[public]` is what opens a site beneath it, on every edge.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct VisitorRules;
-
-impl Layer for VisitorRules {}
 
 #[async_trait]
 impl Guard for VisitorRules {

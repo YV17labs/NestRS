@@ -19,10 +19,8 @@ static SEEN: Mutex<Vec<Seen>> = Mutex::new(Vec::new());
 
 /// Admits every field, recording what its view says.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Witness;
-
-impl Layer for Witness {}
 
 #[async_trait]
 impl Guard for Witness {

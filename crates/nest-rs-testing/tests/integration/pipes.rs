@@ -27,10 +27,8 @@ fn counter() -> usize {
 /// Strips the `"password"` key from a top-level JSON object body and bumps
 /// [`COUNTER`] every invocation.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct StripPassword;
-
-impl Layer for StripPassword {}
 
 impl GlobalPipe for StripPassword {
     fn transform(
@@ -134,10 +132,8 @@ static SEEN: std::sync::Mutex<Vec<Seen>> = std::sync::Mutex::new(Vec::new());
 
 /// Records what it is handed, and changes nothing.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RecordingPipe;
-
-impl Layer for RecordingPipe {}
 
 impl GlobalPipe for RecordingPipe {
     fn transform(

@@ -17,13 +17,11 @@ const PATH: &str = "/mcp/layers";
 /// Records what each check was told: a guard handed the wrong operation passes a
 /// bare "did it run" assertion.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Recorder {
     calls: AtomicUsize,
     tools: std::sync::Mutex<Vec<String>>,
 }
-
-impl Layer for Recorder {}
 
 #[async_trait]
 impl Guard for Recorder {
@@ -67,10 +65,8 @@ impl GuardFor<nest_rs_mcp::McpView> for Recorder {}
 
 /// Refuses everything, so a denial's shape can be read off the wire.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Closed;
-
-impl Layer for Closed {}
 
 #[async_trait]
 impl Guard for Closed {
@@ -249,10 +245,8 @@ static POOLED_MCP_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// Admits every request, naming its caller as the authentication guard does,
 /// and every operation.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Pooled;
-
-impl Layer for Pooled {}
 
 #[async_trait]
 impl Guard for Pooled {
@@ -337,10 +331,8 @@ async fn a_pooled_guard_checks_the_request_once_and_the_operation_once() {
 static POOL_ONLY_MCP_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PoolOnlyMcp;
-
-impl Layer for PoolOnlyMcp {}
 
 #[async_trait]
 impl Guard for PoolOnlyMcp {
@@ -408,10 +400,8 @@ async fn a_global_guard_that_only_checks_mcp_still_refuses_the_operation() {
 static DECLARED_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DeclaredEverywhere;
-
-impl Layer for DeclaredEverywhere {}
 
 #[async_trait]
 impl Guard for DeclaredEverywhere {
@@ -430,10 +420,8 @@ impl GuardFor<nest_rs_mcp::McpView> for DeclaredEverywhere {}
 /// Admits every request, naming its caller as the authentication guard does:
 /// the endpoint's own guard, beside the pool.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AdmitRequest;
-
-impl Layer for AdmitRequest {}
 
 #[async_trait]
 impl Guard for AdmitRequest {
@@ -497,10 +485,8 @@ async fn a_guard_the_edge_did_not_run_still_runs_per_operation() {
 
 /// Listed by a host's `#[use_guards]`, provided by no module.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct NeverProvided;
-
-impl Layer for NeverProvided {}
 
 #[async_trait]
 impl Guard for NeverProvided {
@@ -575,7 +561,7 @@ async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_say
 static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountsItsDrop;
 
 impl Drop for CountsItsDrop {
@@ -583,8 +569,6 @@ impl Drop for CountsItsDrop {
         DROPPED.fetch_add(1, Ordering::SeqCst);
     }
 }
-
-impl Layer for CountsItsDrop {}
 
 #[async_trait]
 impl Guard for CountsItsDrop {
@@ -658,12 +642,11 @@ impl AroundLog {
 
 /// Writes down each unit it runs around, then runs it.
 #[injectable]
+#[derive(Layer)]
 struct Around {
     #[inject]
     log: std::sync::Arc<AroundLog>,
 }
-
-impl Layer for Around {}
 
 #[async_trait]
 impl nest_rs_core::Interceptor for Around {
@@ -826,10 +809,8 @@ struct LedgerRefused;
 
 /// Maps the ledger's refusal to a `409`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct LedgerConflict;
-
-impl Layer for LedgerConflict {}
 
 #[async_trait]
 impl nest_rs_core::ExceptionFilter for LedgerConflict {
@@ -1013,10 +994,8 @@ fn sealed_as(status: u16, code: nest_rs_core::Code) -> nest_rs_core::Caught {
 
 /// The method's filter: a `409`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct SealedAtMethod;
-
-impl Layer for SealedAtMethod {}
 
 #[async_trait]
 impl nest_rs_core::ExceptionFilter for SealedAtMethod {
@@ -1033,10 +1012,8 @@ impl nest_rs_core::ExceptionFilter for SealedAtMethod {
 
 /// The host's filter: a `404`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct SealedAtHost;
-
-impl Layer for SealedAtHost {}
 
 #[async_trait]
 impl nest_rs_core::ExceptionFilter for SealedAtHost {
@@ -1053,10 +1030,8 @@ impl nest_rs_core::ExceptionFilter for SealedAtHost {
 
 /// The app's filter: a `400`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct SealedAtApp;
-
-impl Layer for SealedAtApp {}
 
 #[async_trait]
 impl nest_rs_core::ExceptionFilter for SealedAtApp {
@@ -1088,12 +1063,11 @@ impl ScopeLog {
 macro_rules! scope_interceptor {
     ($name:ident, $scope:literal) => {
         #[injectable]
+        #[derive(Layer)]
         struct $name {
             #[inject]
             log: std::sync::Arc<ScopeLog>,
         }
-
-        impl Layer for $name {}
 
         #[async_trait]
         impl nest_rs_core::Interceptor for $name {

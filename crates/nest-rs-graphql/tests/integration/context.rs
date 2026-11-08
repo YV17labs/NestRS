@@ -14,10 +14,8 @@ struct RequestTag(String);
 impl AmbientValue for RequestTag {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct TagGuard;
-
-impl Layer for TagGuard {}
 
 #[async_trait]
 impl Guard for TagGuard {
@@ -427,10 +425,8 @@ mod the_endpoint_guards_speak_the_request_vocabulary {
     /// Admits a request naming its tenant, attaching it; refuses one that names
     /// none.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct TenantGate;
-
-    impl Layer for TenantGate {}
 
     #[async_trait]
     impl Guard for TenantGate {

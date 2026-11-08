@@ -114,10 +114,8 @@ mod a_hosts_own_guards {
     use super::*;
 
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Pass;
-
-    impl Layer for Pass {}
 
     #[async_trait]
     impl Guard for Pass {
@@ -192,12 +190,11 @@ impl Trail {
 macro_rules! recording_guard {
     ($name:ident, $label:literal) => {
         #[injectable]
+        #[derive(Layer)]
         struct $name {
             #[inject]
             trail: Arc<Trail>,
         }
-
-        impl Layer for $name {}
 
         #[async_trait]
         impl Guard for $name {
@@ -260,10 +257,8 @@ struct OpenedModule;
 
 /// Refuses every request.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DenyEverything;
-
-impl Layer for DenyEverything {}
 
 #[async_trait]
 impl Guard for DenyEverything {
@@ -378,10 +373,8 @@ async fn an_opened_endpoint_a_module_declares_guards_for_fails_the_boot() {
 
 /// Authorizes after an authentication guard, declaring it.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Authorizing;
-
-impl Layer for Authorizing {}
 
 #[async_trait]
 impl Guard for Authorizing {
@@ -399,10 +392,8 @@ impl GuardFor<McpView> for Authorizing {}
 
 /// Authenticates, declaring it.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Authenticating;
-
-impl Layer for Authenticating {}
 
 #[async_trait]
 impl Guard for Authenticating {
@@ -510,10 +501,8 @@ impl AmbientValue for Caller {}
 /// Attaches a [`Caller`] to every request, named its actor as the
 /// authentication guard names it, so a session opens for it.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Attaching;
-
-impl Layer for Attaching {}
 
 #[async_trait]
 impl Guard for Attaching {

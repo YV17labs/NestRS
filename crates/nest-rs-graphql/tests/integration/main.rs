@@ -105,10 +105,8 @@ fn store_down() -> Denial {
 
 /// Cannot evaluate the `/graphql` request: its identity store is down.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RequestStoreDown;
-
-impl Layer for RequestStoreDown {}
 
 #[async_trait]
 impl Guard for RequestStoreDown {
@@ -125,10 +123,8 @@ impl GuardFor<nest_rs_http::HttpView> for RequestStoreDown {}
 
 /// Cannot evaluate a field: its identity store is down.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct FieldStoreDown;
-
-impl Layer for FieldStoreDown {}
 
 #[async_trait]
 impl Guard for FieldStoreDown {

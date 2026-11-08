@@ -1080,10 +1080,8 @@ mod self_mount {
 
     /// What covers a gated mount, which a rate limit alone does not.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Identified;
-
-    impl Layer for Identified {}
 
     #[async_trait]
     impl Guard for Identified {

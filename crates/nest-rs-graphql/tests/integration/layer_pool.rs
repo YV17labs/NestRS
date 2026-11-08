@@ -26,10 +26,8 @@ fn reset_counters() {
 
 /// Counts every `check_http` execution, then admits the request.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingPassGuard;
-
-impl Layer for CountingPassGuard {}
 
 #[async_trait]
 impl Guard for CountingPassGuard {
@@ -53,10 +51,8 @@ impl GuardFor<nest_rs_http::HttpView> for CountingPassGuard {}
 
 /// Counts every unit it runs around, then forwards.
 #[nest_rs_core::interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingInterceptor;
-
-impl Layer for CountingInterceptor {}
 
 #[async_trait]
 impl Interceptor for CountingInterceptor {
@@ -216,10 +212,8 @@ mod pipeline {
 
     /// Counts the root fields its resolver binds it on.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct AroundRootFields;
-
-    impl Layer for AroundRootFields {}
 
     #[async_trait]
     impl Interceptor for AroundRootFields {
@@ -231,10 +225,8 @@ mod pipeline {
 
     /// Counts each call of the field resolver it is bound on.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct AroundLabels;
-
-    impl Layer for AroundLabels {}
 
     #[async_trait]
     impl Interceptor for AroundLabels {
@@ -246,10 +238,8 @@ mod pipeline {
 
     /// Records what the app's own interceptor reads of each unit.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Recorder;
-
-    impl Layer for Recorder {}
 
     #[async_trait]
     impl Interceptor for Recorder {
@@ -279,10 +269,8 @@ mod pipeline {
 
     /// Answers a refused write as the conflict it is.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct LedgerConflict;
-
-    impl Layer for LedgerConflict {}
 
     #[async_trait]
     impl ExceptionFilter for LedgerConflict {
@@ -475,10 +463,8 @@ mod pipeline {
 
     /// Counts each subscription opening it runs around.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct CountOpenings;
-
-    impl Layer for CountOpenings {}
 
     #[async_trait]
     impl Interceptor for CountOpenings {

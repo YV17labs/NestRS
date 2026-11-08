@@ -398,10 +398,8 @@ mod guards {
     /// Refuses a caller outside the office network, `#[public]` routes
     /// included.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct OfficeOnly;
-
-    impl Layer for OfficeOnly {}
 
     #[async_trait]
     impl Guard for OfficeOnly {
@@ -514,10 +512,8 @@ mod guards {
 
     /// Decides on the principal an earlier guard attached, and requires it.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct OwnAccount;
-
-    impl Layer for OwnAccount {}
 
     #[async_trait]
     impl Guard for OwnAccount {
@@ -573,10 +569,8 @@ mod guards {
 
     /// Challenges `Basic` in its own words, as a token endpoint's client guard does.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct BasicClients;
-
-    impl Layer for BasicClients {}
 
     #[async_trait]
     impl Guard for BasicClients {

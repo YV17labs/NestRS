@@ -5,15 +5,12 @@
 use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, interceptor};
 
 #[interceptor]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Bare;
 
 #[interceptor(stage = handler)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Spelled;
-
-impl Layer for Bare {}
-impl Layer for Spelled {}
 
 #[async_trait]
 impl Interceptor for Bare {

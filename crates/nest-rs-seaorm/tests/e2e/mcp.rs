@@ -22,10 +22,8 @@ struct Inspection;
 /// Attaches an ability to every request, as the authorization guard does,
 /// naming its caller as the authentication guard does.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Granting;
-
-impl Layer for Granting {}
 
 #[nest_rs_core::async_trait]
 impl Guard for Granting {
@@ -299,10 +297,8 @@ mod bound {
 
     /// The ability a caller named `mine` holds: its own notes alone.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct OwnNotes;
-
-    impl Layer for OwnNotes {}
 
     #[async_trait]
     impl Guard for OwnNotes {

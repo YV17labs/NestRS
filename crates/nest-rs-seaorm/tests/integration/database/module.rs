@@ -340,10 +340,8 @@ async fn a_crud_host_with_no_unit_of_work_binding_is_refused_at_boot_naming_it()
 
 /// Answers for the ability the `#[crud]` gates read, which this boot never serves.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct MemosAbilityGuard;
-
-impl Layer for MemosAbilityGuard {}
 
 #[async_trait]
 impl Guard for MemosAbilityGuard {

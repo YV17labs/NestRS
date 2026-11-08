@@ -16,12 +16,10 @@ const PATH: &str = "/mcp/notes";
 
 /// What the host's guard was told of each operation it checked.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Recorder {
     seen: Mutex<Vec<String>>,
 }
-
-impl Layer for Recorder {}
 
 #[async_trait]
 impl Guard for Recorder {
@@ -55,10 +53,8 @@ impl GuardFor<nest_rs_mcp::McpView> for Recorder {}
 
 /// Refuses every operation it is bound to.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Closed;
-
-impl Layer for Closed {}
 
 #[async_trait]
 impl Guard for Closed {
@@ -390,10 +386,8 @@ fn a_resource_operation_kind_names_the_method_reaching_it() {
 
 /// Listed by an operation's `#[use_guards]`, provided by no module.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct NeverProvided;
-
-impl Layer for NeverProvided {}
 
 #[async_trait]
 impl Guard for NeverProvided {

@@ -13,10 +13,8 @@ struct Caller;
 impl AmbientValue for Caller {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Authenticate;
-
-impl Layer for Authenticate {}
 
 #[async_trait]
 impl Guard for Authenticate {
@@ -42,10 +40,8 @@ impl GuardFor<nest_rs_http::HttpView> for Authenticate {}
 impl GuardFor<nest_rs_ws::WsView> for Authenticate {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Authorize;
-
-impl Layer for Authorize {}
 
 #[async_trait]
 impl Guard for Authorize {
@@ -133,10 +129,8 @@ async fn a_message_listing_again_what_its_upgrade_ran_is_no_misorder() {
 
 /// Establishes who the caller is with nothing a guard above reads, at a message alone.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AuthenticateAtTheMessage;
-
-impl Layer for AuthenticateAtTheMessage {}
 
 #[async_trait]
 impl Guard for AuthenticateAtTheMessage {
@@ -153,10 +147,8 @@ impl GuardFor<nest_rs_ws::WsView> for AuthenticateAtTheMessage {}
 
 /// Decides what the caller may do, needing no principal to boot.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AuthorizeAnyone;
-
-impl Layer for AuthorizeAnyone {}
 
 #[async_trait]
 impl Guard for AuthorizeAnyone {
@@ -262,10 +254,8 @@ async fn a_gateway_that_declares_no_guards_boots() {
 
 /// Listed by a message's `#[use_guards]`, provided by no module.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Unprovided;
-
-impl Layer for Unprovided {}
 
 #[async_trait]
 impl Guard for Unprovided {
@@ -373,10 +363,8 @@ static FORCED_CHECKS: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 
 /// Counts every message check, so a replay is seen.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingGuard;
-
-impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
@@ -598,10 +586,8 @@ mod posture {
     /// Admits every request and decides nothing about who is calling, as a rate
     /// limit does.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Throttle;
-
-    impl Layer for Throttle {}
 
     #[async_trait]
     impl Guard for Throttle {
@@ -957,10 +943,8 @@ mod posture {
 
     /// Reads who is calling, a visitor's branch of its own.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Policy;
-
-    impl Layer for Policy {}
 
     #[async_trait]
     impl Guard for Policy {

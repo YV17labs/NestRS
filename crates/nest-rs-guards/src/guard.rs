@@ -105,10 +105,10 @@ type Check<'fut> = Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut
 /// use nest_rs_core::{Layer, UnitContext, async_trait};
 /// use nest_rs_guards::{Denial, Guard};
 ///
+/// #[derive(Layer)]
 /// struct Maintenance {
 ///     closed: bool,
 /// }
-/// # impl Layer for Maintenance {}
 ///
 /// #[async_trait]
 /// impl Guard for Maintenance {
@@ -206,8 +206,8 @@ pub trait Guard: Layer {
     /// ```
     /// # use nest_rs_core::{Layer, UnitContext, async_trait};
     /// # use nest_rs_guards::{Denial, Guard};
+    /// #[derive(Layer)]
     /// struct OfficeOnly;
-    /// # impl Layer for OfficeOnly {}
     ///
     /// #[async_trait]
     /// impl Guard for OfficeOnly {
@@ -344,9 +344,8 @@ mod tests {
     });
 
     /// Overrides both, as an app writes them.
+    #[derive(Layer)]
     struct Both;
-
-    impl Layer for Both {}
 
     #[async_trait]
     impl Guard for Both {
@@ -364,9 +363,8 @@ mod tests {
     }
 
     /// Refuses a caller outside the office network, wherever it is bound.
+    #[derive(Layer)]
     struct OfficeOnly;
-
-    impl Layer for OfficeOnly {}
 
     #[async_trait]
     impl Guard for OfficeOnly {
@@ -397,9 +395,8 @@ mod tests {
     }
 
     /// Writes its decision once, in the unit entry.
+    #[derive(Layer)]
     struct OneDecision;
-
-    impl Layer for OneDecision {}
 
     #[async_trait]
     impl Guard for OneDecision {
@@ -428,9 +425,8 @@ mod tests {
     impl nest_rs_core::AmbientValue for Author {}
 
     /// Requires what no guard before it attached.
+    #[derive(Layer)]
     struct RequiresAuthor;
-
-    impl Layer for RequiresAuthor {}
 
     #[async_trait]
     impl Guard for RequiresAuthor {

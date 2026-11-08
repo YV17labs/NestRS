@@ -251,6 +251,7 @@ mod tests {
     use std::any::TypeId;
 
     use super::*;
+    use crate::Layer;
     use crate::layer::LayerSite;
     use crate::outcome::__private::{caught_problem, settled};
     use crate::problem::code;
@@ -268,7 +269,8 @@ mod tests {
     }
 
     /// Writes its name, then answers `answer`, for failures carrying `E`.
-    struct Writing<E: ?Sized> {
+    #[derive(Layer)]
+    struct Writing<E: ?Sized + 'static> {
         name: &'static str,
         answer: fn() -> Caught,
         catches: std::marker::PhantomData<fn() -> Box<E>>,
@@ -283,8 +285,6 @@ mod tests {
             }
         }
     }
-
-    impl<E: ?Sized + 'static> Layer for Writing<E> {}
 
     #[async_trait]
     impl<E: Catch + ?Sized> ExceptionFilter for Writing<E> {

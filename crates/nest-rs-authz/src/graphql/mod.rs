@@ -42,9 +42,8 @@
 //! #     name: Option<String>,
 //! # }
 //! # #[injectable]
-//! # #[derive(Default)]
+//! # #[derive(Default, Layer)]
 //! # struct PassGuard;
-//! # impl Layer for PassGuard {}
 //! # #[async_trait]
 //! # impl Guard for PassGuard {
 //! #     async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
@@ -53,9 +52,8 @@
 //! # }
 //! # impl GuardFor<nest_rs_http::HttpView> for PassGuard {}
 //! # #[injectable]
-//! # #[derive(Default)]
+//! # #[derive(Default, Layer)]
 //! # struct Grants;
-//! # impl Layer for Grants {}
 //! # #[async_trait]
 //! # impl Guard for Grants {
 //! #     fn __attaches_ability(&self) -> bool {

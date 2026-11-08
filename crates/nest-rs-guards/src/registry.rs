@@ -41,9 +41,8 @@ pub fn guard<G: Guard + 'static>() -> GuardSpec {
 /// # use nest_rs_core::{App, Layer, UnitContext, async_trait, injectable, module};
 /// # use nest_rs_guards::{Denial, GlobalGuards, Guard};
 /// # #[injectable]
-/// # #[derive(Default)]
+/// # #[derive(Default, Layer)]
 /// # struct RequireApiKey;
-/// # impl Layer for RequireApiKey {}
 /// # #[async_trait]
 /// # impl Guard for RequireApiKey {
 /// #     async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {

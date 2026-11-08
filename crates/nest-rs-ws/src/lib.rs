@@ -12,10 +12,8 @@
 //! # use nest_rs_guards::{Guard, GuardFor};
 //! #
 //! # #[injectable]
-//! # #[derive(Default)]
+//! # #[derive(Default, Layer)]
 //! # struct AuthnGuard;
-//! #
-//! # impl Layer for AuthnGuard {}
 //! #
 //! # #[async_trait]
 //! # impl Guard for AuthnGuard {

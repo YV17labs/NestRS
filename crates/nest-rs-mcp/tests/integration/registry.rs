@@ -1571,10 +1571,8 @@ static ADDRESSES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Ve
 
 /// Admits every request, recording the address of the site it runs as.
 #[nest_rs_core::injectable]
-#[derive(Default)]
+#[derive(Default, nest_rs_core::Layer)]
 struct AddressWitness;
-
-impl nest_rs_core::Layer for AddressWitness {}
 
 #[nest_rs_core::async_trait]
 impl nest_rs_guards::Guard for AddressWitness {
@@ -2267,10 +2265,8 @@ mod posture {
     /// Admits every request and decides nothing about who is calling, as a rate
     /// limit does.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Throttle;
-
-    impl Layer for Throttle {}
 
     #[async_trait]
     impl Guard for Throttle {
@@ -2289,10 +2285,8 @@ mod posture {
 
     /// Declares it establishes who the caller is.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Authenticate;
-
-    impl Layer for Authenticate {}
 
     #[async_trait]
     impl Guard for Authenticate {
@@ -2482,10 +2476,8 @@ mod posture {
 
     /// Decides who may call, on the operation.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Policy;
-
-    impl Layer for Policy {}
 
     #[async_trait]
     impl Guard for Policy {

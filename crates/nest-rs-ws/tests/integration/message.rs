@@ -21,10 +21,8 @@ static WRAPPED: AtomicUsize = AtomicUsize::new(0);
 
 /// Counts every message it runs around.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Counting;
-
-impl Layer for Counting {}
 
 #[async_trait]
 impl Interceptor for Counting {
@@ -83,10 +81,8 @@ async fn a_gateway_interceptor_wraps_every_message_once() {
 static LISTED: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Listed;
-
-impl Layer for Listed {}
 
 #[async_trait]
 impl Interceptor for Listed {
@@ -142,10 +138,8 @@ struct OutOfStock;
 
 /// Answers [`OutOfStock`] as a conflict.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct StockFilter;
-
-impl Layer for StockFilter {}
 
 #[async_trait]
 impl ExceptionFilter for StockFilter {
@@ -219,10 +213,8 @@ static EVENTS_AT_THE_UNIT_STAGE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Reads the reply the client is about to get.
 #[nest_rs_core::interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ReadsTheReply;
-
-impl Layer for ReadsTheReply {}
 
 #[async_trait]
 impl Interceptor for ReadsTheReply {
@@ -251,10 +243,8 @@ impl Interceptor for ReadsTheReply {
 
 /// Refuses every message it checks.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Closed;
-
-impl Layer for Closed {}
 
 #[async_trait]
 impl Guard for Closed {
@@ -440,10 +430,8 @@ async fn two_messages_share_one_request_scope_while_nothing_is_request_scoped() 
 
 /// Admits every upgrade for tenant `acme`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AcmeUpgrade;
-
-impl Layer for AcmeUpgrade {}
 
 #[async_trait]
 impl Guard for AcmeUpgrade {
@@ -985,10 +973,8 @@ async fn the_unit_stage_reads_what_a_frame_no_handler_reads_is_answered() {
 
 /// Answers every frame an error carries, in place of it.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Shapes;
-
-impl Layer for Shapes {}
 
 #[async_trait]
 impl ExceptionFilter for Shapes {
@@ -1034,10 +1020,8 @@ async fn an_apps_exception_filter_shapes_what_a_frame_no_handler_reads_is_answer
 
 /// Admits every upgrade and refuses every message it checks.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ClosedToMessages;
-
-impl Layer for ClosedToMessages {}
 
 #[async_trait]
 impl Guard for ClosedToMessages {
@@ -1086,10 +1070,8 @@ static STALLING: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 /// Waits forever around what no handler reads.
 #[nest_rs_core::interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Stalling;
-
-impl Layer for Stalling {}
 
 #[async_trait]
 impl Interceptor for Stalling {
@@ -1143,10 +1125,8 @@ async fn a_layer_stalling_on_a_frame_no_handler_reads_is_cut_at_the_message_dead
 
 /// Unwinds around what no handler reads.
 #[nest_rs_core::interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Exploding;
-
-impl Layer for Exploding {}
 
 #[async_trait]
 impl Interceptor for Exploding {
@@ -1196,10 +1176,8 @@ async fn a_layer_unwinding_on_a_frame_no_handler_reads_keeps_the_socket() {
 /// Answers what no handler reads itself: a reply where the frame carried
 /// `data`, silence where it did not.
 #[nest_rs_core::interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AnswersInstead;
-
-impl Layer for AnswersInstead {}
 
 #[async_trait]
 impl Interceptor for AnswersInstead {
@@ -1305,10 +1283,8 @@ impl std::error::Error for RoomFull {
 /// Fails the message before its handler with a failure of the server's own, the
 /// edge having rendered nothing yet.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RaisesDisk;
-
-impl Layer for RaisesDisk {}
 
 #[async_trait]
 impl Interceptor for RaisesDisk {
@@ -1320,10 +1296,8 @@ impl Interceptor for RaisesDisk {
 /// Fails the message before its handler with a failure its client earned, the
 /// edge having rendered nothing yet.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RaisesConflict;
-
-impl Layer for RaisesConflict {}
 
 #[async_trait]
 impl Interceptor for RaisesConflict {
@@ -1489,10 +1463,8 @@ fn assert_span_records(logs: &LogCapture, event: &str, error_type: Option<&str>)
 
 /// A catch-all writing its house frame in place of every failure's.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct HouseFrame;
-
-impl Layer for HouseFrame {}
 
 #[async_trait]
 impl ExceptionFilter for HouseFrame {
@@ -1535,10 +1507,8 @@ async fn a_filters_own_frame_leaves_who_failed_on_the_span() {
 
 /// A catch-all acknowledging every failure with a plain reply.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PlainReply;
-
-impl Layer for PlainReply {}
 
 #[async_trait]
 impl ExceptionFilter for PlainReply {
@@ -1583,10 +1553,8 @@ async fn a_filters_plain_reply_leaves_who_failed_on_the_span() {
 
 /// Answers whatever it catches as the client's conflict.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AsConflict;
-
-impl Layer for AsConflict {}
 
 #[async_trait]
 impl ExceptionFilter for AsConflict {
@@ -1599,10 +1567,8 @@ impl ExceptionFilter for AsConflict {
 
 /// Answers whatever it catches as the server's failure.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AsFailure;
-
-impl Layer for AsFailure {}
 
 #[async_trait]
 impl ExceptionFilter for AsFailure {
@@ -1668,10 +1634,8 @@ async fn a_filters_problem_decides_who_failed_by_its_status() {
 
 /// Answers the message's failure with one of the server's own in its place.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct SwapsForDisk;
-
-impl Layer for SwapsForDisk {}
 
 #[async_trait]
 impl Interceptor for SwapsForDisk {
@@ -1685,10 +1649,8 @@ impl Interceptor for SwapsForDisk {
 
 /// Answers the message's failure with one its client earned in its place.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct SwapsForConflict;
-
-impl Layer for SwapsForConflict {}
 
 #[async_trait]
 impl Interceptor for SwapsForConflict {

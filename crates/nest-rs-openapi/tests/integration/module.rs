@@ -467,10 +467,8 @@ async fn a_default_version_nothing_declares_fails_the_boot() {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DenyEveryone;
-
-impl Layer for DenyEveryone {}
 
 #[async_trait]
 impl Guard for DenyEveryone {

@@ -49,10 +49,8 @@ fn ability_of(grant: Option<&str>) -> Ability {
 /// Attaches the ability of the credential the request names, naming its
 /// caller as the authentication guard does.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Grants;
-
-impl Layer for Grants {}
 
 #[async_trait]
 impl Guard for Grants {

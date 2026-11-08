@@ -11,10 +11,8 @@ use nest_rs_testing::TestApp;
 struct RequiredRoles(&'static [&'static str]);
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RolesGuard;
-
-impl Layer for RolesGuard {}
 
 #[async_trait]
 impl Guard for RolesGuard {

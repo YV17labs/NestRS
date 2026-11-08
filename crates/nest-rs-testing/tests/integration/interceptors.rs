@@ -29,10 +29,8 @@ fn stamp(cx: &mut UnitContext<'_>, name: &'static str) -> Result<(), Denial> {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Tracer;
-
-impl Layer for Tracer {}
 
 #[async_trait]
 impl Interceptor for Tracer {
@@ -44,10 +42,8 @@ impl Interceptor for Tracer {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DenyGuard;
-
-impl Layer for DenyGuard {}
 
 #[async_trait]
 impl Guard for DenyGuard {
@@ -165,10 +161,8 @@ fn counter() -> usize {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CounterInterceptor;
-
-impl Layer for CounterInterceptor {}
 
 #[async_trait]
 impl Interceptor for CounterInterceptor {
@@ -314,12 +308,11 @@ struct Units {
 
 /// A module's interceptor whose dependency its module lists after it.
 #[interceptor(stage = unit)]
+#[derive(Layer)]
 struct CountUnits {
     #[inject]
     units: Arc<Units>,
 }
-
-impl Layer for CountUnits {}
 
 #[async_trait]
 impl Interceptor for CountUnits {
@@ -387,10 +380,8 @@ async fn a_modules_interceptor_the_app_also_lists_runs_once() {
 
 /// At the unit stage, around the guards: it sees every HTTP unit's answer.
 #[interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct EdgeStamp;
-
-impl Layer for EdgeStamp {}
 
 #[async_trait]
 impl Interceptor for EdgeStamp {
@@ -489,10 +480,8 @@ struct Principal(&'static str);
 impl AmbientValue for Principal {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AttachPrincipal;
-
-impl Layer for AttachPrincipal {}
 
 #[async_trait]
 impl Guard for AttachPrincipal {
@@ -515,10 +504,8 @@ impl GuardFor<HttpView> for AttachPrincipal {}
 /// Writes what the route declared, who the guards admitted and the correlation
 /// the request sent onto the answer, the last read once the handler ran.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Reader;
-
-impl Layer for Reader {}
 
 #[async_trait]
 impl Interceptor for Reader {

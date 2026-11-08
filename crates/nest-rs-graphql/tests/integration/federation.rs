@@ -27,10 +27,8 @@ struct Widget {
 
 /// Refuses every operation it is bound to.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Closed;
-
-impl Layer for Closed {}
 
 #[async_trait]
 impl Guard for Closed {
@@ -468,10 +466,8 @@ static COUNTED_CHECKS: AtomicUsize = AtomicUsize::new(0);
 
 /// Admits everything and counts.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Counting;
-
-impl Layer for Counting {}
 
 #[async_trait]
 impl Guard for Counting {
@@ -1640,10 +1636,8 @@ mod around_the_federation_fields {
 
     /// Records the unit, field and role of each unit it runs around.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Recorder;
-
-    impl Layer for Recorder {}
 
     #[async_trait]
     impl Interceptor for Recorder {
@@ -1660,10 +1654,8 @@ mod around_the_federation_fields {
 
     /// Answers every failure it is offered as a conflict.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct EveryFailure;
-
-    impl Layer for EveryFailure {}
 
     #[async_trait]
     impl ExceptionFilter for EveryFailure {

@@ -261,10 +261,8 @@ const INSUFFICIENT_STORAGE: nest_rs_core::Code = nest_rs_core::Code::new("INSUFF
 
 /// Refuses every field it checks: the caller may not.
 #[nest_rs_core::injectable]
-#[derive(Default)]
+#[derive(Default, nest_rs_core::Layer)]
 struct Forbids;
-
-impl nest_rs_core::Layer for Forbids {}
 
 #[nest_rs_core::async_trait]
 impl nest_rs_guards::Guard for Forbids {

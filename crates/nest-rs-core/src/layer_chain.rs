@@ -807,14 +807,15 @@ pub(crate) mod __private {
 mod tests {
     use super::__private::{ResolvedLayer, compose_chain, dedup_bucket, log_effective_chain};
     use super::*;
-    use crate::layer::{Layer, LayerSite};
+    use crate::Layer;
+    use crate::layer::LayerSite;
 
+    #[derive(Layer)]
     struct Authn;
-    impl Layer for Authn {}
+    #[derive(Layer)]
     struct Authz;
-    impl Layer for Authz {}
+    #[derive(Layer)]
     struct Audit;
-    impl Layer for Audit {}
 
     fn entry<L: Layer + 'static>(layer: L, source: LayerSite) -> ResolvedLayer<dyn Layer> {
         ResolvedLayer {
@@ -937,8 +938,8 @@ mod tests {
 
     /// Declared twice by the one test below alone: the line is filed once per
     /// process for each layer type.
+    #[derive(Layer)]
     struct Redeclared;
-    impl Layer for Redeclared {}
 
     #[test]
     fn a_redundant_declaration_names_the_one_decorator_that_re_runs_a_layer() {

@@ -474,10 +474,8 @@ type Client = TestClient;
 /// An interceptor that only forwards: listed by the app, it puts every route on
 /// the layered pipeline, where its tail renders a handler's `Err`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Forwarding;
-
-impl Layer for Forwarding {}
 
 #[async_trait]
 impl Interceptor for Forwarding {

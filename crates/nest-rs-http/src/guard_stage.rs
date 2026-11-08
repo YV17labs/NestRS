@@ -681,9 +681,8 @@ mod tests {
 
     /// Attaches the tenant its request names, and inserts its own `Throttle`
     /// where a guard could once shadow the declared one.
+    #[derive(Layer)]
     struct TenantGuard;
-
-    impl Layer for TenantGuard {}
 
     #[async_trait]
     impl Guard for TenantGuard {
@@ -705,9 +704,8 @@ mod tests {
 
     /// Reads, in a later stage of the same request, what the first attached
     /// and what the site declared.
+    #[derive(Layer)]
     struct Witness;
-
-    impl Layer for Witness {}
 
     #[async_trait]
     impl Guard for Witness {
@@ -736,9 +734,8 @@ mod tests {
 
     /// Declares what an unreachable dependency and a refused tenant answer, on
     /// every route.
+    #[derive(Layer)]
     struct Busy;
-
-    impl Layer for Busy {}
 
     #[async_trait]
     impl Guard for Busy {
@@ -770,9 +767,8 @@ mod tests {
     }
 
     /// Challenges `Basic`, and answers in its protocol's own words.
+    #[derive(Layer)]
     struct ChallengesBasic;
-
-    impl Layer for ChallengesBasic {}
 
     #[async_trait]
     impl Guard for ChallengesBasic {
@@ -931,9 +927,8 @@ mod tests {
     impl std::error::Error for ConnectionRefused {}
 
     /// Cannot evaluate the request: its identity store is down.
+    #[derive(Layer)]
     struct StoreDown;
-
-    impl Layer for StoreDown {}
 
     #[async_trait]
     impl Guard for StoreDown {
@@ -994,9 +989,8 @@ mod tests {
     }
 
     /// Admits every request and attaches nothing.
+    #[derive(Layer)]
     struct Admitting;
-
-    impl Layer for Admitting {}
 
     #[async_trait]
     impl Guard for Admitting {
@@ -1011,9 +1005,8 @@ mod tests {
 
     /// Refuses in its protocol's own words: the answer `status` carries,
     /// written into the view, beside the denial every edge reads.
+    #[derive(Layer)]
     struct OwnWords(StatusCode);
-
-    impl Layer for OwnWords {}
 
     #[async_trait]
     impl Guard for OwnWords {
@@ -1032,9 +1025,8 @@ mod tests {
     }
 
     /// Writes an answer, then admits.
+    #[derive(Layer)]
     struct AdmitsAnswering;
-
-    impl Layer for AdmitsAnswering {}
 
     #[async_trait]
     impl Guard for AdmitsAnswering {
@@ -1052,9 +1044,8 @@ mod tests {
     }
 
     /// Refuses every request with a plain denial.
+    #[derive(Layer)]
     struct Refusing;
-
-    impl Layer for Refusing {}
 
     #[async_trait]
     impl Guard for Refusing {
@@ -1209,12 +1200,11 @@ mod tests {
 
     /// Declares what it refuses with, on a route that is not `#[public]` and on
     /// one that is.
+    #[derive(Layer)]
     struct Declares {
         gated: &'static [u16],
         public: &'static [u16],
     }
-
-    impl Layer for Declares {}
 
     #[async_trait]
     impl Guard for Declares {

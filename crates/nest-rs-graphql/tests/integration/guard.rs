@@ -14,10 +14,8 @@ struct Role(String);
 impl AmbientValue for Role {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RoleHeaderGuard;
-
-impl Layer for RoleHeaderGuard {}
 
 #[async_trait]
 impl Guard for RoleHeaderGuard {
@@ -43,7 +41,7 @@ impl Guard for RoleHeaderGuard {
 impl GuardFor<nest_rs_http::HttpView> for RoleHeaderGuard {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RequireAdmin;
 
 nest_rs_core::inventory::submit! {
@@ -56,8 +54,6 @@ nest_rs_core::inventory::submit! {
         },
     )
 }
-
-impl Layer for RequireAdmin {}
 
 #[async_trait]
 impl Guard for RequireAdmin {
@@ -201,10 +197,8 @@ async fn resolver_guard_denies_a_non_admin() {
 
 /// Refuses every GraphQL operation it is asked about.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DenyAll;
-
-impl Layer for DenyAll {}
 
 #[async_trait]
 impl Guard for DenyAll {
@@ -228,12 +222,10 @@ impl GuardFor<nest_rs_http::HttpView> for DenyAll {}
 
 /// Counts the GraphQL operations it is asked about, and lets each through.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingGuard {
     seen: std::sync::atomic::AtomicUsize,
 }
-
-impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
@@ -500,10 +492,8 @@ mod unresolvable {
     use nest_rs_testing::LogCapture;
 
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct NeverProvided;
-
-    impl Layer for NeverProvided {}
 
     #[async_trait]
     impl Guard for NeverProvided {
@@ -610,7 +600,7 @@ mod owned_chain {
     static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct CountsItsDrop;
 
     impl Drop for CountsItsDrop {
@@ -618,8 +608,6 @@ mod owned_chain {
             DROPPED.fetch_add(1, Ordering::SeqCst);
         }
     }
-
-    impl Layer for CountsItsDrop {}
 
     #[async_trait]
     impl Guard for CountsItsDrop {

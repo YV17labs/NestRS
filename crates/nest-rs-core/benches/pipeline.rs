@@ -89,10 +89,8 @@ fn gate(_: &mut UnitContext<'_>) -> Result<(), Failure> {
 }
 
 /// An interceptor that runs the rest of the unit and returns its outcome.
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Pass<const N: usize>;
-
-impl<const N: usize> Layer for Pass<N> {}
 
 #[async_trait]
 impl<const N: usize> Interceptor for Pass<N> {
@@ -102,10 +100,8 @@ impl<const N: usize> Interceptor for Pass<N> {
 }
 
 /// A filter that would decline every failure; a unit that succeeds never runs it.
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Decline;
-
-impl Layer for Decline {}
 
 #[async_trait]
 impl ExceptionFilter for Decline {

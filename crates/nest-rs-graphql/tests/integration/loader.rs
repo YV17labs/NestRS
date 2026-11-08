@@ -57,10 +57,8 @@ impl AmbientValue for Caller {}
 /// Attaches the caller at the request, as the authorization guard attaches the
 /// caller's ability.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CallerGuard;
-
-impl Layer for CallerGuard {}
 
 #[async_trait]
 impl Guard for CallerGuard {

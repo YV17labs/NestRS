@@ -67,10 +67,8 @@ impl PostDto {
 /// post but those a relation denies; `org_member` reads the `id` and `org_id`
 /// of posts a relation grants; `headlines` reads a story's `id` and renamed column.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AbilityInjector;
-
-impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {

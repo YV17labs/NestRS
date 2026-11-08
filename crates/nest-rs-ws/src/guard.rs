@@ -292,9 +292,8 @@ mod tests {
     impl AmbientValue for Seen {}
 
     /// Admits a message whose `data` is a number, attaching what it read.
+    #[derive(Layer)]
     struct Numbers;
-
-    impl Layer for Numbers {}
 
     #[async_trait]
     impl Guard for Numbers {
@@ -420,9 +419,8 @@ mod tests {
     impl std::error::Error for ConnectionRefused {}
 
     /// Cannot evaluate a message: its identity store is down.
+    #[derive(Layer)]
     struct StoreDown;
-
-    impl Layer for StoreDown {}
 
     #[async_trait]
     impl Guard for StoreDown {

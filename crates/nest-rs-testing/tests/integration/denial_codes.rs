@@ -76,10 +76,8 @@ fn refusing(cx: &UnitContext<'_>) -> Result<(), Denial> {
 
 /// Refuses each operation with the denial its name says, on every edge.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Refusing;
-
-impl Layer for Refusing {}
 
 #[async_trait]
 impl Guard for Refusing {

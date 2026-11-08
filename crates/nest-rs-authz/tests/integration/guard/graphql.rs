@@ -162,10 +162,8 @@ async fn a_field_resolver_reads_the_ability_its_request_attached() {
 /// Identifies a caller at the `/graphql` request, as an authentication guard does,
 /// and attaches no ability.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct IdentifiesAtTheRequest;
-
-impl Layer for IdentifiesAtTheRequest {}
 
 #[async_trait]
 impl Guard for IdentifiesAtTheRequest {

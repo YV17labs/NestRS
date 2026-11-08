@@ -20,10 +20,8 @@ use crate::widget;
 /// Builds the caller's ability from an `x-role` header. `visitor` is the
 /// anonymous branch — a *grant* it holds must still not satisfy the gate.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AbilityInjector;
-
-impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {

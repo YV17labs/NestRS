@@ -12,10 +12,8 @@ pub(crate) use crate::widget;
 /// Stand-in for the authentication guard at the request: admits it, naming
 /// its caller as the authentication guard does.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 pub(crate) struct PassGuard;
-
-impl Layer for PassGuard {}
 
 #[async_trait]
 impl Guard for PassGuard {

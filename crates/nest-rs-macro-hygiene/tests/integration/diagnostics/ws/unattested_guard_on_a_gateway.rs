@@ -15,10 +15,8 @@ use nest_rs::guards::{Denial, Guard};
 use nest_rs::ws::{gateway, messages};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct UnattestedGuard;
-
-impl Layer for UnattestedGuard {}
 
 // Its decision is written, its edge never declared: the declaration is what
 // says which units this decision was written for.

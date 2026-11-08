@@ -9,15 +9,12 @@
 use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, interceptor};
 
 #[interceptor(order = 100)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Tracing;
 
 #[interceptor(stag = unit, stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Timing;
-
-impl Layer for Tracing {}
-impl Layer for Timing {}
 
 #[async_trait]
 impl Interceptor for Tracing {

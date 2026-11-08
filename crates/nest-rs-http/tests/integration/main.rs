@@ -130,10 +130,8 @@ pub(crate) struct MethodsModule;
 
 /// Refuses every request at the guard stage, before anything reads its body.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 pub(crate) struct Refuse;
-
-impl Layer for Refuse {}
 
 #[async_trait]
 impl Guard for Refuse {

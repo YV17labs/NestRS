@@ -53,9 +53,8 @@ use std::marker::PhantomData;
 /// #     }
 /// # }
 /// # #[injectable]
-/// # #[derive(Default)]
+/// # #[derive(Default, Layer)]
 /// # struct Grants;
-/// # impl Layer for Grants {}
 /// # #[async_trait]
 /// # impl Guard for Grants {
 /// #     fn __attaches_ability(&self) -> bool {

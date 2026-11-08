@@ -17,12 +17,10 @@ use nest_rs_core::{
 
 /// Answers every failure, counting the ones it answered.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CatchAll {
     answered: AtomicUsize,
 }
-
-impl Layer for CatchAll {}
 
 #[async_trait]
 impl ExceptionFilter for CatchAll {

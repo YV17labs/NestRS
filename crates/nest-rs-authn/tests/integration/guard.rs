@@ -1637,10 +1637,8 @@ mod rejected_credential {
     type BearerAuthn = AuthnGuard<BearerStrategy>;
 
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct NeedsWho;
-
-    impl Layer for NeedsWho {}
 
     #[async_trait]
     impl Guard for NeedsWho {

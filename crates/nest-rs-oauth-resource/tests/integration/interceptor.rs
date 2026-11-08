@@ -98,10 +98,8 @@ async fn a_refused_websocket_upgrade_carries_the_pointer() {
 
 /// Stands in for the real chain's verdict: authenticated, but the token's scope falls short.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct TokenTooNarrow;
-
-impl Layer for TokenTooNarrow {}
 
 #[async_trait]
 impl Guard for TokenTooNarrow {
@@ -122,10 +120,8 @@ impl GuardFor<nest_rs_http::HttpView> for TokenTooNarrow {}
 
 /// A refusal no wider token fixes, so no challenge may be emitted.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct NeverAllowed;
-
-impl Layer for NeverAllowed {}
 
 #[async_trait]
 impl Guard for NeverAllowed {
@@ -296,10 +292,8 @@ const LEFT_OUT: &str =
     "a required scope is not a scope-token; the challenge is sent without its scope attribute";
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ScopeOutsideTheGrammar;
-
-impl Layer for ScopeOutsideTheGrammar {}
 
 #[async_trait]
 impl Guard for ScopeOutsideTheGrammar {
@@ -388,9 +382,8 @@ async fn a_scope_outside_the_grammar_leaves_the_attribute_out_and_is_reported() 
 /// A guard that refuses the way a real authentication guard does, so the response
 /// carries the RFC 6750 §3.1 `error` code this layer cannot reconstruct.
 #[injectable]
+#[derive(Layer)]
 struct ExpiredCredential;
-
-impl Layer for ExpiredCredential {}
 
 #[async_trait]
 impl Guard for ExpiredCredential {

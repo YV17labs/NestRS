@@ -804,10 +804,8 @@ fn a_body_read_gap_under_the_request_timeout_or_without_one_is_not_remarked() {
 /// An interceptor that only forwards, at the unit stage: imported, it puts a
 /// layered site around each of the self-mount's entries.
 #[interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Forwarding;
-
-impl Layer for Forwarding {}
 
 #[async_trait]
 impl Interceptor for Forwarding {

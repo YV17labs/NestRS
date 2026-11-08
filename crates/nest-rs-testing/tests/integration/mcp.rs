@@ -23,10 +23,8 @@ fn the_driver_negotiates_the_sdk_latest_handshake() {
 /// Admits every request without naming its caller, as a guard reading an API
 /// key does.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AdmitsUnnamed;
-
-impl Layer for AdmitsUnnamed {}
 
 #[async_trait]
 impl Guard for AdmitsUnnamed {

@@ -22,10 +22,8 @@ struct Inspection;
 
 /// Attaches an ability to every upgrade, as the authorization guard does.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Granting;
-
-impl Layer for Granting {}
 
 #[async_trait]
 impl Guard for Granting {
@@ -118,10 +116,8 @@ mod hook_row {
 /// The ability the upgrade attached grants the row whole, so what a hook meets is the
 /// hook's own bar and no missing grant.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct GrantingRows;
-
-impl Layer for GrantingRows {}
 
 #[async_trait]
 impl Guard for GrantingRows {

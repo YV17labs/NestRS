@@ -1,13 +1,13 @@
 error[E0277]: `Audit` is not a provider a module or an app-wide pool can register
-  --> tests/integration/diagnostics/core/global_pool_lists_no_provider.rs:19:23
+  --> tests/integration/diagnostics/core/global_pool_lists_no_provider.rs:18:23
    |
-19 | #[module(providers = [GlobalInterceptors<(Audit,)>])]
+18 | #[module(providers = [GlobalInterceptors<(Audit,)>])]
    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no decorator made this type a provider
    |
 help: the trait `Discoverable` is not implemented for `Audit`
-  --> tests/integration/diagnostics/core/global_pool_lists_no_provider.rs:8:1
+  --> tests/integration/diagnostics/core/global_pool_lists_no_provider.rs:9:1
    |
- 8 | struct Audit;
+ 9 | struct Audit;
    | ^^^^^^^^^^^^
    = note: add `#[injectable]` to the struct, or implement `Discoverable` when what it registers is more than a decorator can say
    = help: the following other types implement trait `Discoverable`:

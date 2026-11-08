@@ -8,10 +8,8 @@ use nest_rs::http::{EndpointGuards, HttpView};
 use nest_rs::ws::WsView;
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ApiKeyGuard;
-
-impl Layer for ApiKeyGuard {}
 
 #[async_trait]
 impl Guard for ApiKeyGuard {

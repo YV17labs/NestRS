@@ -11,10 +11,8 @@ use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::mcp::{McpView, ServerHandler, mcp};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Shut;
-
-impl Layer for Shut {}
 
 #[async_trait]
 impl Guard for Shut {
@@ -26,10 +24,8 @@ impl Guard for Shut {
 impl GuardFor<McpView> for Shut {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Around;
-
-impl Layer for Around {}
 
 #[async_trait]
 impl Interceptor for Around {
@@ -39,10 +35,8 @@ impl Interceptor for Around {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Declines;
-
-impl Layer for Declines {}
 
 #[async_trait]
 impl ExceptionFilter for Declines {

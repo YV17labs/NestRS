@@ -32,10 +32,8 @@ fn counter() -> usize {
 
 /// Counts every execution, then admits the request.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingGuard;
-
-impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
@@ -152,10 +150,8 @@ fn edge_counter() -> usize {
 
 /// Counts every unit it runs around, then forwards.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct EdgeObserver;
-
-impl Layer for EdgeObserver {}
 
 #[async_trait]
 impl Interceptor for EdgeObserver {
@@ -167,10 +163,8 @@ impl Interceptor for EdgeObserver {
 
 /// Answers a handler's error with a *success*.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct MapToOk;
-
-impl Layer for MapToOk {}
 
 #[async_trait]
 impl ExceptionFilter for MapToOk {
@@ -186,10 +180,8 @@ impl ExceptionFilter for MapToOk {
 
 /// Says, at the unit stage, whether the unit failed, whatever it answered.
 #[nest_rs_core::interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct UnitOutcome;
-
-impl Layer for UnitOutcome {}
 
 #[async_trait]
 impl Interceptor for UnitOutcome {
@@ -207,10 +199,8 @@ impl Interceptor for UnitOutcome {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DenyAll;
-
-impl Layer for DenyAll {}
 
 #[async_trait]
 impl Guard for DenyAll {

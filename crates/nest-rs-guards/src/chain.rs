@@ -91,15 +91,19 @@ mod tests {
     use super::*;
     use crate::Denial;
 
+    #[derive(Layer)]
     struct First;
+    #[derive(Layer)]
     struct Covered;
+    #[derive(Layer)]
     struct Middle;
+    #[derive(Layer)]
     struct AlsoCovered;
+    #[derive(Layer)]
     struct Last;
 
     macro_rules! admit_all {
         ($($guard:ident),*) => {$(
-            impl Layer for $guard {}
             #[async_trait]
             impl Guard for $guard {
                 async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {

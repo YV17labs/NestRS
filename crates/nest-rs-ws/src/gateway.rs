@@ -1364,9 +1364,8 @@ mod tests {
         assert_eq!(event.field("max_message_bytes").as_deref(), Some("1024"));
     }
 
+    #[derive(nest_rs_core::Layer)]
     struct DenyAll;
-
-    impl nest_rs_core::Layer for DenyAll {}
 
     #[async_trait]
     impl nest_rs_guards::Guard for DenyAll {

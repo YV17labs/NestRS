@@ -23,10 +23,8 @@ fn counter() -> usize {
 
 /// Increments [`COUNTER`] every time it runs, then denies with `403`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingDenyGuard;
-
-impl Layer for CountingDenyGuard {}
 
 #[async_trait]
 impl Guard for CountingDenyGuard {

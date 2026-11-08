@@ -850,10 +850,8 @@ impl nest_rs_core::AmbientValue for UpgradeStamp {}
 /// Adds the caller around the upgrade request, at its unit stage, as a
 /// guard's attachment does, and the stamp of the upgrade's request scope.
 #[nest_rs_core::interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, nest_rs_core::Layer)]
 struct CallerInterceptor;
-
-impl nest_rs_core::Layer for CallerInterceptor {}
 
 #[nest_rs_core::async_trait]
 impl nest_rs_core::Interceptor for CallerInterceptor {

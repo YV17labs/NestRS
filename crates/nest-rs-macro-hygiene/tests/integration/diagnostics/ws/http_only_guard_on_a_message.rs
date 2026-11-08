@@ -11,10 +11,8 @@ use nest_rs::http::HttpView;
 use nest_rs::ws::{gateway, messages};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct HttpOnlyGuard;
-
-impl Layer for HttpOnlyGuard {}
 
 #[async_trait]
 impl Guard for HttpOnlyGuard {

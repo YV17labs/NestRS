@@ -44,10 +44,8 @@ struct NotesModule;
 
 /// Grants `Read` on notes to a caller sending `x-read`, nothing otherwise.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Grants;
-
-impl Layer for Grants {}
 
 #[async_trait]
 impl Guard for Grants {

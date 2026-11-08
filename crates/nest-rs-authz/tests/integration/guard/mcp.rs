@@ -26,10 +26,8 @@ impl nest_rs_core::AmbientValue for Actor {}
 /// Stands in for the app's authn guard: attaches the principal `AbilityGuard`
 /// builds the caller's rules from, and names it as the authn guard does.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ActorGuard;
-
-impl Layer for ActorGuard {}
 
 #[async_trait]
 impl Guard for ActorGuard {

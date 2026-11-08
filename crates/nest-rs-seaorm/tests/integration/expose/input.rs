@@ -112,10 +112,8 @@ mod ticket {
 
 /// Grants every caller `Create` on tickets, so the class gate admits it.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct GrantsCreate;
-
-impl Layer for GrantsCreate {}
 
 #[async_trait]
 impl Guard for GrantsCreate {

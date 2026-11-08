@@ -418,10 +418,8 @@ impl AmbientValue for Caller {}
 
 /// Adds the caller around the handler, as a package's interceptor would.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CallerInterceptor;
-
-impl Layer for CallerInterceptor {}
 
 #[nest_rs_core::async_trait]
 impl nest_rs_core::Interceptor for CallerInterceptor {

@@ -17,10 +17,8 @@ use crate::next_message;
 /// variable — exercises the transform, the pipe's own error, a pipe that breaks
 /// the variables' shape, and what a directive reads.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct VarPipe;
-
-impl Layer for VarPipe {}
 
 impl GlobalPipe for VarPipe {
     fn transform(
@@ -69,10 +67,8 @@ impl EchoResolver {
 
 /// Appends `!` to the `raw` variable, so a second run shows.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct BangPipe;
-
-impl Layer for BangPipe {}
 
 impl GlobalPipe for BangPipe {
     fn transform(
@@ -97,10 +93,8 @@ static SEEN: std::sync::Mutex<Vec<Seen>> = std::sync::Mutex::new(Vec::new());
 
 /// Records what it is handed, and changes nothing.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RecordingPipe;
-
-impl Layer for RecordingPipe {}
 
 impl GlobalPipe for RecordingPipe {
     fn transform(

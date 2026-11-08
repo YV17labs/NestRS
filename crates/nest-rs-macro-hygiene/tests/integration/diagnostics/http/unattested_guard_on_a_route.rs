@@ -10,10 +10,8 @@ use nest_rs::guards::{Denial, Guard};
 use nest_rs::http::{controller, routes};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct UnattestedGuard;
-
-impl Layer for UnattestedGuard {}
 
 #[async_trait]
 impl Guard for UnattestedGuard {

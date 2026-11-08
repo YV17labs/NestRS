@@ -52,10 +52,8 @@ impl CrudService for NotesService {
 
 /// The ability every caller holds: its own notes alone.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct OwnNotes;
-
-impl Layer for OwnNotes {}
 
 #[async_trait]
 impl Guard for OwnNotes {
@@ -106,10 +104,8 @@ struct BoundRouteModule;
 
 /// Every caller reads every note and changes its own alone.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ManagesOwnNotes;
-
-impl Layer for ManagesOwnNotes {}
 
 #[async_trait]
 impl Guard for ManagesOwnNotes {

@@ -157,9 +157,9 @@ mod tests {
             meta: nest_rs_core::__private::MetaLevels::default,
         });
 
+    #[derive(Layer)]
     struct NoopPipe;
 
-    impl Layer for NoopPipe {}
     impl GlobalPipe for NoopPipe {}
 
     fn pipe() -> Vec<ResolvedLayer<dyn GlobalPipe>> {

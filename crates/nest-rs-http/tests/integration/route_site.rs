@@ -119,10 +119,8 @@ const READ_FAILED: &str = "global pipe: failed to read body";
 
 /// Runs on every JSON body the route takes, changing nothing.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct KeepBody;
-
-impl Layer for KeepBody {}
 
 impl GlobalPipe for KeepBody {}
 
@@ -212,10 +210,8 @@ impl AmbientValue for Seen {}
 
 /// Inserts its own `Throttle` into the request, then reads the declared one.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Shadowing;
-
-impl Layer for Shadowing {}
 
 #[async_trait]
 impl Guard for Shadowing {

@@ -4,10 +4,8 @@
 use nest_rs::core::{GlobalExceptionFilters, Layer, injectable, module};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Forgetful;
-
-impl Layer for Forgetful {}
 
 #[module(providers = [Forgetful, GlobalExceptionFilters<(Forgetful,)>])]
 struct AppModule;

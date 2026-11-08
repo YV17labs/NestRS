@@ -25,10 +25,8 @@ pub(crate) const ROLE: &str = "x-role";
 /// Attaches, at the upgrade, the ability of the role the request names, as an
 /// app's ability guard attaches the caller's; attaches nothing without one.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 pub(crate) struct RoleUpgrade;
-
-impl Layer for RoleUpgrade {}
 
 #[async_trait]
 impl Guard for RoleUpgrade {

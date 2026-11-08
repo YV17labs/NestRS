@@ -35,12 +35,11 @@ impl Checks {
 /// Stands in for `AuthnGuard` on a gated endpoint: requires a bearer, naming
 /// its caller as `AuthnGuard` does, and counts each request it checks.
 #[injectable]
+#[derive(Layer)]
 struct Bearer {
     #[inject]
     checks: Arc<Checks>,
 }
-
-impl Layer for Bearer {}
 
 #[async_trait]
 impl Guard for Bearer {

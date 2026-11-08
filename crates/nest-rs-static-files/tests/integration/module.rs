@@ -266,10 +266,8 @@ async fn a_self_mount_keeps_its_subtree() {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DenyEveryone;
-
-impl Layer for DenyEveryone {}
 
 #[async_trait]
 impl Guard for DenyEveryone {

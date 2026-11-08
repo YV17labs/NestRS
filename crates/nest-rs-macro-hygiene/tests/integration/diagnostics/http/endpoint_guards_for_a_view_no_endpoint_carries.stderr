@@ -1,7 +1,7 @@
 error[E0277]: no HTTP endpoint's request carries `WsView` units
-  --> tests/integration/diagnostics/http/endpoint_guards_for_a_view_no_endpoint_carries.rs:29:36
+  --> tests/integration/diagnostics/http/endpoint_guards_for_a_view_no_endpoint_carries.rs:27:36
    |
-29 | #[module(providers = [ApiKeyGuard, EndpointGuards<WsView, (ApiKeyGuard,)>])]
+27 | #[module(providers = [ApiKeyGuard, EndpointGuards<WsView, (ApiKeyGuard,)>])]
    |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `EndpointGuards` names an endpoint by the view of the units its request carries
    |
    = help: the trait `CarriedView` is not implemented for `WsView`

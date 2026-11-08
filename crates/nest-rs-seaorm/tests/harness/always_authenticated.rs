@@ -7,10 +7,8 @@ use nest_rs_guards::{Denial, Guard, GuardFor};
 
 /// Authenticates every caller as `crate::Anyone`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 pub(crate) struct AlwaysAuthenticated;
-
-impl Layer for AlwaysAuthenticated {}
 
 #[async_trait]
 impl Guard for AlwaysAuthenticated {

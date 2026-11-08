@@ -38,10 +38,8 @@ mod widget {
 /// No-op stand-in for the authentication guard ahead of the ability guard at
 /// the request — this test only exercises the ability path.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PassGuard;
-
-impl Layer for PassGuard {}
 
 #[async_trait]
 impl Guard for PassGuard {
@@ -59,10 +57,8 @@ impl Guard for PassGuard {
 ///
 /// No `x-role` header is the anonymous caller, taking the visitor branch.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AbilityInjector;
-
-impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
@@ -217,10 +213,8 @@ async fn non_admin_is_forbidden_by_the_resolver_gate() {
 /// A unit's own guard, with nothing at the `/graphql` request: it builds the
 /// ability the posture reads, a Read grant on widgets and nothing else.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct UnitAbility;
-
-impl Layer for UnitAbility {}
 
 #[async_trait]
 impl Guard for UnitAbility {

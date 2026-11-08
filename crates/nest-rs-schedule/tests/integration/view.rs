@@ -32,10 +32,8 @@ static CAUGHT: AtomicUsize = AtomicUsize::new(0);
 
 /// Writes down what the tick's view says, then runs it.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Reading;
-
-impl Layer for Reading {}
 
 #[async_trait]
 impl Interceptor for Reading {
@@ -59,10 +57,8 @@ impl Interceptor for Reading {
 
 /// Skips every tick it runs around.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Skipping;
-
-impl Layer for Skipping {}
 
 #[async_trait]
 impl Interceptor for Skipping {
@@ -76,10 +72,8 @@ impl Interceptor for Skipping {
 
 /// Answers every failure by skipping the tick: a failure the app expects.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Expected;
-
-impl Layer for Expected {}
 
 #[async_trait]
 impl ExceptionFilter for Expected {
@@ -96,10 +90,8 @@ impl ExceptionFilter for Expected {
 
 /// Says every failure is the client's: a `422`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Unprocessable;
-
-impl Layer for Unprocessable {}
 
 #[async_trait]
 impl ExceptionFilter for Unprocessable {
@@ -113,10 +105,8 @@ impl ExceptionFilter for Unprocessable {
 /// Says every failure is the server's: a `500`, as an app-wide filter mapping
 /// errors to problems does.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Internal;
-
-impl Layer for Internal {}
 
 #[async_trait]
 impl ExceptionFilter for Internal {
@@ -356,10 +346,8 @@ async fn a_layer_a_tick_binds_that_nothing_provides_fails_the_configure_naming_b
 
 /// Built per request: no tick's site, composed once at boot, can hold it.
 #[injectable(scope = request)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PerTick;
-
-impl Layer for PerTick {}
 
 #[async_trait]
 impl Interceptor for PerTick {

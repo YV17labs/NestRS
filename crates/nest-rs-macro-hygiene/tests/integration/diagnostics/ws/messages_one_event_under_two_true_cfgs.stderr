@@ -1,5 +1,5 @@
 error[E0080]: evaluation panicked: `#[messages]` declares `#[subscribe_message("ping")]` on `guarded` and again on `open`: a gateway dispatches each event, and each connection hook, to one method, so the second would never run — fold the two bodies into one
-  --> tests/integration/diagnostics/ws/messages_one_event_under_two_true_cfgs.rs:37:7
+  --> tests/integration/diagnostics/ws/messages_one_event_under_two_true_cfgs.rs:35:7
    |
-37 |     #[subscribe_message("ping")]
+35 |     #[subscribe_message("ping")]
    |       ^^^^^^^^^^^^^^^^^ evaluation of `_` failed here

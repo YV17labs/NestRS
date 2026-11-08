@@ -206,9 +206,8 @@ mod tests {
     struct Tenant;
 
     /// Requires [`Principal`], or does without it.
+    #[derive(Layer)]
     struct Requiring(fn() -> PrincipalClaim);
-
-    impl Layer for Requiring {}
 
     #[async_trait]
     impl Guard for Requiring {

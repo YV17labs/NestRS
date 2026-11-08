@@ -117,10 +117,8 @@ struct InventedWidgetDto {
 /// No-op stand-in for the authentication guard ahead of the ability guard at
 /// the request.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PassGuard;
-
-impl Layer for PassGuard {}
 
 #[async_trait]
 impl Guard for PassGuard {
@@ -137,10 +135,8 @@ impl Guard for PassGuard {
 /// reads only widget 1 and only its `id`; `headlines` reads a story's `id` and
 /// renamed column; `reader` reads a review's `id`; anyone else gets nothing.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AbilityInjector;
-
-impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
@@ -1462,10 +1458,8 @@ mod ability_of_the_unit {
 
     /// Attaches, at the field, an ability reading widgets' `id` alone.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct FieldAbility;
-
-    impl Layer for FieldAbility {}
 
     #[async_trait]
     impl Guard for FieldAbility {

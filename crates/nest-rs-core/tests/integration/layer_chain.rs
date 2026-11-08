@@ -24,8 +24,6 @@ use crate::refused_boot;
 /// `$name` as an interceptor doing nothing.
 macro_rules! passes_through {
     ($name:ident) => {
-        impl Layer for $name {}
-
         #[async_trait]
         impl Interceptor for $name {
             async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
@@ -39,6 +37,7 @@ macro_rules! passes_through {
 macro_rules! layer {
     ($name:ident $({ $($field:tt)* })?) => {
         #[injectable]
+        #[derive(Layer)]
         struct $name { $($($field)*)? }
 
         passes_through!($name);
@@ -151,7 +150,7 @@ async fn a_layer_a_later_root_lists_is_that_roots() {
 
 /// Says who built it.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Tagged {
     tag: &'static str,
 }
@@ -455,6 +454,7 @@ async fn a_layer_a_pool_registers_injecting_a_scoped_provider_is_refused_naming_
 }
 
 #[injectable(scope = request)]
+#[derive(Layer)]
 struct ScopedLayer;
 
 passes_through!(ScopedLayer);
@@ -472,6 +472,7 @@ async fn a_scoped_layer_a_pool_alone_lists_is_refused_as_a_layer() {
 }
 
 /// Its registration registers nothing, as a hand-written one may.
+#[derive(Layer)]
 struct RegistersNothing;
 
 passes_through!(RegistersNothing);

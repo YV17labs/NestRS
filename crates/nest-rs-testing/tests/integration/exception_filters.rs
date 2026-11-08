@@ -64,10 +64,8 @@ async fn detail(resp: nest_rs_testing::TestResponse) -> String {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DomainErrorFilter;
-
-impl Layer for DomainErrorFilter {}
 
 #[async_trait]
 impl ExceptionFilter for DomainErrorFilter {
@@ -85,10 +83,8 @@ impl ExceptionFilter for DomainErrorFilter {
 
 /// Every failure, whatever its error: a crate-wide envelope.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CatchAll;
-
-impl Layer for CatchAll {}
 
 #[async_trait]
 impl ExceptionFilter for CatchAll {
@@ -393,10 +389,8 @@ async fn a_typed_filter_at_the_route_answers_before_a_catch_all_on_its_controlle
 
 /// Stamps every answer of the unit stage it runs at.
 #[interceptor(stage = unit)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Observed;
-
-impl Layer for Observed {}
 
 #[async_trait]
 impl Interceptor for Observed {
@@ -484,10 +478,8 @@ async fn oversized_batch(app: &TestApp, accept: &str) -> nest_rs_testing::TestRe
 /// Every failure answered `418`, its problem saying the `Accept` the request
 /// sent: a filter negotiating what it answers.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct EchoesAccept;
-
-impl Layer for EchoesAccept {}
 
 #[async_trait]
 impl ExceptionFilter for EchoesAccept {
@@ -563,10 +555,8 @@ async fn a_global_filter_reads_the_head_of_a_request_a_self_mount_answered() {
 
 /// Every failure answered as the `503` problem.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AsUnavailable;
-
-impl Layer for AsUnavailable {}
 
 #[async_trait]
 impl ExceptionFilter for AsUnavailable {
@@ -579,10 +569,8 @@ impl ExceptionFilter for AsUnavailable {
 
 /// Every failure answered with a `500` the filter writes itself.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AsItsOwn500;
-
-impl Layer for AsItsOwn500 {}
 
 #[async_trait]
 impl ExceptionFilter for AsItsOwn500 {

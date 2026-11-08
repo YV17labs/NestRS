@@ -17,10 +17,8 @@ use crate::refused_wiring;
 
 /// Denies every request with `403 Forbidden`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DenyGuard;
-
-impl Layer for DenyGuard {}
 
 #[async_trait]
 impl Guard for DenyGuard {
@@ -47,10 +45,8 @@ impl GuardFor<HttpView> for DenyGuard {}
 
 /// Denies with `401 Unauthorized` — paired with [`DenyGuard`] to observe order.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ChallengeGuard;
-
-impl Layer for ChallengeGuard {}
 
 #[async_trait]
 impl Guard for ChallengeGuard {
@@ -202,10 +198,8 @@ static GATE: Mutex<()> = Mutex::const_new(());
 
 /// Counts every execution, then admits — the count, not the status, is asserted.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingGuard;
-
-impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
@@ -356,10 +350,8 @@ async fn the_first_listed_guard_runs_before_the_second() {
 /// Denies every request *unless* the route is `#[public]`, in which case it
 /// admits with no principal — the `AuthnGuard` posture, distilled.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PublicAwareGuard;
-
-impl Layer for PublicAwareGuard {}
 
 #[async_trait]
 impl Guard for PublicAwareGuard {
@@ -435,10 +427,8 @@ async fn a_public_route_bypasses_an_active_global_guard() {
 
 /// Admits every caller and declares no phase, as a rate limit does.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct NoPhaseGuard;
-
-impl Layer for NoPhaseGuard {}
 
 #[async_trait]
 impl Guard for NoPhaseGuard {
@@ -636,10 +626,8 @@ impl AmbientValue for Tenant {}
 /// the rest of the request: a route handler reads it through `Ambient<Tenant>`, a
 /// resolver from the ambient context.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct TenantGuard;
-
-impl Layer for TenantGuard {}
 
 #[async_trait]
 impl Guard for TenantGuard {
@@ -778,10 +766,8 @@ async fn a_missing_context_is_a_bare_500_without_leaking_the_rust_type() {
 
 /// Attaches the principal: an authentication-phase guard.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct SessionGuard;
-
-impl Layer for SessionGuard {}
 
 #[async_trait]
 impl Guard for SessionGuard {
@@ -808,10 +794,8 @@ impl GuardFor<HttpView> for SessionGuard {}
 
 /// Reads the principal: an authorization-phase guard.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PolicyGuard;
-
-impl Layer for PolicyGuard {}
 
 #[async_trait]
 impl Guard for PolicyGuard {
@@ -894,10 +878,8 @@ static FRESH_SESSION_RUNS: AtomicUsize = AtomicUsize::new(0);
 
 /// An authentication-phase guard that counts its runs, so a replay is seen.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct FreshSessionGuard;
-
-impl Layer for FreshSessionGuard {}
 
 #[async_trait]
 impl Guard for FreshSessionGuard {
@@ -983,10 +965,8 @@ mod required_principal {
     /// Attaches [`Claims`] for a caller sending `x-user`; admits the rest where
     /// the site takes a visitor, refuses them elsewhere.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Authn;
-
-    impl Layer for Authn {}
 
     #[async_trait]
     impl Guard for Authn {
@@ -1019,10 +999,8 @@ mod required_principal {
 
     /// One decision on every edge: the caller's claims, read and required.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct NeedsClaims;
-
-    impl Layer for NeedsClaims {}
 
     #[async_trait]
     impl Guard for NeedsClaims {

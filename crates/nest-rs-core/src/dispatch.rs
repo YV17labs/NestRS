@@ -285,8 +285,8 @@ mod tests {
     }
 
     /// Declines every failure, writing that it was tried.
+    #[derive(Layer)]
     struct Declining;
-    impl Layer for Declining {}
 
     provided_by_hand!(Declining);
 
@@ -438,8 +438,8 @@ mod tests {
     }
 
     /// Answers success whatever the rest of the unit came to.
+    #[derive(Layer)]
     struct Swallowing;
-    impl Layer for Swallowing {}
 
     #[async_trait]
     impl Interceptor for Swallowing {
@@ -450,8 +450,8 @@ mod tests {
     }
 
     /// Writes what the rest of the unit came to.
+    #[derive(Layer)]
     struct Observing;
-    impl Layer for Observing {}
 
     #[async_trait]
     impl Interceptor for Observing {
@@ -521,8 +521,8 @@ mod tests {
 
     /// Attaches before running the rest of the unit, and writes what is ambient
     /// once it ran.
+    #[derive(Layer)]
     struct Attaching;
-    impl Layer for Attaching {}
 
     #[async_trait]
     impl Interceptor for Attaching {
@@ -624,8 +624,8 @@ mod tests {
 
     /// Writes what the unit carries once the rest of it ran: attached and
     /// still pending, or ambient.
+    #[derive(Layer)]
     struct Outside;
-    impl Layer for Outside {}
 
     #[async_trait]
     impl Interceptor for Outside {
@@ -959,8 +959,8 @@ mod tests {
     }
 
     /// Writes whether the unit it wraps came back answered.
+    #[derive(Layer)]
     struct ReadsTheAnswer;
-    impl Layer for ReadsTheAnswer {}
 
     #[async_trait]
     impl Interceptor for ReadsTheAnswer {
@@ -1021,8 +1021,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_failure_a_filter_answered_is_never_rendered_again() {
+        #[derive(Layer)]
         struct Answering;
-        impl Layer for Answering {}
 
         provided_by_hand!(Answering);
 
@@ -1059,8 +1059,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_global_filter_answers_after_the_methods_declined() {
+        #[derive(Layer)]
         struct Answering;
-        impl Layer for Answering {}
 
         provided_by_hand!(Answering);
 

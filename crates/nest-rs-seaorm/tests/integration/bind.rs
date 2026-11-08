@@ -98,10 +98,8 @@ impl CrudService for NotesService {
 /// Grants the caller what its `x-role` header says: `reader` reads every note's
 /// id and title, anyone else nothing.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RoleGrants;
-
-impl Layer for RoleGrants {}
 
 #[async_trait]
 impl Guard for RoleGrants {

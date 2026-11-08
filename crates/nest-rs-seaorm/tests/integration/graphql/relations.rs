@@ -428,10 +428,8 @@ fn ability_of(role: &str) -> nest_rs_authz::Ability {
 
 /// Attaches a member's ability on the field it guards, whatever the request carries.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ReadingAsMember;
-
-impl Layer for ReadingAsMember {}
 
 #[async_trait]
 impl Guard for ReadingAsMember {

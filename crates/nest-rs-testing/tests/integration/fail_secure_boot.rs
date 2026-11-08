@@ -15,10 +15,8 @@ use nest_rs_testing::{HeadlessApp, TestApp};
 
 /// Registered as a provider: the resolvable control case.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct WiredGuard;
-
-impl Layer for WiredGuard {}
 
 #[async_trait]
 impl Guard for WiredGuard {
@@ -45,10 +43,8 @@ impl GuardFor<nest_rs_http::HttpView> for WiredGuard {}
 
 /// Deliberately **not** listed in any module's providers.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct GhostGuard;
-
-impl Layer for GhostGuard {}
 
 #[async_trait]
 impl Guard for GhostGuard {
@@ -75,12 +71,11 @@ struct NobodyProvides;
 /// A guard only its pool lists, injecting what no module provides.
 #[expect(dead_code, reason = "the boot refuses it, so nothing reads it")]
 #[injectable]
+#[derive(Layer)]
 struct NeedyGuard {
     #[inject]
     nobody: std::sync::Arc<NobodyProvides>,
 }
-
-impl Layer for NeedyGuard {}
 
 #[async_trait]
 impl Guard for NeedyGuard {
@@ -104,12 +99,11 @@ impl GuardFor<nest_rs_http::HttpView> for NeedyGuard {}
 /// An interceptor only its pool lists, injecting what no module provides.
 #[expect(dead_code, reason = "the boot refuses it, so nothing reads it")]
 #[injectable]
+#[derive(Layer)]
 struct NeedyInterceptor {
     #[inject]
     nobody: std::sync::Arc<NobodyProvides>,
 }
-
-impl Layer for NeedyInterceptor {}
 
 #[async_trait]
 impl Interceptor for NeedyInterceptor {
@@ -121,12 +115,11 @@ impl Interceptor for NeedyInterceptor {
 /// A filter only its pool lists, injecting what no module provides.
 #[expect(dead_code, reason = "the boot refuses it, so nothing reads it")]
 #[injectable]
+#[derive(Layer)]
 struct NeedyExceptionFilter {
     #[inject]
     nobody: std::sync::Arc<NobodyProvides>,
 }
-
-impl Layer for NeedyExceptionFilter {}
 
 #[async_trait]
 impl ExceptionFilter for NeedyExceptionFilter {
@@ -140,12 +133,11 @@ impl ExceptionFilter for NeedyExceptionFilter {
 /// A pipe only its pool lists, injecting what no module provides.
 #[expect(dead_code, reason = "the boot refuses it, so nothing reads it")]
 #[injectable]
+#[derive(Layer)]
 struct NeedyPipe {
     #[inject]
     nobody: std::sync::Arc<NobodyProvides>,
 }
-
-impl Layer for NeedyPipe {}
 
 impl GlobalPipe for NeedyPipe {}
 
@@ -375,10 +367,8 @@ async fn one_pool_the_root_and_a_module_it_imports_list_fails_the_boot_naming_th
 /// Rebuilt on every resolution: a pool, resolved once at mount, would share
 /// one instance with every request.
 #[injectable(scope = transient)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct TransientGuard;
-
-impl Layer for TransientGuard {}
 
 #[async_trait]
 impl Guard for TransientGuard {
@@ -404,10 +394,8 @@ struct TransientGuardPoolModule;
 
 /// Built per request: a pool, resolved once at mount, would never build it.
 #[injectable(scope = request)]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PerRequestInterceptor;
-
-impl Layer for PerRequestInterceptor {}
 
 #[async_trait]
 impl Interceptor for PerRequestInterceptor {
@@ -576,10 +564,8 @@ async fn the_global_guard_pool_covers_a_route_declaring_no_posture() {
 /// Admits every caller and decides nothing about who it is, as a rate limit does:
 /// it declares no phase.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct LimitGuard;
-
-impl Layer for LimitGuard {}
 
 #[async_trait]
 impl Guard for LimitGuard {

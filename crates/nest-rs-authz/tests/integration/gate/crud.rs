@@ -41,10 +41,8 @@ const DENY: &str = "x-deny";
 /// Manages the notes of org 7, but for the action [`DENY`] names, which a
 /// `cannot` claws back on every row.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct OrgManager;
-
-impl Layer for OrgManager {}
 
 #[async_trait]
 impl Guard for OrgManager {

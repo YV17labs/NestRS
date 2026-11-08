@@ -28,10 +28,8 @@ use nest_rs_testing::{TestApp, TestResponse};
 /// `AuthnGuard` does, unless the surface admits an anonymous caller — a public
 /// handler, or an in-band endpoint whose operations decide.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct BearerGuard;
-
-impl Layer for BearerGuard {}
 
 #[async_trait]
 impl Guard for BearerGuard {
@@ -63,10 +61,8 @@ impl GuardFor<HttpView> for BearerGuard {}
 
 /// An IP allow-list or an API key: a check on the HTTP request alone.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ApiKeyGuard;
-
-impl Layer for ApiKeyGuard {}
 
 #[async_trait]
 impl Guard for ApiKeyGuard {
@@ -91,10 +87,8 @@ const API_KEY: &str = "x-api-key";
 /// The documented idiom of a guard admitting a `#[public]` handler, and no one
 /// else.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PublicOnlyGuard;
-
-impl Layer for PublicOnlyGuard {}
 
 #[async_trait]
 impl Guard for PublicOnlyGuard {
@@ -129,12 +123,11 @@ impl Postures {
 
 /// Admits every request after writing down the posture it read.
 #[injectable]
+#[derive(Layer)]
 struct PostureProbe {
     #[inject]
     postures: Arc<Postures>,
 }
-
-impl Layer for PostureProbe {}
 
 #[async_trait]
 impl Guard for PostureProbe {
@@ -160,10 +153,8 @@ impl Guard for PostureProbe {
 /// Admits everything: the authorization half of endpoint guards whose
 /// assertions are about their authentication half.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PassGuard;
-
-impl Layer for PassGuard {}
 
 #[async_trait]
 impl Guard for PassGuard {
@@ -199,12 +190,11 @@ impl Trail {
 macro_rules! recording_guard {
     ($name:ident, $label:literal) => {
         #[injectable]
+        #[derive(Layer)]
         struct $name {
             #[inject]
             trail: Arc<Trail>,
         }
-
-        impl Layer for $name {}
 
         #[async_trait]
         impl Guard for $name {

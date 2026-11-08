@@ -58,10 +58,8 @@ struct RawWidget {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AbilityInjector;
-
-impl Layer for AbilityInjector {}
 
 #[async_trait]
 impl Guard for AbilityInjector {
@@ -109,10 +107,8 @@ impl Guard for AbilityInjector {
 impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ListAbilityInjector;
-
-impl Layer for ListAbilityInjector {}
 
 #[async_trait]
 impl Guard for ListAbilityInjector {
@@ -470,10 +466,8 @@ async fn a_list_masks_each_row_and_retains_wire_keys() {
 /// `narrow` holds a title-only grant beside a relational one; anyone else reads
 /// every post but those a relation denies.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PostAbilityInjector;
-
-impl Layer for PostAbilityInjector {}
 
 #[async_trait]
 impl Guard for PostAbilityInjector {

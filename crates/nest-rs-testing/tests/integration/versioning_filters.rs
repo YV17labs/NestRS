@@ -31,10 +31,8 @@ async fn detail(resp: nest_rs_testing::TestResponse) -> String {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct TeapotFilter;
-
-impl Layer for TeapotFilter {}
 
 #[async_trait]
 impl ExceptionFilter for TeapotFilter {
@@ -142,10 +140,8 @@ fn filter_calls() -> usize {
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingFilter;
-
-impl Layer for CountingFilter {}
 
 #[async_trait]
 impl ExceptionFilter for CountingFilter {
@@ -305,10 +301,8 @@ mod refused_versions {
 
     /// Stamps every answer of the unit stage it runs at.
     #[interceptor(stage = unit)]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct Seen;
-
-    impl Layer for Seen {}
 
     #[async_trait]
     impl Interceptor for Seen {

@@ -436,8 +436,8 @@ mod tests {
     #[derive(Clone)]
     struct ClaimsB;
 
+    #[derive(Layer)]
     struct Authn;
-    impl Layer for Authn {}
     #[async_trait]
     impl Guard for Authn {
         async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
@@ -451,8 +451,8 @@ mod tests {
         }
     }
 
+    #[derive(Layer)]
     struct Authz;
-    impl Layer for Authz {}
     #[async_trait]
     impl Guard for Authz {
         async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
@@ -467,8 +467,8 @@ mod tests {
     }
 
     /// Reads what it requires: its decision has no visitor branch.
+    #[derive(Layer)]
     struct Requires;
-    impl Layer for Requires {}
     #[async_trait]
     impl Guard for Requires {
         async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
@@ -480,8 +480,8 @@ mod tests {
     }
 
     /// Attaches what a class gate reads.
+    #[derive(Layer)]
     struct Ability;
-    impl Layer for Ability {}
     #[async_trait]
     impl Guard for Ability {
         async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
@@ -492,8 +492,8 @@ mod tests {
         }
     }
 
+    #[derive(Layer)]
     struct AuthzWantsB;
-    impl Layer for AuthzWantsB {}
     #[async_trait]
     impl Guard for AuthzWantsB {
         async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
@@ -627,8 +627,8 @@ mod tests {
 
     /// Attaches it at the request, and at a carried unit only when it is `#[public]`,
     /// as `AbilityGuard` does.
+    #[derive(Layer)]
     struct PublicAbility;
-    impl Layer for PublicAbility {}
     #[async_trait]
     impl Guard for PublicAbility {
         async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {

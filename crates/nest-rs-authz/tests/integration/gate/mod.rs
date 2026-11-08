@@ -74,10 +74,8 @@ fn create_widget() -> i32 {
 /// Attaches [`too_narrow`] to every request it checks, naming its caller as
 /// the authentication guard does.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct NarrowToken;
-
-impl Layer for NarrowToken {}
 
 #[async_trait]
 impl Guard for NarrowToken {
@@ -104,10 +102,8 @@ impl GuardFor<HttpView> for NarrowToken {}
 
 /// Attaches [`denied_outright`] to every request it checks.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DeniedToken;
-
-impl Layer for DeniedToken {}
 
 #[async_trait]
 impl Guard for DeniedToken {
@@ -401,10 +397,8 @@ async fn a_denial_no_when_narrows_is_refused_plainly_on_every_edge_and_runs_no_b
 /// Identifies its caller on every edge and attaches no ability: all a class gate
 /// reads stays absent, whichever guards stand beside it.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct OnlyIdentifies;
-
-impl Layer for OnlyIdentifies {}
 
 #[async_trait]
 impl Guard for OnlyIdentifies {

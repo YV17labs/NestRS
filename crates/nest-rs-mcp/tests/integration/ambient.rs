@@ -31,10 +31,8 @@ impl AmbientValue for Tenant {}
 /// Attaches a [`Caller`] to every request, named its actor as the
 /// authentication guard names it, so a session opens for it.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Attaching;
-
-impl Layer for Attaching {}
 
 #[async_trait]
 impl Guard for Attaching {

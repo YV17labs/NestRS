@@ -1,7 +1,7 @@
 error[E0277]: `Forgetful` is not an exception filter
-  --> tests/integration/diagnostics/core/exception_filters_listing_a_type_that_does_not_catch.rs:12:34
+  --> tests/integration/diagnostics/core/exception_filters_listing_a_type_that_does_not_catch.rs:10:34
    |
-12 | #[module(providers = [Forgetful, GlobalExceptionFilters<(Forgetful,)>])]
+10 | #[module(providers = [Forgetful, GlobalExceptionFilters<(Forgetful,)>])]
    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ bound as an exception filter here
    |
 help: the trait `nest_rs::core::ExceptionFilter` is not implemented for `Forgetful`

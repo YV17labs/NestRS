@@ -133,10 +133,8 @@ async fn a_bound_field_with_no_unit_of_work_binding_is_refused_at_boot_naming_it
 
 /// Answers for an ability and attaches none, what the boot cannot tell apart.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AttachesNothing;
-
-impl Layer for AttachesNothing {}
 
 #[async_trait]
 impl Guard for AttachesNothing {

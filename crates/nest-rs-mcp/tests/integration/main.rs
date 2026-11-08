@@ -181,7 +181,7 @@ const STORE_DOWN_CHAIN: &str =
 
 /// Cannot evaluate a request or an operation: its identity store is down.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct StoreDown;
 
 impl StoreDown {
@@ -190,8 +190,6 @@ impl StoreDown {
             .with_source(ConnectionRefused)
     }
 }
-
-impl Layer for StoreDown {}
 
 #[async_trait]
 impl Guard for StoreDown {

@@ -21,10 +21,8 @@ use nest_rs_mcp::{ServerHandler, mcp};
 
 /// Refuses every caller through `Denial::unauthorized`, the ordinary guard path.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 pub struct AlwaysUnauthorized;
-
-impl Layer for AlwaysUnauthorized {}
 
 #[async_trait]
 impl Guard for AlwaysUnauthorized {

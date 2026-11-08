@@ -100,10 +100,8 @@ async fn an_authentication_or_rate_refusal_carries_no_timing() {
 const ADMIT: &str = "x-admit";
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AdmitGuard;
-
-impl Layer for AdmitGuard {}
 
 #[async_trait]
 impl Guard for AdmitGuard {
@@ -182,10 +180,8 @@ async fn a_guard_denial_carries_no_timing() {
 /// A global interceptor refusing with a failure of its own, which the edge
 /// answers inside the unit stage the header reads.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AdmitInterceptor;
-
-impl Layer for AdmitInterceptor {}
 
 #[async_trait]
 impl Interceptor for AdmitInterceptor {
@@ -254,10 +250,8 @@ fn a_switched_off_header_mounts_nothing() {
 /// Admits every request, naming its caller as `AuthnGuard` does, and refuses
 /// every in-band unit — a GraphQL field, an MCP operation — a rate.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct OperationLimit;
-
-impl Layer for OperationLimit {}
 
 #[async_trait]
 impl Guard for OperationLimit {

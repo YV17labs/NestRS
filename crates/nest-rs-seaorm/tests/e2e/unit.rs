@@ -97,10 +97,8 @@ async fn a_writing_handler_commits_through_the_lazy_transaction() {
 
 /// Answers every failure `200`, as an envelope a product shapes errors with.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct AnswersOk;
-
-impl Layer for AnswersOk {}
 
 #[async_trait]
 impl ExceptionFilter for AnswersOk {
@@ -175,10 +173,8 @@ static HANDLER_RAN: AtomicBool = AtomicBool::new(false);
 
 /// Refuses every request, after reading the executor it runs under.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Refusing;
-
-impl Layer for Refusing {}
 
 #[async_trait]
 impl Guard for Refusing {

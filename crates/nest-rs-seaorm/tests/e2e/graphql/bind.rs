@@ -187,10 +187,8 @@ mod ability_of_the_unit {
 
     /// Attaches, at the field, an ability reading every ghost.
     #[injectable]
-    #[derive(Default)]
+    #[derive(Default, Layer)]
     struct FieldAbility;
-
-    impl Layer for FieldAbility {}
 
     #[async_trait]
     impl Guard for FieldAbility {

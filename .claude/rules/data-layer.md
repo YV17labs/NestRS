@@ -348,7 +348,10 @@ link off the judged row, so a key the grant withholds reads `null`; a `has_many`
 groups its children by their key in the batch, its `#[expose]` its visible
 opening. An MCP tool's answer is written inside its site. What a refused row or a
 row judged for another caller files is one line per operation and per fact, naming
-the unit as its `mounted` line does.
+the unit as its `mounted` line does: the serializer hands its refusal to the edge
+answering, which files it there (`nest_rs_core::__private::answering`), and one no
+edge claims is filed where it is met; a GraphQL column names its operation's `kind`
+and root `field`.
 
 **A dispatched method answers no `Model`**, `#[expose]`d or not, held by rustc: every
 type its return type spells is asked of `nest_rs_core::__private::RowProbe`, a

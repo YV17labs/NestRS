@@ -279,11 +279,11 @@ fails `build()`, and the row answers only the caller whose ability judged it
 **Operator lines**
 - `http.request`, `ws.message` and `mcp.operation` name no `host` nor
   `method`; an error's `Display` can still quote a path. *read*
-- A wire row refused where it serializes (HTTP's `Json`, a WS reply, an MCP
-  answer) files its line with the entity and the reason, and names the unit by
-  its span alone, the edge's own `http.request` or `ws.message` line carrying the
-  coordinates. Close: the serializer's refusal handed to the edge, as GraphQL's
-  column check names its root field. *read*
+- A wire row's column refused where GraphQL resolves it names the operation's
+  `kind` and the root `field` once per operation and reason, never the root
+  field's `host` and `method`: the column resolves after the root field's unit,
+  which alone holds its site. Close: with the `#[public]` field's line of §3, the
+  root field's answer resolved under its unit. *seen*
 
 **Docs, bench, tooling**
 - The benchmark figures are 4.0.0's, dated as such on every page. Close: the

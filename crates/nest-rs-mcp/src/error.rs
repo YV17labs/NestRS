@@ -53,12 +53,17 @@
 
 use std::error::Error as StdError;
 
-use nest_rs_core::__private::{SaidFailure, Withheld, caught_problem, find_in_chain};
-use nest_rs_core::{Code, DecodeError, Failure, Problem, ToProblem, code};
+use nest_rs_core::__private::{
+    AnswerRefusal, RefusedAnswer, SaidFailure, Withheld, caught_problem, find_in_chain,
+};
+use nest_rs_core::{Code, DecodeError, Failure, Handler, Problem, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
 use rmcp::model::ErrorCode;
+
+use crate::operation::McpOperationKind;
+use crate::view::served_operation;
 use rmcp::transport::streamable_http_server::session::local::{
     LocalSessionManagerError, SessionError,
 };
@@ -176,21 +181,40 @@ pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
 
 /// A tool's answer as rmcp sends it, written where the operation runs, so a wire
 /// row it carries is written for the caller its site answers: a row that caller
-/// may not read refuses as a denial, `FORBIDDEN`.
+/// may not read refuses as a denial, `FORBIDDEN`, its line naming the tool `at`
+/// names — its handler and its name — as its `mounted` line does.
 pub fn answered_tool<T: rmcp::handler::server::tool::IntoCallToolResult>(
     value: T,
+    at: (&Handler, &str),
 ) -> Result<rmcp::model::CallToolResponse, OperationFailure> {
-    use nest_rs_core::__private::{AnswerRefusal, take_refused_answer};
-    let _ = take_refused_answer();
-    value.into_call_tool_result().map_err(|refused| {
-        let refused = match take_refused_answer() {
-            Some(AnswerRefusal::Withheld) => {
-                rendered(&Problem::new(403, nest_rs_core::code::FORBIDDEN))
-            }
-            _ => refused,
-        };
-        OperationFailure::from(refused)
+    let (written, refused) = nest_rs_core::__private::answering(|| value.into_call_tool_result());
+    written.map_err(|unwritten| {
+        OperationFailure::from(match refused {
+            Some(refused) => refused_answer(&refused, at, McpOperationKind::Tool),
+            None => unwritten,
+        })
     })
+}
+
+/// The error a wire row's refusal answers — `FORBIDDEN` for a row the caller may
+/// not read, the opaque one for a row judged for someone else — its line filed at
+/// the operation of `kind` that `at` names, under the endpoint serving it.
+pub(crate) fn refused_answer(
+    refused: &RefusedAnswer,
+    (handler, name): (&Handler, &str),
+    kind: McpOperationKind,
+) -> McpError {
+    let served = served_operation(kind, name);
+    let path = crate::operation::served_path();
+    let served = match path.as_deref() {
+        Some(path) => served.at(path),
+        None => served,
+    };
+    refused.file_at(Some(handler), served);
+    match refused.refusal() {
+        AnswerRefusal::Withheld => rendered(&Problem::new(403, code::FORBIDDEN)),
+        _ => rendered(&Problem::new(500, code::INTERNAL)),
+    }
 }
 
 /// A problem as the JSON-RPC error an MCP operation answers with.

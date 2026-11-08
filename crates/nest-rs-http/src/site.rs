@@ -9,9 +9,12 @@ use std::sync::Arc;
 
 use http::StatusCode;
 use nest_rs_core::__private::{
-    Shape, Tail, UnitChains, Withheld, caught_problem, dispatch, new_unit_context,
+    RefusedAnswer, Shape, Tail, UnitChains, Withheld, caught_problem, dispatch, new_unit_context,
 };
-use nest_rs_core::{DecodeError, Failure, Handler, Outcome, Peer, Problem, Settled, UnitContext};
+use nest_rs_core::{
+    DecodeError, Failure, Handler, Outcome, Peer, Problem, ServedAddress, Settled, UnitContext,
+    UnitView as _,
+};
 use nest_rs_database::{
     ExecutorScope, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec, run_unit,
 };
@@ -81,6 +84,19 @@ impl SiteTail for EndpointTail {
 pub(crate) fn stamp_answer<'a>(caller_path: impl Fn() -> &'a str, response: &mut Response) {
     crate::created::stamp_location(&caller_path, response);
     crate::paginated::stamp_next_link(&caller_path, response);
+}
+
+/// File the refusal a reply's wire row met as it serialized (`Json`), at the unit
+/// `handler` dispatches, served at `served`: once, by the first stage holding the
+/// answer that names the unit.
+pub(crate) fn file_refused_reply(
+    handler: Option<&Handler>,
+    served: ServedAddress<'_>,
+    response: &mut Response,
+) {
+    if let Some(refused) = response.extensions_mut().remove::<RefusedAnswer>() {
+        refused.file_at(handler, served);
+    }
 }
 
 /// How the unit of work a request runs is settled.
@@ -202,10 +218,14 @@ impl<T: SiteTail> SiteEndpoint<T> {
     async fn dispatched(&self, mut req: Request) -> Answered {
         if self.chains.shape() == Shape::Bare {
             return match self.tail.answer(&mut req).await {
-                Ok(response) => Answered {
-                    commits: !is_error(&response),
-                    response,
-                },
+                Ok(mut response) => {
+                    let served = ServedAddress::route(req.verb(), req.route());
+                    file_refused_reply(Some(self.handler), served, &mut response);
+                    Answered {
+                        commits: !is_error(&response),
+                        response,
+                    }
+                }
                 Err(error) => Answered {
                     response: error.answer(),
                     commits: false,
@@ -226,10 +246,11 @@ impl<T: SiteTail> SiteEndpoint<T> {
             dispatch(&mut cx, &self.chains, &mut Running(&self.tail)).await
         };
         let commits = outcome.is_ok();
-        Answered {
-            response: render(self.handler, &mut view, outcome),
-            commits,
-        }
+        let mut response = render(self.handler, &mut view, outcome);
+        // What a layer answered around the tail: an exception filter's own reply.
+        let served = view.served_address().unwrap_or_default();
+        file_refused_reply(Some(self.handler), served, &mut response);
+        Answered { response, commits }
     }
 }
 
@@ -242,8 +263,9 @@ pub(crate) fn is_error(response: &Response) -> bool {
 /// A site's tail as the pipeline runs it: the request the view holds handed
 /// to it, the answer written back into the view. A handler's error, or a
 /// `4xx`/`5xx` it answered, fails the unit, answered: the exception filters
-/// see it, and a failed unit never commits. Nothing is filed here: what the
-/// client is not told is filed once the unit's answer is final ([`render`]).
+/// see it, and a failed unit never commits. A reply's row that refused files its
+/// line here, before a filter can answer over it; what the client is not told is
+/// filed once the unit's answer is final ([`render`]).
 struct Running<'t, T>(&'t T);
 
 impl<T: SiteTail> Tail for Running<'_, T> {
@@ -253,7 +275,11 @@ impl<T: SiteTail> Tail for Running<'_, T> {
             let view = HttpView::of(cx)?;
             let answered = tail.answer(view.request_mut()).await;
             match answered {
-                Ok(response) => {
+                Ok(mut response) => {
+                    let handler = cx.handler();
+                    let served = cx.served_address().unwrap_or_default();
+                    file_refused_reply(Some(handler), served, &mut response);
+                    let view = HttpView::of(cx)?;
                     let status = response.status();
                     let failed = is_error(&response);
                     let settled = view.respond(response);

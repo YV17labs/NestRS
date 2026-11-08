@@ -4,6 +4,10 @@
 //! serializer, a stream's poll.
 
 use std::cell::Cell;
+use std::fmt;
+
+use crate::handler::Handler;
+use crate::served_address::ServedAddress;
 
 /// Who the value being written answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,9 +29,71 @@ pub enum AnswerRefusal {
     Unjudged,
 }
 
+/// A value's refusal to be written, as the edge answering with it hands it on: its
+/// line, filed once that edge names the unit it answers.
+#[derive(Clone, Copy)]
+pub struct RefusedAnswer {
+    refusal: AnswerRefusal,
+    entity: &'static str,
+    reason: &'static str,
+    file: FileRefusal,
+}
+
+/// How a refusal files its line, at the unit an edge names.
+pub type FileRefusal = fn(&RefusedAnswer, Option<&Handler>, ServedAddress<'_>);
+
+impl RefusedAnswer {
+    /// A refusal of a row of `entity`, for `reason`, whose line `file` writes.
+    pub const fn new(
+        refusal: AnswerRefusal,
+        entity: &'static str,
+        reason: &'static str,
+        file: FileRefusal,
+    ) -> Self {
+        Self {
+            refusal,
+            entity,
+            reason,
+            file,
+        }
+    }
+
+    /// Why the value refused.
+    pub fn refusal(&self) -> AnswerRefusal {
+        self.refusal
+    }
+
+    /// The table of the row that refused.
+    pub fn entity(&self) -> &'static str {
+        self.entity
+    }
+
+    /// The value an incident query groups on.
+    pub fn reason(&self) -> &'static str {
+        self.reason
+    }
+
+    /// File the refusal's line at the unit `handler` dispatches, served at
+    /// `served`; `None` and the default where no unit is answering.
+    pub fn file_at(&self, handler: Option<&Handler>, served: ServedAddress<'_>) {
+        (self.file)(self, handler, served);
+    }
+}
+
+impl fmt::Debug for RefusedAnswer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RefusedAnswer")
+            .field("refusal", &self.refusal)
+            .field("entity", &self.entity)
+            .field("reason", &self.reason)
+            .finish_non_exhaustive()
+    }
+}
+
 thread_local! {
     static AUDIENCE: Cell<Audience> = const { Cell::new(Audience::Caller) };
-    static REFUSED: Cell<Option<AnswerRefusal>> = const { Cell::new(None) };
+    /// `None` outside [`answering`]; inside, the first refusal its writer met.
+    static CLAIMED: Cell<Option<Option<RefusedAnswer>>> = const { Cell::new(None) };
     static PUSHED: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -66,14 +132,36 @@ pub fn for_others<T>(write: impl FnOnce() -> T) -> T {
     write()
 }
 
-/// Note why a value refused to be written, for the edge whose serializer failed.
-pub fn refuse_answer(why: AnswerRefusal) {
-    REFUSED.with(|refused| refused.set(Some(why)));
+/// Run `write`, the serializer an edge answers with: a refusal it meets is handed
+/// back for the edge to file at the unit it answers, rather than filed here.
+pub fn answering<T>(write: impl FnOnce() -> T) -> (T, Option<RefusedAnswer>) {
+    struct Restore(Option<Option<RefusedAnswer>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CLAIMED.with(|claimed| claimed.set(self.0));
+        }
+    }
+    let restore = Restore(CLAIMED.with(|claimed| claimed.replace(Some(None))));
+    let written = write();
+    let refused = CLAIMED.with(Cell::take).flatten();
+    drop(restore);
+    (written, refused)
 }
 
-/// What [`refuse_answer`] noted on this thread since the last call, cleared.
-pub fn take_refused_answer() -> Option<AnswerRefusal> {
-    REFUSED.with(Cell::take)
+/// A value refused to be written: handed to the edge whose serializer met it
+/// ([`answering`]), else filed at once, naming no unit.
+pub fn refuse_answer(refused: RefusedAnswer) {
+    let unclaimed = CLAIMED.with(|claimed| match claimed.get() {
+        Some(None) => {
+            claimed.set(Some(Some(refused)));
+            false
+        }
+        Some(Some(_)) => false,
+        None => true,
+    });
+    if unclaimed {
+        refused.file_at(None, ServedAddress::default());
+    }
 }
 
 #[cfg(test)]
@@ -94,10 +182,47 @@ mod tests {
         assert!(!is_pushed());
     }
 
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static FILED: AtomicUsize = AtomicUsize::new(0);
+
+    fn counted(_: &RefusedAnswer, _: Option<&Handler>, _: ServedAddress<'_>) {
+        FILED.fetch_add(1, Ordering::SeqCst);
+    }
+
+    const WITHHELD: RefusedAnswer = RefusedAnswer::new(
+        AnswerRefusal::Withheld,
+        "widgets",
+        "row_not_granted",
+        counted,
+    );
+
     #[test]
-    fn a_noted_refusal_is_read_once() {
-        refuse_answer(AnswerRefusal::Withheld);
-        assert_eq!(take_refused_answer(), Some(AnswerRefusal::Withheld));
-        assert_eq!(take_refused_answer(), None);
+    fn a_refusal_an_edge_answers_with_is_handed_back_and_any_other_filed() {
+        let before = FILED.load(Ordering::SeqCst);
+        let ((), refused) = answering(|| refuse_answer(WITHHELD));
+        assert_eq!(
+            refused.map(|refused| refused.reason()),
+            Some("row_not_granted")
+        );
+        assert_eq!(FILED.load(Ordering::SeqCst), before, "the edge files it");
+
+        refuse_answer(WITHHELD);
+        assert_eq!(
+            FILED.load(Ordering::SeqCst),
+            before + 1,
+            "no edge claimed it"
+        );
+        let ((), refused) = answering(|| ());
+        assert!(refused.is_none(), "a refusal outside the writer is not its");
+    }
+
+    #[test]
+    fn a_writer_that_unwinds_claims_nothing_after_it() {
+        let unwound = std::panic::catch_unwind(|| answering(|| panic!("the writer unwinds")));
+        assert!(unwound.is_err());
+        let before = FILED.load(Ordering::SeqCst);
+        refuse_answer(WITHHELD);
+        assert_eq!(FILED.load(Ordering::SeqCst), before + 1);
     }
 }

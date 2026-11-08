@@ -13,7 +13,9 @@ use nest_rs_graphql::async_graphql::{
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{EndpointGuards, HttpView, Json, StatusCode, controller, routes};
+use nest_rs_mcp::{McpError, mcp, tools};
 use nest_rs_testing::TestApp;
+use nest_rs_ws::{gateway, messages};
 
 /// A member of an org: its name every reply reads, its email and nickname a grant
 /// may withhold, its password hash no reply ever holds.
@@ -262,6 +264,7 @@ async fn a_reply_the_caller_may_not_read_is_refused() {
     let app = TestApp::for_module::<MembersHttpModule>()
         .await
         .expect("boots");
+    let logs = nest_rs_testing::LogCapture::install();
     let resp = app
         .http()
         .post("/members/1")
@@ -271,6 +274,154 @@ async fn a_reply_the_caller_may_not_read_is_refused() {
     assert_eq!(resp.0.status(), StatusCode::FORBIDDEN);
     let body = resp.0.into_body().into_string().await.unwrap_or_default();
     assert!(!body.contains("member 1"), "{body}");
+    let filed = logs.find(
+        nest_rs_authz::TARGET,
+        "a reply's row is withheld from its caller",
+    );
+    assert_eq!(filed.len(), 1, "one line per refused reply: {filed:#?}");
+    for (field, named) in [
+        ("entity", "members"),
+        ("reason", "row_not_granted"),
+        ("host", "MembersController"),
+        ("method", "written"),
+        ("verb", "POST"),
+        ("path", "/members/1"),
+    ] {
+        assert_eq!(filed[0].field(field).as_deref(), Some(named), "{field}");
+    }
+}
+
+/// A row judged for another caller is a defect of the body that carried it: its
+/// line names the route as its `mounted` line does.
+#[tokio::test]
+async fn a_row_judged_for_another_caller_names_the_route_that_answered_it() {
+    let app = TestApp::for_module::<MembersHttpModule>()
+        .await
+        .expect("boots");
+    let (status, _) = get_as(&app, "admin", "/members/cache").await;
+    assert_eq!(status, StatusCode::OK);
+    let logs = nest_rs_testing::LogCapture::install();
+    let (status, _) = get_as(&app, "peer", "/members/cached").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let filed = logs.find(
+        nest_rs_authz::TARGET,
+        "a wire row answered a caller it was not judged for",
+    );
+    assert_eq!(filed.len(), 1, "{filed:#?}");
+    for (field, named) in [
+        ("entity", "members"),
+        ("reason", "judged_for_another"),
+        ("host", "MembersController"),
+        ("method", "cached"),
+        ("verb", "GET"),
+        ("path", "/members/cached"),
+    ] {
+        assert_eq!(filed[0].field(field).as_deref(), Some(named), "{field}");
+    }
+}
+
+#[gateway(path = "/ws/members")]
+#[derive(Default)]
+struct MembersGateway;
+
+#[messages]
+impl MembersGateway {
+    #[subscribe_message("written")]
+    #[authorize(Update, member::Entity)]
+    async fn written(&self) -> Member {
+        Member::from(&member::row(1, 1))
+    }
+}
+
+#[module(
+    imports = [nest_rs_ws::WsModule],
+    providers = [RoleGuard, GlobalGuards<(RoleGuard,)>, MembersGateway],
+)]
+struct MembersWsModule;
+
+#[mcp(path = "/mcp/members")]
+#[derive(Clone, Default)]
+struct MembersTool;
+
+#[tools]
+impl MembersTool {
+    /// The member a write answers.
+    #[tool]
+    #[authorize(Update, member::Entity)]
+    async fn written(&self) -> Result<nest_rs_mcp::Json<Member>, McpError> {
+        Ok(nest_rs_mcp::Json(Member::from(&member::row(1, 1))))
+    }
+}
+
+#[module(providers = [RoleGuard, GlobalGuards<(RoleGuard,)>, MembersTool])]
+struct MembersMcpModule;
+
+/// A message's reply the caller may not read is refused as a route's is, its line
+/// naming the message as its `mounted` line does.
+#[tokio::test]
+async fn a_message_reply_the_caller_may_not_read_is_refused_naming_its_message() {
+    let ws = TestApp::builder()
+        .module::<MembersWsModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+    let logs = nest_rs_testing::LogCapture::install();
+    let frame = crate::ws::message_as(&ws, "/ws/members", Some("writer"), "written").await;
+    ws.shutdown().await.expect("the transport stops cleanly");
+    let frame = frame.to_string();
+    assert!(frame.contains("FORBIDDEN"), "{frame}");
+    assert!(!frame.contains("member 1"), "{frame}");
+    let filed = logs.find(
+        nest_rs_authz::TARGET,
+        "a reply's row is withheld from its caller",
+    );
+    assert_eq!(filed.len(), 1, "{filed:#?}");
+    for (field, named) in [
+        ("entity", "members"),
+        ("reason", "row_not_granted"),
+        ("host", "MembersGateway"),
+        ("method", "written"),
+        ("path", "/ws/members"),
+        ("event", "written"),
+    ] {
+        assert_eq!(filed[0].field(field).as_deref(), Some(named), "{field}");
+    }
+}
+
+/// A tool's answer the caller may not read is refused as a route's is, its line
+/// naming the tool as its `mounted` line does.
+#[tokio::test]
+async fn a_tool_answer_the_caller_may_not_read_is_refused_naming_its_tool() {
+    let app = TestApp::for_module::<MembersMcpModule>()
+        .await
+        .expect("boots");
+    let logs = nest_rs_testing::LogCapture::install();
+    let answer = nest_rs_testing::mcp::call_tool_statelessly(
+        app.http(),
+        "/mcp/members",
+        "written",
+        None,
+        &[("x-role", "writer")],
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(answer.contains("FORBIDDEN"), "{answer}");
+    assert!(!answer.contains("member 1"), "{answer}");
+    let filed = logs.find(
+        nest_rs_authz::TARGET,
+        "a reply's row is withheld from its caller",
+    );
+    assert_eq!(filed.len(), 1, "{filed:#?}");
+    for (field, named) in [
+        ("entity", "members"),
+        ("reason", "row_not_granted"),
+        ("host", "MembersTool"),
+        ("method", "written"),
+        ("path", "/mcp/members"),
+        ("tool", "written"),
+    ] {
+        assert_eq!(filed[0].field(field).as_deref(), Some(named), "{field}");
+    }
 }
 
 /// What a body builds around a wire row holds only what the row holds.

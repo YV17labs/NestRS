@@ -7,7 +7,10 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, LazyLock};
 
-use nest_rs_core::__private::{AnswerRefusal, Audience, Site, audience, refuse_answer};
+use nest_rs_core::__private::{
+    AnswerRefusal, Audience, RefusedAnswer, Site, audience, refuse_answer,
+};
+use nest_rs_core::{Handler, ServedAddress};
 use nest_rs_database::{ExecutorScope, current_executor_scope};
 use sea_orm::{EntityTrait, IdenStatic};
 
@@ -171,42 +174,56 @@ impl Judged {
     }
 
     /// Whether a row of `E` may be written for the caller it answers, every column at
-    /// once, as a serializer writes it; a refusal is filed once, here, since a
-    /// serializer stops at it, and noted for the edge answering.
+    /// once, as a serializer writes it; a refusal is handed to the edge answering,
+    /// which files it once at the unit it names, since a serializer stops at it.
     pub fn serialize_check<E: EntityTrait>(&self) -> Result<(), Refused> {
-        self.answers(false).inspect_err(|&refused| {
-            refuse_answer(match refused {
-                Refused::Withheld => AnswerRefusal::Withheld,
-                _ => AnswerRefusal::Unjudged,
-            });
-            file::<E>(refused, None);
-        })
+        self.answers(false)
+            .inspect_err(|&refused| refuse_answer(refused_answer::<E>(refused)))
     }
 }
 
-/// The line a refused row files: a denial at `warn`, a row that reached a caller it
-/// was not judged for, a wiring defect, at `error`.
-fn file<E: EntityTrait>(refused: Refused, field: Option<(&str, &str)>) {
-    let entity = E::default().table_name();
-    let (kind, field) = field.unzip();
-    if refused == Refused::Withheld {
-        tracing::warn!(
-            target: crate::TARGET,
-            entity,
-            reason = refused.as_str(),
-            kind,
-            field,
-            "a reply's row is withheld from its caller",
-        );
-    } else {
-        tracing::error!(
-            target: crate::TARGET,
-            entity,
-            reason = refused.as_str(),
-            kind,
-            field,
-            "a wire row answered a caller it was not judged for",
-        );
+/// `refused` as the edge answering hands it on.
+fn refused_answer<E: EntityTrait>(refused: Refused) -> RefusedAnswer {
+    RefusedAnswer::new(
+        match refused {
+            Refused::Withheld => AnswerRefusal::Withheld,
+            _ => AnswerRefusal::Unjudged,
+        },
+        E::default().table_name(),
+        refused.as_str(),
+        file,
+    )
+}
+
+/// The line a refused row files, naming the unit as its `mounted` line does: a
+/// denial at `warn`, a row that reached a caller it was not judged for, a wiring
+/// defect, at `error`.
+fn file(refused: &RefusedAnswer, handler: Option<&Handler>, served: ServedAddress<'_>) {
+    let host = handler.map(Handler::host_name);
+    let method = handler.map(Handler::method);
+    macro_rules! line {
+        ($level:ident, $said:literal) => {
+            tracing::$level!(
+                target: crate::TARGET,
+                entity = refused.entity(),
+                reason = refused.reason(),
+                host,
+                method,
+                verb = served.verb,
+                path = served.path,
+                kind = served.kind,
+                field = served.field,
+                event = served.event,
+                tool = served.tool,
+                prompt = served.prompt,
+                resource = served.resource,
+                $said,
+            )
+        };
+    }
+    match refused.refusal() {
+        AnswerRefusal::Withheld => line!(warn, "a reply's row is withheld from its caller"),
+        _ => line!(error, "a wire row answered a caller it was not judged for"),
     }
 }
 
@@ -235,7 +252,7 @@ pub fn judged_field<E: EntityTrait>(
             ctx,
             format!("judged {entity} {} {root}", refused.as_str()),
         ) {
-            file::<E>(refused, Some((kind, root)));
+            refused_answer::<E>(refused).file_at(None, ServedAddress::field(kind, root));
         }
         Err(match refused {
             Refused::Withheld => crate::graphql::forbidden(),

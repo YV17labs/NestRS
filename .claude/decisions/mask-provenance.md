@@ -501,3 +501,14 @@ when it is the leaf. An `#[expose]`d `Model` meets it beside its coherence refus
 holding the row in a field, a type alias hiding the row inside a wrapper the probe cannot
 open — stays that body's visible line, as the derive on the row it needs is.
 
+**With it: a refused row's line names its unit.** A wire row refusing where it serializes
+filed its line with the entity and the reason, naming the unit by its span alone (seen red
+at `ac578c866`: `host` absent on HTTP's `Json`, a WS reply and an MCP tool's answer). Its
+refusal is now handed to the edge answering (`nest_rs_core::__private::answering`), which
+files it once at the unit its `mounted` line names — HTTP's site with the route's `host`,
+`method`, `verb` and `path`, WS's reply with the message's `path` and `event`, MCP's answer
+with the operation's `path` and `tool` or `resource` — and a push names its `event`; a
+refusal no edge claims is filed where it is met, naming no unit, so none is lost. GraphQL's
+column refusal names the operation's `kind` and the root `field` once per operation and
+reason: it resolves after the root field's unit, which alone knows its `host` and `method`
+(`TODO.md` §3).

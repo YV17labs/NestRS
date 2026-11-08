@@ -21,9 +21,9 @@ help: the trait `nest_rs::mcp::rmcp::serde::Serialize` is not implemented for `N
              (T0, T1, T2, T3)
              (T0, T1, T2, T3, T4)
            and $N others
-note: required by a bound in `WsReply::reply`
+note: required by a bound in `nest_rs::ws::__private::reply_at`
   --> $WORKSPACE/crates/nest-rs-ws/src/envelope.rs
    |
-   |     pub fn reply<T: Serialize>(value: &T) -> WsReply {
-   |                     ^^^^^^^^^ required by this bound in `WsReply::reply`
+   | pub fn reply_at<T: Serialize>(value: &T, at: Option<(&Handler, &str)>) -> WsReply {
+   |                    ^^^^^^^^^ required by this bound in `reply_at`
    = note: this error originates in the attribute macro `messages` (in Nightly builds, run with -Z macro-backtrace for more info)

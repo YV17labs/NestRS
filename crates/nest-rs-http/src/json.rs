@@ -138,18 +138,24 @@ impl<'a, T: DeserializeOwned> FromRequest<'a> for Json<T> {
 
 impl<T: Serialize + Send> IntoResponse for Json<T> {
     fn into_response(self) -> Response {
-        use nest_rs_core::__private::{AnswerRefusal, take_refused_answer};
-        let _ = take_refused_answer();
-        match serde_json::to_vec(&self.0) {
-            Ok(bytes) => Response::builder()
+        use nest_rs_core::__private::{AnswerRefusal, answering};
+        match answering(|| serde_json::to_vec(&self.0)) {
+            (Ok(bytes), _) => Response::builder()
                 .content_type(HeaderValue::from_static("application/json; charset=utf-8"))
                 .body(bytes),
-            // A wire row the caller may not read refused itself and filed why: a
-            // denial, which rolls the request's unit back as any `403` does.
-            Err(_) if take_refused_answer() == Some(AnswerRefusal::Withheld) => {
-                ProblemDetails::from_status(StatusCode::FORBIDDEN).into_response()
+            // A wire row refused itself: a row the caller may not read is a denial,
+            // which rolls the request's unit back as any `403` does, and one judged
+            // for someone else a defect. The site answering files its line.
+            (Err(_), Some(refused)) => {
+                let status = match refused.refusal() {
+                    AnswerRefusal::Withheld => StatusCode::FORBIDDEN,
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                let mut response = ProblemDetails::from_status(status).into_response();
+                response.extensions_mut().insert(refused);
+                response
             }
-            Err(error) => {
+            (Err(error), None) => {
                 unserialized(&error);
                 ProblemDetails::from_status(StatusCode::INTERNAL_SERVER_ERROR).into_response()
             }

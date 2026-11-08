@@ -253,8 +253,8 @@ pub mod __private {
     pub use crate::app_dir::{app_dir, in_app_dir};
     pub use crate::app_identity::{capture_app_identity, package_identity};
     pub use crate::audience::{
-        AnswerRefusal, Audience, as_pushed, audience, for_others, is_pushed, refuse_answer,
-        take_refused_answer,
+        AnswerRefusal, Audience, FileRefusal, RefusedAnswer, answering, as_pushed, audience,
+        for_others, is_pushed, refuse_answer,
     };
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,

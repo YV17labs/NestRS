@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use nest_rs_core::{Failure, ToProblem};
+use nest_rs_core::{Failure, Handler, ToProblem};
 use rmcp::handler::server::wrapper::Json;
 use rmcp::model::{ListResourcesResult, ReadResourceResult, Resource, ResourceContents};
 use serde::Serialize;
@@ -28,8 +28,13 @@ pub trait ResourceBody: Sized {
     /// when only the value knows it.
     const MIME_TYPE: Option<&'static str>;
 
-    /// The result reading `uri` answers.
-    fn into_read(self, uri: String) -> Result<ReadResourceResult, OperationFailure>;
+    /// The result reading `uri` answers, at the resource `at` names — its handler
+    /// and its template.
+    fn into_read(
+        self,
+        uri: String,
+        at: (&Handler, &str),
+    ) -> Result<ReadResourceResult, OperationFailure>;
 }
 
 /// The value, serialized: a JSON text the client parses.
@@ -37,18 +42,20 @@ pub trait ResourceBody: Sized {
 impl<T: Serialize> ResourceBody for Json<T> {
     const MIME_TYPE: Option<&'static str> = Some(JSON);
 
-    fn into_read(self, uri: String) -> Result<ReadResourceResult, OperationFailure> {
-        use nest_rs_core::__private::{AnswerRefusal, take_refused_answer};
-        let _ = take_refused_answer();
-        let text = serde_json::to_string(&self.0).map_err(|refused| {
-            if take_refused_answer() == Some(AnswerRefusal::Withheld) {
-                OperationFailure::from(crate::problem_error(&nest_rs_core::Problem::new(
-                    403,
-                    nest_rs_core::code::FORBIDDEN,
-                )))
-            } else {
-                OperationFailure::unanswered(Failure::new(refused))
-            }
+    fn into_read(
+        self,
+        uri: String,
+        at: (&Handler, &str),
+    ) -> Result<ReadResourceResult, OperationFailure> {
+        let (written, refused) =
+            nest_rs_core::__private::answering(|| serde_json::to_string(&self.0));
+        let text = written.map_err(|unwritten| match refused {
+            Some(refused) => OperationFailure::from(crate::error::refused_answer(
+                &refused,
+                at,
+                crate::McpOperationKind::Resource,
+            )),
+            None => OperationFailure::unanswered(Failure::new(unwritten)),
         })?;
         Ok(ReadResourceResult::new(vec![
             ResourceContents::text(text, uri).with_mime_type(JSON),
@@ -61,7 +68,11 @@ impl<T: Serialize> ResourceBody for Json<T> {
 impl ResourceBody for String {
     const MIME_TYPE: Option<&'static str> = Some(TEXT);
 
-    fn into_read(self, uri: String) -> Result<ReadResourceResult, OperationFailure> {
+    fn into_read(
+        self,
+        uri: String,
+        _at: (&Handler, &str),
+    ) -> Result<ReadResourceResult, OperationFailure> {
         Ok(ReadResourceResult::new(vec![ResourceContents::text(
             self, uri,
         )]))
@@ -73,7 +84,11 @@ impl ResourceBody for String {
 impl ResourceBody for ReadResourceResult {
     const MIME_TYPE: Option<&'static str> = None;
 
-    fn into_read(self, _uri: String) -> Result<ReadResourceResult, OperationFailure> {
+    fn into_read(
+        self,
+        _uri: String,
+        _at: (&Handler, &str),
+    ) -> Result<ReadResourceResult, OperationFailure> {
         Ok(self)
     }
 }
@@ -84,9 +99,13 @@ impl ResourceBody for ReadResourceResult {
 impl<B: ResourceBody> ResourceBody for Option<B> {
     const MIME_TYPE: Option<&'static str> = B::MIME_TYPE;
 
-    fn into_read(self, uri: String) -> Result<ReadResourceResult, OperationFailure> {
+    fn into_read(
+        self,
+        uri: String,
+        at: (&Handler, &str),
+    ) -> Result<ReadResourceResult, OperationFailure> {
         match self {
-            Some(body) => body.into_read(uri),
+            Some(body) => body.into_read(uri, at),
             None => Err(OperationFailure::from(resource_not_found())),
         }
     }
@@ -166,12 +185,32 @@ impl ResourceListing for Vec<Resource> {
 
 #[cfg(test)]
 mod tests {
+    use std::any::TypeId;
+
+    use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+    use nest_rs_core::Posture;
+
     use super::*;
+
+    struct NotesTool;
+
+    static NOTE: Handler = declare_handler(HandlerDeclaration {
+        unit: crate::unit::OPERATION,
+        host: TypeId::of::<NotesTool>(),
+        host_name: "NotesTool",
+        method: "note",
+        address: "note://{id}",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    /// The resource every read here answers at.
+    const AT: (&Handler, &str) = (&NOTE, "note://{id}");
 
     #[test]
     fn a_body_carries_the_uri_it_was_read_at_and_its_media_type() {
         let read = Json(serde_json::json!({ "id": 1 }))
-            .into_read("note://1".to_owned())
+            .into_read("note://1".to_owned(), AT)
             .ok()
             .expect("a JSON value serializes");
         assert_eq!(
@@ -210,7 +249,7 @@ mod tests {
     #[test]
     fn none_is_answered_as_a_resource_no_template_reads() {
         let missing = None::<String>
-            .into_read("note://2".to_owned())
+            .into_read("note://2".to_owned(), AT)
             .expect_err("nothing to read")
             .into_answer();
         assert_eq!(missing, resource_not_found());

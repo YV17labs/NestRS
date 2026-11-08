@@ -362,6 +362,20 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
             true => crate::problem::normalize_error_response(resp).await,
             false => resp,
         };
+        // A reply answered outside every site, whose row refused as it serialized.
+        if resp
+            .extensions()
+            .get::<nest_rs_core::__private::RefusedAnswer>()
+            .is_some()
+        {
+            span.in_scope(|| {
+                continuation.enter(|| {
+                    let path = matched.route();
+                    let served = nest_rs_core::ServedAddress::route(&method, path.as_deref());
+                    crate::site::file_refused_reply(None, served, &mut resp);
+                });
+            });
+        }
         // Past the last await: from here the request has an answer to file.
         let log = unanswered.answered();
 

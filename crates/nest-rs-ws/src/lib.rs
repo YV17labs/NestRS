@@ -199,7 +199,7 @@ pub mod __private {
     pub use crate::ambient::ambient_parameter;
     pub use crate::envelope::{
         ErrorReport, ErrorReportChain, ErrorReportFallback, ErrorReportLocal, HandlerFailed,
-        ReplyOutcome, ReplyValue, ReplyValueFallback, decode_payload,
+        ReplyOutcome, ReplyValue, ReplyValueFallback, decode_payload, reply_at,
     };
     pub use crate::gateway::{GATEWAY_LABEL, gateway_endpoint, served_path, wire_gateway};
     pub use crate::guard::{MessageGuards, message_guard_stage, refused_origin};

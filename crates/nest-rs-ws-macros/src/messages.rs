@@ -425,8 +425,14 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         };
 
         // Each wire row the reply carries was judged where it was built, so the
-        // reply ships as it serializes.
-        let reply = quote! { ::core::result::Result::Ok(::nest_rs_ws::WsReply::reply(&__ret)) };
+        // reply ships as it serializes, a refusal filed at this message.
+        let at = handler_ref(&self_ty, &method_name);
+        let reply = quote! {
+            ::core::result::Result::Ok(::nest_rs_ws::__private::reply_at(
+                &__ret,
+                ::core::option::Option::Some((#at, #event)),
+            ))
+        };
 
         // The report is built in library code, never by a call here: on an
         // `Infallible` error that call would be unreachable code. Its tiers

@@ -4,7 +4,10 @@ use std::error::Error;
 use std::fmt;
 
 use nest_rs_core::__private::{Withheld, find_in_chain};
-use nest_rs_core::{Code, DecodeError, Failure, OPAQUE_CLIENT_MESSAGE, Problem, ToProblem, code};
+use nest_rs_core::{
+    Code, DecodeError, Failure, Handler, OPAQUE_CLIENT_MESSAGE, Problem, ServedAddress, ToProblem,
+    code,
+};
 use nest_rs_pipes::PipeError;
 use serde::{Deserialize, Serialize};
 
@@ -317,20 +320,7 @@ impl WsReply {
     /// Serializes a handler's return; a failure degrades to an [`Opaque`]
     /// [`WsReply::Error`], since serde's `Display` can carry the value.
     pub fn reply<T: Serialize>(value: &T) -> WsReply {
-        use nest_rs_core::__private::{AnswerRefusal, take_refused_answer};
-        let _ = take_refused_answer();
-        let written = serde_json::to_value(value);
-        // A wire row the caller may not read refused itself, and said so: a denial.
-        if written.is_err() && take_refused_answer() == Some(AnswerRefusal::Withheld) {
-            return WsReply::Error(WsError::from_problem(&nest_rs_core::Problem::new(
-                403,
-                nest_rs_core::code::FORBIDDEN,
-            )));
-        }
-        match written.opaque() {
-            Ok(data) => WsReply::Reply(data),
-            Err(err) => WsReply::Error(err),
-        }
+        reply_at(value, None)
     }
 
     /// Build an [`Error`](WsReply::Error) reply from an arbitrary message.
@@ -423,6 +413,38 @@ impl Rendered {
             file(withheld, crate::gateway::served_path().as_deref(), event);
         }
         WsReply::Error(self.frame)
+    }
+}
+
+/// [`WsReply::reply`] for the message `at` names — its handler and its event: a
+/// wire row the reply carries that refuses files its line naming the message as
+/// its `mounted` line does, a row the caller may not read answering `FORBIDDEN`
+/// and one judged for someone else the opaque frame.
+pub fn reply_at<T: Serialize>(value: &T, at: Option<(&Handler, &str)>) -> WsReply {
+    use nest_rs_core::__private::{AnswerRefusal, answering};
+    match answering(|| serde_json::to_value(value)) {
+        (Ok(data), _) => WsReply::Reply(data),
+        (Err(_), Some(refused)) => {
+            let path = crate::gateway::served_path();
+            let served = at.map_or_else(ServedAddress::default, |(_, event)| {
+                ServedAddress::event(event)
+            });
+            let served = match path.as_deref() {
+                Some(path) => served.at(path),
+                None => served,
+            };
+            refused.file_at(at.map(|(handler, _)| handler), served);
+            WsReply::Error(match refused.refusal() {
+                AnswerRefusal::Withheld => {
+                    WsError::from_problem(&Problem::new(403, code::FORBIDDEN))
+                }
+                _ => WsError::internal(),
+            })
+        }
+        (written, None) => match written.opaque() {
+            Ok(data) => WsReply::Reply(data),
+            Err(err) => WsReply::Error(err),
+        },
     }
 }
 

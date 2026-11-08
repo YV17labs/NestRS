@@ -7,7 +7,6 @@
 //! operation's read left ([`OperationRefusal`]). No other hook sits between
 //! validation and execution.
 
-use std::any::TypeId;
 use std::sync::Arc;
 
 use async_graphql::async_trait::async_trait;
@@ -17,6 +16,7 @@ use async_graphql::extensions::{
 use async_graphql::{Request, ServerError, ServerResult, ValidationResult};
 
 use crate::config::GraphqlConfig;
+use crate::context::held_by;
 use crate::document_cost::{self, DocumentLimits};
 use crate::filed_once::FiledOnce;
 use crate::loader::LoaderSeeds;
@@ -73,11 +73,7 @@ impl Extension for RequestExtension {
         mut request: Request,
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
-        let own_key = request
-            .data
-            .get(&TypeId::of::<OwnKey>())
-            .and_then(|held| held.downcast_ref::<OwnKey>())
-            .cloned();
+        let own_key = held_by::<OwnKey>(&request.data).cloned();
         let variables = std::mem::take(&mut request.variables);
         let operation = request.operation_name.take();
         let registry = &ctx.schema_env.registry;

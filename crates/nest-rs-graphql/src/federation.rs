@@ -27,12 +27,13 @@ use async_graphql::{
 };
 use nest_rs_config::Namespaced as _;
 use nest_rs_core::__private::{
-    GuardStage, GuardStageFactory, HandlerDeclaration, MetaLevels, Site, SiteDeclaration,
-    SiteLayers, declare_handler, declare_site,
+    GuardStage, GuardStageFactory, HandlerDeclaration, MetaLevels, ResolvedLayer, Site,
+    SiteDeclaration, SiteLayers, declare_handler, declare_site,
 };
 use nest_rs_core::anyhow;
 use nest_rs_core::{Container, Handler, Posture};
 use nest_rs_guards::__private::{global_guards_active, identifies, resolve_global_chain};
+use nest_rs_guards::Guard;
 use nest_rs_http::__private::carried_request_chain;
 
 use crate::config::GraphqlConfig;
@@ -65,9 +66,6 @@ static SERVICE_SITE: Site = declare_site(&SERVICE, federation_field_site(service
 /// The site `_entities` runs.
 static ENTITIES_SITE: Site = declare_site(&ENTITIES, federation_field_site(entities_guard_stage));
 
-/// How a boot error names the site `_service` runs.
-const SERVICE_SITE_LABEL: &str = "POST /graphql (_service)";
-
 /// A federation root field's declaration: a root field no resolver declares,
 /// gated by `guard_stage` alone, inside the app's filters and interceptors.
 const fn federation_field_site(guard_stage: GuardStageFactory) -> SiteDeclaration {
@@ -92,20 +90,28 @@ const fn federation_field(field: &'static str) -> Handler {
     })
 }
 
-/// The pool, as on every unit, and each other guard the `/graphql` request ran that
-/// identifies a caller: `_service` answers the whole SDL and no member's posture stands
-/// behind it, so one of them admitting the anonymous request is the one thing left to
-/// refuse it. A guard identifying no one decided at the request all it decides.
 fn service_guard_stage(
     container: &Container,
     _: &Handler,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
-    let pool = resolve_global_chain(container, SERVICE_SITE_LABEL);
-    let mut chain = carried_request_chain::<GraphqlView>(container, SERVICE_SITE_LABEL)?;
+    Ok(FieldGuardStage::of(
+        service_chain(container)?,
+        DENIED_FEDERATION_FIELD,
+    ))
+}
+
+/// The pool, as on every unit, and each other guard the `/graphql` request ran that
+/// identifies a caller: `_service` answers the whole SDL and no member's posture stands
+/// behind it, so one of them admitting the anonymous request is the one thing left to
+/// refuse it. A guard identifying no one decided at the request all it decides.
+fn service_chain(container: &Container) -> anyhow::Result<Vec<ResolvedLayer<dyn Guard>>> {
+    const SITE: &str = "POST /graphql (_service)";
+    let pool = resolve_global_chain(container, SITE);
+    let mut chain = carried_request_chain::<GraphqlView>(container, SITE)?;
     chain.retain(|guard| {
         identifies(guard) || pool.iter().any(|pooled| pooled.type_id == guard.type_id)
     });
-    Ok(FieldGuardStage::of(chain, DENIED_FEDERATION_FIELD))
+    Ok(chain)
 }
 
 /// The app-wide pool, the whole chain of a field that belongs to no resolver;
@@ -127,8 +133,8 @@ const SDL_OPEN: &str =
     "GraphQL subgraph SDL is served to callers no guard identified outside a dev profile";
 
 /// Refuse a subgraph `_service` would answer to whoever reaches it: no guard its
-/// `/graphql` request runs identifies or authorizes the caller, and the configuration
-/// does not open its SDL. An opening taking effect in a deployment is said at `warn`.
+/// site runs identifies or authorizes the caller, and the configuration does not
+/// open its SDL. An opening taking effect in a deployment is said at `warn`.
 pub(crate) fn check_sdl_exposure(
     container: &Container,
     config: &GraphqlConfig,
@@ -136,9 +142,7 @@ pub(crate) fn check_sdl_exposure(
     if !config.federation {
         return Ok(());
     }
-    let pool = resolve_global_chain(container, SERVICE_SITE_LABEL);
-    let carried = carried_request_chain::<GraphqlView>(container, SERVICE_SITE_LABEL)?;
-    if pool.iter().chain(&carried).any(identifies) {
+    if service_chain(container)?.iter().any(identifies) {
         return Ok(());
     }
     if config.federation_sdl.is_open() {

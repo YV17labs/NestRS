@@ -889,11 +889,7 @@ mod tests {
     /// What a read of `request` leaves it answering in place of running.
     fn refused(mut request: Request) -> Option<ServerError> {
         Selected::of(&mut request);
-        request
-            .data
-            .get(&std::any::TypeId::of::<OperationRefusal>())
-            .and_then(|held| held.downcast_ref::<OperationRefusal>())
-            .map(OperationRefusal::said)
+        crate::context::held_by::<OperationRefusal>(&request.data).map(OperationRefusal::said)
     }
 
     /// What a request is refused before it runs, when it is.

@@ -2,7 +2,7 @@
 //! [`ContextEndpoint`] folds every link-time-registered [`GraphqlContextSeed`]
 //! over the parsed request before executing it.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -187,6 +187,12 @@ pub fn connection_data(
         .filter(|reg| reg.lifetime == SeedLifetime::Connection)
         .fold(gql, |gql, reg| (reg.seed)(req, container, gql))
         .data)
+}
+
+/// The `T` `data` holds, if any: async-graphql reads a request's data by type only
+/// through a `Context`, which a request has none of before it executes.
+pub(crate) fn held_by<T: Any>(data: &Data) -> Option<&T> {
+    data.get(&TypeId::of::<T>())?.downcast_ref()
 }
 
 impl<E> ContextEndpoint<E> {

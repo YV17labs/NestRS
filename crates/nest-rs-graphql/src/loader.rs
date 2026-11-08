@@ -26,6 +26,7 @@ use nest_rs_core::{
 use nest_rs_http::DetachedWork;
 use tracing::Instrument;
 
+use crate::context::held_by;
 use crate::error::{FieldFailure, UnseededLoader};
 use crate::operation::field_name;
 use crate::resolver::{ServedObjects, import_remedy};
@@ -207,11 +208,7 @@ impl LoaderSeeds {
 
     /// `request`, holding a loader of each owner the app reaches.
     pub(crate) fn seed(&self, mut request: Request) -> Request {
-        let held = request
-            .data
-            .get(&TypeId::of::<BatchSpan>())
-            .and_then(|held| held.downcast_ref::<BatchSpan>())
-            .map(|held| held.0.clone());
+        let held = held_by::<BatchSpan>(&request.data).map(|held| held.0.clone());
         // An ancestor of the current span cannot be entered again, so the
         // spawners read it off the seeding instead.
         let _seeding = Seeding::hold(held);

@@ -213,8 +213,10 @@ pub enum AttemptOutcome {
     ///
     /// `after` is `min(5 min, 1 s · 2^(n − 1))` for failed attempt `n`, scaled by
     /// a jitter between 0.8 and 1.2 derived from the job's id and `n`, unless the
-    /// failure's [`Problem`] asks for longer with `with_retry_after`, which holds
-    /// up to an hour.
+    /// failure's [`Problem`] asks for longer with `with_retry_after`: then what it
+    /// asked, up to an hour, stretched by up to a fifth drawn the same way, so
+    /// it never runs earlier and jobs one answer refused together come back
+    /// apart.
     ///
     /// The [`Delivery`] already counts the next attempt. A backend declaring
     /// [`DelayedPush`](crate::Capability::DelayedPush) re-files
@@ -531,7 +533,6 @@ pub(crate) async fn attempt_in(
         checkpoints: delivery.checkpoints.clone(),
         attempt: Attempt::new(delivery.id.clone(), attempt, delivery.queue.clone()),
     };
-    let retry_after = backoff::retry_after(&delivery.id, attempt);
     // The ambient context too: a job the body pushes seals *this* trace and
     // what crossed with the job, and every line below reads its trace ids off
     // it, not off the span.
@@ -568,7 +569,6 @@ pub(crate) async fn attempt_in(
             identity,
             unit_of_work.as_ref(),
             last,
-            retry_after,
         )
         .await
     });
@@ -803,7 +803,6 @@ async fn run(
     identity: JobIdentity,
     unit_of_work: Option<&Arc<dyn UnitOfWork>>,
     last: bool,
-    retry_after: Duration,
 ) -> AttemptOutcome {
     let attempt = identity.attempt;
     let line = JobLine::open(identity);
@@ -922,7 +921,8 @@ async fn run(
             )
         }
         Ok(Ok(Ran::Failed(error))) => {
-            let retry_after = backoff::honouring(retry_after, error.retry_after_secs);
+            let retry_after =
+                backoff::honouring(&line.identity.job_id, attempt, error.retry_after_secs);
             tracing::warn!(
                 target: TARGET,
                 error = %nest_rs_core::error_message(&error),
@@ -1123,7 +1123,6 @@ mod tests {
             identity(attempt),
             None,
             last,
-            Duration::from_secs(1),
         )
         .await
     }
@@ -1399,7 +1398,6 @@ mod tests {
             identity(1),
             None,
             false,
-            Duration::from_secs(1),
         )
         .await;
         assert!(matches!(result, AttemptOutcome::DeadLetter(_)));

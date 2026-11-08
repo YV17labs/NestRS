@@ -1020,8 +1020,9 @@ lists what the boot, a log or the wire shows when one is missed.
 
     - `retries = N` runs a failed attempt again **after a backoff** — one second
       after the first failure, doubling, at most five minutes — where 6.x ran it
-      again at once. A `Problem` carrying `with_retry_after(n)` holds it back `n`
-      seconds when that is longer, at most an hour, where 6.x read no such wait.
+      again at once. A `Problem` carrying `with_retry_after(n)` holds it back at
+      least `n` seconds when that is longer, stretched by up to a fifth, what it
+      asks counted up to an hour, where 6.x read no such wait.
       See [Retries and failure](/queue/retries-and-failure/).
     - **A job failing with a client's error dead-letters at once.** A
       `JobError::abort(…)`, or a `ServiceError` or a `Problem` with a `4xx`,

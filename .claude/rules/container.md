@@ -558,7 +558,10 @@ retrying a backend waits `nest_rs_core::Backoff`'s curve** — exponential,
 ±20 % jitter drawn from a seed, gRPC's connection backoff — never a doubling
 of its own: a reconnect loop seeds it with `process_seed()`, so replicas come
 back apart; a loop its library owns (redis's `ConnectionManager`,
-object_store) stays the library's.
+object_store) stays the library's. A wait the backend asks — a `Retry-After`
+— is waited whole, up to a named ceiling, stretched by up to a fifth through
+`Backoff::honouring` and never cut (`.claude/decisions/asked-wait-is-honoured.md`):
+the queue's retry and the JWK Set's fetch.
 **An outbound client the framework
 opens follows one policy**, and is private to the crate whose protocol needs it
 (OAuth's exchange, the JWK Set, the OTLP export, storage) — never an outbound

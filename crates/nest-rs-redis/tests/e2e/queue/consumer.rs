@@ -323,6 +323,116 @@ async fn a_checkpoint_survives_a_retry_and_a_dead_replica_and_is_cleared_at_the_
     crate::forget(queue).await;
 }
 
+// --- a wait a failure asks ---------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AskingCommand {
+    run: u64,
+}
+
+static ASKING: Runs = Runs::new();
+
+/// When each first attempt of a run failed, asking its wait.
+static ASKED_AT: Mutex<Vec<(u64, std::time::Instant)>> = Mutex::new(Vec::new());
+
+/// Holds a first attempt until the test has read Redis's clock.
+static ASKING_RELEASED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// What the first attempt asks: past the backoff's first wait, jitter included
+/// (1.2 s), so the wait the job keeps is the one asked.
+const ASKED_SECS: u32 = 2;
+
+#[queue(name = "nestrs-e2e-asked-wait", job = AskingCommand)]
+struct AskingQueue;
+
+#[injectable]
+#[derive(Default)]
+struct AskingProcessor;
+
+#[processor]
+impl AskingProcessor {
+    /// The first attempt waits to be released, then fails as an upstream's
+    /// `429` asking [`ASKED_SECS`]; the second completes.
+    #[process(queue = AskingQueue, retries = 1, transactional = false)]
+    async fn ask(&self, job: AskingCommand) -> Result<(), nest_rs_core::Problem> {
+        if ASKING.start(job.run) > 1 {
+            ASKING.finish(job.run);
+            return Ok(());
+        }
+        while !ASKING_RELEASED.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        ASKED_AT
+            .lock()
+            .expect("asked lock")
+            .push((job.run, std::time::Instant::now()));
+        Err(
+            nest_rs_core::Problem::new(429, nest_rs_core::code::RATE_LIMITED)
+                .with_retry_after(ASKED_SECS),
+        )
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, nest_rs_queue::QueueModule],
+    providers = [AskingProcessor],
+)]
+struct AskingModule;
+
+/// A job whose attempt asked a wait waits in `due` at least that long by Redis's
+/// clock, and runs again no earlier than that after its failure: what
+/// `with_retry_after` asks is honoured where the job is held, never in a worker's
+/// memory.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_asking_a_wait_is_held_in_redis_and_runs_again_no_earlier() {
+    let queue = <AskingQueue as nest_rs_queue::Queue>::NAME;
+    crate::forget(queue).await;
+    let _forgotten = crate::forgetting(queue);
+    let run = crate::this_run();
+    let replica = crate::patient_replica::<AskingModule>().await;
+    let receipt = replica
+        .producer
+        .push(AskingQueue, AskingCommand { run })
+        .await
+        .expect("enqueue");
+
+    crate::wait_until(Duration::from_secs(10), || ASKING.of(run).len() == 1).await;
+    let before = super::producer::redis_now().await;
+    ASKING_RELEASED.store(true, std::sync::atomic::Ordering::SeqCst);
+    let job = receipt.id();
+    crate::wait_for(Duration::from_secs(5), || async move {
+        super::producer::due_of(queue, job).await.is_some()
+    })
+    .await;
+    let due = super::producer::due_of(queue, job)
+        .await
+        .expect("the job is held back in `due`");
+    let asked = Duration::from_secs(ASKED_SECS.into());
+    let asked_ms = u64::try_from(asked.as_millis()).expect("a short wait");
+    assert!(
+        due >= before + asked_ms,
+        "due at {due} ms by Redis's clock, before the failure at {before} ms: held less than \
+         the {asked:?} asked"
+    );
+
+    crate::wait_until(Duration::from_secs(20), || ASKING.finished(run) == 1).await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+    let failed = ASKED_AT
+        .lock()
+        .expect("asked lock")
+        .iter()
+        .find(|(of, _)| *of == run)
+        .map(|(_, at)| *at)
+        .expect("the first attempt failed asking");
+    let starts = ASKING.of(run);
+    let again = starts.get(1).copied().expect("a second attempt");
+    assert!(
+        again.duration_since(failed) >= asked,
+        "the second attempt ran {:?} after the failure, before the {asked:?} asked",
+        again.duration_since(failed)
+    );
+}
+
 // --- a throttle across replicas ------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

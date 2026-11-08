@@ -241,8 +241,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   framework's, a break of every service's `?`. *seen*
 - A storage key with every policy removed answers `AccessDenied`, which reads
   like least privilege. *read*
-- No jitter above a requested `Retry-After`, and no Redis run sees a job held
-  by `with_retry_after`. *read*
 - The CLI reads a `CrudService` only in `service.rs` and `services/`;
   `nestrs lint` skips a file that does not parse. *read*
 - Generated processors, scheduled tasks and listeners are neither compiled

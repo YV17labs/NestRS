@@ -11,7 +11,9 @@
 //!
 //! A failure can ask for longer: a `Problem` carrying `with_retry_after`, an
 //! upstream's `429` passed on, holds the job back at least that long, up to
-//! [`ASKED_CEILING`].
+//! [`ASKED_CEILING`], and up to a fifth longer, drawn the same way
+//! (`Backoff::honouring`): jobs one answer refused at one instant do not all
+//! come back at the instant it named, and none comes back before it.
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -43,11 +45,20 @@ pub(crate) fn retry_after(id: &JobId, attempt: u32) -> Duration {
     RETRY.wait(attempt, Backoff::seed(id.as_bytes()))
 }
 
-/// `backoff`, lengthened to the `asked` seconds the failure asked, which count up
-/// to [`ASKED_CEILING`].
-pub(crate) fn honouring(backoff: Duration, asked: Option<u32>) -> Duration {
+/// How long to wait after attempt number `attempt` of job `id` failed retryably
+/// asking `asked` seconds: its [`retry_after`], or what it asked when longer —
+/// counted up to [`ASKED_CEILING`], then stretched by up to a fifth, drawn from
+/// `(id, attempt)` as the backoff's jitter is.
+pub(crate) fn honouring(id: &JobId, attempt: u32, asked: Option<u32>) -> Duration {
+    let backoff = retry_after(id, attempt);
     asked.map_or(backoff, |seconds| {
-        backoff.max(Duration::from_secs(seconds.into()).min(ASKED_CEILING))
+        let asked = Duration::from_secs(seconds.into()).min(ASKED_CEILING);
+        let attempt = NonZeroU32::new(attempt).unwrap_or(NonZeroU32::MIN);
+        backoff.max(Backoff::honouring(
+            asked,
+            attempt,
+            Backoff::seed(id.as_bytes()),
+        ))
     })
 }
 
@@ -84,17 +95,25 @@ mod tests {
 
     #[test]
     fn what_a_failure_asks_lengthens_the_wait_and_never_shortens_it_or_passes_the_ceiling() {
-        let backoff = Duration::from_secs(16);
-        for (asked, waits) in [
-            (None, backoff),
-            (Some(0), backoff),
-            (Some(15), backoff),
-            (Some(30), Duration::from_secs(30)),
-            (Some(3600), ASKED_CEILING),
-            (Some(3601), ASKED_CEILING),
-            (Some(u32::MAX), ASKED_CEILING),
+        let job = JobId::mint();
+        let attempt = 5;
+        let backoff = retry_after(&job, attempt);
+        assert!(backoff >= Duration::from_millis(12_800), "{backoff:?}");
+        // Stretched by a fifth, 10 s reaches 12 s at most, under that floor.
+        for asked in [None, Some(0), Some(10)] {
+            assert_eq!(honouring(&job, attempt, asked), backoff, "{asked:?}");
+        }
+        for (asked, at_least) in [
+            (30, Duration::from_secs(30)),
+            (3600, ASKED_CEILING),
+            (3601, ASKED_CEILING),
+            (u32::MAX, ASKED_CEILING),
         ] {
-            assert_eq!(honouring(backoff, asked), waits, "{asked:?}");
+            let wait = honouring(&job, attempt, Some(asked));
+            assert!(
+                wait >= at_least && wait <= at_least.mul_f64(1.2),
+                "{asked}: {wait:?} against {at_least:?}"
+            );
         }
     }
 
@@ -112,6 +131,21 @@ mod tests {
             [1129, 1938, 3236, 6816, 254_464, 250_200, 322_500],
             "attempts 10 and 11 wait on the five-minute ceiling, jittered",
         );
+    }
+
+    #[test]
+    fn jobs_one_answer_asked_to_wait_do_not_all_come_back_at_its_instant() {
+        let asked = Duration::from_secs(30);
+        let waits: std::collections::BTreeSet<Duration> = (0..32)
+            .map(|_| honouring(&JobId::mint(), 1, Some(30)))
+            .collect();
+        assert!(waits.len() > 1, "{waits:?}");
+        for wait in &waits {
+            assert!(
+                *wait >= asked && *wait <= asked.mul_f64(1.2),
+                "never before what was asked, at most a fifth after: {wait:?}"
+            );
+        }
     }
 
     #[test]

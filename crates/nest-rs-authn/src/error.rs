@@ -247,8 +247,9 @@ pub enum AuthError {
     #[error("{}", UNAVAILABLE)]
     #[non_exhaustive]
     Unavailable {
-        /// How long until a retry may succeed, when the party that failed said
-        /// so — an identity provider's own `Retry-After`.
+        /// How long until a retry may succeed, when it is known — an identity
+        /// provider's own `Retry-After`, or the time until the JWK Set's next
+        /// fetch may start.
         retry_after: Option<Duration>,
         /// The detail, then the cause's chain, read through [`Error::source`].
         #[doc(hidden)]

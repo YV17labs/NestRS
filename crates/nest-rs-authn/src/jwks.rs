@@ -9,7 +9,10 @@
 //!   wait for it, and a caller dropped mid-fetch cancels nothing.
 //! - **At most one fetch per [`JWKS_REFRESH_FLOOR`]**, whatever asks for it — a
 //!   token naming a `kid` the set lacks, a set gone stale, a failure retried —
-//!   so no token makes this server flood its issuer.
+//!   so no token makes this server flood its issuer. An issuer answering `429`
+//!   or a `5xx` with a `Retry-After` is not asked again before it, counted up to
+//!   [`JWKS_RETRY_AFTER_CEILING`] and stretched by up to a fifth
+//!   (`Backoff::honouring`), so replicas it told to wait come back apart.
 //! - **Fresh for the answer's `Cache-Control: max-age`**, net of its `Age`,
 //!   between the floor and [`JWKS_MAX_AGE_CEILING`]; [`JWKS_DEFAULT_MAX_AGE`]
 //!   when it states none. A stale set keeps serving while its refresh runs.
@@ -18,6 +21,7 @@
 //!   fetched, a token is [`AuthError::Unavailable`] — the `503` that never
 //!   blames the token.
 
+use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -28,6 +32,7 @@ use tokio::time::Instant;
 
 use nest_rs_config::{ClientTls, ConfigService, Namespaced};
 use nest_rs_core::__private::OpaqueCause;
+use nest_rs_core::{Backoff, process_seed};
 
 use crate::Algorithm;
 use crate::AuthnConfig;
@@ -52,6 +57,12 @@ pub const JWKS_MAX_BYTES: usize = 128 * 1024;
 /// The least time between the starts of two fetches, whatever asks for them,
 /// and so the shortest a set stays fresh.
 pub const JWKS_REFRESH_FLOOR: Duration = Duration::from_secs(30);
+
+/// How much of an issuer's `Retry-After` is counted, whatever it asked, before
+/// it is stretched by up to a fifth, so the next fetch is held back 72 minutes
+/// at most: a value no issuer meant parks no verifier, and a held set keeps
+/// verifying meanwhile, up to [`JWKS_STALE_CEILING`].
+pub const JWKS_RETRY_AFTER_CEILING: Duration = Duration::from_secs(60 * 60);
 
 /// How long a set stays fresh when its answer states no `max-age`.
 pub const JWKS_DEFAULT_MAX_AGE: Duration = Duration::from_secs(10 * 60);
@@ -85,6 +96,9 @@ struct State {
     failure: Option<Failure>,
     /// When the last fetch started, which the floor counts from.
     last_attempt: Option<Instant>,
+    /// Before when no fetch starts: what the issuer's last `Retry-After` asked,
+    /// stretched; `None` once a fetch succeeds.
+    asked_until: Option<Instant>,
     /// The last fetch started: still running while its sender lives.
     in_flight: Option<watch::Receiver<()>>,
 }
@@ -387,6 +401,7 @@ impl Inner {
                     fresh_until: now + fresh_for,
                 });
                 state.failure = None;
+                state.asked_until = None;
                 drop(state);
                 tracing::debug!(
                     target: crate::TARGET,
@@ -403,6 +418,13 @@ impl Inner {
                 let said = state
                     .usable(now)
                     .map(|_| nest_rs_core::error_message(&failure.cause));
+                state.asked_until = failure.retry_after.map(|asked| {
+                    now + Backoff::honouring(
+                        asked.min(JWKS_RETRY_AFTER_CEILING),
+                        NonZeroU32::MIN,
+                        process_seed(),
+                    )
+                });
                 state.failure = Some(failure);
                 drop(state);
                 if let Some(said) = said {
@@ -441,6 +463,7 @@ impl State {
         if self
             .last_attempt
             .is_some_and(|started| now.duration_since(started) < JWKS_REFRESH_FLOOR)
+            || self.asked_until.is_some_and(|until| now < until)
         {
             return Joined {
                 fetch: None,
@@ -484,15 +507,20 @@ impl State {
     }
 
     /// The `503` a token gets while no set can be had: the last failure, and
-    /// the issuer's wait or the time until the next fetch may start.
+    /// the time until the next fetch may start — past the floor and past what
+    /// the issuer asked.
     fn unavailable(&self, endpoint: &str, now: Instant) -> AuthError {
-        let next_fetch = self.last_attempt.map_or(Duration::ZERO, |started| {
+        let floor = self.last_attempt.map_or(Duration::ZERO, |started| {
             JWKS_REFRESH_FLOOR.saturating_sub(now.duration_since(started))
         });
+        let asked = self
+            .asked_until
+            .map_or(Duration::ZERO, |until| until.saturating_duration_since(now));
+        let next_fetch = floor.max(asked);
         let next_fetch = (!next_fetch.is_zero()).then_some(next_fetch);
         match &self.failure {
             Some(failure) => AuthError::Unavailable {
-                retry_after: failure.retry_after.or(next_fetch),
+                retry_after: next_fetch,
                 __cause: failure.cause.clone(),
             },
             None => AuthError::unavailable(

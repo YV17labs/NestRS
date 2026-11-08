@@ -33,7 +33,7 @@ fn holder_of(refused: QueueError) -> JobId {
 
 /// When the job `job` of `queue` is due, in Redis's milliseconds, if it is
 /// held back.
-async fn due_of(queue: &str, job: &JobId) -> Option<u64> {
+pub(super) async fn due_of(queue: &str, job: &JobId) -> Option<u64> {
     redis::cmd("ZSCORE")
         .arg(crate::key_of(queue, "due"))
         .arg(job.to_string())
@@ -43,7 +43,7 @@ async fn due_of(queue: &str, job: &JobId) -> Option<u64> {
 }
 
 /// Redis's clock, in milliseconds.
-async fn redis_now() -> u64 {
+pub(super) async fn redis_now() -> u64 {
     let (seconds, micros): (u64, u64) = redis::cmd("TIME")
         .query_async(&mut crate::connect().await)
         .await

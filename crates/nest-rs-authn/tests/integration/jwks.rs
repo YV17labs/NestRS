@@ -718,13 +718,57 @@ async fn an_answer_that_is_not_a_usable_set_is_unavailable_and_never_quoted() {
         assert!(detail.contains(reason), "{detail}");
         assert!(!detail.contains(SENTINEL), "{detail}");
         assert!(!detail.contains("elsewhere"), "{detail}");
-        if retry_after.is_some() {
-            assert_eq!(waited, retry_after, "the issuer's own wait");
+        if let Some(asked) = retry_after {
+            let waited = waited.expect("the wait until the next fetch may start");
+            assert!(
+                waited > asked - Duration::from_secs(1) && waited <= asked.mul_f64(1.2),
+                "the issuer's own wait, stretched by a fifth at most: {waited:?}"
+            );
         } else {
             assert!(waited.is_some(), "the wait until the next fetch may start");
         }
         assert_eq!(issuer.fetches(), 1);
     }
+}
+
+/// An issuer asking for a wait is not asked again before it, however many
+/// tokens need its set, and is asked again once it passed; the callers told to
+/// wait are told the time left until then.
+#[tokio::test]
+async fn an_issuer_asking_a_wait_is_not_asked_again_before_it() {
+    let asked = Duration::from_secs(120);
+    let issuer = Issuer::serving(Answer::status(503).with("retry-after", "120")).await;
+    let jwt = verifier(&issuer);
+    let signed = token(&ED25519.key, Algorithm::EdDSA, Some("ed"));
+    assert!(matches!(
+        jwt.verify::<Claims>(&signed).await,
+        Err(AuthError::Unavailable { .. })
+    ));
+    assert_eq!(issuer.fetches(), 1);
+
+    elapse(JWKS_REFRESH_FLOOR).await;
+    let Err(AuthError::Unavailable {
+        retry_after: Some(told),
+        ..
+    }) = jwt.verify::<Claims>(&signed).await
+    else {
+        panic!("within the asked wait the set cannot be had");
+    };
+    assert_eq!(issuer.fetches(), 1, "past the floor, within what it asked");
+    // The real time since the settle comes off `told`; a fetcher ignoring the
+    // ask would tell none.
+    assert!(
+        told <= asked.mul_f64(1.2) - JWKS_REFRESH_FLOOR
+            && told > asked - JWKS_REFRESH_FLOOR - Duration::from_secs(1),
+        "the time left until the next fetch: {told:?}"
+    );
+
+    issuer.answer(Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")]));
+    elapse(asked.mul_f64(1.2)).await;
+    jwt.verify::<Claims>(&signed)
+        .await
+        .expect("asked again once its wait passed");
+    assert_eq!(issuer.fetches(), 2);
 }
 
 /// What the operator's line says below `refused`'s constant.

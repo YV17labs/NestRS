@@ -85,8 +85,11 @@ The worker says how long it chose, on the line that reports the failure:
 A failure can ask for longer. A `Problem` carrying `with_retry_after(30)` — the
 upstream's `429` or `503` passed on — holds the next attempt back at least that
 long, so the job does not spend its budget while the upstream is still refusing.
-The wait is the longer of the two, what it asks counts up to an hour, and the
-line adds `retry_after_asked_ms=30000` beside the wait it chose.
+The wait is the longer of the two, what it asks counts up to an hour and is
+stretched by up to a fifth — 30 to 36 seconds here, drawn from the job's id
+like the jitter — so the jobs one `429` refused together do not all come back at
+the instant it named, and none comes back before it. The line adds
+`retry_after_asked_ms=30000` beside the wait it chose.
 
 On Redis the next attempt waits off the stream, due on Redis's clock, until a
 running worker files it back — see [Delayed jobs](/queue/delivery/#delayed-jobs)

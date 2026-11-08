@@ -58,7 +58,7 @@ pub use error::{AuthError, CredentialError, PasswordError, SignError, UnknownAlg
 pub use guard::AuthnGuard;
 pub use jwks::{
     JWKS_CONNECT_TIMEOUT, JWKS_DEFAULT_MAX_AGE, JWKS_FETCH_TIMEOUT, JWKS_MAX_AGE_CEILING,
-    JWKS_MAX_BYTES, JWKS_REFRESH_FLOOR, JWKS_STALE_CEILING,
+    JWKS_MAX_BYTES, JWKS_REFRESH_FLOOR, JWKS_RETRY_AFTER_CEILING, JWKS_STALE_CEILING,
 };
 pub use module::{AuthnModule, AuthnSetup};
 /// Derives [`PrincipalIdentity`](trait@PrincipalIdentity) and `AmbientValue`

@@ -389,14 +389,16 @@ are constants of `nest_rs::authn`:
 | `JWKS_FETCH_TIMEOUT` | 5 s (3 s to connect) | one fetch, body included — a token waits on one at most |
 | `JWKS_MAX_BYTES` | 128 KiB | the document read; a longer one is refused unread |
 | `JWKS_REFRESH_FLOOR` | 30 s | the least time between two fetches, whatever asks — a flood of forged `kid`s costs the issuer one request per floor |
+| `JWKS_RETRY_AFTER_CEILING` | 1 h | how much of an issuer's `Retry-After`, on a `429` or a `5xx`, is counted; what it asks is waited, stretched by up to a fifth so replicas it told together come back apart: the next fetch is held back 72 min at most |
 | `JWKS_DEFAULT_MAX_AGE` | 10 min | how long a set stays fresh when the answer states no `Cache-Control: max-age`; a stated one is honoured, net of `Age`, from the floor to `JWKS_MAX_AGE_CEILING` (1 h) |
 | `JWKS_STALE_CEILING` | 1 h | how long past its freshness the last good set still verifies while every refresh fails |
 
 A stale set keeps serving while it refreshes, and a refresh that fails is said
 once at `warn` on `nest_rs::authn` while the last good set is kept. A set that
 cannot be had — never fetched, past its stale ceiling, or failing while the
-key a token names is looked for — answers `503` with `Retry-After`, on a
-`#[public]` route too, never a `401`: the token was never checked. The
+key a token names is looked for — answers `503` with a `Retry-After` saying
+when the next fetch may start, on a `#[public]` route too, never a `401`: the
+token was never checked. The
 endpoint must be `https`, and its certificate is verified against the system's
 authorities, or the ones `<PREFIX>_AUTHN__TLS_CA_CERT` names; an issuer that
 requires a client certificate gets the one `<PREFIX>_AUTHN__TLS_CERT` and

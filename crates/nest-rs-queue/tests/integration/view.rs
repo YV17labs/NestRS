@@ -375,7 +375,11 @@ async fn a_filter_answering_a_wait_holds_the_next_attempt_back_that_long() {
     let AttemptOutcome::Retry { after } = outcome else {
         panic!("a 503 another attempt may clear retries: {outcome:?}");
     };
-    assert_eq!(after, std::time::Duration::from_secs(30));
+    let asked = std::time::Duration::from_secs(30);
+    assert!(
+        after >= asked && after <= asked.mul_f64(1.2),
+        "what the filter asked, stretched by a fifth at most: {after:?}"
+    );
 }
 
 #[tokio::test]

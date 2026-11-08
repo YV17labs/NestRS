@@ -2440,6 +2440,11 @@ fn waited(outcome: AttemptOutcome) -> Duration {
     after
 }
 
+/// Whether `waited` honours `asked`: never before it, at most a fifth after.
+fn honours(waited: Duration, asked: Duration) -> bool {
+    waited >= asked && waited <= asked.mul_f64(1.2)
+}
+
 #[tokio::test]
 async fn a_problem_asking_a_wait_holds_the_next_attempt_back_however_the_method_says_it() {
     for (name, queue) in [
@@ -2454,10 +2459,10 @@ async fn a_problem_asking_a_wait_holds_the_next_attempt_back_however_the_method_
         ),
         ("AnsweringProcessor::throttled", "answers-throttled"),
     ] {
-        assert_eq!(
-            waited(first_answer(name, queue).await),
-            Duration::from_secs(ASKED_SECS.into()),
-            "{name}",
+        let waited = waited(first_answer(name, queue).await);
+        assert!(
+            honours(waited, Duration::from_secs(ASKED_SECS.into())),
+            "{name}: {waited:?}",
         );
     }
 }
@@ -2469,7 +2474,8 @@ async fn a_wait_asked_past_every_bound_holds_the_next_attempt_back_for_an_hour()
         "answers-past-every-bound",
     )
     .await;
-    assert_eq!(waited(outcome), Duration::from_secs(60 * 60));
+    let waited = waited(outcome);
+    assert!(honours(waited, Duration::from_secs(60 * 60)), "{waited:?}");
 }
 
 #[tokio::test]
@@ -2494,7 +2500,12 @@ async fn the_line_reporting_a_failure_says_the_wait_it_chose_and_the_one_asked()
         nest_rs_queue::TARGET,
         "job failed; will retry within the budget",
     );
-    assert_eq!(line.field("retry_after_ms").as_deref(), Some("3600000"));
+    let chosen = line
+        .field("retry_after_ms")
+        .and_then(|millis| millis.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .expect("the wait chosen, in milliseconds");
+    assert!(honours(chosen, Duration::from_secs(60 * 60)), "{chosen:?}");
     assert_eq!(
         line.field("retry_after_asked_ms").as_deref(),
         Some("4294967295000"),

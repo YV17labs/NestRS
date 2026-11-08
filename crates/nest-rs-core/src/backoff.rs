@@ -10,6 +10,10 @@ use std::time::Duration;
 const JITTER_LOW_PERMILLE: u128 = 800;
 const JITTER_SPAN_PERMILLE: u64 = 400;
 
+/// How far above an asked wait [`Backoff::honouring`] stretches it, in
+/// thousandths: the jitter's upper half, so an asked wait is never cut.
+const STRETCH_SPAN_PERMILLE: u64 = JITTER_SPAN_PERMILLE / 2;
+
 /// FNV-1a's 64-bit offset basis and prime: a hash its own specification fixes,
 /// so a wait never moves with the standard library's unspecified
 /// `DefaultHasher`.
@@ -80,10 +84,7 @@ impl Backoff {
             .min(ceiling);
         let jitter = fnv1a(seed, &attempt.get().to_le_bytes()) % (JITTER_SPAN_PERMILLE + 1);
         let nanos = curve.saturating_mul(JITTER_LOW_PERMILLE + u128::from(jitter)) / 1000;
-        u64::try_from(nanos / NANOS_PER_SEC).map_or(Duration::MAX, |secs| {
-            // The remainder of a division by a billion fits a `u32`.
-            Duration::new(secs, (nanos % NANOS_PER_SEC) as u32)
-        })
+        from_nanos(nanos)
     }
 
     /// The seed a loop keyed by `key` draws its waits from — a job's id, a
@@ -91,6 +92,36 @@ impl Backoff {
     pub fn seed(key: &[u8]) -> u64 {
         fnv1a(FNV_OFFSET_BASIS, key)
     }
+
+    /// The wait honouring one the other side asked for — a `Retry-After`, a
+    /// failure's `with_retry_after` — after failed attempt number `attempt`:
+    /// `asked`, stretched by a factor in `[1, 1.2]` drawn from `seed` and
+    /// `attempt` as [`wait`](Self::wait) draws its jitter. Never shorter than
+    /// asked (RFC 9110 §10.2.3), so what one answer told to wait does not all
+    /// come back at the instant it named.
+    ///
+    /// ```
+    /// use std::num::NonZeroU32;
+    /// use std::time::Duration;
+    /// use nest_rs_core::Backoff;
+    ///
+    /// let asked = Duration::from_secs(30);
+    /// let wait = Backoff::honouring(asked, NonZeroU32::MIN, Backoff::seed(b"a job"));
+    /// assert!(wait >= asked && wait <= Duration::from_secs(36));
+    /// ```
+    pub fn honouring(asked: Duration, attempt: NonZeroU32, seed: u64) -> Duration {
+        let stretch = fnv1a(seed, &attempt.get().to_le_bytes()) % (STRETCH_SPAN_PERMILLE + 1);
+        let nanos = asked.as_nanos().saturating_mul(1000 + u128::from(stretch)) / 1000;
+        from_nanos(nanos)
+    }
+}
+
+/// `nanos` as a [`Duration`], held to [`Duration::MAX`].
+fn from_nanos(nanos: u128) -> Duration {
+    u64::try_from(nanos / NANOS_PER_SEC).map_or(Duration::MAX, |secs| {
+        // The remainder of a division by a billion fits a `u32`.
+        Duration::new(secs, (nanos % NANOS_PER_SEC) as u32)
+    })
 }
 
 /// FNV-1a over `bytes`, from the state `from`.
@@ -245,6 +276,60 @@ mod tests {
             .map(|attempt| JOBS.wait(nth(attempt), seed).as_millis())
             .collect();
         assert_eq!(waits, [1129, 1938, 3236, 6816, 254_464, 250_200, 322_500]);
+    }
+
+    #[test]
+    fn an_asked_wait_is_never_cut_and_stretched_by_a_fifth_at_most_without_overflow() {
+        let seed = Backoff::seed(b"a job");
+        for asked in [
+            Duration::ZERO,
+            Duration::from_nanos(1),
+            Duration::from_secs(30),
+            Duration::from_secs(60 * 60),
+            Duration::MAX,
+        ] {
+            for attempt in [1, 2, 3, 1_000, u32::MAX] {
+                let wait = Backoff::honouring(asked, nth(attempt), seed);
+                assert!(wait >= asked, "attempt {attempt}: {wait:?} cuts {asked:?}");
+                assert!(
+                    wait <= asked.saturating_add(asked / 5),
+                    "attempt {attempt}: {wait:?} past a fifth over {asked:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn loops_one_answer_asked_to_wait_do_not_all_come_back_at_its_instant() {
+        let asked = Duration::from_secs(30);
+        let waits: BTreeSet<Duration> = (0u32..32)
+            .map(|loop_| Backoff::honouring(asked, nth(1), Backoff::seed(&loop_.to_le_bytes())))
+            .collect();
+        assert!(waits.len() > 1, "{waits:?}");
+        let seed = Backoff::seed(b"one loop");
+        assert_eq!(
+            Backoff::honouring(asked, nth(2), seed),
+            Backoff::honouring(asked, nth(2), seed)
+        );
+    }
+
+    /// The stretch draws the curve's own hash, FNV-1a of the key then the
+    /// attempt, onto its upper half: pinned to literals computed outside this
+    /// crate, on the key the curve's pin uses.
+    #[test]
+    fn the_stretch_is_fnv1a_of_the_key_then_the_attempt() {
+        let key = [
+            0x01, 0x89, 0x0a, 0x5d, 0xac, 0x96, 0x77, 0x4b, 0xbc, 0xce, 0xb3, 0x02, 0x09, 0x9a,
+            0x80, 0x57,
+        ];
+        let seed = Backoff::seed(&key);
+        let waits: Vec<u128> = [1, 2, 3, 4]
+            .into_iter()
+            .map(|attempt| {
+                Backoff::honouring(Duration::from_secs(30), nth(attempt), seed).as_millis()
+            })
+            .collect();
+        assert_eq!(waits, [32_550, 32_160, 31_770, 31_500]);
     }
 
     #[test]

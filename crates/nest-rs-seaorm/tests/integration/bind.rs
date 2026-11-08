@@ -171,7 +171,7 @@ impl BoundTools {
 struct BoundModule;
 
 /// A binding whose every unit commits, on no database.
-struct Committing;
+pub(crate) struct Committing;
 
 struct CommittingUnit;
 

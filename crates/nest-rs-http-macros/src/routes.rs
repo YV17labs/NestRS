@@ -54,8 +54,6 @@ struct RouteHandler {
     /// On an `#[sse]` route, the assertion that its posture's subject shapes
     /// nothing, spanned on the subject the posture names.
     stream_posture: TokenStream2,
-    /// Whether the handler declares any extractor; without one, no mask probe is emitted.
-    has_extractors: bool,
     no_pipes: bool,
     /// `#[force_guards]` paths on the method.
     force_guards: Vec<Path>,
@@ -68,8 +66,6 @@ struct RouteHandler {
     /// The method's `#[cfg]` conditions, carried onto every item emitted for the
     /// route outside the method.
     cfgs: Vec<TokenStream2>,
-    /// The route as the mask probe's line names it: the verb and the path.
-    route_label: String,
     /// Whether the route declares `#[authorize]`.
     authorized: bool,
     /// The handler method, which names the route's site.
@@ -600,14 +596,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             param_types,
             posture_type: authorize_ty,
             stream_posture,
-            has_extractors: !inputs.is_empty(),
             no_pipes,
             force_guards,
             pipes: method_pipes,
             exception_filters: method_exception_filters,
             versions: method_versions.clone(),
             cfgs: cfgs.clone(),
-            route_label: format!("{} {}", verb_ident, route_path.value()),
             authorized: authorize.is_some(),
             method_name: method_name.clone(),
         };
@@ -1390,19 +1384,14 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
         probe_types,
         posture_type,
         stream_posture,
-        has_extractors,
         no_pipes,
         force_guards,
         pipes: method_pipes,
         exception_filters: method_exception_filters,
-        route_label,
         authorized,
         method_name,
     } = handler;
-    let route_label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
 
-    // The run-time probe catches a masking extractor reached indirectly (nested,
-    // or a hand-rolled `FromRequest`), which no scan of the signature can see.
     let shaper_selection = shaper_selection(probe_types);
     let gate_selection = gate_selection(probe_types);
     let posture_assert = match posture_type {
@@ -1458,11 +1447,6 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
     } else {
         quote! { #wrapper { __ctrl: ::std::sync::Arc::clone(&__ctrl) } }
     };
-    let probe = if *has_extractors {
-        quote! { ::core::option::Option::Some(#route_label_lit) }
-    } else {
-        quote! { ::core::option::Option::None }
-    };
     let deprecated = match deprecation_header {
         Some(header) => quote! { ::core::option::Option::Some(#header) },
         None => quote! { ::core::option::Option::None },
@@ -1482,7 +1466,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
             {
                 #posture_assert
                 #stream_posture
-                ::nest_rs_http::__private::shaped(#wrapper_expr, #shaper_selection, #probe)
+                ::nest_rs_http::__private::shaped(#wrapper_expr, #shaper_selection)
             },
             #deprecated,
         )

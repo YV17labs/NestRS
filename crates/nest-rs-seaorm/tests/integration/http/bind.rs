@@ -227,3 +227,65 @@ async fn a_bound_route_reads_the_id_its_controller_path_names() {
     let body = refused.0.into_body().into_string().await.expect("a body");
     assert!(body.contains(nest_rs_core::UUID_V7_REQUIRED), "{body}");
 }
+
+/// Finds every row it is asked for, as a live load finding one does.
+#[injectable]
+#[derive(Default)]
+struct FindingNotesService;
+
+#[async_trait]
+impl CrudService for FindingNotesService {
+    type Entity = note::Entity;
+
+    async fn access(
+        &self,
+        _action: Action,
+        id: uuid::Uuid,
+    ) -> Result<nest_rs_seaorm::Access<note::Model>, sea_orm::DbErr> {
+        Ok(nest_rs_seaorm::Access::Found(note::Model { id }))
+    }
+}
+
+#[controller(path = "/found")]
+#[use_guards(Grants)]
+struct FoundNotesController;
+
+#[routes]
+impl FoundNotesController {
+    #[get("/{id}")]
+    #[authorize(Read, bind = FindingNotesService)]
+    async fn note(
+        &self,
+        note: Authorized<Read, note::Entity>,
+    ) -> nest_rs_http::Result<nest_rs_http::Json<note::Note>> {
+        Ok(nest_rs_http::Json(note::Note::from(&note.into_inner())))
+    }
+}
+
+#[module(providers = [FindingNotesService, Grants, FoundNotesController])]
+struct FoundNotesModule;
+
+/// The load is the route's extractor and the reply the row judged where it was
+/// built: nothing between them reads the reply back, so a found row answers.
+#[tokio::test]
+async fn a_bound_route_answers_the_row_its_load_found() {
+    let app = TestApp::builder()
+        .module::<FoundNotesModule>()
+        .provide_dyn::<dyn nest_rs_database::UnitOfWork>(std::sync::Arc::new(
+            crate::bind::Committing,
+        ))
+        .build()
+        .await
+        .expect("a bound route boots on its unit of work");
+    let id = uuid::Uuid::now_v7();
+
+    let found = app
+        .http()
+        .get(format!("/found/{id}"))
+        .header("x-read", "")
+        .send()
+        .await;
+
+    found.assert_status(StatusCode::OK);
+    found.assert_json(serde_json::json!({ "id": id })).await;
+}

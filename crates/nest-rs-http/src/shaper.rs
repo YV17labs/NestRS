@@ -10,17 +10,15 @@
 //! and every handler parameter's to [`ShaperProbe`], and the compiler answers
 //! whether that type implements [`RouteResponseShaper`].
 
-use std::cell::Cell;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 
 use futures_util::FutureExt as _;
 use futures_util::future::Either;
-use http::StatusCode;
 
 use crate::endpoint::Endpoint;
-use crate::error::{HttpError, Result};
+use crate::error::Result;
 use crate::request::Request;
 use crate::response::Response;
 use crate::route_site::RouteWrapper;
@@ -175,31 +173,19 @@ macro_rules! __gate_of {
 }
 
 /// Wrap `inner` with the route's shaping seam. Emitted by `#[routes]` for every
-/// handler: `shaper` is the type-directed selection over the parameter list,
-/// and `probe` names the route when it carries extractors (see [`MaskProbe`]).
-pub fn shaped<E>(
-    inner: E,
-    shaper: Option<CaptureFn>,
-    probe: Option<&'static str>,
-) -> ShapedEndpoint<E> {
-    ShapedEndpoint {
-        inner,
-        shaper,
-        probe,
-    }
+/// handler: `shaper` is the type-directed selection over the parameter list.
+pub fn shaped<E>(inner: E, shaper: Option<CaptureFn>) -> ShapedEndpoint<E> {
+    ShapedEndpoint { inner, shaper }
 }
 
-/// The route's shaping seam: applies the armed [`ResponseShaping`], or runs the
-/// masking probe's cross-check when nothing armed.
+/// The route's shaping seam: applies the armed [`ResponseShaping`], if any.
 pub struct ShapedEndpoint<E> {
     inner: E,
     shaper: Option<CaptureFn>,
-    probe: Option<&'static str>,
 }
 
 /// `handler`'s answer, its streaming body continuing under what the handler
-/// ran under, shaped by `shaping` — or, with nothing armed, probed when
-/// `probe` names the route.
+/// ran under, shaped by `shaping` when one is armed.
 ///
 /// Not an `async fn`, nor a block awaiting `handler`: either keeps the future
 /// it is handed beside the one it awaits, so each would double the handler's
@@ -207,101 +193,37 @@ pub struct ShapedEndpoint<E> {
 fn shape<'a>(
     handler: impl Future<Output = Result<Response>> + Send + 'a,
     shaping: Option<Box<dyn ResponseShaping>>,
-    probe: Option<&'static str>,
 ) -> impl Future<Output = Result<Response>> + Send + 'a {
     let plain = handler.map(|resp| resp.map(crate::response_body::continue_body));
-    match (shaping, probe) {
-        (Some(shaping), _) => Either::Left(shaping.apply(Box::pin(plain))),
-        (None, Some(route)) => Either::Right(Either::Left(probed(plain, route))),
-        (None, None) => Either::Right(Either::Right(plain)),
+    match shaping {
+        Some(shaping) => Either::Left(shaping.apply(Box::pin(plain))),
+        None => Either::Right(plain),
     }
-}
-
-/// `plain`'s answer, failed closed when a masking extractor ran on a route
-/// nothing armed.
-fn probed<'a>(
-    plain: impl Future<Output = Result<Response>> + Send + 'a,
-    route: &'static str,
-) -> impl Future<Output = Result<Response>> + Send + 'a {
-    MASK_PROBE
-        .scope(
-            Cell::new(false),
-            plain.map(|resp| (MASK_PROBE.with(Cell::get), resp)),
-        )
-        .map(move |(marked, resp)| unmasked(marked, resp, route))
-}
-
-/// `resp`, unless `marked` says a masking extractor ran on `route`, which
-/// nothing armed, and it succeeded.
-fn unmasked(marked: bool, resp: Result<Response>, route: &'static str) -> Result<Response> {
-    let resp = resp?;
-    if marked && resp.status().is_success() {
-        tracing::error!(
-            target: crate::target::HTTP,
-            site = route,
-            "a masking extractor ran but no response shaper armed on this route — \
-             declare it as a handler parameter (a nested or hand-rolled extractor \
-             is invisible to the type-directed arm); failing closed",
-        );
-        return Err(HttpError::from_status(StatusCode::INTERNAL_SERVER_ERROR));
-    }
-    Ok(resp)
 }
 
 impl<E: Endpoint> Endpoint for ShapedEndpoint<E> {
     async fn call(&self, req: Request) -> Result<Response> {
         let shaping = self.shaper.and_then(|capture| capture(&req));
-        shape(self.inner.call(req), shaping, self.probe).await
+        shape(self.inner.call(req), shaping).await
     }
 }
 
 impl<W: RouteWrapper> RouteWrapper for ShapedEndpoint<W> {
     async fn call(&self, req: &mut Request) -> Result<Response> {
         let shaping = self.shaper.and_then(|capture| capture(req));
-        shape(self.inner.call(req), shaping, self.probe).await
-    }
-}
-
-tokio::task_local! {
-    /// The per-request masking probe (see [`MaskProbe`]); extractors run inside
-    /// the endpoint's own task, so the scope covers them.
-    static MASK_PROBE: Cell<bool>;
-}
-
-/// The run-time backstop behind the type-directed arm, for a masking extractor
-/// it cannot see (nested in another, or a hand-rolled `FromRequest`): a
-/// [`mark`](MaskProbe::mark) on an unarmed route's success fails it closed.
-pub struct MaskProbe;
-
-impl MaskProbe {
-    /// Record that a masking extractor ran on this request. Called by the
-    /// extractors themselves; outside a probe scope (an armed route, another
-    /// transport) this is a no-op.
-    pub fn mark() {
-        #[expect(
-            clippy::let_underscore_must_use,
-            reason = "outside a probe scope the mark is a documented no-op"
-        )]
-        let _ = MASK_PROBE.try_with(|marked| marked.set(true));
+        shape(self.inner.call(req), shaping).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use http::StatusCode;
 
     use crate::endpoint::endpoint_fn;
     use crate::testing::{Holding, get};
     use crate::{HeaderName, HeaderValue};
 
     use super::*;
-
-    fn marks_and_succeeds() -> impl Endpoint {
-        endpoint_fn(|_req| async {
-            MaskProbe::mark();
-            Ok(Response::builder().body("unmasked body"))
-        })
-    }
 
     fn plain() -> impl Endpoint {
         endpoint_fn(|_req| async { Ok(Response::builder().body("ok")) })
@@ -329,25 +251,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_marked_probe_on_success_fails_closed() {
-        let logs = nest_rs_testing::LogCapture::install();
-        let ep = shaped(marks_and_succeeds(), None, Some("GET /users"));
-        let refused = answer(&ep, None).await.expect_err("fails closed");
-        assert_eq!(refused.status(), StatusCode::INTERNAL_SERVER_ERROR);
-
-        let event = logs.expect_one(
-            "nest_rs::http",
-            "a masking extractor ran but no response shaper armed on this route — \
-             declare it as a handler parameter (a nested or hand-rolled extractor \
-             is invisible to the type-directed arm); failing closed",
-        );
-        assert_eq!(event.level, "error");
-        assert_eq!(event.field("site").as_deref(), Some("GET /users"));
-    }
-
-    #[tokio::test]
-    async fn an_unmarked_probe_passes_the_response_through() {
-        let ep = shaped(plain(), None, Some("GET /health"));
+    async fn an_unarmed_route_passes_the_response_through() {
+        let ep = shaped(plain(), None);
         assert_eq!(
             text(answer(&ep, None).await).await,
             (StatusCode::OK, "ok".into())
@@ -394,7 +299,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_armed_shaper_wraps_the_handler_and_rewrites_the_body() {
-        let ep = shaped(plain(), __shaper_of!(Shout), None);
+        let ep = shaped(plain(), __shaper_of!(Shout));
         assert_eq!(
             text(answer(&ep, Some("seen")).await).await,
             (StatusCode::OK, "seen:OK".into())
@@ -403,29 +308,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_capture_that_declines_leaves_the_response_untouched() {
-        let ep = shaped(plain(), __shaper_of!(Shout), None);
+        let ep = shaped(plain(), __shaper_of!(Shout));
         assert_eq!(
             text(answer(&ep, None).await).await,
             (StatusCode::OK, "ok".into())
         );
-    }
-
-    #[tokio::test]
-    async fn an_armed_route_runs_no_probe_scope() {
-        // A `mark` inside an armed route must not fail it closed.
-        static RAN: AtomicBool = AtomicBool::new(false);
-
-        let marks = endpoint_fn(|_req| async {
-            MaskProbe::mark();
-            RAN.store(true, Ordering::SeqCst);
-            Ok(Response::builder().body("ok"))
-        });
-        let ep = shaped(marks, __shaper_of!(Shout), Some("GET /armed"));
-        assert_eq!(
-            text(answer(&ep, Some("seen")).await).await,
-            (StatusCode::OK, "seen:OK".into())
-        );
-        assert!(RAN.load(Ordering::SeqCst), "the handler ran");
     }
 
     struct Gated;
@@ -534,7 +421,7 @@ mod tests {
     /// `#[routes]` mounts it and as an endpoint.
     fn added_by_shaping<const N: usize>() -> [usize; 2] {
         let handler = size_of_val(&RouteWrapper::call(&Holding::<N>, &mut get()));
-        let ep = shaped(Holding::<N>, __shaper_of!(Shout), Some("POST /x"));
+        let ep = shaped(Holding::<N>, __shaper_of!(Shout));
         [
             size_of_val(&RouteWrapper::call(&ep, &mut get())) - handler,
             size_of_val(&Endpoint::call(&ep, get())) - handler,

@@ -24,7 +24,6 @@ where
     <S::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     A: ActionMarker,
 {
-    nest_rs_http::__private::MaskProbe::mark();
     let nest_rs_http::Path(id) =
         <nest_rs_http::Path<Uuid> as nest_rs_http::FromRequest>::from_request(req, body).await?;
     load::<A, S>(id).await.map_err(into_http)

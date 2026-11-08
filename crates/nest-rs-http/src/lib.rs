@@ -287,7 +287,7 @@ pub mod __private {
     pub use crate::route_site::{
         RouteGuards, RoutePipes, RouteWrapper, mount_controller, mount_route, route_guard_stage,
     };
-    pub use crate::shaper::{CaptureFn, GateFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
+    pub use crate::shaper::{CaptureFn, GateFn, ShaperProbe, UnshapedProbe, shaped};
     pub use crate::transport::{
         join_path, literal_mount_path, normalize_mount_path, version_path, versions_declare,
     };

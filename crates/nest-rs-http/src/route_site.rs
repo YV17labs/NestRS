@@ -330,7 +330,7 @@ mod tests {
         let tail = RouteTail {
             handler: &ROUTE,
             pipes: BodyPipes::none(),
-            wrapper: shaped(Holding::<N>, None, Some("POST /x")),
+            wrapper: shaped(Holding::<N>, None),
         };
         let route = deprecated_route(SiteEndpoint::new(&ROUTE, chains, None, tail), "true");
         let handler = size_of_val(&RouteWrapper::call(&Holding::<N>, &mut get()));

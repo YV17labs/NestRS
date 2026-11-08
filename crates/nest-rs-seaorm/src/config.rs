@@ -1,6 +1,6 @@
-use std::time::Duration;
-
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use nest_rs_config::__private::is_loopback;
 use nest_rs_config::{
@@ -102,6 +102,32 @@ const MIN_CONNECTIONS: CountBounds = CountBounds::new(
 
 /// libpq's variable naming the mode a URL leaves out, which sqlx reads.
 const PGSSLMODE: &str = "PGSSLMODE";
+
+/// libpq's variable naming the authority a URL leaves out, which sqlx reads.
+pub(crate) const PGSSLROOTCERT: &str = "PGSSLROOTCERT";
+
+/// The URL's spellings of the authority sqlx reads, libpq's first.
+const ROOT_KEYS: &[&str] = &["sslrootcert", "ssl-root-cert", "ssl-ca"];
+
+/// Each certificate file a connection reads — the authority, the client's
+/// certificate and its key — as the URL spells it, libpq's first, and the
+/// libpq variable naming it beside a URL naming none.
+const TLS_FILES: [(&[&str], &str); 3] = [
+    (ROOT_KEYS, PGSSLROOTCERT),
+    (&["sslcert", "ssl-cert"], "PGSSLCERT"),
+    (&["sslkey", "ssl-key"], "PGSSLKEY"),
+];
+
+/// What the server's certificate is verified to, libpq's root of verification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TrustRoot {
+    /// The system's authorities: no root named, or libpq's `system`.
+    System,
+    /// What the URL's `sslrootcert` names.
+    Url,
+    /// What libpq's `PGSSLROOTCERT` names, beside a URL naming none.
+    Variable,
+}
 
 /// What the boot says when a deployment reaches Postgres in plaintext.
 pub(crate) const PLAINTEXT_OPEN: &str = "Postgres is reached in plaintext outside a dev profile: \
@@ -208,11 +234,15 @@ impl SeaOrmConfig {
     }
 
     /// What every connection this config opens does with TLS: the mode
-    /// [`tls_mode`](Self::tls_mode) allows, and the system's authorities when
-    /// the URL names no `sslrootcert`, over the `PGSSLROOTCERT` sqlx read first.
+    /// [`tls_mode`](Self::tls_mode) allows, and the system's authorities where
+    /// [`trust_root`](Self::trust_root) reads them — what sqlx read of the URL
+    /// or of `PGSSLROOTCERT` stands otherwise.
     fn tls(&self) -> Result<impl Fn(PgConnectOptions) -> PgConnectOptions + Send + Sync + 'static> {
         let mode = self.tls_mode()?;
-        let system = self.trusts_the_system();
+        if !matches!(mode, PgSslMode::Disable) {
+            self.check_tls_files()?;
+        }
+        let system = self.trust_root() == TrustRoot::System;
         Ok(move |options: PgConnectOptions| {
             #[expect(
                 clippy::disallowed_methods,
@@ -266,34 +296,77 @@ impl SeaOrmConfig {
         ConfigError::parse(Self::URL.var(Self::NAMESPACE), message)
     }
 
-    /// Whether the pool trusts the system's authorities: when the URL names no
-    /// `sslrootcert`, or names libpq's `system` — sqlx would read neither, and
-    /// trusts the authorities compiled into it otherwise.
-    fn trusts_the_system(&self) -> bool {
-        self.query(&["sslrootcert", "ssl-root-cert", "ssl-ca"])
-            .is_none_or(|root| root == "system")
+    /// What the server's certificate is verified to, as libpq reads it: the
+    /// URL's `sslrootcert`, then `PGSSLROOTCERT`, and the system's authorities
+    /// where neither names one or one names libpq's `system`. An empty value is
+    /// none, and the URL's hides the variable, as libpq's connection parameter
+    /// does.
+    pub(crate) fn trust_root(&self) -> TrustRoot {
+        match self.query(ROOT_KEYS).as_deref() {
+            Some("system" | "") => TrustRoot::System,
+            Some(_) => TrustRoot::Url,
+            None => match libpq_var(PGSSLROOTCERT).as_deref() {
+                None | Some("" | "system") => TrustRoot::System,
+                Some(_) => TrustRoot::Variable,
+            },
+        }
     }
 
-    /// The value the URL's query gives the first of `keys` it names.
-    fn query(&self, keys: &[&str]) -> Option<&str> {
-        let (_, query) = self.url.expose_secret().split_once('?')?;
-        query.split('&').find_map(|pair| {
-            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-            keys.contains(&key).then_some(value)
-        })
+    /// Refuse a certificate file a connection would read and this process
+    /// cannot, naming where it is set: every attempt would fail the same way,
+    /// and sqlx says it as an I/O error the boot would retry for its budget.
+    /// The file is read again at each connection, so a renewed one is taken.
+    fn check_tls_files(&self) -> Result<()> {
+        for (keys, var) in TLS_FILES {
+            let names_no_root = |value: &str| keys == ROOT_KEYS && matches!(value, "system" | "");
+            let named = self.query(keys);
+            let path = match named.as_deref() {
+                Some(value) if names_no_root(value) => continue,
+                Some(value) => PathBuf::from(value),
+                None => match libpq_var(var) {
+                    Some(value) if names_no_root(&value) || is_inline_pem(&value) => continue,
+                    Some(value) => PathBuf::from(value),
+                    None => continue,
+                },
+            };
+            let Err(error) = readable(&path) else {
+                continue;
+            };
+            let why = format!(
+                "this process cannot read ({}), so every connection would fail its TLS",
+                nest_rs_core::error_message(&error)
+            );
+            return Err(match named {
+                Some(_) => Self::refuse_url(format!("`{}` names a file {why}", keys[0])),
+                None => ConfigError::parse(var, format!("names a file {why}")),
+            });
+        }
+        Ok(())
+    }
+
+    /// The value the URL's query gives the last of `keys` it names, decoded:
+    /// what sqlx reads, through the same parse, the last pair winning.
+    fn query(&self, keys: &[&str]) -> Option<String> {
+        let url = url::Url::parse(self.url.expose_secret()).ok()?;
+        url.query_pairs()
+            .filter(|(key, _)| keys.contains(&key.as_ref()))
+            .last()
+            .map(|(_, value)| value.into_owned())
     }
 
     /// What every connection this config opens shares: TLS verified
     /// (`verify-full`, against the system's authorities unless `sslrootcert`
-    /// names a file) or off (`sslmode=disable`, or libpq's `PGSSLMODE=disable`
-    /// beside a URL naming no mode), and the pool bounds.
+    /// names a file, or libpq's `PGSSLROOTCERT` beside a URL naming none) or off
+    /// (`sslmode=disable`, or libpq's `PGSSLMODE=disable` beside a URL naming no
+    /// mode), and the pool bounds.
     ///
     /// The one constructor every path reaches — the app's pool,
     /// [`connect_from_env`](crate::connect_from_env), a tool or a test
     /// opening a connection of its own — so each refuses what the boot does:
-    /// an empty URL, a mode that encrypts without verifying, and a connect
-    /// budget or a pool bound outside its range, or a minimum above the maximum,
-    /// which a config built in code never had checked. A refusal names its
+    /// an empty URL, a mode that encrypts without verifying, a certificate file
+    /// the URL or a libpq variable names that this process cannot read, and a
+    /// connect budget or a pool bound outside its range, or a minimum above the
+    /// maximum, which a config built in code never had checked. A refusal names its
     /// variable, and never quotes the URL, which carries the password.
     pub fn connect_options(&self) -> Result<ConnectOptions> {
         if self.url.expose_secret().is_empty() {
@@ -333,6 +406,30 @@ impl SeaOrmConfig {
         }
         Ok((most, least))
     }
+}
+
+/// libpq's own variable `name`, read where sqlx reads it, so the two never
+/// disagree: no prefix renames it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "libpq's variable, which sqlx reads from the process itself"
+)]
+fn libpq_var(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+/// What sqlx reads as a PEM value rather than a file's path.
+fn is_inline_pem(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("-----BEGIN") && trimmed.ends_with("-----")
+}
+
+/// Whether this process can read the file at `path`, as each connection
+/// does: a folder opens, and only its read fails. One byte is read, so no key
+/// is copied.
+fn readable(path: &Path) -> std::io::Result<()> {
+    use std::io::Read as _;
+    std::fs::File::open(path)?.read(&mut [0; 1]).map(drop)
 }
 
 /// A mode short of verifying, in the word `sslmode` writes it.
@@ -424,13 +521,17 @@ mod tests {
                 "{refused}"
             );
         }
-        for url in [
-            "postgres://app:s3cret@db/app",
-            "postgres://app:s3cret@db/app?sslmode=disable",
-            "postgres://app:s3cret@db/app?sslmode=verify-full&sslrootcert=/ca.pem",
-        ] {
-            assert!(pinned(url).connect_options().is_ok(), "{url}");
-        }
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("ca.pem", "")?;
+            for url in [
+                "postgres://app:s3cret@db/app",
+                "postgres://app:s3cret@db/app?sslmode=disable",
+                "postgres://app:s3cret@db/app?sslmode=verify-full&sslrootcert=ca.pem",
+            ] {
+                assert!(pinned(url).connect_options().is_ok(), "{url}");
+            }
+            Ok(())
+        });
     }
 
     /// A deployment reaching Postgres in plaintext says so, by host and port and
@@ -440,6 +541,7 @@ mod tests {
     fn a_deployment_reaching_postgres_in_plaintext_off_this_machine_is_said() {
         const DISABLED: &str = "postgres://app:s3cret@db.internal:5433/app?sslmode=disable";
         figment::Jail::expect_with(|jail| {
+            jail.create_file("ca.pem", "")?;
             for (profile, url, endpoint) in [
                 ("production", DISABLED, Some("db.internal:5433")),
                 ("staging", DISABLED, Some("db.internal:5433")),
@@ -454,7 +556,7 @@ mod tests {
                 ("production", "postgres://app:s3cret@db/app", None),
                 (
                     "production",
-                    "postgres://app:s3cret@db/app?sslmode=verify-full&sslrootcert=/ca.pem",
+                    "postgres://app:s3cret@db/app?sslmode=verify-full&sslrootcert=ca.pem",
                     None,
                 ),
                 (
@@ -638,23 +740,174 @@ mod tests {
         }
     }
 
+    /// libpq's order: the URL's `sslrootcert`, then `PGSSLROOTCERT`, then the
+    /// system's; `system` and an empty value name none.
     #[test]
-    fn the_pool_trusts_the_system_unless_the_url_names_an_authority_file() {
-        for (url, system) in [
-            ("postgres://db/app", true),
-            ("postgres://db/app?sslmode=verify-full", true),
-            (
-                "postgres://db/app?sslmode=verify-full&sslrootcert=system",
-                true,
-            ),
-            (
-                "postgres://db/app?sslmode=verify-full&sslrootcert=/ca.pem",
-                false,
-            ),
-            ("postgres://db/app?ssl-ca=/ca.pem", false),
-        ] {
-            assert_eq!(pinned(url).trusts_the_system(), system, "{url}");
-        }
+    fn the_root_of_verification_is_read_as_libpq_reads_it() {
+        figment::Jail::expect_with(|jail| {
+            for (variable, url, root) in [
+                (None, "postgres://db/app", TrustRoot::System),
+                (
+                    None,
+                    "postgres://db/app?sslmode=verify-full",
+                    TrustRoot::System,
+                ),
+                (
+                    None,
+                    "postgres://db/app?sslrootcert=system",
+                    TrustRoot::System,
+                ),
+                (None, "postgres://db/app?sslrootcert=", TrustRoot::System),
+                (
+                    None,
+                    "postgres://db/app?sslrootcert=/ca.pem",
+                    TrustRoot::Url,
+                ),
+                (None, "postgres://db/app?ssl-ca=/ca.pem", TrustRoot::Url),
+                (Some("/ca.pem"), "postgres://db/app", TrustRoot::Variable),
+                (Some("system"), "postgres://db/app", TrustRoot::System),
+                (Some(""), "postgres://db/app", TrustRoot::System),
+                (
+                    Some("/ca.pem"),
+                    "postgres://db/app?sslrootcert=system",
+                    TrustRoot::System,
+                ),
+                (
+                    Some("/ca.pem"),
+                    "postgres://db/app?sslrootcert=/other.pem",
+                    TrustRoot::Url,
+                ),
+            ] {
+                match variable {
+                    Some(value) => jail.set_env(PGSSLROOTCERT, value),
+                    None => jail.clear_env(),
+                }
+                assert_eq!(pinned(url).trust_root(), root, "{variable:?}, {url}");
+            }
+            Ok(())
+        });
+    }
+
+    /// Each file is checked where sqlx reads it: the last pair naming it in
+    /// any spelling, key and value decoded as sqlx decodes them.
+    #[test]
+    fn the_query_is_read_as_sqlx_reads_it() {
+        use sea_orm::sqlx::ConnectOptions as _;
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            for query in [
+                "sslrootcert=/certs/ca.pem",
+                "sslrootcert=%2Fcerts%2Fmy%20ca.pem",
+                "sslrootcert=my+ca.pem",
+                "sslrootcert=100%",
+                "sslrootcert=%zz",
+                "sslrootcert=%+1.pem",
+                "sslrootcert=%25%2B1%+1.pem",
+                "sslrootcert=gone.pem&sslrootcert=ca.pem",
+                "sslrootcert=ca.pem&sslrootcert=gone.pem",
+                "sslrootcert=ca.pem&ssl-ca=gone.pem",
+                "ssl%72ootcert=ca.pem",
+                "sslrootcert=ca.pem#gone.pem",
+                "sslcert=client.pem&sslkey=client.key&ssl-cert=other.pem",
+                "ssl%2Dkey=client.key",
+            ] {
+                let url = format!("postgres://db/app?{query}");
+                let sqlx = PgConnectOptions::from_str(&url)
+                    .expect("sqlx reads the URL")
+                    .to_url_lossy();
+                for (keys, _) in TLS_FILES {
+                    let read = sqlx
+                        .query_pairs()
+                        .find(|(key, _)| key == keys[0])
+                        .and_then(|(_, value)| value.strip_prefix("file: ").map(str::to_owned));
+                    assert_eq!(pinned(&url).query(keys), read, "{query}: {}", keys[0]);
+                }
+            }
+            Ok(())
+        });
+    }
+
+    /// A mode the URL names under an encoded key is the URL's, as sqlx reads
+    /// it, so its refusal names the URL and never libpq's `PGSSLMODE`.
+    #[test]
+    fn a_mode_named_under_an_encoded_key_is_the_urls() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            let refused = pinned("postgres://db/app?ssl%2Dmode=require")
+                .connect_options()
+                .expect_err("sqlx reads `require`")
+                .to_string();
+            assert!(
+                refused.starts_with(&format!(
+                    "invalid value for {}: asks Postgres for TLS without verifying",
+                    nest_rs_config::var_name("seaorm", "URL")
+                )),
+                "{refused}"
+            );
+            Ok(())
+        });
+    }
+
+    /// A file `connect_options` would hand sqlx and this process cannot read —
+    /// gone, or a folder, which opens and cannot be read — is refused naming
+    /// where it is set, never with its path or the URL.
+    #[test]
+    fn a_certificate_file_that_cannot_be_read_is_refused_naming_where_it_is_set() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("ca.pem", "")?;
+            jail.create_dir("folder")?;
+            for unreadable in ["gone.pem", "folder"] {
+                jail.clear_env();
+                for (query, refused) in [
+                    (format!("sslrootcert={unreadable}"), "`sslrootcert`"),
+                    (format!("sslcert={unreadable}&sslkey=ca.pem"), "`sslcert`"),
+                    (format!("ssl-key={unreadable}&sslcert=ca.pem"), "`sslkey`"),
+                ] {
+                    let url = format!("postgres://app:s3cret@db/app?{query}");
+                    let said = pinned(&url).connect_options().expect_err(&url).to_string();
+                    assert!(
+                        said.starts_with(&format!(
+                            "invalid value for {}: {refused} names a file this process cannot \
+                             read",
+                            nest_rs_config::var_name("seaorm", "URL")
+                        )) && !said.contains(unreadable)
+                            && !said.contains("s3cret"),
+                        "{said}"
+                    );
+                }
+                for var in [PGSSLROOTCERT, "PGSSLCERT", "PGSSLKEY"] {
+                    jail.clear_env();
+                    jail.set_env(var, unreadable);
+                    let said = pinned("postgres://app:s3cret@db/app")
+                        .connect_options()
+                        .expect_err(var)
+                        .to_string();
+                    assert!(
+                        said.starts_with(&format!(
+                            "invalid value for {var}: names a file this process cannot read"
+                        )),
+                        "{var}={unreadable}: {said}"
+                    );
+                }
+            }
+            jail.clear_env();
+            jail.set_env(PGSSLROOTCERT, "gone.pem");
+            assert!(
+                pinned("postgres://db/app?sslmode=disable")
+                    .connect_options()
+                    .is_ok(),
+                "a connection without TLS reads no certificate"
+            );
+            jail.set_env(
+                PGSSLROOTCERT,
+                "-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----",
+            );
+            assert!(
+                pinned("postgres://db/app").connect_options().is_ok(),
+                "an inline PEM is read as no file"
+            );
+            Ok(())
+        });
     }
 
     #[test]

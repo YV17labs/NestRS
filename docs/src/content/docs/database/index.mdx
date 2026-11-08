@@ -231,12 +231,15 @@ its `sslrootcert`, `sslcert` and `sslkey` name are read each time the pool opens
 a connection, so a renewed one reaches every connection opened after it, while
 those already open keep the certificate they began with.
 
-The URL alone names an authority. libpq's `PGSSLROOTCERT` stands behind the
-system's authorities: a server only that file vouches for fails the boot, the
-refusal pointing at `sslrootcert`, and a server the system trusts is let in
-whatever the file says, so the variable narrows nothing either. Its neighbours
-`PGSSLCERT` and `PGSSLKEY` do present a client certificate beside a URL naming
-neither, as `sslcert` and `sslkey` do.
+The authority is read as libpq reads it: the URL's `sslrootcert`, then libpq's
+`PGSSLROOTCERT` beside a URL naming none, each in place of the system's store,
+and the system's store where neither names one or one names libpq's `system`.
+A server the file does not vouch for fails the boot, the refusal naming where
+the authority is named. sqlx keeps the public authorities it compiles in beside
+any of them. `PGSSLCERT` and `PGSSLKEY` present a client certificate beside a
+URL naming neither, as `sslcert` and `sslkey` do. A file any of them names that
+this process cannot read fails the boot at once, naming where it is set, rather
+than being tried again until the budget runs out.
 
 The pool closes when the app ends, after every shutdown hook: each connection
 gets Postgres's goodbye rather than a dropped socket, said before the close

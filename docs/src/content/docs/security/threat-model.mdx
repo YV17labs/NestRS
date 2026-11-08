@@ -69,8 +69,10 @@ the URL does not name.
 
 An encrypted connection the framework opens checks the server's
 certificate, every time: it chains to an authority the system's store
-holds, or to the ones a `TLS_CA_CERT` setting names in place of them,
-and it names the host dialled. No setting, URL parameter or code path
+holds, or to the ones a `TLS_CA_CERT` setting names in place of them
+(for Postgres, the file its URL or libpq names, and sqlx keeps the
+public authorities it compiles in beside either, as its row says), and
+it names the host dialled. No setting, URL parameter or code path
 turns the check off — the framework's lints refuse the libraries' own
 switches in its code — and each client below has a test that dials a
 server whose certificate a private authority signed and sees it refused
@@ -78,7 +80,7 @@ before any request, login or credential crosses.
 
 | Client | Trusts | Private authority |
 |--------|--------|-------------------|
-| Postgres pool, `connect_from_env`, `EphemeralDatabase` | the system's store, `verify-full` by default | the file `sslrootcert` names in `<PREFIX>_SEAORM__URL`; libpq's `PGSSLROOTCERT` names none |
+| Postgres pool, `connect_from_env`, `EphemeralDatabase` | the system's store, `verify-full` by default, and the public authorities sqlx compiles in | the file `sslrootcert` names in `<PREFIX>_SEAORM__URL`, or libpq's `PGSSLROOTCERT` beside a URL naming none, in the store's place and beside sqlx's authorities |
 | Redis, all three topologies | the system's store, for a `rediss://` URL | `<PREFIX>_REDIS__TLS_CA_CERT` |
 | Storage | the system's store, for an `https://` endpoint | `<PREFIX>_STORAGE__TLS_CA_CERT` |
 | JWK Set | the system's store | `<PREFIX>_AUTHN__TLS_CA_CERT` |

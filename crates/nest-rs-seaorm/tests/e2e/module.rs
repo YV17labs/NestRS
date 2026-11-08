@@ -1,7 +1,8 @@
 //! Covers `src/module.rs`: the pool declares its budget, so the boot holds it
 //! under the net of a guard whose strategy injects the pool; what Postgres
-//! refuses on every attempt refuses the boot at once; and the pool closes once
-//! every unit settled, whatever a connection still checked out waits on.
+//! refuses on every attempt refuses the boot at once; libpq's `PGSSLROOTCERT`
+//! is the root its TLS verifies to; and the pool closes once every unit
+//! settled, whatever a connection still checked out waits on.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +16,7 @@ use nest_rs_testing::EphemeralDatabase;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use crate::harness::NoMigrations;
+use crate::system_store::stand_in_system_store;
 
 /// A strategy that injects the pool, as one looking an identity up does.
 #[injectable]
@@ -135,6 +137,62 @@ pub(crate) fn bounding_statements(bound: Duration) -> SeaOrmConfig {
 
 #[module(imports = [SeaOrmModule])]
 struct PoolModule;
+
+/// The dev container's authority, which each environment this suite runs in
+/// installs in the system's store: the dev container's start
+/// (`.devcontainer/scripts/post-start.sh`) and CI's `dev-services` action.
+const DEV_AUTHORITY: &str = "/usr/local/share/ca-certificates/nestrs-development.crt";
+
+/// A process whose store lacks the dev authority is refused by the suite's
+/// Postgres, naming where an authority is named, and logs in once libpq's
+/// `PGSSLROOTCERT` names it: the variable is the root of verification, as
+/// libpq reads it. The store is the suite's stand-in, read once per process.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn a_store_lacking_the_dev_authority_logs_in_on_pgsslrootcert_alone() {
+    let elsewhere = nest_rs_testing::TestAuthority::new();
+    figment::Jail::expect_with(|jail| {
+        stand_in_system_store(jail, elsewhere.pem());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let boot = || {
+            runtime.block_on(
+                App::builder()
+                    .provide(config(None))
+                    .module::<PoolModule>()
+                    .build(),
+            )
+        };
+
+        let Err(refused) = boot() else {
+            panic!("the store trusts the dev authority after all");
+        };
+        let refused = format!("{refused:#}");
+        assert!(
+            refused.contains("invalid peer certificate") && refused.contains("`sslrootcert`"),
+            "{refused}"
+        );
+
+        jail.set_env("PGSSLROOTCERT", DEV_AUTHORITY);
+        let app = boot().unwrap_or_else(|refused| panic!("the variable names it: {refused:#}"));
+        runtime.block_on(async move {
+            let db = app
+                .container()
+                .get::<DatabaseConnection>()
+                .expect("the pool");
+            db.execute_unprepared("SELECT 1")
+                .await
+                .expect("a statement runs over the connection the variable verified");
+            app.close().await;
+        });
+        Ok(())
+    });
+}
 
 /// Postgres cancels a statement running past the bound and says why, so a lock
 /// held elsewhere or a plan gone wrong ends as the database's own error.

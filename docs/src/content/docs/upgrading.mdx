@@ -364,7 +364,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `LogFormat::by_profile()` | `LogFormat::ByProfile`, which `LogFormat::default()` now is, resolved where the console is built; `LogFormat::by_profile() == LogFormat::Json` is `LogFormat::ByProfile.writes_json()` |
    | `tracing_subscriber::fmt().with_env_filter(…).with_writer(ConsoleWriter::get()).init()` in a binary with no `App` | `nest_rs::core::logging::install_console(&LogSettings::from_env()?)` |
    | `nest_rs::config::crypto_provider()` | nothing to call: the framework installs the provider its clients and listeners use |
-   | `let opts = config.connect_options();` | `let opts = config.connect_options()?;`, refused for an empty URL, an unverified `sslmode` or a connect budget out of range |
+   | `let opts = config.connect_options();` | `let opts = config.connect_options()?;`, refused for an empty URL, an unverified `sslmode`, a certificate file the URL or a libpq variable names that this process cannot read, a connect budget or a pool bound out of range, or a minimum above the maximum |
    | `RedisConnection::connect(url)`, `connect_within(url, budget)` | `RedisConnection::connect(&config)` |
    | `conn.manager()` | the connection itself — it is `ConnectionLike` and `Clone` |
    | `Material { bytes, path: None }` | `Material::inline(bytes)` |
@@ -1307,9 +1307,11 @@ lists what the boot, a log or the wire shows when one is missed.
       URL, or libpq's `PGSSLMODE=disable` beside a URL naming no mode, turns it
       off: `allow`, `prefer`, `require` and `verify-ca` fail the boot, naming
       `PGSSLMODE` where it set one, and a server without TLS needs one of those two
-      written. An authority named in libpq's `PGSSLROOTCERT`, which 6.x read, moves to
-      the URL's `sslrootcert`: the variable now stands behind the system's
-      authorities, and a server only it vouches for fails the boot.
+      written. An authority named in libpq's `PGSSLROOTCERT`, which 6.x read, is
+      read as libpq reads it — the root of verification beside a URL naming no
+      `sslrootcert` — so a server only the system's store vouches for fails the
+      boot, and a certificate file one of them names that cannot be read fails it
+      at once, naming where it is set.
     - **Shutdown** ends within bounds you can read. HTTP stops waiting for open
       connections once `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` runs out, 20
       seconds by default, where 6.x waited for every one: a request still running
@@ -2208,6 +2210,14 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A Postgres URL** with an unverified `sslmode`, an OAuth provider endpoint
   over plain `http`, a non-loopback `http` redirect, or a loopback one outside a
   development or test profile, fails the boot naming its variable and the RFC.
+- **A Postgres server only the system's store vouches for, beside libpq's
+  `PGSSLROOTCERT` naming another authority**, fails the boot ``TLS failed — name
+  the authority that signed its certificate in libpq's `PGSSLROOTCERT`, which this
+  process sets, …``: the variable is the root of verification, as libpq reads it.
+  Name the right authority there, or unset it. A certificate file `sslrootcert`,
+  `sslcert`, `sslkey` or a libpq variable names that the process cannot read fails
+  the boot at once naming where it is set, where it was retried until the connect
+  budget ran out.
 - **Storage**: `<PREFIX>_STORAGE__BUCKET` fails the boot naming
   `<PREFIX>_STORAGE__URL`, a bucket that does not exist fails it at once, a key
   the store rejects fails it at once naming the credential variables, and half

@@ -239,6 +239,11 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   every framework error holding one says it by its SQLSTATE, and `?` into a
   `ServiceError` never meets it. Close: `Repo` answering an error of the
   framework's, a break of every service's `?`. *seen*
+- Postgres's certificate is checked against the public authorities sqlx
+  compiles in (webpki-roots) beside whatever root is named, the URL's
+  `sslrootcert` or `PGSSLROOTCERT`: sqlx 0.9 seeds them under every root, so a
+  private authority does not narrow trust to itself as libpq's does. Close: sqlx
+  seeding none under a named root (§7). *read*
 
 **Configuration and telemetry**
 - A provider injecting a named instance's resource with no import
@@ -249,8 +254,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 - The new plaintext `warn` lines (`redis://`, `sslmode=disable`, OTLP
   `http://`) were seen by unit tests only, never on a live plaintext server.
   *read*
-- `PGSSLROOTCERT` stands behind the system's authorities when the URL names
-  no `sslrootcert`, and fails closed on a private authority. *read*
 
 **Operator lines**
 - `http.request`, `ws.message` and `mcp.operation` name no `host` nor
@@ -342,7 +345,8 @@ path).
 
 To report (nothing filed yet): rmcp (session-restore waiters answer `404`
 instead of `503`; positional reads of `JsonRpcResponse`); sqlx-core 0.9
-(`close_hard` never returns on a quiet TLS connection); sea-orm
+(`close_hard` never returns on a quiet TLS connection; its compiled roots
+seeded under a named `sslrootcert`); sea-orm
 (`TryInsert::exec_with_returning` answers `RecordNotFound` where `Conflicted`
 is documented); async-graphql 7.2.1 (an errored field omitted from `data`;
 an interface field's error with no `path`; a field selected twice runs its

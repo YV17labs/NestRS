@@ -27,6 +27,8 @@ mod page;
 mod repo;
 mod savepoint;
 mod service;
+#[path = "../harness/system_store.rs"]
+mod system_store;
 mod unit;
 
 /// The principal the suite's authentication stand-ins attach: a caller with no

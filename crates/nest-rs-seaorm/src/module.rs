@@ -16,7 +16,7 @@ use sea_orm::{
 };
 
 use crate::SeaOrmConfig;
-use crate::config::DEFAULT_CONNECT_TIMEOUT;
+use crate::config::{DEFAULT_CONNECT_TIMEOUT, PGSSLROOTCERT, TrustRoot};
 use crate::error::ConnectError;
 
 /// Where the substrate's variables live: `<PREFIX>_SEAORM__*`.
@@ -265,6 +265,7 @@ async fn connect(
     options: ConnectOptions,
 ) -> anyhow::Result<DatabaseConnection> {
     let probe = config.probe_options()?;
+    let root = config.trust_root();
     let endpoint = endpoint(&probe);
     crate::config::warn_when_open(&probe);
     let budget = options
@@ -288,6 +289,7 @@ async fn connect(
                     classify(
                         DbErr::Conn(RuntimeErr::SqlxError(Arc::new(error))),
                         endpoint,
+                        root,
                     )
                 };
                 PgConnection::connect_with(probe)
@@ -298,7 +300,7 @@ async fn connect(
                     .map_err(met)?;
                 Database::connect(options)
                     .await
-                    .map_err(|error| classify(error, endpoint))
+                    .map_err(|error| classify(error, endpoint, root))
             }
         },
     )
@@ -335,8 +337,9 @@ fn said(endpoint: &str, budget: Duration) -> impl FnMut(Proving<'_, DbErr>) + '_
 
 /// What one failed attempt met: a refusal every attempt would repeat, or a
 /// failure that may clear — a refused or reset connection, a name that does
-/// not resolve yet, a server starting up (`57P03`) or full (`53300`).
-fn classify(error: DbErr, endpoint: &str) -> Attempt<DbErr, ConnectError> {
+/// not resolve yet, a server starting up (`57P03`) or full (`53300`). A TLS
+/// refusal says where the authority is named, `root` telling where it was read.
+fn classify(error: DbErr, endpoint: &str, root: TrustRoot) -> Attempt<DbErr, ConnectError> {
     let DbErr::Conn(RuntimeErr::SqlxError(sqlx)) = &error else {
         return Attempt::Failed(error);
     };
@@ -352,11 +355,19 @@ fn classify(error: DbErr, endpoint: &str) -> Attempt<DbErr, ConnectError> {
             }
             _ => return Attempt::Failed(error),
         },
-        SqlxError::Tls(_) | SqlxError::Io(_) if is_tls(sqlx) => format!(
-            "TLS failed — name the authority that signed its certificate in {url}'s \
-             `sslrootcert`, and a client certificate in `sslcert` and `sslkey` if Postgres \
-             requires one"
-        ),
+        SqlxError::Tls(_) | SqlxError::Io(_) if is_tls(sqlx) => {
+            let authority = match root {
+                TrustRoot::Variable => format!(
+                    "libpq's `{PGSSLROOTCERT}`, which this process sets, or in {url}'s \
+                     `sslrootcert`"
+                ),
+                TrustRoot::System | TrustRoot::Url => format!("{url}'s `sslrootcert`"),
+            };
+            format!(
+                "TLS failed — name the authority that signed its certificate in {authority}, \
+                 and a client certificate in `sslcert` and `sslkey` if Postgres requires one"
+            )
+        }
         SqlxError::Configuration(_) => {
             format!("sqlx refused the options {url} sets — check its query parameters")
         }
@@ -370,9 +381,10 @@ fn classify(error: DbErr, endpoint: &str) -> Attempt<DbErr, ConnectError> {
 }
 
 /// Whether `sqlx` met TLS that every attempt would fail the same way: TLS it
-/// could not set up (`Error::Tls` — an `sslrootcert` it cannot read, a server
-/// without TLS), or a handshake rustls refused, which sqlx hands back as an io
-/// error holding rustls's own.
+/// could not set up (`Error::Tls` — a certificate file that does not parse, a
+/// server without TLS), or a handshake rustls refused, which sqlx hands back as
+/// an io error holding rustls's own. A file it cannot read is an io error too,
+/// which `connect_options` refuses first.
 fn is_tls(sqlx: &SqlxError) -> bool {
     matches!(sqlx, SqlxError::Tls(_)) || ClientTls::negotiation_failed(sqlx)
 }

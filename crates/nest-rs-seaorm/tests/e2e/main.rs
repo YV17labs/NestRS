@@ -37,6 +37,8 @@ mod scope;
 mod select;
 mod service;
 mod soft_delete;
+#[path = "../harness/system_store.rs"]
+mod system_store;
 mod unique_key;
 mod unit;
 mod worker;

@@ -14,6 +14,8 @@ use nest_rs_testing::TestAuthority;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 
+use crate::system_store::stand_in_system_store;
+
 #[module(imports = [SeaOrmModule])]
 struct PoolModule;
 
@@ -163,25 +165,33 @@ async fn the_pool_never_logs_in_to_a_server_whose_certificate_no_trusted_authori
     logs.expect_none(nest_rs_seaorm::target::ORM, RETRYING);
 }
 
-/// Runs `check` where each TLS variable names a file of its contents, for the
-/// closure alone, on a runtime opened inside it, in the folder holding them.
+/// Runs `check` where the system's store holds `store` alone, when it names
+/// one, and each TLS variable names a file of its contents, for the closure
+/// alone, on a runtime opened inside it, handed the jail whose folder holds
+/// them.
 #[expect(
     clippy::result_large_err,
     reason = "figment::Jail fixes the closure's error type"
 )]
-fn under_tls_variables(variables: &[(&str, &str)], check: impl AsyncFnOnce(&std::path::Path)) {
+fn under_tls_variables(
+    store: Option<&str>,
+    variables: &[(&str, &str)],
+    check: impl AsyncFnOnce(&mut figment::Jail),
+) {
     figment::Jail::expect_with(|jail| {
+        if let Some(store) = store {
+            stand_in_system_store(jail, store);
+        }
         for (name, contents) in variables {
             let file = jail.directory().join(format!("{name}.pem"));
             std::fs::write(&file, contents).expect("the file");
             jail.set_env(*name, file.display());
         }
-        let directory = jail.directory().to_owned();
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("tokio runtime")
-            .block_on(check(&directory));
+            .block_on(check(jail));
         Ok(())
     });
 }
@@ -207,47 +217,17 @@ async fn refused_boot(url: String) -> String {
     format!("{refused:#}")
 }
 
-/// libpq's `PGSSLROOTCERT` names no authority here: a server only that file
-/// vouches for is refused as any other, pointing at `sslrootcert`, which logs in
-/// to that server when the URL names the same file.
+/// libpq's `PGSSLROOTCERT` names the authority beside a URL naming none, as
+/// libpq reads it: a server only that file vouches for is logged in to though
+/// the system's store lacks it.
 #[test]
-fn pgsslrootcert_vouches_for_no_server_and_the_urls_sslrootcert_does() {
-    let authority = TestAuthority::new();
-    under_tls_variables(&[("PGSSLROOTCERT", authority.pem())], async |directory| {
-        let (url, started) = postgres_signed_by(&authority, None).await;
-        let refused = refused_boot(url).await;
-        assert!(
-            !started.load(Ordering::SeqCst),
-            "the pool logged in on the variable's word: {refused}"
-        );
-        assert!(
-            refused.contains("UnknownIssuer") && refused.contains("sslrootcert"),
-            "{refused}"
-        );
-
-        let (url, started) = postgres_signed_by(&authority, None).await;
-        let file = directory.join("PGSSLROOTCERT.pem");
-        let refused = refused_boot(format!("{url}?sslrootcert={}", file.display())).await;
-        assert!(
-            started.load(Ordering::SeqCst) && refused.contains(LOGIN_REFUSED),
-            "{refused}"
-        );
-    });
-}
-
-/// libpq's `PGSSLROOTCERT` narrows nothing either: a server the system's
-/// authorities vouch for is logged in to, whatever other authority the variable
-/// names. `SSL_CERT_FILE` is the system's store here, read once per process.
-#[test]
-fn pgsslrootcert_narrows_nothing_the_systems_authorities_vouch_for() {
-    let (system, other) = (TestAuthority::new(), TestAuthority::new());
+fn pgsslrootcert_names_the_authority_beside_a_url_naming_none() {
+    let (authority, system) = (TestAuthority::new(), TestAuthority::new());
     under_tls_variables(
-        &[
-            ("SSL_CERT_FILE", system.pem()),
-            ("PGSSLROOTCERT", other.pem()),
-        ],
+        Some(system.pem()),
+        &[("PGSSLROOTCERT", authority.pem())],
         async |_| {
-            let (url, started) = postgres_signed_by(&system, None).await;
+            let (url, started) = postgres_signed_by(&authority, None).await;
             let refused = refused_boot(url).await;
             assert!(
                 started.load(Ordering::SeqCst) && refused.contains(LOGIN_REFUSED),
@@ -255,6 +235,111 @@ fn pgsslrootcert_narrows_nothing_the_systems_authorities_vouch_for() {
             );
         },
     );
+}
+
+/// It is the root of verification in the system store's place, as libpq's is:
+/// a server the system's authorities vouch for and the file does not is
+/// refused, pointing at the variable. The system's store is the suite's
+/// stand-in here, read once per process.
+#[test]
+fn pgsslrootcert_stands_in_place_of_the_systems_store() {
+    let (system, other) = (TestAuthority::new(), TestAuthority::new());
+    under_tls_variables(
+        Some(system.pem()),
+        &[("PGSSLROOTCERT", other.pem())],
+        async |_| {
+            let (url, started) = postgres_signed_by(&system, None).await;
+            let refused = refused_boot(url).await;
+            assert!(
+                !started.load(Ordering::SeqCst),
+                "the pool logged in past the file it was told to trust: {refused}"
+            );
+            assert!(
+                refused.contains("invalid peer certificate")
+                    && refused.contains("in libpq's `PGSSLROOTCERT`, which this process sets"),
+                "{refused}"
+            );
+        },
+    );
+}
+
+/// The URL's `sslrootcert` outranks the variable, as a libpq connection
+/// parameter outranks its environment default.
+#[test]
+fn the_urls_sslrootcert_outranks_pgsslrootcert() {
+    let (authority, other) = (TestAuthority::new(), TestAuthority::new());
+    under_tls_variables(
+        Some(other.pem()),
+        &[("PGSSLROOTCERT", other.pem()), ("ROOT", authority.pem())],
+        async |jail| {
+            let (url, started) = postgres_signed_by(&authority, None).await;
+            let file = jail.directory().join("ROOT.pem");
+            let refused = refused_boot(format!("{url}?sslrootcert={}", file.display())).await;
+            assert!(
+                started.load(Ordering::SeqCst) && refused.contains(LOGIN_REFUSED),
+                "{refused}"
+            );
+        },
+    );
+}
+
+/// libpq's `system`, and an empty variable, read as the system's authorities.
+#[test]
+fn pgsslrootcert_naming_system_or_nothing_trusts_the_system() {
+    let system = TestAuthority::new();
+    for value in ["system", ""] {
+        under_tls_variables(Some(system.pem()), &[], async |jail| {
+            jail.set_env("PGSSLROOTCERT", value);
+            let (url, started) = postgres_signed_by(&system, None).await;
+            let refused = refused_boot(url).await;
+            assert!(
+                started.load(Ordering::SeqCst) && refused.contains(LOGIN_REFUSED),
+                "PGSSLROOTCERT={value:?}: {refused}"
+            );
+        });
+    }
+}
+
+/// A root file no process could read.
+const MISSING: &str = "/nonexistent/nestrs-boot-proof/ca.pem";
+
+/// A root file that cannot be read fails every attempt the same way — gone, or
+/// a folder, which opens and cannot be read: the boot refuses at once, naming
+/// where it is set, whichever names it.
+#[test]
+fn a_root_file_that_cannot_be_read_is_refused_at_once_naming_where_it_is_set() {
+    under_tls_variables(None, &[], async |jail| {
+        let folder = jail.directory().display().to_string();
+        for unreadable in [MISSING, &folder] {
+            let (url, started) = postgres_signed_by(&TestAuthority::new(), None).await;
+            let refused = refused_boot(format!("{url}?sslrootcert={unreadable}")).await;
+            assert!(!started.load(Ordering::SeqCst), "{refused}");
+            assert!(
+                refused.contains("`sslrootcert`")
+                    && refused.contains(&nest_rs_config::var_name("seaorm", "URL"))
+                    && !refused.contains("could not be reached within"),
+                "{unreadable}: {refused}"
+            );
+        }
+    });
+}
+
+/// The same files named by the variable.
+#[test]
+fn a_root_file_pgsslrootcert_names_that_cannot_be_read_is_refused_at_once_naming_it() {
+    under_tls_variables(None, &[], async |jail| {
+        let folder = jail.directory().display().to_string();
+        for unreadable in [MISSING, &folder] {
+            jail.set_env("PGSSLROOTCERT", unreadable);
+            let (url, started) = postgres_signed_by(&TestAuthority::new(), None).await;
+            let refused = refused_boot(url).await;
+            assert!(!started.load(Ordering::SeqCst), "{refused}");
+            assert!(
+                refused.contains("invalid value for PGSSLROOTCERT: names a file"),
+                "{unreadable}: {refused}"
+            );
+        }
+    });
 }
 
 /// libpq's `PGSSLCERT` and `PGSSLKEY` name a client certificate beside a URL
@@ -265,11 +350,8 @@ fn pgsslcert_and_pgsslkey_present_a_client_certificate() {
     let (server, clients) = (TestAuthority::new(), TestAuthority::new());
     let client = clients.client("nestrs");
     under_tls_variables(
-        &[
-            ("SSL_CERT_FILE", server.pem()),
-            ("PGSSLCERT", &client.cert),
-            ("PGSSLKEY", &client.key),
-        ],
+        Some(server.pem()),
+        &[("PGSSLCERT", &client.cert), ("PGSSLKEY", &client.key)],
         async |_| {
             let (url, started) = postgres_signed_by(&server, Some(&clients)).await;
             let refused = refused_boot(url).await;

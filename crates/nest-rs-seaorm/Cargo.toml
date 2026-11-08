@@ -79,6 +79,9 @@ nest-rs-authz.workspace = true
 sea-orm = { workspace = true, features = ["with-chrono"] }
 # The pool's TLS backend, selected here because sea-orm cannot select it.
 sqlx.workspace = true
+# The URL's query read through sqlx's own parse, so the certificate file the
+# boot checks is the one every connection reads.
+url.workspace = true
 chrono.workspace = true
 # `PageParams` (the `?first&after` cursor query) derives `Deserialize` so the
 # generated `#[crud]` list handler can read it with `Query<…>`.

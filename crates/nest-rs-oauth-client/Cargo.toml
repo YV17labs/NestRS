@@ -53,7 +53,7 @@ tracing.workspace = true
 # `TestAuthority` issues the certificate each provider double presents over TLS;
 # `TestApp` serves a handler returning the redirect.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls"] }
-# The document the route `#[routes]` expands into is read into.
+# The document a `#[routes]` route is read into.
 nest-rs-openapi = { path = "../nest-rs-openapi" }
 # Forging an expired transaction cookie, to prove `exchange` refuses it. The
 # crate hides `jsonwebtoken` from consumers; only the test that has to mint a

@@ -80,11 +80,6 @@ impl AuthorizationParameters {
             .map(|(name, value)| (name.as_str(), value.as_str()))
     }
 
-    /// Whether no parameter is set.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     /// The validation code the boot refuses these parameters with, the first
     /// fault found — `sent_by_the_client`, `not_a_parameter_name`, `no_value` or
     /// `named_twice` — or `None`: what a provider's config holding its own

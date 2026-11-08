@@ -165,14 +165,30 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 ## 4. Known gaps by area
 
 **Weak proofs and flaky tests**
-- The Cluster slot-move test fails under a stall over about a second, through
-  the suite's admin connections (3 of 10 runs under deliberate stalls). Close:
-  `bare_client` with a connect timeout wider than a stall. *seen*
-- A lapsed lease counts a job twice at a one-second lease (none at the
-  default); whether it caused the original flaky soak is not shown. *seen*
-- `GATED` and the queue kit's Redis cases count exact attempts on
-  `RedisKit`'s lease, so a runner stalled over a second can fail one. Close: a
-  longer lease offered by `KitBackend`. *read*
+- A test of the Redis suite's own counting no run on its one-second lease,
+  the failovers and the KEDA confinement, may fail under a stall past about
+  two thirds of it, the behaviour right; neither was driven under stalls: the
+  KEDA one ends, in about 0.3 s, before a driver in the dev container finds
+  its process, and the failovers run alone on their topology. Correlation,
+  trim and the entry deleted while delivered did not reproduce it: ten runs
+  each under 1.5 s stalls from the test's boot, every one green. Close: a
+  driver the test signals its start to, then each driven, and one seen red
+  moved to the suite's three-second lease, as the queue kit's two renewal
+  cases and the lost settle moved. *read*
+- The Redis suite's three tests on its three-second lease count a job's runs:
+  the queue kit's `a_long_attempt_keeps_its_lease_and_runs_once` and
+  `a_lease_lost_under_a_live_worker_cuts_its_attempt_and_the_holder_decides`
+  (`KitLease::Brief`), and the lost settle
+  (`standalone::a_settle_whose_answer_is_lost_still_ended_the_job_once`). A
+  renewal goes a third into the lease, so a runner stalled past two seconds
+  lapses it and the job runs again, the behaviour right: every suite stays
+  green under a stall of up to about two seconds, not more. Seen at the
+  one-second lease, 1.5 s stalls lapsing the long attempt's in 30 of 30 runs;
+  at three seconds, 10 of 10 green under the same stalls; a stall past two
+  seconds was not driven. Close: a longer lease, `KitLease::Brief` on Redis
+  and the suite's renewed lease, which lengthens the long attempt (its hold is
+  half again the lease) and the lost settle (its wait is twice the lease) with
+  it, each among the suite's slowest tests. *read*
 - The Valkey `HELLO` race is forced by no test on a real connection. *seen*
 - A command blocked elsewhere still waits its whole budget. Close: a change in
   `redis`, upstream. *read*

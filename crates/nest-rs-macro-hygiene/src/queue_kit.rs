@@ -6,19 +6,22 @@ use std::time::Duration;
 
 use nest_rs::core::anyhow;
 use nest_rs::queue::QueueName;
-use nest_rs::testing::queue::KitBackend;
+use nest_rs::testing::queue::{KitBackend, KitLease};
 use nest_rs::testing::{HeadlessApp, TestAppBuilder};
 
 /// A backend the kit is written against, as a driver declares its own.
 pub struct HygieneQueueKit;
 
 impl KitBackend for HygieneQueueKit {
-    fn app(&self) -> TestAppBuilder {
+    fn app(&self, _lease: KitLease) -> TestAppBuilder {
         HeadlessApp::builder()
     }
 
-    fn lease(&self) -> Duration {
-        Duration::from_secs(1)
+    fn lease(&self, lease: KitLease) -> Duration {
+        match lease {
+            KitLease::Brief => Duration::from_secs(3),
+            KitLease::Lasting => Duration::from_secs(30),
+        }
     }
 
     async fn purge(&self, _queue: &QueueName) -> anyhow::Result<()> {

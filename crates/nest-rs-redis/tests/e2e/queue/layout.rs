@@ -14,7 +14,7 @@ use std::time::Duration;
 use futures_util::StreamExt as _;
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{Checkpoint, PushOptions, QueueModule, processor, queue};
-use nest_rs_redis::{RedisConnection, RedisQueueModule, RedisTopology};
+use nest_rs_redis::{RedisQueueModule, RedisTopology};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -56,7 +56,7 @@ impl ConfinedProcessor {
         progress.save(1).await?;
         match job.act {
             Act::Complete => {}
-            Act::Linger => tokio::time::sleep(crate::LEASE * 2).await,
+            Act::Linger => tokio::time::sleep(crate::LEASE_LAPSED * 2).await,
             Act::Fail => anyhow::bail!("the upstream is gone"),
         }
         CONFINED.finish(job.run);
@@ -195,9 +195,7 @@ fn allowed(rule: &str) -> BTreeSet<String> {
 /// Redis that has not cached the script it calls.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_queue_pages_rules_are_exact_for_a_producer_and_a_worker() {
-    let mut admin = RedisConnection::connect(&crate::redis_config_on(DB_CONFINED_TO_THE_PREFIX))
-        .await
-        .expect("the admin connection");
+    let mut admin = crate::connect_on(DB_CONFINED_TO_THE_PREFIX).await;
     crate::flush(&mut admin)
         .await
         .expect("an empty database to start on");
@@ -387,12 +385,11 @@ async fn the_queue_pages_keda_rule_takes_what_keda_sends_and_writes_nothing() {
     let mut read = None;
     for node in crate::data_nodes().await {
         let addr = node.get_connection_info().addr().to_string();
-        let mut keda = crate::bare_client(&crate::url_as(
+        let mut keda = crate::suite_connection(&crate::bare_client(&crate::url_as(
             &crate::node_url(&addr),
             &user,
             crate::ACL_PASSWORD,
-        ))
-        .get_multiplexed_async_connection()
+        )))
         .await
         .expect("the KEDA user connects");
         // A replica or a node serving another slot answers a redirection,
@@ -431,8 +428,7 @@ async fn the_queue_pages_keda_rule_takes_what_keda_sends_and_writes_nothing() {
         for addr in crate::named_hosts() {
             let as_keda =
                 crate::url_as(&crate::node_url(&addr), &sentinel_user, crate::ACL_PASSWORD);
-            let mut sentinel = crate::bare_client(&as_keda)
-                .get_multiplexed_async_connection()
+            let mut sentinel = crate::suite_connection(&crate::bare_client(&as_keda))
                 .await
                 .expect("KEDA's sentinel user connects");
             let mut sent = go_redis_names_itself().to_vec();

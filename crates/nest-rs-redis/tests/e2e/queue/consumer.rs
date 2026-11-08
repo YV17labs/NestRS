@@ -12,7 +12,7 @@ use nest_rs_core::{injectable, module};
 use nest_rs_queue::{Checkpoint, QueueName, processor, queue};
 use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule};
 use nest_rs_testing::HeadlessApp;
-use nest_rs_testing::queue::KitBackend;
+use nest_rs_testing::queue::{KitBackend, KitLease};
 use serde::{Deserialize, Serialize};
 
 use crate::Runs;
@@ -44,10 +44,10 @@ impl RedisKit {
     }
 
     /// Claim each delivery of `queue` for `holder` (its own holder when
-    /// `None`) as idle past any lease — counting a delivery when it changes
-    /// hands.
+    /// `None`) as idle past any lease a case holds — counting a delivery when
+    /// it changes hands.
     async fn idle(queue: &QueueName, holder: Option<&str>) -> anyhow::Result<()> {
-        let idle = u64::try_from(crate::LEASE.as_millis() * 10)?;
+        let idle = u64::try_from(RedisKit.lease(KitLease::Lasting).as_millis() * 10)?;
         for (entry, held_by) in Self::pending(queue).await? {
             let mut claim = redis::cmd("XCLAIM");
             claim
@@ -68,16 +68,22 @@ impl RedisKit {
 }
 
 impl KitBackend for RedisKit {
-    fn app(&self) -> nest_rs_testing::TestAppBuilder {
-        HeadlessApp::builder()
-            .provide(RedisQueueConfig {
-                lease: crate::LEASE,
-            })
-            .module::<KitModule>()
+    fn app(&self, lease: KitLease) -> nest_rs_testing::TestAppBuilder {
+        let builder = HeadlessApp::builder().provide(RedisQueueConfig {
+            lease: self.lease(lease),
+        });
+        match lease {
+            KitLease::Brief => builder,
+            KitLease::Lasting => builder.provide(crate::at_default_budget(crate::redis_config())),
+        }
+        .module::<KitModule>()
     }
 
-    fn lease(&self) -> Duration {
-        crate::LEASE
+    fn lease(&self, lease: KitLease) -> Duration {
+        match lease {
+            KitLease::Brief => crate::LEASE_RENEWED,
+            KitLease::Lasting => RedisQueueConfig::default().lease,
+        }
     }
 
     async fn purge(&self, queue: &QueueName) -> anyhow::Result<()> {
@@ -303,7 +309,10 @@ async fn a_checkpoint_survives_a_retry_and_a_dead_replica_and_is_cleared_at_the_
     .await;
 
     doomed.kill().await;
-    let heir = crate::replica::<ImportModule>().await;
+    RedisKit::idle(&QueueName::new(queue).expect("a valid queue name"), None)
+        .await
+        .expect("the dead replica's lease lapses");
+    let heir = crate::patient_replica::<ImportModule>().await;
     crate::wait_until(Duration::from_secs(20), || IMPORTED.finished(run) >= 1).await;
     // Its checkpoint went with it.
     crate::wait_for(Duration::from_secs(2), || async move {
@@ -312,8 +321,7 @@ async fn a_checkpoint_survives_a_retry_and_a_dead_replica_and_is_cleared_at_the_
     .await;
     heir.worker.shutdown().await.expect("clean shutdown");
 
-    // On the suite's short lease, which this test is about: a runner stalled past it
-    // runs the job again, as at-least-once allows, so what it proves is the order.
+    // The dead replica's lease lapsed when the test said, never under a stall.
     let seen = seen(run);
     assert!(
         seen.starts_with(&[None, Some(1), Some(2)]),
@@ -1452,6 +1460,12 @@ mod standalone {
     /// A settle that ran on Redis and whose answer was lost: the worker cannot
     /// tell, and says so at `error`, but the job ended in the script that settled
     /// it — it never runs again, and the stream holds nothing of it.
+    ///
+    /// The worker holds the suite's brief lease, so a runner stalled between
+    /// the delivery and the settle reclaims nothing, and the settle it retries
+    /// until that lease would lapse gives up within the test's wait; the lapse
+    /// that follows is the test's, and a worker of its own looks past it. The
+    /// lost answer waits out the suite's budget, the worker's alone.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_settle_whose_answer_is_lost_still_ended_the_job_once() {
         let logs = nest_rs_testing::LogCapture::install_global();
@@ -1459,8 +1473,18 @@ mod standalone {
         crate::forget(queue).await;
         let run = crate::this_run();
         let proxy = crate::MutingProxy::start().await;
-        let replica = crate::replica_on::<GatedModule>(crate::through(proxy.url())).await;
-        crate::producer()
+        let replica = crate::replica_of::<GatedModule>(
+            HeadlessApp::builder()
+                .provide(crate::through(proxy.url()))
+                .provide(RedisQueueConfig {
+                    lease: crate::LEASE_RENEWED,
+                })
+                .provide(nest_rs_queue::QueueConfig {
+                    shutdown_timeout: crate::WINDOW,
+                }),
+        )
+        .await;
+        crate::producer_on(crate::at_default_budget(crate::redis_config()))
             .await
             .push(GatedQueue, GatedCommand { run })
             .await
@@ -1471,16 +1495,24 @@ mod standalone {
         GATE.add_permits(1);
         crate::wait_until(Duration::from_secs(10), || GATED.finished(run) == 1).await;
         let unconfirmed = "job outcome not confirmed; unless it was written, the job runs again once its lease lapses";
-        // The worker said it could not confirm the outcome.
-        crate::wait_until(Duration::from_secs(10), || {
+        // The worker said it could not confirm the outcome: it retries the
+        // settle until the lease would lapse, a lease past its last renewal at
+        // the latest, so the wait follows the lease.
+        crate::wait_until(crate::LEASE_RENEWED * 2, || {
             !logs.find(nest_rs_queue::TARGET, unconfirmed).is_empty()
         })
         .await;
-        // Past the lease, a delivery the settle had not ended would be reclaimed.
-        tokio::time::sleep(crate::LEASE * 3).await;
+        // A delivery the settle had not ended would be reclaimed by the first
+        // receive of a worker that hears Redis, and run.
+        RedisKit::idle(&QueueName::new(queue).expect("a valid queue name"), None)
+            .await
+            .expect("every lease on the queue lapses");
+        let looking = crate::patient_replica::<GatedModule>().await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         assert_eq!(GATED.of(run).len(), 1, "the job ran once");
         assert_eq!(crate::filed(queue).await, 0, "the settle ended it on Redis");
+        looking.worker.shutdown().await.expect("clean shutdown");
         drop(replica);
         crate::forget(queue).await;
     }

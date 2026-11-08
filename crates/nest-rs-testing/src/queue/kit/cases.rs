@@ -1,7 +1,9 @@
 //! The kit's cases: each pushes jobs through the backend's producer, runs them
 //! on the port's [`QueueWorker`] over the backend's consumer, and asserts what
 //! the contract promises — read off what the jobs' attempts reported and the
-//! lines the port filed.
+//! lines the port filed. A case counting a job's runs holds the lasting lease
+//! ([`KitLease`]) and lapses one only through the backend's hooks; the two whose
+//! subject is a renewal hold the brief one.
 
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -19,13 +21,13 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use super::KitBackend;
 use super::command::{
     Act, BudgetQueue, ConcurrencyQueue, DeathQueue, DelayQueue, DrainQueue, KitCommand, OnceQueue,
     RenewalQueue, ResendQueue, RetryQueue, StallQueue, TakenQueue, TraceQueue,
 };
 use super::module::CaseModule;
 use super::probe::{self, Attempt};
+use super::{KitBackend, KitLease};
 use crate::{HeadlessApp, LogCapture};
 
 /// The drain window of a case's workers.
@@ -38,9 +40,14 @@ const PATIENCE: Duration = Duration::from_secs(20);
 /// jittered up to a fifth longer.
 const FIRST_RETRY_AT_LATEST: Duration = Duration::from_millis(1200);
 
+/// How long a case watches, once every lease on its queue lapsed, for a job
+/// reclaimed and run again: a worker's first receive reclaims what lapsed and
+/// starts its attempt within milliseconds.
+const LOOK: Duration = Duration::from_secs(1);
+
 /// A job pushed once runs once and completes.
 pub async fn a_pushed_job_runs_once<B: KitBackend>(backend: B, logs: LogCapture) {
-    let kit = Kit::begin(backend, logs, OnceQueue).await;
+    let kit = Kit::begin(backend, logs, OnceQueue, KitLease::Lasting).await;
     let worker = kit.worker(WINDOW).await;
     kit.push(&worker, OnceQueue, 0, Act::Complete, None).await;
     kit.until(|| kit.completed(OnceQueue::NAME, 0) == 1).await;
@@ -55,7 +62,7 @@ pub async fn a_method_runs_no_more_attempts_at_once_than_its_concurrency<B: KitB
     backend: B,
     logs: LogCapture,
 ) {
-    let kit = Kit::begin(backend, logs, ConcurrencyQueue).await;
+    let kit = Kit::begin(backend, logs, ConcurrencyQueue, KitLease::Lasting).await;
     let worker = kit.worker(WINDOW).await;
     for seq in 0..6 {
         kit.push(&worker, ConcurrencyQueue, seq, Act::Hold { ms: 300 }, None)
@@ -78,7 +85,7 @@ pub async fn a_retryable_failure_runs_again_as_the_next_attempt<B: KitBackend>(
     backend: B,
     logs: LogCapture,
 ) {
-    let kit = Kit::begin(backend, logs, RetryQueue).await;
+    let kit = Kit::begin(backend, logs, RetryQueue, KitLease::Lasting).await;
     let worker = kit.worker(WINDOW).await;
     let pushed = kit
         .push(&worker, RetryQueue, 0, Act::FailFirst { attempts: 1 }, None)
@@ -102,7 +109,7 @@ pub async fn a_retryable_failure_runs_again_as_the_next_attempt<B: KitBackend>(
 /// A job failing every attempt is dead-lettered once its budget is spent —
 /// `retries = 1`, two attempts — and runs no third.
 pub async fn a_spent_budget_dead_letters_the_job<B: KitBackend>(backend: B, logs: LogCapture) {
-    let kit = Kit::begin(backend, logs, BudgetQueue).await;
+    let kit = Kit::begin(backend, logs, BudgetQueue, KitLease::Lasting).await;
     let worker = kit.worker(WINDOW).await;
     let pushed = kit
         .push(&worker, BudgetQueue, 0, Act::FailAlways, None)
@@ -113,12 +120,12 @@ pub async fn a_spent_budget_dead_letters_the_job<B: KitBackend>(backend: B, logs
             .is_empty()
     })
     .await;
-    tokio::time::sleep(kit.backend.lease()).await;
+    kit.lapse_and_look().await;
     worker.stop().await;
     assert_eq!(
         kit.attempts(BudgetQueue::NAME, 0).len(),
         2,
-        "no third attempt"
+        "no third attempt, the lease lapsed and looked past"
     );
     assert_eq!(
         kit.lines(&pushed).len(),
@@ -135,7 +142,7 @@ pub async fn a_job_whose_worker_died_mid_attempt_runs_on_another<B: KitBackend>(
     backend: B,
     logs: LogCapture,
 ) {
-    let kit = Kit::begin(backend, logs, DeathQueue).await;
+    let kit = Kit::begin(backend, logs, DeathQueue, KitLease::Lasting).await;
     let first = kit.worker(WINDOW).await;
     let pushed = kit.push(&first, DeathQueue, 0, Act::ParkOnce, None).await;
     kit.until(|| kit.attempts(DeathQueue::NAME, 0).len() == 1)
@@ -168,7 +175,7 @@ pub async fn a_lease_lost_under_a_live_worker_cuts_its_attempt_and_the_holder_de
     backend: B,
     logs: LogCapture,
 ) {
-    let kit = Kit::begin(backend, logs, TakenQueue).await;
+    let kit = Kit::begin(backend, logs, TakenQueue, KitLease::Brief).await;
     let first = kit.worker(WINDOW).await;
     let pushed = kit.push(&first, TakenQueue, 0, Act::ParkOnce, None).await;
     kit.until(|| kit.attempts(TakenQueue::NAME, 0).len() == 1)
@@ -209,7 +216,7 @@ pub async fn a_job_taking_its_worker_down_past_the_stall_limit_is_dead_lettered_
     backend: B,
     logs: LogCapture,
 ) {
-    let kit = Kit::begin(backend, logs, StallQueue).await;
+    let kit = Kit::begin(backend, logs, StallQueue, KitLease::Lasting).await;
     let mut worker = kit.worker(WINDOW).await;
     kit.push(&worker, StallQueue, 0, Act::ParkAlways, None)
         .await;
@@ -248,7 +255,7 @@ pub async fn the_drain_finishes_what_fits_its_window_and_hands_back_the_rest<B: 
     backend: B,
     logs: LogCapture,
 ) {
-    let kit = Kit::begin(backend, logs, DrainQueue).await;
+    let kit = Kit::begin(backend, logs, DrainQueue, KitLease::Lasting).await;
     let window = Duration::from_secs(1);
     let first = kit.worker(window).await;
     kit.push(&first, DrainQueue, 0, Act::Hold { ms: 200 }, None)
@@ -285,14 +292,14 @@ pub async fn the_drain_finishes_what_fits_its_window_and_hands_back_the_rest<B: 
     kit.end().await;
 }
 
-/// An attempt running three leases long keeps its lease through renewals: a
-/// second worker never takes it, and it runs once.
+/// An attempt running half as long again as its lease keeps it through
+/// renewals: a second worker never takes it, and it runs once.
 pub async fn a_long_attempt_keeps_its_lease_and_runs_once<B: KitBackend>(
     backend: B,
     logs: LogCapture,
 ) {
-    let kit = Kit::begin(backend, logs, RenewalQueue).await;
-    let hold = kit.backend.lease() * 3;
+    let kit = Kit::begin(backend, logs, RenewalQueue, KitLease::Brief).await;
+    let hold = kit.lease() * 3 / 2;
     let first = kit.worker(WINDOW).await;
     let second = kit.worker(WINDOW).await;
     let ms = u64::try_from(hold.as_millis()).unwrap_or(u64::MAX);
@@ -320,7 +327,7 @@ pub async fn a_delayed_push_runs_once_its_delay_has_passed<B: KitBackend>(
     backend: B,
     logs: LogCapture,
 ) {
-    let kit = Kit::begin(backend, logs, DelayQueue).await;
+    let kit = Kit::begin(backend, logs, DelayQueue, KitLease::Lasting).await;
     let worker = kit.worker(WINDOW).await;
     if !worker
         .jobs
@@ -356,7 +363,7 @@ pub async fn a_delayed_push_runs_once_its_delay_has_passed<B: KitBackend>(
 
 /// A job runs in the trace its push was made in.
 pub async fn a_job_runs_in_the_trace_that_pushed_it<B: KitBackend>(backend: B, logs: LogCapture) {
-    let kit = Kit::begin(backend, logs, TraceQueue).await;
+    let kit = Kit::begin(backend, logs, TraceQueue, KitLease::Lasting).await;
     let worker = kit.worker(WINDOW).await;
     let pushed_in = with_request_scope(None, Correlation::minted(None), async {
         kit.push(&worker, TraceQueue, 0, Act::Complete, None).await;
@@ -379,7 +386,7 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
     backend: B,
     logs: LogCapture,
 ) {
-    let kit = Kit::begin(backend, logs, ResendQueue).await;
+    let kit = Kit::begin(backend, logs, ResendQueue, KitLease::Lasting).await;
     let queue = queue_name::<ResendQueue>();
     let pushing = kit.producer().await;
     let recording = Arc::new(Recording::new(Arc::clone(producer_of(&pushing.jobs))));
@@ -477,7 +484,7 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
     })
     .await;
     tokio::time::sleep_until(retry_due).await;
-    tokio::time::sleep(kit.backend.lease()).await;
+    kit.lapse_and_look().await;
     first.stop().await;
     assert_eq!(
         kit.attempts(ResendQueue::NAME, 0).len(),
@@ -525,11 +532,13 @@ pub async fn an_envelope_enqueued_again_while_its_job_is_held_is_filed_once<B: K
     kit.end().await;
 }
 
-/// One case's run against one backend, on the queue `C` marks.
+/// One case's run against one backend, on the queue `C` marks, every app of it
+/// on one lease.
 struct Kit<B, C> {
     backend: B,
     logs: LogCapture,
     run: u64,
+    lease: KitLease,
     case: PhantomData<fn() -> C>,
 }
 
@@ -610,8 +619,9 @@ async fn enqueue_again(
 }
 
 impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
-    /// Start a case on `queue`'s marker, its storage emptied first.
-    async fn begin(backend: B, logs: LogCapture, _queue: C) -> Self {
+    /// Start a case on `queue`'s marker, its apps on `lease`, its storage
+    /// emptied first.
+    async fn begin(backend: B, logs: LogCapture, _queue: C, lease: KitLease) -> Self {
         backend
             .purge(&queue_name::<C>())
             .await
@@ -624,8 +634,27 @@ impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
             backend,
             logs,
             run,
+            lease,
             case: PhantomData,
         }
+    }
+
+    /// How long a delivery's lease lasts in this case's apps.
+    fn lease(&self) -> Duration {
+        self.backend.lease(self.lease)
+    }
+
+    /// Make every lease the backend holds on the case's queue lapse, then watch
+    /// a fresh worker's first receives for [`LOOK`]: a job a settle left held
+    /// is reclaimed and runs again inside it.
+    async fn lapse_and_look(&self) {
+        self.backend
+            .lapse(&queue_name::<C>())
+            .await
+            .expect("the backend lapses the case's leases");
+        let looking = self.worker(WINDOW).await;
+        tokio::time::sleep(LOOK).await;
+        looking.stop().await;
     }
 
     /// End a case whose assertions were read: its queue's storage emptied, so
@@ -641,7 +670,7 @@ impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
     async fn app(&self, window: Duration) -> HeadlessApp {
         let app = self
             .backend
-            .app()
+            .app(self.lease)
             .module::<C::Module>()
             .provide(QueueConfig {
                 shutdown_timeout: window,
@@ -736,10 +765,11 @@ impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
             .collect()
     }
 
-    /// Wait for `done`, within a few leases and [`PATIENCE`].
+    /// Wait for `done`, within a few brief leases and [`PATIENCE`]: a case on
+    /// the lasting lease lapses one only through the backend's hooks.
     #[track_caller]
     fn until(&self, done: impl FnMut() -> bool) -> impl Future<Output = ()> {
-        crate::wait_until(self.backend.lease() * 4 + PATIENCE, done)
+        crate::wait_until(self.backend.lease(KitLease::Brief) * 4 + PATIENCE, done)
     }
 }
 

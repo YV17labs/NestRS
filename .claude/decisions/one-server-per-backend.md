@@ -190,3 +190,36 @@ soak's own log is gone and the handler as committed did not double in 22 such ru
 `demo/.env`, and that file holds no Redis, since every profile reads it, production
 included. Each topology's URL sits commented in `demo/.env.development`, under the
 one server's `NESTRS_REDIS__URL` and `NESTRS_REDIS__TRANSCODES__URL`.
+
+**2026-11-08, a stall of the runner under two seconds fails no count and no
+administration command:** the entry of 2026-11-06 left a lapse rerunning a
+job, which at-least-once allows, able to fail three kinds of test on a loaded
+runner. A test about a lapse now forces it rather than waiting the one-second
+lease out: the checkpoint through a dead replica runs on the default lease,
+and the lost settle's answer on a renewed lease of three seconds, since its
+worker retries the settle until the lease would lapse — on the default lease
+that line came 25 s after the mute, a test of 26 s — and each lapses what is
+held through `XCLAIM … IDLE` once its subject is in place. The queue kit's
+cases hold the longer of two leases their backend offers (`KitLease::Lasting`)
+and lapse only through `lapse` and `take`; the two whose subject is a renewal
+hold `KitLease::Brief`, the same three seconds on Redis: a renewal goes a
+third into a lease, so a stall under two seconds lapses nothing, where 1.5 s
+stalls lapsed the one-second lease in each of 30 runs of the long attempt's
+case, its job run 7 or 9 times, and none in 10 runs at three seconds. That
+case holds its attempt half a lease past the lease, which still fails without
+renewals; three leases made it the suite's slowest test, 10 s. Across a lapse
+no test forced, no count is asserted. The suite's own connections — its
+`CLIENT LIST`, `ACL`, `CLUSTER` and `MIGRATE`, its reads of what a test filed
+and its probe of a user's rights — open and are answered within the
+framework's default budget, where `redis`'s second to open failed the
+slot-moving test three times in ten under 1.5 s stalls and none in ten after;
+those telling a frozen node apart keep `redis`'s. Whether a lapse caused the
+2026-10-14 soak's double count cannot be shown: its log is gone. The stalls of
+2026-11-06 showed it is enough to make that count, and no test counting runs
+can now meet one. What a stall may still fail, the behaviour right, each line
+written in TODO.md: a test on the three-second lease — the kit's two renewal
+cases and the lost settle — under a stall past two seconds, two thirds of it,
+since a longer lease lengthens each of them with it; and a test counting no
+run on the one-second lease, past about two thirds of it, which correlation,
+trim and the entry deleted while delivered did not show in ten runs each
+under 1.5 s stalls, the failovers and the KEDA confinement left undriven.

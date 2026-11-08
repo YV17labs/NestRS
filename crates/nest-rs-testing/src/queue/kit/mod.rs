@@ -1,14 +1,17 @@
-//! The kit's pieces: the backend seam a driver implements ([`KitBackend`]), the
-//! processor every case's worker runs, the probe it reports to, and the cases.
+//! The kit's pieces: the backend seam a driver implements ([`KitBackend`]) and
+//! the leases it offers a case ([`KitLease`]), the processor every case's
+//! worker runs, the probe it reports to, and the cases.
 
 mod backend;
 pub mod cases;
 mod command;
+mod lease;
 mod module;
 mod probe;
 mod processor;
 
 pub use backend::KitBackend;
+pub use lease::KitLease;
 
 /// Run one case against the backend `backend` builds, on a runtime of its own —
 /// paused when the backend lives in this process
@@ -43,7 +46,7 @@ where
 /// ```
 /// # use std::time::Duration;
 /// # use nest_rs_queue::QueueName;
-/// # use nest_rs_testing::queue::KitBackend;
+/// # use nest_rs_testing::queue::{KitBackend, KitLease};
 /// # use nest_rs_testing::{HeadlessApp, TestAppBuilder};
 /// # struct MyBackend;
 /// # impl MyBackend {
@@ -52,11 +55,14 @@ where
 /// #     }
 /// # }
 /// # impl KitBackend for MyBackend {
-/// #     fn app(&self) -> TestAppBuilder {
+/// #     fn app(&self, _: KitLease) -> TestAppBuilder {
 /// #         HeadlessApp::builder()
 /// #     }
-/// #     fn lease(&self) -> Duration {
-/// #         Duration::from_secs(1)
+/// #     fn lease(&self, lease: KitLease) -> Duration {
+/// #         match lease {
+/// #             KitLease::Brief => Duration::from_secs(3),
+/// #             KitLease::Lasting => Duration::from_secs(30),
+/// #         }
 /// #     }
 /// #     async fn purge(&self, _: &QueueName) -> anyhow::Result<()> {
 /// #         Ok(())

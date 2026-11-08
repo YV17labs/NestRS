@@ -8,61 +8,90 @@ use std::time::Duration;
 use nest_rs_core::{DuplicateMetaError, Transport, injectable, module};
 use nest_rs_queue::{BoundConsumer, Jobs, QueueName, QueueWorker, processor, queue};
 use nest_rs_testing::HeadlessApp;
-use nest_rs_testing::queue::KitBackend;
+use nest_rs_testing::queue::{KitBackend, KitLease};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::memory::{DELAYING, Memory, PLAIN};
 
-/// How long an in-memory delivery's lease lasts in the kit.
+/// How long an in-memory delivery's brief lease lasts in the kit, and every
+/// lease of the tests below.
 const LEASE: Duration = Duration::from_millis(500);
 
-/// The kit's backend over one in-memory store, shared by every app a case
-/// builds.
+/// How long an in-memory delivery's lease of each kind lasts in the kit.
+fn lease_of(lease: KitLease) -> Duration {
+    match lease {
+        KitLease::Brief => LEASE,
+        KitLease::Lasting => Duration::from_secs(30),
+    }
+}
+
+/// The kit's backend over an in-memory store per lease, each shared by every
+/// app a case builds on it.
 struct MemoryKit {
-    memory: Memory,
+    brief: Memory,
+    lasting: Memory,
 }
 
 impl MemoryKit {
     fn delaying() -> Self {
         Self {
-            memory: Memory::new(&DELAYING, LEASE),
+            brief: Memory::new(&DELAYING, lease_of(KitLease::Brief)),
+            lasting: Memory::new(&DELAYING, lease_of(KitLease::Lasting)),
         }
     }
 
     fn plain() -> Self {
         Self {
-            memory: Memory::new(&PLAIN, LEASE),
+            brief: Memory::new(&PLAIN, lease_of(KitLease::Brief)),
+            lasting: Memory::new(&PLAIN, lease_of(KitLease::Lasting)),
         }
+    }
+
+    fn memory(&self, lease: KitLease) -> &Memory {
+        match lease {
+            KitLease::Brief => &self.brief,
+            KitLease::Lasting => &self.lasting,
+        }
+    }
+
+    fn both(&self) -> [&Memory; 2] {
+        [&self.brief, &self.lasting]
     }
 }
 
 impl KitBackend for MemoryKit {
     const IN_PROCESS: bool = true;
 
-    fn app(&self) -> nest_rs_testing::TestAppBuilder {
-        let producer = Jobs::new(Arc::new(self.memory.clone()));
+    fn app(&self, lease: KitLease) -> nest_rs_testing::TestAppBuilder {
+        let memory = self.memory(lease);
         HeadlessApp::builder()
-            .provide(BoundConsumer::new(self.memory.consumer()))
-            .provide(producer)
+            .provide(BoundConsumer::new(memory.consumer()))
+            .provide(Jobs::new(Arc::new(memory.clone())))
     }
 
-    fn lease(&self) -> Duration {
-        LEASE
+    fn lease(&self, lease: KitLease) -> Duration {
+        lease_of(lease)
     }
 
     async fn purge(&self, queue: &QueueName) -> anyhow::Result<()> {
-        self.memory.purge(queue.as_str());
+        for memory in self.both() {
+            memory.purge(queue.as_str());
+        }
         Ok(())
     }
 
     async fn lapse(&self, queue: &QueueName) -> anyhow::Result<()> {
-        self.memory.lapse(queue.as_str());
+        for memory in self.both() {
+            memory.lapse(queue.as_str());
+        }
         Ok(())
     }
 
     async fn take(&self, queue: &QueueName) -> anyhow::Result<()> {
-        self.memory.take(queue.as_str());
+        for memory in self.both() {
+            memory.take(queue.as_str());
+        }
         Ok(())
     }
 }

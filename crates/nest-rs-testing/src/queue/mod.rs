@@ -4,4 +4,4 @@
 
 pub(crate) mod kit;
 
-pub use kit::KitBackend;
+pub use kit::{KitBackend, KitLease};

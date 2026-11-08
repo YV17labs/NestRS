@@ -329,23 +329,23 @@ orchestrator should not restart a pod because the broker blinked.
 
 ## Test it
 
-Implement `KitBackend` — an app reaching your storage, the lease it holds
-deliveries for, and three hooks on the storage — and let `queue_kit!` write
-one test per case:
+Implement `KitBackend` — an app reaching your storage on each of the two leases
+a case asks for, how long each lasts, and three hooks on the storage — and let
+`queue_kit!` write one test per case:
 
 ```rust title="from nest-rs-queue's suite, abridged"
 impl KitBackend for MemoryKit {
     const IN_PROCESS: bool = true;
 
-    fn app(&self) -> nest_rs_testing::TestAppBuilder {
-        let producer = Jobs::new(Arc::new(self.memory.clone()));
+    fn app(&self, lease: KitLease) -> nest_rs_testing::TestAppBuilder {
+        let memory = self.memory(lease);
         HeadlessApp::builder()
-            .provide(BoundConsumer::new(self.memory.consumer()))
-            .provide(producer)
+            .provide(BoundConsumer::new(memory.consumer()))
+            .provide(Jobs::new(Arc::new(memory.clone())))
     }
 
-    fn lease(&self) -> Duration {
-        LEASE
+    fn lease(&self, lease: KitLease) -> Duration {
+        lease_of(lease)
     }
 
     async fn purge(&self, queue: &QueueName) -> anyhow::Result<()> {
@@ -364,22 +364,32 @@ impl KitBackend for MemoryKit {
 /// The kit over a backend that files a record due later.
 mod delaying {
     use super::MemoryKit;
-use std::time::Duration;
 
     nest_rs_testing::queue_kit!(MemoryKit::delaying());
 }
 ```
 
 Your crate reaches the kit through the umbrella, as
-`nest_rs::testing::queue_kit!` and `nest_rs::testing::queue::KitBackend`;
-`app` starts from `nest_rs::testing::HeadlessApp::builder()`, since a driver's
-suite serves no HTTP. `IN_PROCESS` is for a backend living in the test's own
-process, whose leases run on paused time; a networked one leaves it `false`.
-`purge` empties a queue, `lapse` makes every lease on it lapse with its holder
-and count unchanged, and `take` hands every delivery to another holder that
-lapses at once — what a frozen worker meets. Checkpoint: twelve tests pass,
-among them a worker dying mid-attempt, a lease taken under a running attempt,
-the stall limit, the drain and an envelope enqueued twice.
+`nest_rs::testing::queue_kit!` and `nest_rs::testing::queue::{KitBackend,
+KitLease}`; `app` starts from `nest_rs::testing::HeadlessApp::builder()`,
+since a driver's suite serves no HTTP. `IN_PROCESS` is for a backend living in
+the test's own process, whose leases run on paused time; a networked one
+leaves it `false`.
+
+`KitLease` names the lease a case boots its apps on. `Brief` is short, since
+the two cases whose subject is a renewal wait one out, yet a few seconds for a
+networked backend: a renewal goes a third into the lease, so a runner
+stalled past the other two thirds sees it lapse. `Lasting` outlasts a
+runner stalled for seconds on a loaded CI machine, your connection's own bounds
+widened with it: every other case counts a job's runs, and a delivery a stalled
+runner held past a brief lease would be reclaimed and run again — the
+behaviour right, the count wrong. Those cases lapse a lease only through the
+hooks: `purge` empties a queue, `lapse` makes every lease on it lapse with its
+holder and count unchanged, and `take` hands every delivery to another holder
+that lapses at once — what a frozen worker meets — each whatever the lease's
+kind. Checkpoint: twelve tests pass, among them a worker dying mid-attempt, a
+lease taken under a running attempt, the stall limit, the drain and an
+envelope enqueued twice.
 
 ## What fails if you get it wrong
 

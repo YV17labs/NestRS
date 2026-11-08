@@ -87,7 +87,7 @@ fn schedule_config() -> RedisConfig {
 }
 
 async fn schedule_connection() -> RedisConnection {
-    RedisConnection::connect(&schedule_config())
+    RedisConnection::connect(&crate::at_default_budget(schedule_config()))
         .await
         .expect("connect to the schedule's database")
 }

@@ -106,6 +106,24 @@ fn bare_client(url: &str) -> redis::Client {
     redis::Client::build_with_tls(url, certificates).expect("a TLS client of the suite's Valkey")
 }
 
+/// A connection of the suite's own to `client`'s server, opened and answered
+/// within the framework's default budget: wide of a runner stalled for seconds
+/// on a loaded machine, where `redis`'s own second to open and half-second to
+/// answer fail an administration command with Valkey right. A helper telling a
+/// frozen node apart keeps `redis`'s, or bounds its probe itself.
+async fn suite_connection(
+    client: &redis::Client,
+) -> redis::RedisResult<redis::aio::MultiplexedConnection> {
+    let wait = Some(RedisConfig::default().connect_timeout);
+    client
+        .get_multiplexed_async_connection_with_config(
+            &redis::AsyncConnectionConfig::new()
+                .set_connection_timeout(wait)
+                .set_response_timeout(wait),
+        )
+        .await
+}
+
 /// The boot's refusal of a Redis budget at a net reaching it, its setting
 /// naming the variable a deployment lowers.
 fn budget_past_net(refused: anyhow::Error) -> nest_rs_core::BudgetPastNetError {
@@ -121,8 +139,8 @@ fn budget_past_net(refused: anyhow::Error) -> nest_rs_core::BudgetPastNetError {
     refused
 }
 
-/// The budget the suite's connections hold a command to: under two thirds of
-/// [`LEASE`], or the queue binding refuses the boot.
+/// The budget the apps under test hold a command to: under two thirds of
+/// [`LEASE_LAPSED`], or the queue binding refuses the boot.
 const BUDGET: Duration = Duration::from_millis(500);
 
 /// The logical databases the suite selects, all declared here so that no two
@@ -352,8 +370,7 @@ async fn node(addr: &str) -> redis::aio::MultiplexedConnection {
 /// [`node`], on database `db`: a command naming a key, `CLUSTER GETKEYSINSLOT`
 /// and `MIGRATE` act on the database their connection selected.
 async fn node_on(addr: &str, db: u8) -> redis::aio::MultiplexedConnection {
-    bare_client(&url_on(&node_url(addr), db))
-        .get_multiplexed_async_connection()
+    suite_connection(&bare_client(&url_on(&node_url(addr), db)))
         .await
         .unwrap_or_else(|error| panic!("{addr} answers on database {db}: {error}"))
 }
@@ -518,8 +535,7 @@ async fn a_primary_url_on(db: u8) -> String {
 /// `cmd`'s answer from each of `nodes`, asked of all at once.
 async fn on_each<T: redis::FromRedisValue>(nodes: &[redis::Client], cmd: &redis::Cmd) -> Vec<T> {
     futures_util::future::join_all(nodes.iter().map(|node| async move {
-        let mut connection = node
-            .get_multiplexed_async_connection()
+        let mut connection = suite_connection(node)
             .await
             .expect("every data node answers");
         cmd.query_async(&mut connection)
@@ -606,8 +622,7 @@ async fn drop_every_connection_on(db: u8) -> usize {
     let closed = futures_util::future::join_all(nodes.iter().map(|node| {
         let selected = &selected;
         async move {
-            let mut node = node
-                .get_multiplexed_async_connection()
+            let mut node = suite_connection(node)
                 .await
                 .expect("every data node answers");
             let clients: String = redis::cmd("CLIENT")
@@ -678,8 +693,7 @@ async fn requiring_client_certificates(body: impl std::future::Future<Output = (
 
     let mut nodes = Vec::new();
     for node in data_nodes().await {
-        let mut connection = node
-            .get_multiplexed_async_connection()
+        let mut connection = suite_connection(&node)
             .await
             .expect("every data node answers");
         let (_, kept): (String, String) = redis::cmd("CONFIG")
@@ -1038,8 +1052,8 @@ struct Replica {
 }
 
 /// Boot the worker app `M` and start its worker — one replica, leasing for
-/// [`LEASE`] and draining within [`WINDOW`]. The app is leaked: the transport
-/// borrows the container it owns, the way a process would hold it.
+/// [`LEASE_LAPSED`] and draining within [`WINDOW`]. The app is leaked: the
+/// transport borrows the container it owns, the way a process would hold it.
 async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
     replica_of::<M>(brisk(HeadlessApp::builder())).await
 }
@@ -1053,11 +1067,12 @@ async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Re
 }
 
 /// [`replica_on`] on the queue's default lease and the connection's default
-/// budget, for a test counting a job's runs and lapsing none: a runner stalled
-/// past [`LEASE`] between a delivery and its settle sees it run again, as
+/// budget, for a test counting a job's runs: a runner stalled past
+/// [`LEASE_LAPSED`] between a delivery and its settle sees it run again, as
 /// at-least-once allows, and one stalled past [`BUDGET`] sees a push refused, the
-/// behaviour right both times. A test about a lapse or a renewal, or counting no
-/// run, stays on [`LEASE`].
+/// behaviour right both times. A lapse such a test is about it forces itself
+/// (`RedisKit`'s `idle`); one waiting a lease out holds [`LEASE_RENEWED`], and a
+/// test counting no run stays on [`LEASE_LAPSED`].
 async fn patient_replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
     replica_of::<M>(
         HeadlessApp::builder()
@@ -1132,10 +1147,19 @@ impl Mortal {
     }
 }
 
-/// Boot the worker app `M` like [`replica`], and run its worker on a task a
-/// test can abort.
+/// Boot the worker app `M` like [`patient_replica`], and run its worker on a
+/// task a test can abort: what the dead replica held lapses when the test says,
+/// never under a runner's stall.
 async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
-    let (app, producer) = booted::<M>(brisk(HeadlessApp::builder())).await;
+    let (app, producer) = booted::<M>(
+        HeadlessApp::builder()
+            .provide(at_default_budget(redis_config()))
+            .provide(RedisQueueConfig::default())
+            .provide(QueueConfig {
+                shutdown_timeout: WINDOW,
+            }),
+    )
+    .await;
     let mut worker = QueueWorker::new();
     worker
         .configure(app.container())
@@ -1146,9 +1170,15 @@ async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
     Mortal { serving, producer }
 }
 
-/// The lease every replica of the suite holds its deliveries for: short, so a
-/// job a dead replica held is free again within a test.
-const LEASE: Duration = Duration::from_secs(1);
+/// The lease a replica of the suite holds its deliveries for when its test
+/// counts no run and lets it lapse: short, so the test waits several out.
+const LEASE_LAPSED: Duration = Duration::from_secs(1);
+
+/// The lease of a test counting a job's runs that waits it out while renewals
+/// keep it — a renewal, or a settle retried to the lease's end: a few seconds,
+/// since a renewal goes a third into it, so a runner stalled under two seconds
+/// lapses nothing.
+const LEASE_RENEWED: Duration = Duration::from_secs(3);
 
 /// The drain window every replica of the suite stops within.
 const WINDOW: Duration = Duration::from_secs(2);
@@ -1157,7 +1187,9 @@ const WINDOW: Duration = Duration::from_secs(2);
 /// than pinned, so the suite's own variables cannot move them.
 fn brisk(builder: nest_rs_testing::TestAppBuilder) -> nest_rs_testing::TestAppBuilder {
     builder
-        .provide(RedisQueueConfig { lease: LEASE })
+        .provide(RedisQueueConfig {
+            lease: LEASE_LAPSED,
+        })
         .provide(QueueConfig {
             shutdown_timeout: WINDOW,
         })
@@ -1493,7 +1525,7 @@ async fn documented_user(page: &str, role: &str, user: &str, db: u8) -> RedisCon
 /// is asked of a script of its own: the ACL checks the command, and a script's
 /// own commands only when it runs, which the run itself proves.
 async fn assert_may_load_a_script(config: &RedisConfig) {
-    let mut user = RedisConnection::connect(config)
+    let mut user = RedisConnection::connect(&at_default_budget(config.clone()))
         .await
         .expect("the page's user passes the boot's proof");
     let _: String = redis::cmd("SCRIPT")

@@ -319,11 +319,11 @@ async fn the_connection_answers_again_once_redis_drops_it() {
     // A connection nothing reopens, on the same database: it is how this test
     // knows the drop took, so a recovery below is a reconnection and never a
     // drop that missed.
-    let mut unmanaged =
-        crate::bare_client(&crate::a_primary_url_on(crate::DB_CONNECTION_DROP).await)
-            .get_multiplexed_async_connection()
-            .await
-            .expect("open a connection nothing reopens");
+    let mut unmanaged = crate::suite_connection(&crate::bare_client(
+        &crate::a_primary_url_on(crate::DB_CONNECTION_DROP).await,
+    ))
+    .await
+    .expect("open a connection nothing reopens");
     redis::cmd("PING")
         .query_async::<()>(&mut unmanaged)
         .await

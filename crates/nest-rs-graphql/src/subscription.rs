@@ -20,7 +20,7 @@ use async_graphql::parser::types::OperationType;
 use async_graphql::{Data, Executor};
 use futures_util::future::Either;
 use futures_util::stream::SplitSink;
-use futures_util::{SinkExt, Stream, StreamExt};
+use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 
 use nest_rs_core::__private::Site;
 use nest_rs_core::anyhow;
@@ -129,8 +129,12 @@ impl SocketData {
         }
     }
 
-    /// `socket`, run on this data layer.
-    fn serve<'a>(self, socket: crate::BoxFuture<'a, ()>) -> crate::BoxFuture<'a, ()> {
+    /// `socket`, served at `served_at`, run on this data layer.
+    fn serve<'a>(
+        self,
+        socket: crate::BoxFuture<'a, ()>,
+        served_at: ServedPath,
+    ) -> crate::BoxFuture<'a, ()> {
         match self {
             Self::Bound(binding) => Box::pin(async move {
                 let unit = nest_rs_database::UnitSpec::new(
@@ -138,7 +142,12 @@ impl SocketData {
                     nest_rs_database::ExecutorScope::Request,
                     nest_rs_database::TransactionPolicy::Pool,
                 );
-                nest_rs_database::run_unit(Some(&binding), unit, socket, |_| true, refused).await;
+                let served = socket.map(Ok);
+                let ran =
+                    nest_rs_database::run_unit(Some(&binding), unit, served, Result::is_ok, Err);
+                if let Err(why) = ran.await {
+                    refused(&served_at, &why);
+                }
             }),
             Self::Installed(executor) => Box::pin(
                 nest_rs_database::__private::with_request_executor(executor, socket),
@@ -147,11 +156,14 @@ impl SocketData {
     }
 }
 
-/// A binding that refused the socket its pool: the socket closes unserved.
-fn refused(why: nest_rs_database::Unhonoured) {
+/// A binding that refused the socket at `served_at` its pool: the socket closes
+/// unserved.
+fn refused(served_at: &ServedPath, why: &nest_rs_database::Unhonoured) {
     tracing::error!(
         target: crate::TARGET,
-        error = %nest_rs_core::error_message(&why),
+        host = ENDPOINT.host_name(),
+        path = &*served_at.0,
+        error = %nest_rs_core::error_message(why),
         "subscription socket not served: the unit-of-work binding refused its pool",
     );
 }
@@ -280,23 +292,16 @@ impl SocketBounds {
     }
 }
 
-/// The mount a socket's lines name, in the fields of its `mounted endpoint`
-/// line: the endpoint's host, and the path its upgrade matched.
+/// The path a socket's endpoint is served at, as its upgrade matched it: what
+/// every line the socket files names beside the endpoint's host, as its
+/// `mounted endpoint` line does.
 #[derive(Clone)]
-struct SocketSite {
-    path: Arc<str>,
-}
+struct ServedPath(Arc<str>);
 
-impl SocketSite {
+impl ServedPath {
     /// The upgrade `req`'s, the endpoint's address before it is routed.
     fn of(req: &Request) -> Self {
-        Self {
-            path: Arc::from(req.route().unwrap_or(ENDPOINT.address())),
-        }
-    }
-
-    fn host(&self) -> &'static str {
-        ENDPOINT.host_name()
+        Self(Arc::from(req.route().unwrap_or(ENDPOINT.address())))
     }
 }
 
@@ -306,7 +311,7 @@ impl SocketSite {
 async fn ends_at(
     going_away: impl Future<Output = ()>,
     ttl: Option<Duration>,
-    site: SocketSite,
+    served_at: ServedPath,
 ) -> Ending {
     let ceiling = async {
         match ttl {
@@ -320,8 +325,8 @@ async fn ends_at(
             // `debug`: shutdown is logged once; a line per socket is noise.
             tracing::debug!(
                 target: crate::TARGET,
-                host = site.host(),
-                path = &*site.path,
+                host = ENDPOINT.host_name(),
+                path = &*served_at.0,
                 close_code = u16::from(CloseCode::Away),
                 "closing subscription socket: the server is going away",
             );
@@ -330,8 +335,8 @@ async fn ends_at(
         () = ceiling => {
             tracing::info!(
                 target: crate::TARGET,
-                host = site.host(),
-                path = &*site.path,
+                host = ENDPOINT.host_name(),
+                path = &*served_at.0,
                 max_connection_ms = ttl.map_or(0, |ttl| ttl.as_millis()),
                 close_code = u16::from(CloseCode::Away),
                 "closing subscription socket: max lifetime reached",
@@ -401,7 +406,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 &ALL_WEBSOCKET_PROTOCOLS,
             ))?;
         let pipes = SocketPipes::of(&self.bridge, &req);
-        let site = SocketSite::of(&req);
+        let served_at = ServedPath::of(&req);
         // What the upgrade's guards attached reaches the socket the way it
         // reaches a POST: forwarded by the seeds, carried by the connection.
         // Never the upgrade's scope nor its transaction: the socket's own
@@ -424,14 +429,23 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 // One span per socket: async-graphql's engine hides operation
                 // boundaries from this crate.
                 let span = nest_rs_core::operation_span!(crate::unit::SUBSCRIPTION, &correlation,);
-                let line = SubscriptionLine::new(correlation.clone(), span.clone());
-                let end = ends_at(sockets.going_away(), bounds.max_connection, site.clone());
+                let line =
+                    SubscriptionLine::new(correlation.clone(), span.clone(), served_at.clone());
+                let end = ends_at(
+                    sockets.going_away(),
+                    bounds.max_connection,
+                    served_at.clone(),
+                );
+                let grace_served_at = served_at.clone();
+                let pool_served_at = served_at.clone();
                 // A local slot, since the executor scope wraps a `()` future.
                 let mut ended: Option<Ended> = None;
                 let serving: crate::BoxFuture<'_, ()> = Box::pin(async {
                     let served = MESSAGE_BYTES.scope(
                         bounds.max_message_bytes,
-                        serve_socket(stream, executor, protocol, data, end, bounds, pipes, site),
+                        serve_socket(
+                            stream, executor, protocol, data, end, bounds, pipes, served_at,
+                        ),
                     );
                     ended = Some(match bounds.max_connection {
                         // A peer that stopped reading cannot hold the socket past
@@ -444,6 +458,8 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                         .unwrap_or_else(|_| {
                             tracing::debug!(
                                 target: crate::TARGET,
+                                host = ENDPOINT.host_name(),
+                                path = &*grace_served_at.0,
                                 close_grace_ms = u64::try_from(
                                     DetachedWork::CLOSE_GRACE.as_millis()
                                 )
@@ -457,7 +473,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                     });
                 });
                 let served = match socket_data {
-                    Some(socket_data) => socket_data.serve(serving),
+                    Some(socket_data) => socket_data.serve(serving, pool_served_at),
                     None => serving,
                 };
                 // Dropped at the window's close, which `line`'s `Drop` files `cancelled`.
@@ -498,10 +514,10 @@ async fn serve_socket<E: Executor>(
     end: impl Future<Output = Ending> + Send + 'static,
     bounds: SocketBounds,
     pipes: Option<SocketPipes>,
-    site: SocketSite,
+    served_at: ServedPath,
 ) -> Ended {
     let (mut sink, socket) = stream.split();
-    let inbound = Inbound::new(socket, end, bounds, pipes, site);
+    let inbound = Inbound::new(socket, end, bounds, pipes, served_at.clone());
     let started = Arc::clone(&inbound.started);
     let ending = Arc::clone(&inbound.ending);
     let refusal = Arc::clone(&inbound.refusal);
@@ -513,7 +529,7 @@ async fn serve_socket<E: Executor>(
     loop {
         if let Some(frame) = withheld.take() {
             if let Err(error) = sink.send(Message::text(frame)).await {
-                return stopped_writing(&error);
+                return stopped_writing(&served_at, &error);
             }
             continue;
         }
@@ -524,7 +540,7 @@ async fn serve_socket<E: Executor>(
             // The peer's half owns the keepalive; this half owns the `Sink`.
             () = ping.notified() => {
                 if let Err(error) = sink.send(Message::Ping(Default::default())).await {
-                    return stopped_writing(&error);
+                    return stopped_writing(&served_at, &error);
                 }
                 continue;
             }
@@ -533,7 +549,7 @@ async fn serve_socket<E: Executor>(
         let next = match next {
             Ok(next) => next,
             Err(payload) => {
-                close_socket(&mut sink, CloseCode::Error, UNWOUND).await;
+                close_socket(&mut sink, &served_at, CloseCode::Error, UNWOUND).await;
                 return Ended::Unwound(payload);
             }
         };
@@ -543,11 +559,11 @@ async fn serve_socket<E: Executor>(
                     lock(&started).remove(&id);
                 }
                 if let Err(error) = sink.send(Message::text(text)).await {
-                    return stopped_writing(&error);
+                    return stopped_writing(&served_at, &error);
                 }
             }
             Some(WsMessage::Close(code, reason)) => {
-                close_socket(&mut sink, CloseCode::from(code), &reason).await;
+                close_socket(&mut sink, &served_at, CloseCode::from(code), &reason).await;
                 return Ended::Refused;
             }
             None => break,
@@ -555,13 +571,13 @@ async fn serve_socket<E: Executor>(
     }
     if let Some(refusal) = refusal.get() {
         if let Some((code, reason)) = refusal.close() {
-            close_socket(&mut sink, code, reason).await;
+            close_socket(&mut sink, &served_at, code, reason).await;
         }
         return refusal.ended();
     }
     match ending.get() {
         Some(ending) => {
-            close_socket(&mut sink, CloseCode::Away, ending.reason()).await;
+            close_socket(&mut sink, &served_at, CloseCode::Away, ending.reason()).await;
             Ended::ByServer
         }
         None => {
@@ -578,12 +594,14 @@ async fn serve_socket<E: Executor>(
 
 /// A frame could not be written: past the transport's send deadline the
 /// server drops the socket; any other failure is the peer gone.
-fn stopped_writing(error: &websocket::Error) -> Ended {
+fn stopped_writing(served_at: &ServedPath, error: &websocket::Error) -> Ended {
     if !matches!(error, websocket::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut) {
         return Ended::ByPeer;
     }
     tracing::warn!(
         target: crate::TARGET,
+        host = ENDPOINT.host_name(),
+        path = &*served_at.0,
         error = %nest_rs_core::error_message(error),
         "the peer took nothing within the send deadline; it is cut off",
     );
@@ -751,7 +769,7 @@ struct Inbound<S> {
     max_message_bytes: usize,
     /// Wakes the loop to send the Ping the keepalive owes.
     ping: Arc<tokio::sync::Notify>,
-    site: SocketSite,
+    served_at: ServedPath,
 }
 
 impl<S> Inbound<S> {
@@ -760,7 +778,7 @@ impl<S> Inbound<S> {
         end: impl Future<Output = Ending> + Send + 'static,
         bounds: SocketBounds,
         pipes: Option<SocketPipes>,
-        site: SocketSite,
+        served_at: ServedPath,
     ) -> Self {
         Self {
             socket,
@@ -777,7 +795,7 @@ impl<S> Inbound<S> {
             ping_timeout: bounds.ping_timeout,
             max_message_bytes: bounds.max_message_bytes,
             ping: Arc::default(),
-            site,
+            served_at,
         }
     }
 
@@ -789,8 +807,8 @@ impl<S> Inbound<S> {
         if code == CloseCode::Size {
             tracing::warn!(
                 target: crate::TARGET,
-                host = self.site.host(),
-                path = &*self.site.path,
+                host = ENDPOINT.host_name(),
+                path = &*self.served_at.0,
                 error = %nest_rs_core::error_message(error),
                 close_code = u16::from(code),
                 max_message_bytes = self.max_message_bytes,
@@ -799,8 +817,8 @@ impl<S> Inbound<S> {
         } else {
             tracing::debug!(
                 target: crate::TARGET,
-                host = self.site.host(),
-                path = &*self.site.path,
+                host = ENDPOINT.host_name(),
+                path = &*self.served_at.0,
                 error = %nest_rs_core::error_message(error),
                 close_code = u16::from(code),
                 "subscription socket read failed",
@@ -812,8 +830,8 @@ impl<S> Inbound<S> {
     fn peer_silent<T>(&self) -> Poll<Option<T>> {
         tracing::warn!(
             target: crate::TARGET,
-            host = self.site.host(),
-            path = &*self.site.path,
+            host = ENDPOINT.host_name(),
+            path = &*self.served_at.0,
             ping_timeout_ms = self.ping_timeout.as_millis(),
             "closing subscription socket: the peer sent nothing back within the ping timeout",
         );
@@ -870,6 +888,8 @@ where
         {
             tracing::debug!(
                 target: crate::TARGET,
+                host = ENDPOINT.host_name(),
+                path = &*this.served_at.0,
                 close_code = 4408,
                 "closing subscription socket: no connection_init within the wait",
             );
@@ -893,8 +913,9 @@ where
                     if !(message.is_text() || message.is_binary()) {
                         continue;
                     }
+                    let served_at = &this.served_at;
                     let mut parsed = serde_json::from_slice::<ClientMessage>(&message.into_data())
-                        .map_err(not_a_message);
+                        .map_err(|error| not_a_message(served_at, error));
                     match &mut parsed {
                         Ok(ClientMessage::ConnectionInit { .. }) => this.init_deadline = None,
                         Ok(ClientMessage::Start { id, payload }) => {
@@ -903,6 +924,8 @@ where
                                 drop(started);
                                 tracing::debug!(
                                     target: crate::TARGET,
+                                    host = ENDPOINT.host_name(),
+                                    path = &*this.served_at.0,
                                     close_code = 4409,
                                     "closing subscription socket: a running operation's id \
                                      was reused",
@@ -915,6 +938,8 @@ where
                                 drop(started);
                                 tracing::debug!(
                                     target: crate::TARGET,
+                                    host = ENDPOINT.host_name(),
+                                    path = &*this.served_at.0,
                                     max_socket_operations = max,
                                     "subscribe refused: the socket runs its maximum of operations",
                                 );
@@ -930,6 +955,8 @@ where
                                 if let Err(refused) = pipes.fold(payload) {
                                     tracing::debug!(
                                         target: crate::TARGET,
+                                        host = ENDPOINT.host_name(),
+                                        path = &*this.served_at.0,
                                         reason = "global_pipe",
                                         "subscribe refused: a global pipe refused its variables",
                                     );
@@ -970,9 +997,11 @@ const NOT_A_MESSAGE: &str = "not a graphql-ws message";
 /// A frame that does not decode, as the engine is handed it: the engine closes
 /// the socket with the error's sentence as the reason, and serde's sentence
 /// quotes the payload it refused.
-fn not_a_message(error: serde_json::Error) -> serde_json::Error {
+fn not_a_message(served_at: &ServedPath, error: serde_json::Error) -> serde_json::Error {
     tracing::debug!(
         target: crate::TARGET,
+        host = ENDPOINT.host_name(),
+        path = &*served_at.0,
         error = %nest_rs_core::DecodeError::new(&error),
         "graphql-ws frame refused: it does not decode as a protocol message",
     );
@@ -984,12 +1013,15 @@ fn not_a_message(error: serde_json::Error) -> serde_json::Error {
 /// control frame holds is cut, never sent whole for the peer to refuse.
 async fn close_socket(
     sink: &mut SplitSink<WebSocketStream, Message>,
+    served_at: &ServedPath,
     code: CloseCode,
     reason: &str,
 ) {
     if let Err(err) = sink.send(websocket::close_frame(code, reason)).await {
         tracing::debug!(
             target: crate::TARGET,
+            host = ENDPOINT.host_name(),
+            path = &*served_at.0,
             error = %nest_rs_core::error_message(&err),
             close_code = u16::from(code),
             "subscription socket close frame undelivered",
@@ -1013,15 +1045,22 @@ struct SubscriptionLine {
     correlation: nest_rs_core::Correlation,
     /// The subscription's span, which the outcome is recorded on for the export.
     span: tracing::Span,
+    /// The socket's coordinate, as `ws.connect` names a gateway's.
+    served_at: ServedPath,
     started: std::time::Instant,
     outcome: Option<&'static str>,
 }
 
 impl SubscriptionLine {
-    fn new(correlation: nest_rs_core::Correlation, span: tracing::Span) -> Self {
+    fn new(
+        correlation: nest_rs_core::Correlation,
+        span: tracing::Span,
+        served_at: ServedPath,
+    ) -> Self {
         Self {
             correlation,
             span,
+            served_at,
             started: std::time::Instant::now(),
             outcome: None,
         }
@@ -1048,6 +1087,7 @@ impl SubscriptionLine {
                             &*payload,
                             "graphql subscription panicked; the socket is closed with an internal \
                              error",
+                            path = &*self.served_at.0,
                             close_code = u16::from(CloseCode::Error),
                         );
                     },
@@ -1071,6 +1111,7 @@ impl Drop for SubscriptionLine {
                 span: &self.span,
                 outcome: outcome,
                 started: self.started,
+                path = &*self.served_at.0,
             );
         });
     }
@@ -1085,13 +1126,22 @@ mod tests {
 
     #[test]
     fn a_frame_that_is_not_a_protocol_message_is_refused_without_its_payload() {
+        let logs = nest_rs_testing::LogCapture::install();
         let refused = serde_json::from_slice::<ClientMessage>(
             br#"{"type":"subscribe","id":"1","payload":"sk_live_secret"}"#,
         )
-        .map_err(not_a_message)
+        .map_err(|error| not_a_message(&served_at(), error))
         .err()
         .expect("a string is no request payload");
         assert_eq!(refused.to_string(), NOT_A_MESSAGE);
+        let line = logs.expect_one(
+            crate::TARGET,
+            "graphql-ws frame refused: it does not decode as a protocol message",
+        );
+        for (field, value) in [("host", ENDPOINT.host_name()), ("path", "/graphql")] {
+            assert_eq!(line.field(field).as_deref(), Some(value), "{line:#?}");
+        }
+        assert!(!logs.quotes("sk_live_secret"), "{line:#?}");
     }
 
     /// A panic inside a `Drop` during an unwind aborts the process, and this
@@ -1104,6 +1154,7 @@ mod tests {
         drop(SubscriptionLine::new(
             nest_rs_core::Correlation::minted(None),
             tracing::Span::none(),
+            served_at(),
         ));
 
         let served = logs.find(
@@ -1118,6 +1169,11 @@ mod tests {
         assert_eq!(
             served[0].field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::CANCELLED),
+        );
+        assert_eq!(
+            served[0].field("path").as_deref(),
+            Some("/graphql"),
+            "the connection's coordinate, as `ws.connect` names a gateway's",
         );
         assert!(served[0].field("duration_ms").is_some());
     }
@@ -1134,6 +1190,7 @@ mod tests {
             SubscriptionLine::new(
                 nest_rs_core::Correlation::minted(None),
                 tracing::Span::none(),
+                served_at(),
             )
             .settle(ended);
             let served = logs.find(
@@ -1151,7 +1208,7 @@ mod tests {
         let correlation = nest_rs_core::Correlation::minted(None);
 
         nest_rs_core::with_request_scope(None, correlation.clone(), async {
-            let _line = SubscriptionLine::new(correlation, tracing::Span::none());
+            let _line = SubscriptionLine::new(correlation, tracing::Span::none(), served_at());
         })
         .await;
 
@@ -1300,20 +1357,23 @@ mod tests {
 
         let mut socket_ran_on_the_pool = false;
         let mut batch_ran_on = None;
-        let socket = socket_data.serve(Box::pin(async {
-            socket_ran_on_the_pool = nest_rs_database::current_executor()
-                .is_some_and(|executor| executor.as_any().is::<Pool>());
-            let batch = RequestContinuation::capture(Continuation::Batch)
-                .expect("a socket runs in a request scope");
-            batch_ran_on = Some(
-                batch
-                    .scope(async {
-                        nest_rs_database::current_executor()
-                            .is_some_and(|executor| executor.as_any().is::<Pool>())
-                    })
-                    .await,
-            );
-        }));
+        let socket = socket_data.serve(
+            Box::pin(async {
+                socket_ran_on_the_pool = nest_rs_database::current_executor()
+                    .is_some_and(|executor| executor.as_any().is::<Pool>());
+                let batch = RequestContinuation::capture(Continuation::Batch)
+                    .expect("a socket runs in a request scope");
+                batch_ran_on = Some(
+                    batch
+                        .scope(async {
+                            nest_rs_database::current_executor()
+                                .is_some_and(|executor| executor.as_any().is::<Pool>())
+                        })
+                        .await,
+                );
+            }),
+            served_at(),
+        );
         nest_rs_core::with_request_scope(None, Correlation::minted(None), socket).await;
 
         assert!(
@@ -1378,11 +1438,9 @@ mod tests {
         SocketBounds::of(&GraphqlConfig::default())
     }
 
-    /// The mount a test's socket names on its lines.
-    fn site() -> SocketSite {
-        SocketSite {
-            path: Arc::from("/graphql"),
-        }
+    /// The path a test's socket names on its lines.
+    fn served_at() -> ServedPath {
+        ServedPath(Arc::from("/graphql"))
     }
 
     /// The peer's half asks the loop for a Ping once the peer has been silent for
@@ -1399,7 +1457,7 @@ mod tests {
 
         let (peer, mut frames) = tokio::sync::mpsc::unbounded_channel();
         let socket = futures_util::stream::poll_fn(move |cx| frames.poll_recv(cx));
-        let mut inbound = Inbound::new(socket, std::future::pending(), bounds(), None, site());
+        let mut inbound = Inbound::new(socket, std::future::pending(), bounds(), None, served_at());
         let ping = Arc::clone(&inbound.ping);
         let refusal = Arc::clone(&inbound.refusal);
         peer.send(Ok(Message::text(r#"{"type":"connection_init"}"#)))
@@ -1455,7 +1513,7 @@ mod tests {
         let timeout = nest_rs_http::DEFAULT_PING_TIMEOUT;
         let (peer, mut frames) = tokio::sync::mpsc::unbounded_channel();
         let socket = futures_util::stream::poll_fn(move |cx| frames.poll_recv(cx));
-        let mut inbound = Inbound::new(socket, std::future::pending(), bounds(), None, site());
+        let mut inbound = Inbound::new(socket, std::future::pending(), bounds(), None, served_at());
         let ping = Arc::clone(&inbound.ping);
         let refusal = Arc::clone(&inbound.refusal);
         peer.send(Ok(Message::text(r#"{"type":"connection_init"}"#)))
@@ -1518,7 +1576,7 @@ mod tests {
             },
             bounds(),
             None,
-            site(),
+            served_at(),
         );
         let ending = Arc::clone(&inbound.ending);
         for _ in 0..4 {
@@ -1568,7 +1626,7 @@ mod tests {
             },
             bounds(),
             None,
-            site(),
+            served_at(),
         );
         let started = Arc::clone(&inbound.started);
         for _ in 0..3 {

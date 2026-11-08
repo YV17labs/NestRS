@@ -288,17 +288,19 @@ fn rendered(view: WsView, outcome: Outcome, event: &str) -> Answered {
         .as_ref()
         .err()
         .and_then(|failure| view.server_failed(failure));
-    let (reply, withheld, server_failed) = match (outcome, view.into_answer()) {
-        (Ok(_), (Some(reply), withheld)) => (reply, withheld, false),
-        (Ok(_), (None, _)) => {
+    let (answer, withheld, path) = view.into_answer();
+    let (reply, withheld, server_failed) = match (outcome, answer) {
+        (Ok(_), Some(reply)) => (reply, withheld, false),
+        (Ok(_), None) => {
             tracing::error!(
                 target: crate::TARGET,
+                path = path.as_deref(),
                 event,
                 "a message settled without a reply; answered opaquely",
             );
             return Answered::opaque();
         }
-        (Err(failure), (Some(reply), withheld)) if failure.is_answered() => {
+        (Err(failure), Some(reply)) if failure.is_answered() => {
             let server_failed =
                 rendered_class.unwrap_or_else(|| failure_rendered(&failure).frame.server_failed);
             (reply, withheld, server_failed)
@@ -310,7 +312,7 @@ fn rendered(view: WsView, outcome: Outcome, event: &str) -> Answered {
         }
     };
     if let Some(withheld) = withheld {
-        crate::envelope::file(withheld, event);
+        crate::envelope::file(withheld, path.as_deref(), event);
     }
     Answered {
         reply,
@@ -428,6 +430,31 @@ mod tests {
                 panic!("an error frame");
             };
             crate::testing::assert_opaque(&frame);
+        }
+    }
+
+    /// A unit that settled with no reply in its view answers opaquely, its line
+    /// naming the message by the coordinates its `mounted` line gives it.
+    #[test]
+    fn a_message_settled_without_a_reply_names_it_at_its_gateway() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let path: Arc<str> = Arc::from("/chat");
+        let view = WsView::new(
+            WsClient::for_test(),
+            "send",
+            Some(&path),
+            serde_json::Value::Null,
+        );
+
+        let answered = rendered(view, Ok(nest_rs_core::__private::settled()), "send");
+
+        assert!(answered.failed && !answered.refused_its_client());
+        let line = logs.expect_one(
+            crate::TARGET,
+            "a message settled without a reply; answered opaquely",
+        );
+        for (coordinate, value) in [("path", "/chat"), ("event", "send")] {
+            assert_eq!(line.field(coordinate).as_deref(), Some(value), "{line:#?}");
         }
     }
 }

@@ -639,3 +639,97 @@ async fn a_unit_a_declaring_guard_refuses_files_one_line_on_its_target() {
 async fn a_unit_a_silent_guard_refuses_files_one_line_on_the_layers_target() {
     units_refused::<SilentFieldPoolModule, SilentField>(false).await;
 }
+
+#[module(
+    imports = [
+        EveryEdgeModule,
+        HttpModule::for_root(HttpConfig {
+            global_prefix: Some("/api".into()),
+            ..HttpConfig::default()
+        }),
+    ],
+    providers = [GlobalGuards<(DeclaredField,)>],
+)]
+struct PrefixedUnitsModule;
+
+/// Every line `unit` filed, one at least, at the path its mount is served at.
+fn assert_unit_line_at(logs: &LogCapture, unit: &str, path: &str) {
+    let lines = logs.find(nest_rs_core::operation_log::TARGET, unit);
+    assert!(!lines.is_empty(), "{unit} files its line");
+    for line in &lines {
+        assert_eq!(
+            line.field("path").as_deref(),
+            Some(path),
+            "{unit}: {line:#?}"
+        );
+    }
+}
+
+/// The `mounted endpoint` line of the self-mount `host` registered, at `path`.
+fn assert_endpoint_at(logs: &LogCapture, host: &str, path: &str) {
+    let mounted = logs
+        .find(nest_rs_http::target::ROUTES, "mounted endpoint")
+        .into_iter()
+        .find(|line| line.field("host").as_deref() == Some(host))
+        .unwrap_or_else(|| panic!("{host}'s endpoint mounted"));
+    assert_eq!(mounted.field("path").as_deref(), Some(path), "{mounted:#?}");
+}
+
+/// Under a global prefix a WebSocket message and an MCP operation name the path
+/// a client connects to, as their endpoint's `mounted endpoint` line does: their
+/// denial, their `mounted` line, `ws.message` and `mcp.operation` alike.
+#[tokio::test]
+async fn a_unit_denial_names_the_path_served_under_the_global_prefix() {
+    let named = short_type_name::<DeclaredField>();
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<PrefixedUnitsModule>()
+        .build_ws()
+        .await
+        .expect("every edge serves under the prefix");
+
+    let seen = filed(&logs);
+    let mut socket = app.socket("/api/ws/door").connect().await;
+    socket.send("ping", serde_json::json!({})).await;
+    let refused = socket.next_envelope().await;
+    assert!(
+        refused["data"]["error"].is_string(),
+        "the message is refused: {refused}"
+    );
+    let line = assert_one_line(&logs, seen, "a WS message under a prefix", true, &named);
+    assert_joins_its_mount(
+        &logs,
+        "a WS message under a prefix",
+        &line,
+        "DoorGateway",
+        Some("ping"),
+        &[("path", "/api/ws/door"), ("event", "ping")],
+    );
+    assert_unit_line_at(&logs, nest_rs_ws::unit::MESSAGE.name(), "/api/ws/door");
+    assert_endpoint_at(&logs, "DoorGateway", "/api/ws/door");
+    drop(socket);
+    app.close().await;
+
+    let app = booted::<PrefixedUnitsModule>().await;
+    let seen = filed(&logs);
+    let mcp = call_tool_statelessly(
+        app.http(),
+        "/api/mcp",
+        "ping",
+        None,
+        &[],
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(mcp.contains("closed"), "the tool call is refused: {mcp}");
+    let line = assert_one_line(&logs, seen, "an MCP operation under a prefix", true, &named);
+    assert_joins_its_mount(
+        &logs,
+        "an MCP operation under a prefix",
+        &line,
+        "DoorTool",
+        Some("ping"),
+        &[("path", "/api/mcp"), ("tool", "ping")],
+    );
+    assert_unit_line_at(&logs, nest_rs_mcp::unit::OPERATION.name(), "/api/mcp");
+}

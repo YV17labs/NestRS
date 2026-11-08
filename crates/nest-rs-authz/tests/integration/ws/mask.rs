@@ -349,6 +349,54 @@ async fn a_value_the_mask_cannot_read_back_names_its_message() {
     }
 }
 
+#[gateway(path = "/ws/mask/socket")]
+#[use_guards(super::RoleUpgrade)]
+struct SocketMaskGateway;
+
+#[messages]
+impl SocketMaskGateway {
+    /// A value the mask cannot read back into a row, answered on a socket.
+    #[subscribe_message("invented_widget")]
+    #[authorize(Read, widget::Entity)]
+    async fn invented_widget(&self) -> Result<InventedWidgetDto, WsError> {
+        Ok(InventedWidgetDto {
+            id: "anonymous".to_owned(),
+        })
+    }
+}
+
+#[nest_rs_core::module(
+    imports = [nest_rs_ws::WsModule],
+    providers = [super::RoleUpgrade, SocketMaskGateway],
+)]
+struct SocketMaskModule;
+
+/// On a socket the mask's failure names its message by the coordinates the
+/// `mounted` line gives it, the gateway's `path` beside the `event`.
+#[tokio::test]
+async fn on_a_socket_a_mask_failure_names_the_gateways_path() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<SocketMaskModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+
+    let frame = super::message_as(&app, "/ws/mask/socket", Some("viewer"), "invented_widget").await;
+    assert!(frame["data"]["error"].is_string(), "{frame}");
+    let event = logs.expect_one("nest_rs::authz", "response masking failed");
+    for (field, named) in [
+        ("transport", "ws"),
+        ("host", "SocketMaskGateway"),
+        ("method", "invented_widget"),
+        ("path", "/ws/mask/socket"),
+        ("event", "invented_widget"),
+    ] {
+        assert_eq!(event.field(field).as_deref(), Some(named), "{field}");
+    }
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
 #[tokio::test]
 async fn unmasked_keeps_the_gate_and_returns_the_body_verbatim() {
     let body = reply("viewer", "projected").await;

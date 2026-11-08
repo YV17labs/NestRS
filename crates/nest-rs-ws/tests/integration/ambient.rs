@@ -143,6 +143,14 @@ async fn an_unattached_ctx_answers_opaquely_and_files_its_type() {
         "{:?}",
         line.fields,
     );
+    for (coordinate, value) in [("path", "/ctx"), ("event", "unwired")] {
+        assert_eq!(
+            line.field(coordinate).as_deref(),
+            Some(value),
+            "the line names the message as its `mounted` line does: {:?}",
+            line.fields,
+        );
+    }
     app.shutdown().await.expect("shuts down");
 }
 

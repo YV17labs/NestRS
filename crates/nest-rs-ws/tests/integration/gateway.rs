@@ -1359,6 +1359,7 @@ async fn a_message_past_its_deadline_is_answered_a_timeout_and_the_socket_goes_o
     );
     assert_eq!(cut.level, "warn");
     assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
+    assert_eq!(cut.field("path").as_deref(), Some("/deadline"));
     assert_eq!(cut.field("event").as_deref(), Some("stall"));
     assert_eq!(cut.field("timeout_ms").as_deref(), Some("1000"));
 

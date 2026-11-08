@@ -644,7 +644,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                         <#self_ty>::__nestrs_mount_path(),
                         ::nest_rs_ws::__private::GATEWAY_LABEL,
                         move |__container, __routes| {
-                            let __path = <#self_ty>::__nestrs_mount_path();
+                            let __declared = <#self_ty>::__nestrs_mount_path();
+                            // What a client connects to, under the global prefix: every
+                            // line naming the gateway names it so.
+                            let __path = __routes.served(&__declared);
                             #(#mounted_logs)*
                             let __gw = ::std::sync::Arc::new(
                                 <#self_ty>::__nestrs_from_container(__container),
@@ -664,7 +667,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             );
                             __routes.route(
                                 ::nest_rs_ws::__private::nest_rs_http::Method::GET,
-                                &__path,
+                                &__declared,
                                 __ep,
                             );
                         },

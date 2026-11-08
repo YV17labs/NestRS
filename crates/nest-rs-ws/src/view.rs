@@ -145,8 +145,9 @@ impl WsView {
             .map(|(_, server_failed)| *server_failed)
     }
 
-    /// The answer, and what it withholds, filed once it goes out.
-    pub(crate) fn into_answer(self) -> (Option<WsReply>, Option<Withheld>) {
-        (self.reply, self.withheld)
+    /// The answer, what it withholds, filed once it goes out, and the path of
+    /// the gateway it goes out at, which that line names.
+    pub(crate) fn into_answer(self) -> (Option<WsReply>, Option<Withheld>, Option<Arc<str>>) {
+        (self.reply, self.withheld, self.path)
     }
 }

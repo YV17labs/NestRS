@@ -386,7 +386,7 @@ mod tests {
             checked(&stage_of(Numbers), &WsClient::for_test(), json!("text")).await;
         let failure = checked.expect_err("text is refused");
         assert!(failure.is_answered(), "the stage answered it");
-        let (reply, line) = view.into_answer();
+        let (reply, line, _) = view.into_answer();
         let Some(crate::WsReply::Error(refused)) = reply else {
             panic!("a refusal answers an error frame");
         };

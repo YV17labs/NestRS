@@ -203,7 +203,7 @@ pub mod __private {
         ErrorReport, ErrorReportChain, ErrorReportFallback, ErrorReportLocal, HandlerFailed,
         ReplyOutcome, ReplyValue, ReplyValueFallback, decode_payload,
     };
-    pub use crate::gateway::{GATEWAY_LABEL, gateway_endpoint, wire_gateway};
+    pub use crate::gateway::{GATEWAY_LABEL, gateway_endpoint, served_path, wire_gateway};
     pub use crate::guard::{MessageGuards, message_guard_stage, refused_origin};
     pub use crate::message::{DeclaredMessage, MessageTable};
     pub use crate::module::RUNTIME;

@@ -179,8 +179,9 @@ impl HttpRoutes {
         self.unit_of_work.as_ref()
     }
 
-    /// `template` as a client calls it: under the global prefix.
-    pub(crate) fn served(&self, template: &str) -> String {
+    /// `template` as a client calls it, under the global prefix: the path a
+    /// mount's lines name it by, as its `mounted endpoint` line does.
+    pub fn served(&self, template: &str) -> String {
         match &self.prefix {
             Some(prefix) => join_path(prefix, template),
             None => template.to_owned(),

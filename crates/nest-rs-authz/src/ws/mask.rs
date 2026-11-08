@@ -96,7 +96,9 @@ where
 {
     fn masked_reply(site: &'static Site, value: &O) -> WsReply {
         let handler = site.handler();
+        let path = nest_rs_ws::__private::served_path();
         let served = ServedAddress::event(handler.address());
+        let served = path.as_deref().map_or(served, |path| served.at(path));
         let unit = MaskedUnit::on(Edge::Ws, Some(handler), served);
         match masked_reply_for::<A, E, O>(unit, value) {
             Ok(masked) => WsReply::Reply(masked),

@@ -9,7 +9,7 @@ use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use nest_rs_core::__private::{ClassGate, Pending, RequestScopes, install_pending};
 use nest_rs_core::code;
 use nest_rs_core::{
-    Container, Continuation, Correlation, Handler, RequestContinuation, operation_log,
+    AmbientValue, Container, Continuation, Correlation, Handler, RequestContinuation, operation_log,
 };
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_guards::__private::GuardSpec;
@@ -93,9 +93,10 @@ pub const GATEWAY_LABEL: &str = "ws";
 /// The endpoint a gateway's upgrade mounts at, assembled from the gateway, its
 /// messages, the container it mounts from, and the [`DetachedWork`] its
 /// `HttpEndpointMeta` declares; what each connection needs from the container
-/// is resolved here, once. `host` and `path` name the gateway as its `mounted`
-/// lines do, on every line its sockets file. Called by `#[messages]`-generated
-/// mount code.
+/// is resolved here, once. `host` and `path`, the one a client connects to under
+/// the global prefix, name the gateway as its `mounted` lines do, on every line
+/// its sockets file; a unit deadline the shutdown window cannot hold is said
+/// here at `warn`, naming it so. Called by `#[messages]`-generated mount code.
 pub fn gateway_endpoint<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
@@ -105,27 +106,42 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
     host: &'static str,
     path: &str,
 ) -> BoxEndpoint {
+    // Falls back to the bounded default, never to an unbounded lifetime or buffer.
+    let config = container.get::<WsConfig>().unwrap_or_default();
+    let window = container
+        .get::<nest_rs_http::HttpConfig>()
+        .unwrap_or_default()
+        .shutdown_timeout;
+    config.warn_when_units_outlast_the_window(window, path);
     BoxEndpoint::new(GatewayEndpoint {
         gateway,
         server,
         messages: Arc::new(messages),
         unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
-        // Falls back to the bounded default, never to an unbounded lifetime or buffer.
-        config: container.get::<WsConfig>().unwrap_or_default(),
+        config,
         scopes: RequestScopes::new(container.clone()),
         sockets,
-        site: SocketSite {
+        served: Arc::new(ServedGateway {
             host,
             path: Arc::from(path),
-        },
+        }),
     })
 }
 
-/// The gateway a socket's lines name, in the fields of its `mounted` lines.
-#[derive(Clone)]
-struct SocketSite {
+/// The gateway as its `mounted` lines name it, which every line its sockets
+/// file names too: its host, and the path a client connects to. Ambient for
+/// each socket, so what a message's handler calls — its mask — names it as well.
+struct ServedGateway {
     host: &'static str,
     path: Arc<str>,
+}
+
+impl AmbientValue for ServedGateway {}
+
+/// The path the gateway running this unit is served at, as its `mounted` lines
+/// name it; `None` off a socket, for a message dispatched as a test calls it.
+pub fn served_path() -> Option<Arc<str>> {
+    nest_rs_core::ambient::<ServedGateway>().map(|served| Arc::clone(&served.path))
 }
 
 /// The wiring `#[messages]` attaches for the gateway at `path`: its
@@ -133,8 +149,7 @@ struct SocketSite {
 /// declare holds against them — one no guard covers says `#[public]`, and one
 /// saying it can be reached with no credential — and each composes over its
 /// `host_pipes` — a layer no imported module provides, or two `#[meta]` values
-/// of one type at one level, fail the boot naming the site. A unit deadline the
-/// shutdown window cannot hold is said at `warn`.
+/// of one type at one level, fail the boot naming the site.
 pub fn wire_gateway(
     container: &Container,
     path: &str,
@@ -145,14 +160,6 @@ pub fn wire_gateway(
     let upgrade = crate::guard::validate_upgrade(container, path, upgrade)?;
     crate::message::compose_declared(container, host_pipes, messages)?;
     crate::guard::check_posture(container, path, &upgrade, messages)?;
-    let window = container
-        .get::<nest_rs_http::HttpConfig>()
-        .unwrap_or_default()
-        .shutdown_timeout;
-    container
-        .get::<WsConfig>()
-        .unwrap_or_default()
-        .warn_when_units_outlast_the_window(window, path);
     Ok(())
 }
 
@@ -171,7 +178,7 @@ struct GatewayEndpoint<G, N: 'static> {
     /// Every socket this gateway serves: an upgraded socket outlives the HTTP
     /// connection the shutdown window waits on, so the window waits on this too.
     sockets: DetachedWork,
-    site: SocketSite,
+    served: Arc<ServedGateway>,
 }
 
 impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
@@ -194,7 +201,7 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             message_timeout: self.config.message_timeout,
             connect_timeout: self.config.connect_timeout,
             disconnect_timeout: self.config.disconnect_timeout,
-            site: self.site.clone(),
+            served: Arc::clone(&self.served),
         };
         let limits = SocketLimits {
             max_lifetime,
@@ -211,8 +218,12 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             let connection = wiring.connection.clone();
             let going_away = sockets.going_away();
             async move {
-                let serving = serve_connection(
-                    gateway, server, messages, wiring, limits, socket, going_away,
+                let served = Arc::clone(&wiring.served);
+                let serving = nest_rs_core::with_ambient(
+                    served,
+                    serve_connection(
+                        gateway, server, messages, wiring, limits, socket, going_away,
+                    ),
                 );
                 let serving = match carried {
                     Some(carried) => Either::Left(carried.scope(serving)),
@@ -241,7 +252,7 @@ struct DispatchWiring {
     /// What the disconnect hook may hold the close for; `None` ⇒ no deadline.
     disconnect_timeout: Option<Duration>,
     /// The gateway the socket's lines name.
-    site: SocketSite,
+    served: Arc<ServedGateway>,
 }
 
 /// Per-socket limits resolved once at upgrade from [`WsConfig`].
@@ -295,7 +306,7 @@ async fn serve_connection<G, N, S>(
     let (outbox, mut rx) =
         tokio::sync::mpsc::channel::<crate::server::Frame>(crate::server::OUTBOX_CAPACITY);
     let conn_id = server.connect(outbox.clone());
-    let site = &wiring.site;
+    let served = &*wiring.served;
 
     // The `Sink` comes back when the outbox closes, so the Close frame is written
     // after every reply already queued. A frame that cannot be written ends the
@@ -306,7 +317,7 @@ async fn serve_connection<G, N, S>(
     // empties would hold it back until its peer was dropped as silent.
     let ping = Arc::new(tokio::sync::Notify::new());
     let pinged = Arc::clone(&ping);
-    let writer_site = site.clone();
+    let writer_served = Arc::clone(&wiring.served);
     let mut writer = Writer(tokio::spawn(nest_rs_core::panic::contain(async move {
         loop {
             let frame = tokio::select! {
@@ -318,7 +329,7 @@ async fn serve_connection<G, N, S>(
                 },
             };
             if let Err(error) = sink.send(frame).await {
-                stopped_writing(&writer_site, conn_id, &error);
+                stopped_writing(&writer_served, conn_id, &error);
                 break;
             }
         }
@@ -367,8 +378,8 @@ async fn serve_connection<G, N, S>(
                 // `debug`: shutdown is logged once; a line per socket is noise.
                 tracing::debug!(
                     target: crate::TARGET,
-                    host = site.host,
-                    path = &*site.path,
+                    host = served.host,
+                    path = &*served.path,
                     conn_id,
                     close_code = u16::from(CloseCode::Away),
                     "closing socket: the server is going away",
@@ -384,8 +395,8 @@ async fn serve_connection<G, N, S>(
             } => {
                 tracing::info!(
                     target: crate::TARGET,
-                    host = site.host,
-                    path = &*site.path,
+                    host = served.host,
+                    path = &*served.path,
                     conn_id,
                     close_code = u16::from(CloseCode::Away),
                     "closing socket: max lifetime reached",
@@ -424,20 +435,20 @@ async fn serve_connection<G, N, S>(
                     // tungstenite queues the Pong before a Ping reaches this loop,
                     // and a raw frame is never read.
                     Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => None,
-                    Err(err) => break read_failed(site, conn_id, &err, limits.max_message_bytes),
+                    Err(err) => break read_failed(served, conn_id, &err, limits.max_message_bytes),
                 };
                 // The pushes' outbox, so ordering with broadcasts the handler
                 // triggered is preserved.
                 if let Some(reply) = reply
                     && outbox.try_send(reply.into()).is_err()
                 {
-                    break stalled_outbox(site, conn_id);
+                    break stalled_outbox(served, conn_id);
                 }
             }
             // Last, so a frame that arrived in the same instant answers the Ping.
             due = keep_alive.due() => match due {
                 Due::Ping => ping.notify_one(),
-                Due::Silent => break peer_silent(site, conn_id, limits.ping_timeout),
+                Due::Silent => break peer_silent(served, conn_id, limits.ping_timeout),
             },
         }
     };
@@ -463,16 +474,16 @@ async fn serve_connection<G, N, S>(
     let closed = tokio::time::timeout(DetachedWork::CLOSE_GRACE, async {
         // Without the `Sink`, which went down with the task, the peer reads 1006
         // (RFC 6455 §7.4.1).
-        if let Some(sink) = writer_ended((&mut writer.0).await, conn_id) {
-            close_socket(sink, closure, site, conn_id).await;
+        if let Some(sink) = writer_ended((&mut writer.0).await, served, conn_id) {
+            close_socket(sink, closure, served, conn_id).await;
         }
     })
     .await;
     if closed.is_err() {
         tracing::debug!(
             target: crate::TARGET,
-            host = site.host,
-            path = &*site.path,
+            host = served.host,
+            path = &*served.path,
             conn_id,
             close_grace_ms = u64::try_from(DetachedWork::CLOSE_GRACE.as_millis()).unwrap_or(u64::MAX),
             "socket dropped: the peer did not take its replies and close within the grace",
@@ -496,7 +507,11 @@ type Written<S> = Result<S, Box<dyn std::any::Any + Send>>;
 /// The `Sink` the writer gave back, once its panic, if any, is said. The
 /// writer is aborted only after this wait, so a `JoinError` here is its
 /// runtime going down.
-fn writer_ended<S>(joined: Result<Written<S>, tokio::task::JoinError>, conn_id: u64) -> Option<S> {
+fn writer_ended<S>(
+    joined: Result<Written<S>, tokio::task::JoinError>,
+    served: &ServedGateway,
+    conn_id: u64,
+) -> Option<S> {
     match joined {
         Ok(Ok(sink)) => Some(sink),
         Ok(Err(payload)) => {
@@ -504,6 +519,8 @@ fn writer_ended<S>(joined: Result<Written<S>, tokio::task::JoinError>, conn_id: 
                 target: crate::TARGET,
                 payload.as_ref(),
                 "writer task panicked",
+                host = served.host,
+                path = &*served.path,
                 conn_id,
             );
             None
@@ -516,12 +533,12 @@ fn writer_ended<S>(joined: Result<Written<S>, tokio::task::JoinError>, conn_id: 
 type WsSink<S> = futures_util::stream::SplitSink<S, Message>;
 
 /// The writer could not put a frame on the wire, and the socket ends with it.
-fn stopped_writing(site: &SocketSite, conn_id: ConnId, error: &websocket::Error) {
+fn stopped_writing(served: &ServedGateway, conn_id: ConnId, error: &websocket::Error) {
     if matches!(error, websocket::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut) {
         tracing::warn!(
             target: crate::TARGET,
-            host = site.host,
-            path = &*site.path,
+            host = served.host,
+            path = &*served.path,
             conn_id,
             error = %nest_rs_core::error_message(error),
             "the peer took nothing within the send deadline; it is cut off",
@@ -529,8 +546,8 @@ fn stopped_writing(site: &SocketSite, conn_id: ConnId, error: &websocket::Error)
     } else {
         tracing::debug!(
             target: crate::TARGET,
-            host = site.host,
-            path = &*site.path,
+            host = served.host,
+            path = &*served.path,
             conn_id,
             error = %nest_rs_core::error_message(error),
             "closing socket: a frame could not be written",
@@ -539,11 +556,11 @@ fn stopped_writing(site: &SocketSite, conn_id: ConnId, error: &websocket::Error)
 }
 
 /// Close a socket whose peer stopped draining its full outbox.
-fn stalled_outbox(site: &SocketSite, conn_id: u64) -> Closure {
+fn stalled_outbox(served: &ServedGateway, conn_id: u64) -> Closure {
     tracing::warn!(
         target: crate::TARGET,
-        host = site.host,
-        path = &*site.path,
+        host = served.host,
+        path = &*served.path,
         conn_id,
         close_code = u16::from(CloseCode::Policy),
         "closing socket: the peer stopped draining and the outbox is full",
@@ -557,7 +574,7 @@ fn stalled_outbox(site: &SocketSite, conn_id: u64) -> Closure {
 /// `warn`, naming the cap, never the frame. Any other failure is most often the
 /// connection gone.
 fn read_failed(
-    site: &SocketSite,
+    served: &ServedGateway,
     conn_id: ConnId,
     error: &websocket::Error,
     max_message_bytes: usize,
@@ -566,8 +583,8 @@ fn read_failed(
     if code == CloseCode::Size {
         tracing::warn!(
             target: crate::TARGET,
-            host = site.host,
-            path = &*site.path,
+            host = served.host,
+            path = &*served.path,
             conn_id,
             error = %nest_rs_core::error_message(error),
             close_code = u16::from(code),
@@ -577,8 +594,8 @@ fn read_failed(
     } else {
         tracing::debug!(
             target: crate::TARGET,
-            host = site.host,
-            path = &*site.path,
+            host = served.host,
+            path = &*served.path,
             conn_id,
             error = %nest_rs_core::error_message(error),
             close_code = u16::from(code),
@@ -589,11 +606,11 @@ fn read_failed(
 }
 
 /// Drop a socket whose peer sent nothing back within the Ping's timeout.
-fn peer_silent(site: &SocketSite, conn_id: ConnId, ping_timeout: Duration) -> Closure {
+fn peer_silent(served: &ServedGateway, conn_id: ConnId, ping_timeout: Duration) -> Closure {
     tracing::warn!(
         target: crate::TARGET,
-        host = site.host,
-        path = &*site.path,
+        host = served.host,
+        path = &*served.path,
         conn_id,
         ping_timeout_ms = ping_timeout.as_millis(),
         "closing socket: the peer sent nothing back within the ping timeout",
@@ -639,8 +656,12 @@ const OUTBOX_STALLED: &str = "outbox full, the client is not draining its messag
 
 /// Put the Close frame on the wire, then flush — the flush also drives out the
 /// echo queued for [`Closure::Echo`]. Best-effort: a gone peer is logged at `debug`.
-async fn close_socket<S>(mut sink: WsSink<S>, closure: Closure, site: &SocketSite, conn_id: ConnId)
-where
+async fn close_socket<S>(
+    mut sink: WsSink<S>,
+    closure: Closure,
+    served: &ServedGateway,
+    conn_id: ConnId,
+) where
     S: Sink<Message, Error = websocket::Error>,
 {
     if let Closure::WriterStopped | Closure::PeerSilent = closure {
@@ -651,8 +672,8 @@ where
     {
         tracing::debug!(
             target: crate::TARGET,
-            host = site.host,
-            path = &*site.path,
+            host = served.host,
+            path = &*served.path,
             conn_id,
             error = %nest_rs_core::error_message(&err),
             "websocket close frame undelivered",
@@ -662,8 +683,8 @@ where
     if let Err(err) = SinkExt::close(&mut sink).await {
         tracing::debug!(
             target: crate::TARGET,
-            host = site.host,
-            path = &*site.path,
+            host = served.host,
+            path = &*served.path,
             conn_id,
             error = %nest_rs_core::error_message(&err),
             "websocket close handshake unfinished",
@@ -687,6 +708,7 @@ async fn refuse_oversize(
         || {
             tracing::debug!(
                 target: crate::TARGET,
+                path = &*wiring.served.path,
                 conn_id = client.id(),
                 bytes,
                 max_message_bytes,
@@ -714,6 +736,7 @@ async fn refuse_binary(
         || {
             tracing::debug!(
                 target: crate::TARGET,
+                path = &*wiring.served.path,
                 conn_id = client.id(),
                 bytes,
                 "websocket message refused: binary frames carry no envelope",
@@ -750,7 +773,7 @@ async fn refuse_unread(
                 messages,
                 client,
                 serde_json::Value::Null,
-                &wiring.site.path,
+                &wiring.served.path,
                 refusal,
                 deadline,
             )
@@ -758,7 +781,7 @@ async fn refuse_unread(
         },
     )
     .await;
-    reply_frame(reply, "error", operation_log::OTHER)
+    reply_frame(reply, "error", operation_log::OTHER, &wiring.served.path)
 }
 
 /// Run one connection-lifecycle hook under the connection's identity, as a
@@ -775,7 +798,8 @@ async fn under_connection<F: Future<Output = ()> + Send>(
     hook: F,
 ) -> bool {
     let connection = &wiring.connection;
-    let line = UnitLine::open(unit, conn_id, connection.clone(), span.clone());
+    let path = &*wiring.served.path;
+    let line = UnitLine::open(unit, path, conn_id, connection.clone(), span.clone());
     let timeout = match unit {
         Unit::Connect => wiring.connect_timeout,
         Unit::Disconnect => wiring.disconnect_timeout,
@@ -825,6 +849,7 @@ async fn under_connection<F: Future<Output = ()> + Send>(
             line.file(operation_log::ERROR);
             tracing::warn!(
                 target: crate::TARGET,
+                path,
                 conn_id,
                 unit = unit.declared().name(),
                 timeout_ms = timeout.as_millis(),
@@ -836,7 +861,9 @@ async fn under_connection<F: Future<Output = ()> + Send>(
             line.file(operation_log::ERROR);
             tracing::error!(
                 target: crate::TARGET,
+                path,
                 conn_id,
+                unit = unit.declared().name(),
                 retryable = why.retryable,
                 reason = why.reason,
                 "websocket connection hook ran, but what it wrote could not be committed",
@@ -884,8 +911,8 @@ impl From<std::thread::Result<()>> for HookEnd {
 /// The units a socket carries, each filed under its own canonical name.
 #[derive(Clone, Copy)]
 enum Unit<'a> {
-    /// One message, named by its event and its gateway's path.
-    Message { event: &'a str, path: &'a str },
+    /// One message, named by its event.
+    Message { event: &'a str },
     /// The connect hook.
     Connect,
     /// The disconnect hook.
@@ -910,6 +937,8 @@ impl Unit<'_> {
 /// One macro call per unit: `name:` must be a constant at each call site.
 struct UnitLine<'a> {
     unit: Unit<'a>,
+    /// The path its gateway is served at, every unit's coordinate.
+    path: &'a str,
     conn_id: ConnId,
     /// Entered to file the line: a `Drop` runs while the unit's future is torn
     /// down, not reliably inside the scope that future installed.
@@ -923,12 +952,14 @@ struct UnitLine<'a> {
 impl<'a> UnitLine<'a> {
     fn open(
         unit: Unit<'a>,
+        path: &'a str,
         conn_id: ConnId,
         correlation: Correlation,
         span: tracing::Span,
     ) -> Self {
         Self {
             unit,
+            path,
             conn_id,
             correlation,
             span,
@@ -959,9 +990,9 @@ impl<'a> UnitLine<'a> {
     /// which the client is never told.
     fn unwound(mut self, payload: &(dyn std::any::Any + Send)) {
         self.emit(operation_log::PANIC);
-        let conn_id = self.conn_id;
+        let (path, conn_id) = (self.path, self.conn_id);
         RequestContinuation::new(None, self.correlation.clone()).enter(|| match self.unit {
-            Unit::Message { event, path } => nest_rs_core::contained_panic!(
+            Unit::Message { event } => nest_rs_core::contained_panic!(
                 target: crate::TARGET,
                 payload,
                 "websocket handler panicked; its client is answered with an internal error",
@@ -974,6 +1005,7 @@ impl<'a> UnitLine<'a> {
                 payload,
                 "websocket connect hook panicked; the socket is closed unserved",
                 conn_id,
+                path,
                 close_code = u16::from(CloseCode::Error),
             ),
             Unit::Disconnect => nest_rs_core::contained_panic!(
@@ -981,17 +1013,18 @@ impl<'a> UnitLine<'a> {
                 payload,
                 "websocket disconnect hook panicked; the close goes on",
                 conn_id,
+                path,
             ),
         });
     }
 
     fn emit(&mut self, outcome: &'static str) {
         self.filed = true;
-        let conn_id = self.conn_id;
+        let (path, conn_id) = (self.path, self.conn_id);
         let span = &self.span;
         let started = self.started;
         RequestContinuation::new(None, self.correlation.clone()).enter(|| match self.unit {
-            Unit::Message { event, path } => nest_rs_core::operation_line!(
+            Unit::Message { event } => nest_rs_core::operation_line!(
                 crate::unit::MESSAGE,
                 span: span,
                 outcome: outcome,
@@ -1005,6 +1038,7 @@ impl<'a> UnitLine<'a> {
                 span: span,
                 outcome: outcome,
                 started: started,
+                path,
                 conn_id,
             ),
             Unit::Disconnect => nest_rs_core::operation_line!(
@@ -1012,6 +1046,7 @@ impl<'a> UnitLine<'a> {
                 span: span,
                 outcome: outcome,
                 started: started,
+                path,
                 conn_id,
             ),
         });
@@ -1054,6 +1089,7 @@ async fn handle_text<G: Gateway>(
                 || {
                     tracing::debug!(
                         target: crate::TARGET,
+                        path = &*wiring.served.path,
                         conn_id,
                         error = %refused,
                         "websocket message refused: no envelope",
@@ -1082,7 +1118,7 @@ async fn handle_text<G: Gateway>(
                         message,
                         client,
                         event,
-                        &wiring.site.path,
+                        &wiring.served.path,
                         data,
                         deadline,
                     )
@@ -1095,7 +1131,7 @@ async fn handle_text<G: Gateway>(
                         messages,
                         client,
                         data,
-                        &wiring.site.path,
+                        &wiring.served.path,
                         &refusal,
                         deadline,
                     )
@@ -1105,7 +1141,7 @@ async fn handle_text<G: Gateway>(
         },
     )
     .await;
-    reply_frame(reply, &event, named)
+    reply_frame(reply, &event, named, &wiring.served.path)
 }
 
 /// Run what `body` builds for the message's deadline as the message `named`
@@ -1124,19 +1160,17 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
         .map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
     let at = deadline.map(|(_, at)| at);
     let body = body(at);
+    let path = &*wiring.served.path;
     // The body alone is cut: the unit settles outside it, so a commit never is.
     let cut = async move {
         match deadline {
             Some((timeout, at)) => tokio::time::timeout_at(at, body)
                 .await
-                .unwrap_or_else(|_| timed_out(conn_id, named, timeout)),
+                .unwrap_or_else(|_| timed_out(conn_id, path, named, timeout)),
             None => body.await,
         }
     };
-    let message = Unit::Message {
-        event: named,
-        path: &wiring.site.path,
-    };
+    let message = Unit::Message { event: named };
     let spec = unit_spec(message, at);
     let unit = run_unit(
         unit_of_work,
@@ -1153,7 +1187,7 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
         ws.event = %named,
         ws.connection_id = conn_id,
     );
-    let line = UnitLine::open(message, conn_id, correlation.clone(), span.clone());
+    let line = UnitLine::open(message, path, conn_id, correlation.clone(), span.clone());
     let ran = nest_rs_core::with_request_scope(
         Some(wiring.scopes.open()),
         correlation,
@@ -1174,14 +1208,15 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
 }
 
 /// The frame `reply` puts on the wire under `event`, none for silence; `named`
-/// is what the operator's line calls the message.
-fn reply_frame(reply: WsReply, event: &str, named: &str) -> Option<String> {
+/// at `path` is what the operator's line calls the message.
+fn reply_frame(reply: WsReply, event: &str, named: &str, path: &str) -> Option<String> {
     match reply {
         WsReply::Reply(data) => match WsEnvelope::encode(event, &data) {
             Ok(frame) => Some(frame),
             Err(err) => {
                 tracing::warn!(
                     target: crate::TARGET,
+                    path,
                     event = %named,
                     error = %nest_rs_core::error_message(&err),
                     "failed to serialize reply",
@@ -1196,11 +1231,12 @@ fn reply_frame(reply: WsReply, event: &str, named: &str) -> Option<String> {
 
 /// What a message past its deadline is answered: an error frame in the
 /// class HTTP's request timeout answers (`UNAVAILABLE`), with `timeout` as its
-/// reason, said once at `warn` for the operator.
-fn timed_out(conn_id: ConnId, event: &str, timeout: Duration) -> Answered {
+/// reason, said once at `warn` for the operator, naming the message at `path`.
+fn timed_out(conn_id: ConnId, path: &str, event: &str, timeout: Duration) -> Answered {
     tracing::warn!(
         target: crate::TARGET,
         conn_id,
+        path,
         event,
         reason = TIMEOUT_REASON,
         timeout_ms = timeout.as_millis(),
@@ -1242,10 +1278,12 @@ mod tests {
         }))
         .await;
 
-        assert_eq!(writer_ended(joined, 7), None);
+        assert_eq!(writer_ended(joined, &wiring().served, 7), None);
         let line = logs.expect_one(crate::TARGET, "writer task panicked");
         assert_eq!(line.level, "error");
         assert_eq!(line.field("conn_id").as_deref(), Some("7"));
+        assert_eq!(line.field("host").as_deref(), Some("Echo"));
+        assert_eq!(line.field("path").as_deref(), Some("/echo"));
         let said = line.field(nest_rs_core::panic::FIELD).unwrap_or_default();
         assert!(
             said.contains("invalid type: a string, expected u64") && !said.contains("sk_live"),
@@ -1417,10 +1455,10 @@ mod tests {
             message_timeout: None,
             connect_timeout: None,
             disconnect_timeout: None,
-            site: SocketSite {
+            served: Arc::new(ServedGateway {
                 host: "Echo",
                 path: Arc::from("/echo"),
-            },
+            }),
         }
     }
 
@@ -1596,6 +1634,11 @@ mod tests {
         assert_eq!(span.field("otel.status_code"), None, "{:?}", span.fields);
         let reported = logs.expect_one(crate::TARGET, report);
         assert_eq!(reported.level, "debug");
+        assert_eq!(
+            reported.field("path").as_deref(),
+            Some("/echo"),
+            "the report names the gateway as the message's line does: {reported:#?}",
+        );
         assert!(line.span_id.is_some(), "the line names its unit: {line:#?}");
         assert_eq!(
             (&reported.trace_id, &reported.span_id),
@@ -1953,7 +1996,7 @@ mod tests {
     #[test]
     fn a_peer_that_stops_draining_is_closed_with_a_reason() {
         let logs = nest_rs_testing::LogCapture::install();
-        let closure = stalled_outbox(&wiring().site, 7);
+        let closure = stalled_outbox(&wiring().served, 7);
 
         assert!(matches!(
             closure,

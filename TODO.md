@@ -225,11 +225,14 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   none is answered; a stateless `subscriptions/listen` has no channel for one.
   `TCP_USER_TIMEOUT` is no answer: behind a proxy the server's hop is the live
   proxy. *read*
-- A WebSocket mask's `authorization denied` and `response masking failed` name
-  `event` without the gateway's `path`: the reply is masked inside the
-  handler's call, which holds no view. Close: the path through the masked
-  unit, as MCP's mask reads its endpoint's. `ws.connect` and `ws.disconnect`
-  name `conn_id` alone, not the gateway's `host` and `path`. *read*
+- A withheld chain's line names `error` alone in two places, where a
+  gateway's `websocket message failed` names `path` and `event`:
+  `Opaque::opaque`'s line of that same sentence (one message, two field sets),
+  and MCP's `mcp operation failed` and `unavailable`. Each joins its unit's line
+  by its span only. Close: `.opaque()` hands the chain it withholds to the edge,
+  as a handler's `Err` does through `HandlerFailed`, and MCP's `Reply::filed`
+  takes the operation's address, so each edge files the chain with the unit's
+  coordinates, as `envelope::file` does. *read*
 
 **Auth**
 - A token `sign` mints carries `client_id` only when the claims name one,

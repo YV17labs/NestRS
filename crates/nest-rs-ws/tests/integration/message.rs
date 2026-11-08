@@ -606,11 +606,18 @@ async fn a_connect_hook_past_its_deadline_is_cut_and_its_socket_closed_unserved(
         line.field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::ERROR),
     );
+    assert_eq!(
+        line.field("path").as_deref(),
+        Some("/stalled"),
+        "the hook's line names its gateway by the coordinates `ws.message` does: {:?}",
+        line.fields,
+    );
     let cut = logs.expect_one(
         nest_rs_ws::TARGET,
         "websocket connection hook not finished within its deadline; it is cut",
     );
     assert_eq!(cut.level, "warn");
+    assert_eq!(cut.field("path").as_deref(), Some("/stalled"));
     assert_eq!(cut.field("unit").as_deref(), Some("ws.connect"));
     assert_eq!(cut.field("timeout_ms").as_deref(), Some("1000"));
     app.shutdown().await.expect("the transport stops cleanly");
@@ -678,10 +685,12 @@ async fn a_disconnect_hook_past_its_deadline_is_cut_and_the_close_goes_on() {
         line.field("outcome").as_deref(),
         Some(nest_rs_core::operation_log::ERROR),
     );
+    assert_eq!(line.field("path").as_deref(), Some("/lingering"));
     let cut = logs.expect_one(
         nest_rs_ws::TARGET,
         "websocket connection hook not finished within its deadline; it is cut",
     );
+    assert_eq!(cut.field("path").as_deref(), Some("/lingering"));
     assert_eq!(cut.field("unit").as_deref(), Some("ws.disconnect"));
     app.shutdown().await.expect("the transport stops cleanly");
 }
@@ -852,6 +861,7 @@ async fn a_refusal_a_handler_answers_files_its_line_alone() {
             (
                 line.level.as_str(),
                 line.message.as_str(),
+                line.field("path").unwrap_or_default(),
                 line.field("event").unwrap_or_default(),
             )
         })
@@ -862,12 +872,70 @@ async fn a_refusal_a_handler_answers_files_its_line_alone() {
             (
                 "warn",
                 "websocket message unavailable",
+                "/refusing".to_owned(),
                 "unavailable".to_owned()
             ),
-            ("error", "websocket message failed", "failed".to_owned()),
+            (
+                "error",
+                "websocket message failed",
+                "/refusing".to_owned(),
+                "failed".to_owned()
+            ),
         ],
         "{beside:#?}",
     );
+}
+
+#[gateway(path = "/decoded")]
+struct DecodedGateway;
+
+#[messages]
+impl DecodedGateway {
+    #[subscribe_message("say")]
+    #[public]
+    async fn say(&self, text: String) -> String {
+        text
+    }
+}
+
+#[module(imports = [WsModule], providers = [DecodedGateway])]
+struct DecodedModule;
+
+/// What the edge reports of a message's refusal names the message as its
+/// `mounted` line does, the gateway's `path` beside the `event`: a payload that
+/// does not decode, and an event no handler serves.
+#[tokio::test]
+async fn a_refusals_report_names_the_gateways_path() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<DecodedModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+    let mut socket = app.socket("/decoded").connect().await;
+    for event in ["say", "shout"] {
+        socket.send(event, serde_json::json!(7)).await;
+        let frame = socket.next_envelope().await;
+        assert!(frame["data"]["error"].is_string(), "{frame}");
+    }
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    for (report, event) in [
+        ("subscribe_message payload failed to deserialize", "say"),
+        (
+            "subscribe_message dispatched to an unknown event",
+            nest_rs_core::operation_log::OTHER,
+        ),
+    ] {
+        let line = logs.expect_one(nest_rs_ws::TARGET, report);
+        for (coordinate, value) in [("path", "/decoded"), ("event", event)] {
+            assert_eq!(
+                line.field(coordinate).as_deref(),
+                Some(value),
+                "{report}: {line:#?}"
+            );
+        }
+    }
 }
 
 /// A frame no handler reads is a message all the same: a unit-stage interceptor

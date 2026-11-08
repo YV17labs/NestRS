@@ -830,6 +830,7 @@ async fn a_socket_whose_client_stops_reading_is_dropped_at_the_send_deadline() {
         "the peer took nothing within the send deadline; it is cut off",
     );
     assert_eq!(stalled.level, "warn");
+    assert_names_its_mount(&stalled);
     app.shutdown().await.expect("the transport stops cleanly");
     drop(socket);
 }
@@ -1190,6 +1191,7 @@ struct InitTimeoutApp;
 /// neither before it nor at the 3 s default.
 #[tokio::test]
 async fn a_socket_that_sends_no_connection_init_is_closed_4408() {
+    let logs = LogCapture::install();
     let (app, _) = ticks_app::<InitTimeoutApp>().await;
     let mut socket = graphql_ws(&app).connect().await;
 
@@ -1206,12 +1208,17 @@ async fn a_socket_that_sends_no_connection_init_is_closed_4408() {
     assert_eq!(u16::from(code), 4408);
     assert_eq!(reason, "Connection initialisation timeout");
     app.shutdown().await.expect("the transport stops cleanly");
+    assert_names_its_mount(&logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "closing subscription socket: no connection_init within the wait",
+    ));
 }
 
 /// graphql-ws `PROTOCOL.md`, *Subscribe*: an id already running closes the
 /// socket `4409`, rather than silently replacing the running operation.
 #[tokio::test]
 async fn a_reused_operation_id_closes_the_socket_4409_without_echoing_it() {
+    let logs = LogCapture::install();
     let (app, state) = ticks_app::<SubscriptionApp>().await;
     let mut socket = graphql_ws(&app).connect().await;
     subscribe(&mut socket, "subscription { ticks { seq } }").await;
@@ -1225,6 +1232,22 @@ async fn a_reused_operation_id_closes_the_socket_4409_without_echoing_it() {
     assert_eq!(u16::from(code), 4409);
     assert!(!reason.contains('1'), "the id is not echoed: {reason}");
     app.shutdown().await.expect("the transport stops cleanly");
+    assert_names_its_mount(&logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "closing subscription socket: a running operation's id was reused",
+    ));
+}
+
+/// A socket's line names the endpoint as its `mounted endpoint` line does: its
+/// host, and the path its upgrade matched.
+fn assert_names_its_mount(line: &nest_rs_testing::CapturedEvent) {
+    for (field, value) in [("host", "GraphqlModule"), ("path", "/graphql")] {
+        assert_eq!(
+            line.field(field).as_deref(),
+            Some(value),
+            "{field}: {line:#?}"
+        );
+    }
 }
 
 /// A socket the protocol refused earned it: its line files `error`, and its

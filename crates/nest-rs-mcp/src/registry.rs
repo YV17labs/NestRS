@@ -581,12 +581,15 @@ fn log_mounted(host: &McpHostMeta, declared: &DeclaredRoutes, path: &str) {
 
 fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &DetachedWork) {
     let hosts = hosts_on(container, path);
+    // What a client calls, under the global prefix: every line naming the
+    // endpoint names it so, as its `mounted endpoint` line does.
+    let served = routes.served(path);
 
     let mut index = MountIndex::default();
     for (position, host) in hosts.iter().enumerate() {
         index.hosts.push(host.type_name);
         let declared = host.declared_routes();
-        log_mounted(host, &declared, path);
+        log_mounted(host, &declared, &served);
         let names: Vec<String> = declared.tool_names().collect();
         index.tools.read(position, names, declared.complete);
         index
@@ -603,9 +606,9 @@ fn mount(container: &Container, routes: &mut HttpRoutes, path: &str, detached: &
     container
         .get::<crate::McpConfig>()
         .unwrap_or_default()
-        .warn_when_operations_outlast_the_window(window, path);
+        .warn_when_operations_outlast_the_window(window, &served);
     let index = Arc::new(index);
-    let shared_path: Arc<str> = Arc::from(path);
+    let shared_path: Arc<str> = Arc::from(served);
     let mount = McpMount::from_container(container)
         .stopped_with(detached.clone())
         .declaring(index.clone())

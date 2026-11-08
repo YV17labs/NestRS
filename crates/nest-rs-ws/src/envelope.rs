@@ -249,6 +249,7 @@ impl WsError {
     pub(crate) fn unknown_event() -> Self {
         tracing::debug!(
             target: crate::TARGET,
+            path = crate::gateway::served_path().as_deref(),
             event = nest_rs_core::operation_log::OTHER,
             "subscribe_message dispatched to an unknown event",
         );
@@ -335,6 +336,7 @@ impl WsReply {
         let message = format!("invalid {what} for `{event}`: {}", error.message());
         tracing::debug!(
             target: crate::TARGET,
+            path = crate::gateway::served_path().as_deref(),
             event,
             kind = what,
             error = error.message(),
@@ -357,6 +359,7 @@ impl WsReply {
         };
         tracing::debug!(
             target: crate::TARGET,
+            path = crate::gateway::served_path().as_deref(),
             event,
             error = %said,
             "subscribe_message payload failed to deserialize",
@@ -404,28 +407,30 @@ pub(crate) struct Rendered {
 
 impl Rendered {
     /// The frame, what it withholds filed at once for the message `event`
-    /// declares.
+    /// declares, at the gateway the running socket is served at.
     fn into_reply(self, event: &str) -> WsReply {
         if let Some(withheld) = self.withheld {
-            file(withheld, event);
+            file(withheld, crate::gateway::served_path().as_deref(), event);
         }
         WsReply::Error(self.frame)
     }
 }
 
-/// File the chain a frame answering `event`'s message withholds: behind a
-/// `503`, the server unable to serve it in time, at `warn`; behind any other
-/// failure, at `error`.
-pub(crate) fn file(withheld: Withheld, event: &str) {
+/// File the chain a frame answering `event`'s message, at the gateway served at
+/// `path`, withholds: behind a `503`, the server unable to serve it in time, at
+/// `warn`; behind any other failure, at `error`.
+pub(crate) fn file(withheld: Withheld, path: Option<&str>, event: &str) {
     match withheld {
         Withheld::Unavailable(said) => tracing::warn!(
             target: crate::TARGET,
+            path,
             event,
             error = %said,
             "websocket message unavailable",
         ),
         Withheld::Failed(said) => tracing::error!(
             target: crate::TARGET,
+            path,
             event,
             error = %said,
             "websocket message failed",

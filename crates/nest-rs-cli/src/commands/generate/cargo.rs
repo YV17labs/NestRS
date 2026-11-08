@@ -1,11 +1,11 @@
-//! Dependency auto-wiring for generated code: [`Transform`]s splice what a
+//! Dependency auto-wiring for generated code: [`ManifestEdit`]s splice what a
 //! generator's output needs into the root `[workspace.dependencies]` and the
 //! `crates/features` manifest, idempotently.
 
 use toml_edit::{DocumentMut, Item, Value};
 
 use crate::naming::Transport;
-use crate::scaffold::Transform;
+use crate::scaffold::ManifestEdit;
 use crate::version::framework_req;
 
 /// One dependency the generator may need to introduce.
@@ -180,13 +180,13 @@ pub(super) fn graphql_port_deps() -> Vec<&'static Dep> {
 }
 
 /// Edit the root manifest: add any missing `[workspace.dependencies]` entries.
-pub(super) fn ensure_workspace_deps(deps: Vec<&'static Dep>) -> Transform {
+pub(super) fn ensure_workspace_deps(deps: Vec<&'static Dep>) -> ManifestEdit {
     ensure_deps(deps, &["workspace", "dependencies"], Dep::workspace_item)
 }
 
 /// Edit a member manifest's `[dev-dependencies]`: add any missing entries as
 /// `{ workspace = true, features = [...] }`.
-pub(super) fn ensure_dev_deps(deps: Vec<&'static Dep>) -> Transform {
+pub(super) fn ensure_dev_deps(deps: Vec<&'static Dep>) -> ManifestEdit {
     ensure_deps(deps, &["dev-dependencies"], |_| {
         Item::Value(workspace_value())
     })
@@ -194,25 +194,27 @@ pub(super) fn ensure_dev_deps(deps: Vec<&'static Dep>) -> Transform {
 
 /// Edit the `features` manifest: add any missing `[dependencies]` entries as
 /// `{ workspace = true, features = [...] }`.
-pub(super) fn ensure_features_deps(deps: Vec<&'static Dep>) -> Transform {
+pub(super) fn ensure_features_deps(deps: Vec<&'static Dep>) -> ManifestEdit {
     ensure_deps(deps, &["dependencies"], |_| Item::Value(workspace_value()))
 }
 
 /// Insert what is absent, then enable any feature the entry is missing: a
 /// capability is a feature of the single `nest-rs` entry, already present or not.
+/// A table on the way that holds something else, or an entry that is neither a
+/// version nor a table, refuses the edit naming it.
 fn ensure_deps(
     deps: Vec<&'static Dep>,
     path: &'static [&'static str],
     missing: fn(&Dep) -> Item,
-) -> Transform {
-    Box::new(move |content: &str| {
-        let mut doc = content.parse::<DocumentMut>().ok()?;
+) -> ManifestEdit {
+    ManifestEdit::new(move |doc| {
         let mut table = doc.as_table_mut() as &mut dyn toml_edit::TableLike;
-        for key in path {
+        for (depth, key) in path.iter().enumerate() {
             table = table
                 .entry(key)
                 .or_insert(toml_edit::table())
-                .as_table_like_mut()?;
+                .as_table_like_mut()
+                .ok_or_else(|| format!("`{}` is not a table", path[..=depth].join(".")))?;
         }
         let mut changed = false;
         for dep in &deps {
@@ -220,28 +222,36 @@ fn ensure_deps(
                 table.insert(dep.name, missing(dep));
                 changed = true;
             }
-            changed |= enable_features(table.get_mut(dep.name)?, dep.features);
+            let entry = table
+                .get_mut(dep.name)
+                .ok_or_else(|| format!("`{}` could not be added", dep.name))?;
+            changed |= enable_features(entry, dep.features).ok_or_else(|| {
+                format!(
+                    "`{}.{}` is neither a version nor a table",
+                    path.join("."),
+                    dep.name
+                )
+            })?;
         }
-        changed.then(|| doc.to_string())
+        Ok(changed)
     })
 }
 
 /// Turn on every feature `wanted` that this dependency entry does not already
-/// enable, in place. Handles the three shapes a manifest writes: the dotted
-/// `dep.workspace = true`, the inline `dep = { workspace = true }`, and the
-/// bare `dep = "1"` (widened to a table so the list has somewhere to live).
-fn enable_features(entry: &mut Item, wanted: &[&str]) -> bool {
+/// enable, in place, answering whether it changed. Handles the three shapes a
+/// manifest writes: the dotted `dep.workspace = true`, the inline
+/// `dep = { workspace = true }`, and the bare `dep = "1"` (widened to a table so
+/// the list has somewhere to live); `None` for an entry of none of them.
+fn enable_features(entry: &mut Item, wanted: &[&str]) -> Option<bool> {
     if wanted.is_empty() {
-        return false;
+        return Some(false);
     }
     if let Some(version) = entry.as_str() {
         let mut table = toml_edit::InlineTable::new();
         table.insert("version", Value::from(version));
         *entry = Item::Value(Value::InlineTable(table));
     }
-    let Some(table) = entry.as_table_like_mut() else {
-        return false;
-    };
+    let table = entry.as_table_like_mut()?;
     let mut features = table
         .get("features")
         .and_then(Item::as_array)
@@ -260,7 +270,7 @@ fn enable_features(entry: &mut Item, wanted: &[&str]) -> bool {
             inline.fmt();
         }
     }
-    changed
+    Some(changed)
 }
 
 fn parse_value(raw: &str) -> Item {
@@ -286,16 +296,19 @@ mod tests {
     fn ensures_workspace_dep_idempotently() {
         let src = "[workspace.dependencies]\nanyhow = \"1\"\n";
         let t = ensure_workspace_deps(vec![&SEAORM]);
-        let out = t(src).expect("adds nest-rs");
+        let out = t.apply(src).unwrap().expect("adds nest-rs");
         assert!(out.contains("nest-rs"), "{out}");
         assert!(out.contains("seaorm"), "{out}");
-        assert!(ensure_workspace_deps(vec![&SEAORM])(&out).is_none());
+        assert_eq!(ensure_workspace_deps(vec![&SEAORM]).apply(&out), Ok(None));
     }
 
     #[test]
     fn ensures_features_dep_with_features() {
         let src = "[dependencies]\nanyhow.workspace = true\n";
-        let out = ensure_features_deps(vec![&AUTHZ])(src).expect("adds dep");
+        let out = ensure_features_deps(vec![&AUTHZ])
+            .apply(src)
+            .unwrap()
+            .expect("adds dep");
         assert!(out.contains("nest-rs"));
         assert!(out.contains("workspace = true"));
         assert!(
@@ -309,10 +322,13 @@ mod tests {
     #[test]
     fn enables_a_missing_feature_on_a_dependency_already_declared() {
         let src = "[dependencies]\nnest-rs.workspace = true\n";
-        let out = ensure_features_deps(vec![&GRAPHQL])(src).expect("enables graphql");
+        let out = ensure_features_deps(vec![&GRAPHQL])
+            .apply(src)
+            .unwrap()
+            .expect("enables graphql");
         assert!(out.contains("graphql"), "{out}");
         assert!(
-            ensure_features_deps(vec![&GRAPHQL])(&out).is_none(),
+            ensure_features_deps(vec![&GRAPHQL]).apply(&out) == Ok(None),
             "a second run is a no-op: {out}",
         );
         let doc = out.parse::<DocumentMut>().expect("still valid TOML");
@@ -326,7 +342,10 @@ mod tests {
     #[test]
     fn enabling_a_feature_keeps_the_ones_already_listed() {
         let src = "[dependencies]\nnest-rs = { workspace = true, features = [\"http\"] }\n";
-        let out = ensure_features_deps(vec![&SEAORM, &GRAPHQL])(src).expect("adds graphql");
+        let out = ensure_features_deps(vec![&SEAORM, &GRAPHQL])
+            .apply(src)
+            .unwrap()
+            .expect("adds graphql");
         assert!(
             out.contains("\"http\"") && out.contains("\"graphql\""),
             "{out}"
@@ -470,7 +489,10 @@ mod tests {
     #[test]
     fn a_version_pinned_dependency_is_widened_to_carry_features() {
         let src = "[dependencies]\nnest-rs = \"1.1\"\n";
-        let out = ensure_features_deps(vec![&GRAPHQL])(src).expect("widens the entry");
+        let out = ensure_features_deps(vec![&GRAPHQL])
+            .apply(src)
+            .unwrap()
+            .expect("widens the entry");
         let doc = out.parse::<DocumentMut>().expect("still valid TOML");
         assert_eq!(
             doc["dependencies"]["nest-rs"]["version"].as_str(),

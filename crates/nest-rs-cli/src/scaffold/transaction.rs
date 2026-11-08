@@ -12,6 +12,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::manifest::ManifestEdit;
 use super::wiring::Transform;
 use crate::error::{CliError, CliResult, FileAction};
 
@@ -28,7 +29,7 @@ enum Action {
     },
     Edit {
         path: PathBuf,
-        transform: Transform,
+        edit: Edit,
         /// The edit writes a secret: the report shows each added assignment's
         /// name, never its value.
         secret: bool,
@@ -44,6 +45,14 @@ enum Action {
     Remove {
         path: PathBuf,
     },
+}
+
+/// What an edit does to a file: a [`Transform`] of its text, or a
+/// [`ManifestEdit`] of the TOML document it parses to, which refuses one that
+/// does not parse.
+enum Edit {
+    Text(Transform),
+    Manifest(ManifestEdit),
 }
 
 #[derive(Debug, Default)]
@@ -96,7 +105,23 @@ impl Scaffold {
     pub(crate) fn edit(&mut self, path: impl Into<PathBuf>, transform: Transform) -> &mut Self {
         self.actions.push(Action::Edit {
             path: path.into(),
-            transform,
+            edit: Edit::Text(transform),
+            secret: false,
+        });
+        self
+    }
+
+    /// Queue an idempotent edit of the manifest at `path`, read as the TOML
+    /// document it parses to: one that does not parse refuses the run naming
+    /// it, where a text edit would leave it as it was.
+    pub(crate) fn edit_manifest(
+        &mut self,
+        path: impl Into<PathBuf>,
+        edit: ManifestEdit,
+    ) -> &mut Self {
+        self.actions.push(Action::Edit {
+            path: path.into(),
+            edit: Edit::Manifest(edit),
             secret: false,
         });
         self
@@ -111,7 +136,7 @@ impl Scaffold {
     ) -> &mut Self {
         self.actions.push(Action::Edit {
             path: path.into(),
-            transform,
+            edit: Edit::Text(transform),
             secret: true,
         });
         self
@@ -198,14 +223,19 @@ impl Scaffold {
                     report.removed.push(path.clone());
                     planned.push(PlannedWrite::Remove { path });
                 }
-                Action::Edit {
-                    path,
-                    transform,
-                    secret,
-                } => {
+                Action::Edit { path, edit, secret } => {
                     let current = fs::read_to_string(&path)
                         .map_err(CliError::file(FileAction::Read, &path))?;
-                    match transform(&current) {
+                    let edited = match &edit {
+                        Edit::Text(transform) => transform(&current),
+                        Edit::Manifest(manifest) => manifest.apply(&current).map_err(|reason| {
+                            CliError::InvalidManifest {
+                                path: path.clone(),
+                                reason,
+                            }
+                        })?,
+                    };
+                    match edited {
                         Some(updated) => {
                             let mut added = added_lines(&current, &updated);
                             if secret {

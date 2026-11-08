@@ -103,11 +103,11 @@ pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
     if round_trip.is_some() {
         workspace_deps.extend(round_trip_dev_deps());
     }
-    s.edit(
+    s.edit_manifest(
         ws.root.join("Cargo.toml"),
         ensure_workspace_deps(workspace_deps),
     );
-    s.edit(ws.features_cargo(), ensure_features_deps(deps));
+    s.edit_manifest(ws.features_cargo(), ensure_features_deps(deps));
     s.edit(ws.features_lib(), ensure_lines(decls));
 
     // The edge, the data layer every `#[crud]` route runs its unit of work on,
@@ -233,7 +233,7 @@ impl RoundTrip {
                 );
             }
         }
-        s.edit(
+        s.edit_manifest(
             self.app.join("Cargo.toml"),
             ensure_dev_deps(round_trip_dev_deps()),
         );

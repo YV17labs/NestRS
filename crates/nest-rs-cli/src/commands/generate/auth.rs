@@ -40,11 +40,11 @@ pub(crate) fn run(opts: AuthOptions) -> CliResult<()> {
 
     let mut s = Scaffold::new();
     let secrets = queue(&mut s, &ws, Vec::new())?;
-    s.edit(
+    s.edit_manifest(
         ws.root.join("Cargo.toml"),
         ensure_workspace_deps(auth_deps()),
     );
-    s.edit(ws.features_cargo(), ensure_features_deps(auth_deps()));
+    s.edit_manifest(ws.features_cargo(), ensure_features_deps(auth_deps()));
     s.edit(ws.features_lib(), ensure_lines(lib_decls()));
     let edge = app_import();
     let wiring = wire_into_app(&target, &mut s, &edge, &[])?;

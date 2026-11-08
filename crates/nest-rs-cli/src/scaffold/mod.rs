@@ -1,10 +1,13 @@
 //! File scaffolding: the transactional commit engine ([`transaction`]),
-//! templated rendering ([`render`]), and idempotent source edits ([`wiring`]).
+//! templated rendering ([`render`]), idempotent source edits ([`wiring`]) and
+//! manifest edits ([`manifest`]).
 
+mod manifest;
 mod render;
 mod transaction;
 mod wiring;
 
+pub(crate) use manifest::ManifestEdit;
 pub(crate) use render::Renderer;
 pub(crate) use transaction::{Scaffold, rel, rustfmt, rustfmt_source};
 pub(crate) use wiring::{

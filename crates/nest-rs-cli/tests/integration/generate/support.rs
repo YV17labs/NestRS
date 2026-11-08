@@ -1,5 +1,6 @@
 //! The machinery every generator shares: `--dry-run` writes nothing, and says so
-//! without claiming the work happened; a file it cannot read fails it, named.
+//! without claiming the work happened; a file it cannot read, or a manifest it
+//! cannot parse, fails it, named.
 
 use crate::harness::{files_under, run_err, run_ok, write_fake_app, write_fake_workspace};
 use std::fs;
@@ -69,6 +70,36 @@ fn an_unreadable_app_module_fails_the_run_naming_it() {
     assert!(
         stderr.starts_with("error: cannot read `") && stderr.contains("apps/blog/src/module.rs`: "),
         "the refusal names the file and the system's answer: {stderr}"
+    );
+    assert_eq!(
+        files_under(dir.path()),
+        before,
+        "a refused run writes nothing"
+    );
+}
+
+/// A manifest a generator adds dependencies to and cannot parse is no manifest
+/// it edited: the run fails naming it and where it stopped, and writes nothing,
+/// where it reported success and left the dependencies out.
+#[test]
+fn a_manifest_that_does_not_parse_fails_the_run_naming_where() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    let manifest = dir.path().join("crates/features/Cargo.toml");
+    let source = fs::read_to_string(&manifest).unwrap();
+    let line = source.lines().count() + 1;
+    fs::write(&manifest, format!("{source}[half\n")).unwrap();
+    let before = files_under(dir.path());
+
+    let stderr = run_err(dir.path(), &["g", "queue", "posts", "-p", path]);
+
+    assert!(
+        stderr.contains("cannot edit the manifest `")
+            && stderr.contains("crates/features/Cargo.toml`")
+            && stderr.contains(&format!("line {line}, column ")),
+        "the refusal names the manifest and where it stopped: {stderr}"
     );
     assert_eq!(
         files_under(dir.path()),

@@ -236,7 +236,7 @@ fn generate(ws: &NestrsWorkspace, names: &Names, subject: &Names, dry_run: bool)
     };
     let stem = queue_migration(&mut s, ws, names, body, &mut deps, refuse)?;
     if !deps.is_empty() {
-        s.edit(ws.root.join("Cargo.toml"), ensure_workspace_deps(deps));
+        s.edit_manifest(ws.root.join("Cargo.toml"), ensure_workspace_deps(deps));
     }
 
     finish(s, dry_run, &ws.root, &format!("migration `{stem}`"))?;
@@ -427,7 +427,7 @@ fn register(
         deps.extend(migrations_deps());
         deps.push(framework.dep);
     }
-    s.edit(ws.root.join("Cargo.toml"), ensure_workspace_deps(deps));
+    s.edit_manifest(ws.root.join("Cargo.toml"), ensure_workspace_deps(deps));
 
     finish(
         s,

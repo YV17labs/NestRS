@@ -175,13 +175,13 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let outbox = transport == Transport::Queue
         && queue_framework_entry(&mut s, &ws, &OUTBOX_MIGRATION, &mut workspace_deps)?;
     if !workspace_deps.is_empty() {
-        s.edit(
+        s.edit_manifest(
             ws.root.join("Cargo.toml"),
             ensure_workspace_deps(workspace_deps),
         );
     }
     if !deps.is_empty() {
-        s.edit(ws.features_cargo(), ensure_features_deps(deps));
+        s.edit_manifest(ws.features_cargo(), ensure_features_deps(deps));
     }
     if scaffolded_auth {
         s.edit(ws.features_lib(), ensure_lines(auth::lib_decls()));
@@ -220,7 +220,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     if let Wiring::Wired { root, .. } = &wiring
         && !host_deps.is_empty()
     {
-        s.edit(root.join("Cargo.toml"), ensure_features_deps(host_deps));
+        s.edit_manifest(root.join("Cargo.toml"), ensure_features_deps(host_deps));
     }
 
     finish(

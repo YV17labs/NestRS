@@ -162,11 +162,11 @@ pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
     }
 
     let deps = entity_deps();
-    s.edit(
+    s.edit_manifest(
         ws.root.join("Cargo.toml"),
         ensure_workspace_deps(deps.clone()),
     );
-    s.edit(ws.features_cargo(), ensure_features_deps(deps));
+    s.edit_manifest(ws.features_cargo(), ensure_features_deps(deps));
 
     finish(
         s,

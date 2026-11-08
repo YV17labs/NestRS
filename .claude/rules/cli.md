@@ -51,8 +51,8 @@ generator's. **What a port holds is read off its source, as the compiler reads i
 `CrudService` in any file the port's module tree declares, the
 file of the port its `type Entity` leads to (`entity.rs`, `entities/<stem>.rs`), a
 flat `Entity` from `mod.rs`; what the source leads nowhere, or to no attribute to
-flag, is the run's next step, and a source that does not parse refuses the run by
-its line, never a skip in silence. A grant a next step prints names its subject by
+flag, is the run's next step, and a source or a manifest that does not parse
+refuses the run by its line, never a skip in silence. A grant a next step prints names its subject by
 the path `authz/ability.rs` resolves. `g entity` retires a subject holding the
 entity's name, which its re-export would shadow, while it is what the generator wrote —
 the operations gated on it re-gated on the entity, which fails closed, and

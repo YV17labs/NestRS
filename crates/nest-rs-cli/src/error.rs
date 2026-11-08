@@ -144,6 +144,11 @@ pub enum CliError {
         source: syn::Error,
     },
 
+    /// A manifest a generator edits that it cannot read as one: an edit over a
+    /// guess would leave it as it was while the run said it succeeded.
+    #[error("cannot edit the manifest `{}`, {reason}", path.display())]
+    InvalidManifest { path: PathBuf, reason: String },
+
     /// A migration's name, or the table a migration, a resource or an entity
     /// writes, taking the framework's `nestrs_` prefix for a migration the
     /// framework does not ship.

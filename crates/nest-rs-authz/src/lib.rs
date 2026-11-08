@@ -100,4 +100,5 @@ pub mod __private {
         Judged, JudgedRow, Judgement, PushedItem, PushedItemFallback, Refused, WireColumns, judge,
     };
     pub use inventory;
+    pub use nest_rs_core::__private::{RefusedAnswer, WireRow};
 }

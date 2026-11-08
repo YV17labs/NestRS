@@ -512,3 +512,13 @@ refusal no edge claims is filed where it is met, naming no unit, so none is lost
 column refusal names the operation's `kind` and the root `field` once per operation and
 reason: it resolves after the root field's unit, which alone knows its `host` and `method`
 (`TODO.md` §3).
+
+**And a field resolver's parent.** A `#[field_resolver]` read its parent's columns in
+Rust, past the checks each column makes where GraphQL resolves it: seen at `200bca723`,
+`{ cached { emailDomain } }` answered a peer the domain of an email a publisher's row
+held, judged for the admin. `#[field_resolver]` now asks
+`nest_rs_graphql::__private::ParentProbe` of its parent before it runs: a wire row (core's
+`WireRow`, which `#[expose]` writes beside authz's `JudgedRow`, local so a push tells a
+list from a row) that refuses the caller refuses the field as its columns do, `INTERNAL`
+or `FORBIDDEN`, one line per operation naming the resolver's site; any other parent
+passes. Cost: one judgement check per parent and resolver, as each column pays.

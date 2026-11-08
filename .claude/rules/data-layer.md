@@ -329,8 +329,9 @@ it, which its `Serialize` and each of its GraphQL columns check against the one
 installed where it answers. So a row carried into another request, a cache and a
 publisher's push answer no one, a row judged for a caller refuses on a push to
 other connections (`WsServer`'s `broadcast`, `emit_to`, `emit`), and a system row
-answers no caller. A row its grants refuse answers its key alone on GraphQL and
-`FORBIDDEN` elsewhere, never `{}`; a list a body built holding one fails the whole
+answers no caller, and a `#[field_resolver]` under such a parent refuses before it
+runs (`nest_rs_graphql::__private::ParentProbe`). A row its grants refuse answers its
+key alone on GraphQL and `FORBIDDEN` elsewhere, never `{}`; a list a body built holding one fails the whole
 reply closed, which a `Repo` read never hands it. Held by `nest-rs-authz`'s
 `judged` suites and `nest-rs-seaorm`'s `expose/dto.rs`.
 

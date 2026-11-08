@@ -126,11 +126,6 @@ fails `build()`, and the row answers only the caller whose ability judged it
   unaffected. Close: nest-rs-graphql resolving a root field's answer under the
   ability its unit attached (a wrapper `OutputType` installing it), as MCP writes
   a tool's answer inside its site. *seen* (`gate::public::a_subscription_whose_own_guard_attaches_its_ability_streams_no_row`)
-- **A `#[field_resolver]` reading its parent's columns** checks no parent's
-  judgement: a parent row built for another caller refuses each of its columns,
-  and a scalar the resolver derives from it ships. Close: `#[field_resolver]`
-  asking the parent's `JudgedRow` where its type has one (an autoref probe), as a
-  relation's resolver does. *read*
 
 ## 4. Known gaps by area
 

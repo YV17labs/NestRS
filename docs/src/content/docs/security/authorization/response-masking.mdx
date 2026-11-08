@@ -112,7 +112,10 @@ that the ability installed where it answers is that one, so:
 
 - a row kept in a cache, or carried into another request, answers no one: the
   reply fails with `500` and one `error` line, `a wire row answered a caller it was
-  not judged for`;
+  not judged for`, naming the unit as its `mounted` line does;
+- a `#[field_resolver]` whose parent is such a row, or one the caller may not read,
+  refuses before it runs, as the parent's own columns refuse, so nothing it derives
+  from the parent ships;
 - a push to other connections (`WsServer`'s `broadcast`, `emit_to`, `emit`)
   refuses a row judged for the caller pushing it — no recipient's ability judged
   it — and takes a row a job built, which holds every exposed column for no caller;

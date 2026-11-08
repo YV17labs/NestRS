@@ -227,9 +227,11 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
             }
         }
 
-        impl ::nest_rs_authz::__private::JudgedRow for #output {
-            fn judged(&self) -> ::nest_rs_authz::__private::Judged {
-                self.__judged
+        impl ::nest_rs_authz::__private::JudgedRow for #output {}
+
+        impl ::nest_rs_authz::__private::WireRow for #output {
+            fn refusal(&self) -> ::core::option::Option<::nest_rs_authz::__private::RefusedAnswer> {
+                self.__judged.refusal::<Entity>()
             }
         }
 

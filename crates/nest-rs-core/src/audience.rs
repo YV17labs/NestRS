@@ -90,6 +90,13 @@ impl fmt::Debug for RefusedAnswer {
     }
 }
 
+/// A wire row `#[expose]` builds, as an edge asks whether it answers the caller
+/// being answered: implemented by the decorator on its wire type, never by hand.
+pub trait WireRow {
+    /// Why the row refuses that caller, `None` when it answers.
+    fn refusal(&self) -> Option<RefusedAnswer>;
+}
+
 thread_local! {
     static AUDIENCE: Cell<Audience> = const { Cell::new(Audience::Caller) };
     /// `None` outside [`answering`]; inside, the first refusal its writer met.

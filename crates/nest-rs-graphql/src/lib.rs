@@ -60,6 +60,7 @@ mod opaque;
 mod operation;
 mod operation_units;
 mod own_key;
+mod parent_probe;
 mod redact;
 mod request_extension;
 mod resolver;
@@ -99,6 +100,7 @@ pub mod __private {
         FieldGuards, GraphqlSite, IsStreamReturn, ROOT_FIELD, answers_a_stream, field_guard_stage,
         field_name, run_field, run_nested, served_field,
     };
+    pub use crate::parent_probe::{ParentProbe, ParentProbeFallback};
     pub use crate::resolver::{
         GraphqlFieldRegistration, GraphqlResolverKind, GraphqlResolverObject,
         GraphqlResolverRegistration, GraphqlRootMember, GraphqlSiteRegistration,

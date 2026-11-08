@@ -1775,6 +1775,11 @@ fn field_method(
             __ctx: &::nest_rs_graphql::async_graphql::Context<'_>
             #(, #gql_args)*
         ) #output #where_clause {
+            {
+                #[allow(unused_imports)]
+                use ::nest_rs_graphql::__private::ParentProbeFallback as _;
+                ::nest_rs_graphql::__private::ParentProbe(self).judged(__ctx, #site)?;
+            }
             ::nest_rs_graphql::__private::run_nested(#site, __ctx, #site_kind, move || async move {
                 let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
                 #(#tail_prelude)*

@@ -107,21 +107,16 @@ its own `#[use_guards]`, and only the interceptors and exception filters
 declared on it: never the app's pool, nor the resolver's interceptors, which
 would run once per row.
 
-What it answers is masked all the same. An answer holding an `#[expose]`d wire type's
-rows, the type itself, an `Option`, a list of any kind, a `Box`, an `Arc`, a `Json`
-scalar, a map's values or a `Connection`, masks by that entity's grants and the field's
-selection, [as a root field's does](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds),
-whatever read them, so a selected column the caller's grant withholds is refused naming
-it. A scalar derived from a row or a DTO of your own name no entity, so what those answer
-is chosen in the body. An object of your own holding a wire type's row in a column fails the
-boot naming that column: give it `#[graphql(skip)]` and serve it from a `#[field_resolver]`
-of the object, which masks what it answers. Three shapes no type and no schema tell from a
-masked field still ship what they hold, [named there](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds).
-A row you build by hand answers `INTERNAL` where
-the mask cannot read it back into the entity: answer a DTO of your own instead. A caller
-with no credential reads nothing a grant guards there, whatever its root field names
-([Public reads](/security/authorization/public-reads/#limits)), and what a body answers it
-is judged as no read filtered it.
+Its parent is the wire row its root field built, judged for the caller, so a column
+the caller's grant withholds reads `None` there as on the wire. A parent judged for
+someone else — a row kept from another request, a publisher's — or one the caller may
+not read refuses the field before it runs, `INTERNAL` or `FORBIDDEN` as the parent's own
+columns refuse, so nothing the resolver derives from it ships. A wire row it answers is
+judged where it builds it, [as a root field's is](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds),
+and a column it reads off a whole `Model` and answers as its own value is its body's
+line ([named there](/security/authorization/response-masking/#what-stays-the-bodys-own-line)).
+A caller with no credential reads nothing a grant guards there, whatever its root field
+names ([Public reads](/security/authorization/public-reads/#limits)).
 
 ## Its module is imported
 

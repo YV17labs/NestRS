@@ -8,7 +8,7 @@ use std::fmt;
 use std::sync::{Arc, LazyLock};
 
 use nest_rs_core::__private::{
-    AnswerRefusal, Audience, RefusedAnswer, Site, audience, refuse_answer,
+    AnswerRefusal, Audience, RefusedAnswer, Site, WireRow, audience, refuse_answer,
 };
 use nest_rs_core::{Handler, ServedAddress};
 use nest_rs_database::{ExecutorScope, current_executor_scope};
@@ -180,6 +180,12 @@ impl Judged {
         self.answers(false)
             .inspect_err(|&refused| refuse_answer(refused_answer::<E>(refused)))
     }
+
+    /// Why a row of `E` refuses the caller it answers, every column at once, as a
+    /// field resolving under it reads them; `None` when it answers.
+    pub fn refusal<E: EntityTrait>(&self) -> Option<RefusedAnswer> {
+        self.answers(false).err().map(refused_answer::<E>)
+    }
 }
 
 /// `refused` as the edge answering hands it on.
@@ -263,12 +269,9 @@ pub fn judged_field<E: EntityTrait>(
     }
 }
 
-/// A wire row, as a push reads who judged it: implemented by `#[expose]` on its
-/// wire type, never by hand.
-pub trait JudgedRow {
-    /// The proof the row carries.
-    fn judged(&self) -> Judged;
-}
+/// A wire row a push may carry: implemented by `#[expose]` on its wire type, never
+/// by hand; local, so a list of rows is told from a row.
+pub trait JudgedRow: WireRow {}
 
 /// One item a subscription's stream yields, kept only where it answers the
 /// subscriber: a wire row its judgement refuses, or one judged for another
@@ -312,19 +315,19 @@ impl<T> PushedItemFallback<T> for PushedItem<T> {
 /// another caller, a defect of the push, at `error`. Each names the subscription
 /// as its `mounted` line does.
 fn answers_subscriber<T: JudgedRow>(row: &T, site: &'static Site) -> bool {
-    let Err(refused) = row.judged().answers(false) else {
+    let Some(refused) = row.refusal() else {
         return true;
     };
     let handler = site.handler();
     let (host, method, field) = (handler.host_name(), handler.method(), handler.address());
-    if refused == Refused::Withheld {
+    if refused.refusal() == AnswerRefusal::Withheld {
         tracing::debug!(
             target: crate::TARGET,
             host,
             method,
             kind = "subscription",
             field,
-            reason = refused.as_str(),
+            reason = refused.reason(),
             "subscription item withheld",
         );
     } else {
@@ -334,7 +337,7 @@ fn answers_subscriber<T: JudgedRow>(row: &T, site: &'static Site) -> bool {
             method,
             kind = "subscription",
             field,
-            reason = refused.as_str(),
+            reason = refused.reason(),
             "a wire row answered a caller it was not judged for",
         );
     }

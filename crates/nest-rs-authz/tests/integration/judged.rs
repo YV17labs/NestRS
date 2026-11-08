@@ -23,7 +23,7 @@ pub(crate) mod member {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[expose(name = "Member", graphql)]
+    #[expose(name = "Member", graphql, complex)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "members")]
     pub(crate) struct Model {
@@ -498,6 +498,16 @@ impl MembersResolver {
         stream::iter([member::row(1, 1), member::row(2, 2)]).map(|row| Member::from(&row))
     }
 
+    /// A scalar a field resolver derives from its parent's columns.
+    #[field_resolver]
+    async fn email_domain(&self, parent: &Member) -> Option<String> {
+        parent
+            .email
+            .as_deref()
+            .and_then(|email| email.split('@').nth(1))
+            .map(str::to_owned)
+    }
+
     /// A push carrying a row a publisher built, under its own ability.
     #[subscription]
     #[authorize(Read, member::Entity)]
@@ -641,6 +651,48 @@ async fn a_row_judged_for_another_caller_resolves_for_no_one() {
         "{read}"
     );
     assert!(!read.to_string().contains("member 1"), "{read}");
+}
+
+/// A field resolver reads its parent's columns: a parent judged for another caller
+/// hands it nothing to derive from, as its own columns resolve for no one.
+#[tokio::test]
+async fn a_field_resolver_under_a_row_judged_for_another_caller_answers_nothing() {
+    let app = TestApp::for_module::<MembersGraphqlModule>()
+        .await
+        .expect("boots");
+    *cache().lock().expect("the cache") = Some(published());
+    let logs = nest_rs_testing::LogCapture::install();
+    let read = graphql_as(&app, "peer", "{ cached { emailDomain } }").await;
+    assert!(!read.to_string().contains("example.test"), "{read}");
+    assert_eq!(
+        read["data"]["cached"]["emailDomain"],
+        serde_json::Value::Null,
+        "{read}"
+    );
+    assert_eq!(
+        read["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{read}"
+    );
+    let filed = logs.find(
+        nest_rs_authz::TARGET,
+        "a wire row answered a caller it was not judged for",
+    );
+    assert_eq!(filed.len(), 1, "{filed:#?}");
+    for (field, named) in [
+        ("entity", "members"),
+        ("reason", "judged_for_another"),
+        ("host", "MembersResolver"),
+        ("method", "email_domain"),
+        ("field", "emailDomain"),
+    ] {
+        assert_eq!(filed[0].field(field).as_deref(), Some(named), "{field}");
+    }
+
+    let read = graphql_as(&app, "admin", "{ members { emailDomain } }").await;
+    assert_eq!(
+        read["data"]["members"][0]["emailDomain"], "example.test",
+        "a parent judged for its caller hands its resolver what it holds: {read}"
+    );
 }
 
 /// A write's reply answers its key to a caller who may not read the row, and

@@ -384,3 +384,81 @@ already reads and the one a write's check needs; `WireModel::key_column`, emitte
 `wire_key`, reads a key back, so every edge's `kept_key` and `Ability::mask` judge a column.
 The other way, wire keys in the set, would have left a hidden column with no name to be
 granted by. What the mask reads is otherwise unchanged; `Masked<T>` stays the second pass.
+
+## 2026-11-08 — the wire row is judged where it is built
+
+The owner's word of 2026-11-07 ("la meilleure solution, le meilleur système, beaucoup sur
+la sécurité et la performance… va jusqu'au bout") closes this decision's open question:
+a loaded row is judged on its whole `Model`, once, where `#[expose]`'s conversion builds
+its wire row, and no edge reads a reply back. Two designs were prototyped on the real
+`#[expose]`, the real routes and the real GraphQL extension: the value-less cell (D3,
+`Masked<T>` on every column, as the red team corrected it) and the judged row (D4). D4
+won on each value in turn.
+
+- **The developer first, counted on the demo.** D4 changes what a grant may withhold and
+  nothing a body reads: four `#[expose(nullable)]` on the users the member's grant cuts,
+  the published event carrying its `Model` and the subscription building the row (three
+  lines), three `unmasked` and one `#[wire_default]` dropped. The wire fields stay plain
+  values, `User::from(&row)` stays the one spelling. D3 counted about 28 read sites, a
+  `.get()` on every wire field a body or a test reads, `into_model()` for `Deref`, and a
+  hand-written `From<Withheld>` beside each product error.
+- **Security, each opening.** A withheld column is no value in the row — an `Option` column
+  or one `#[expose(nullable)]` declares reads `None` — so the four shapes `TODO.md` named
+  (a scalar the body builds, a scalar or map column of an object, a flatten beside a
+  resolver of its type, a renamed column) and the generated loaders (decision 4 of
+  `TODO.md`) hold nothing to ship. A grant on `Read` or `Manage` withholding a column no
+  `null` answers is a `MalformedRuleError` at `build()` naming the column and the key, so
+  OpenAPI's and MCP's `required` and GraphQL's `!` stay true (F2, F3). The row carries the
+  id of the ability that judged it (minted per ability, never a pointer) and a private
+  proof no struct literal supplies: its `Serialize` and each GraphQL column check that the
+  ability installed where it answers is that one, so a cache, a row carried into another
+  request and a publisher's push answer no one (F1), a row judged for a caller refuses on a
+  push to other connections (`WsServer`), and a system row (a job's) answers no caller. A
+  row its grants refuse (a write-only token's reply, F6, F7) answers its key alone on
+  GraphQL and `403` elsewhere, never `{}`. A subscription's items are pushes, judged as
+  `Pushed` reads them where the stream builds them, for the subscriber, and an item a
+  refusal makes leaves the stream. A `belongs_to` reads its link off the judged row, so a
+  withheld key reads `null` (F9's half; `has_many` keeps its `#[expose]` as its opening).
+  Judged under `installed()`, a job's scope tested apart (F10).
+- **Performance**, release, 100 user-shaped rows (6 exposed, 3 hidden), an ability 8
+  ambient values deep, the red team's bench rerun on this host at `fb107d774` beside D4:
+
+  | HTTP, `Vec<Model>` to bytes | none narrowed | one grant | conditional |
+  |---|---|---|---|
+  | the reply mask (convert, serialize, shaper) | 110.5 µs | 115.9 µs | 116.5 µs |
+  | D3, the cell (a real `From`, a read per row) | 32.3 µs | 25.7 µs | 32.8 µs |
+  | **D4, the judged row (real `#[expose]`)** | **31.4 µs** | **23.7 µs** | **31.7 µs** |
+  | no mask at all | 24.6 µs | 24.7 µs | 24.6 µs |
+
+  GraphQL before resolution: the mask 69.7 / 80.7 / 78.8 µs, the cell 15.3 / 16.1 /
+  18.8 µs, D4 18.4 / 14.2 / 20.2 µs, plus 4.2–4.3 µs at resolution for its 600 column
+  checks (the cell's stamp, 3.0–3.1 µs). D4 is the cell's cost without the cell.
+
+**Decided with it.** `#[wire_default]`, `unmasked`, `masked_reply`, `Ability::mask` and
+`mask_many`, `MaskReplyError` and every edge's reply mask and probe go: nothing reads a
+reply back. A reply reads `Read`'s grants whatever the posture's action (the red team's
+F6 named it; the owner's mandate decides it): `.fields` on a write grant names writable
+columns, never readable ones, and a narrowed write grant could not build a row whose
+columns no `null` answers. A posture keeps its gate and the reads it opens. A tool's answer
+is written inside its site on MCP, rmcp reading its output schema off the authored
+`Json<T>`. CASL's split of `accessibleBy` (query) from `can` and `permittedFieldsOf`
+(instance) is now verified against its repository sources (`gaps/` survey, 2026-11-07).
+
+**Refused:**
+
+- **The cell (D3 corrected)**: everyday reads through `.get()` and `into_model()` for the
+  same closure, and a cell's name or a per-cell stamp to say what D4's row says once.
+- **Plain `Option` columns without a stamp** (the red team's runner-up): it loses the
+  refusal of a row judged for another caller.
+- **A per-row proof in the field set alone, without the ability's id**: a `with_ability`
+  narrowing and an intersection would read as the caller.
+- **Keeping the reply mask beside the judged row**: two judgements, the slower one on
+  every reply.
+
+**The limits named, in `TODO.md`:** a body reading a column off a whole `Model` and
+answering it as its own value (`initials(row.name)`, `row.email` into a DTO) is the
+body's visible line; a list a body built holding a row its grants refuse fails the whole
+reply closed, where a `Repo` read never hands it one; a `#[public]` GraphQL field whose own
+guard attaches the ability, its request carrying none, answers no wire row, its columns
+resolving outside that field's unit; a push to other connections carries no row judged for
+a caller, so a per-recipient row is built per recipient or is a DTO.

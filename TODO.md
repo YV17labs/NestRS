@@ -199,13 +199,18 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   red with one ask). Close: a hook in `redis`'s send, upstream (§7). *seen*
 - A command blocked elsewhere still waits its whole budget. Close: a change in
   `redis`, upstream. *read*
-- `RustFS` answered `404 NoSuchKey` to a first `PUT` twice; cause not found.
-  Close: a reproduction against RustFS. *seen*
-- nextest `LEAK` marks on passing tests, under load, on macOS only. *read*
-- Each commit's own tree is not rebuilt after a rebase; only the head is
-  gated. *read*
-- Several assertions were never seen red alone (a `compile_fail,E0308` on an
-  order key, the guards suite's `404` and `405`, seaorm's listener e2e). *read*
+- `RustFS` 1.0.1 answered `404 NoSuchKey` to a first `PUT` three times in a
+  month of the dev container's log, each a fresh `<prefix>/a.txt` of the
+  storage suite. Its own log names the cause, the server's: the `PUT`'s last
+  step, renaming the object's `xl.meta` into its directory, found that
+  directory gone (`reliable_rename failed … NotFound`, then `PutObject store
+  write returned … NoSuchKey`), and S3 never answers a `PUT` so. Not
+  reproduced on a throwaway 1.0.1: 12,800 such `PUT`s beside the suite's
+  deletes, aborted uploads, bucket churn and refused requests, an empty bucket
+  and one of 4,000 objects, none. Close: the upstream report with those lines;
+  1.0.2's heal ("defer replacement retries until dangling grace expires") and
+  scanner fixes are candidates, and the dev container pins 1.0.1 where 1.0.4
+  is current, a move a reproduction proves first. *seen*
 
 **HTTP and CORS**
 - An `Ambient<P>` behind a type alias is not read off its spelling, so a
@@ -402,7 +407,11 @@ the framework refuses meanwhile); redis-rs (`PipelineSink` loses a
 read error with nothing in flight; a command sent as its connection's driver
 ends is neither answered nor dropped, so its caller waits out its budget, and
 no hook in the send lets a test place one there); sse-stream 0.2.6
-(keep-alive on std's clock).
+(keep-alive on std's clock); Rust's std on macOS (a child's pipes made in two
+steps, `pipe` then `FD_CLOEXEC`, so a process another thread spawns between
+them inherits them: nextest's `LEAK` mark on a test whose stdout another test
+process holds, seen on a test only sleeping 30 ms, benign; `posix_spawn`'s
+`POSIX_SPAWN_CLOEXEC_DEFAULT` would close it, in std or in nextest).
 
 Known limits whose cause is upstream: `RUSTSEC-2026-0253` (lru through
 async-graphql 7.2.1) ignored until async-graphql 8 is final; a statement cut

@@ -206,7 +206,11 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   outcomes apart, the bound is the other outcome's own duration, said beside
   it; any other real-clock wait only guards against a hang.
 - **nextest is the runner, with no configuration**: `just test` runs every
-  test and the doctests.
+  test and the doctests. A `LEAK` mark on macOS is the runner's: std creates a
+  child's pipes there in two steps (`pipe`, then `FD_CLOEXEC`), so a test
+  process spawned from another thread in between holds another test's stdout
+  until it exits. Linux creates them in one (`pipe2`), so a `LEAK` in the
+  container or CI is a subprocess the test left.
 - **A doc example is compiled, and run unless it serves forever**: a fragment
   carries its scaffolding in hidden `# ` lines, `.run().await` is `no_run`, a
   refusal is `compile_fail`, and `text` is for what is not Rust. Held by review.

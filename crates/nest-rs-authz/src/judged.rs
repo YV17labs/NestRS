@@ -250,15 +250,25 @@ pub fn judged_field<E: EntityTrait>(
             return Ok(());
         };
         let entity = E::default().table_name();
-        let root = root_field(ctx);
+        let root = nest_rs_graphql::__private::root_site(ctx);
         let kind = nest_rs_graphql::__private::served_field(ctx, None)
             .kind
             .unwrap_or_default();
+        let field = root.map(|site| site.handler().address());
         if nest_rs_graphql::__private::first_in_operation(
             ctx,
-            format!("judged {entity} {} {root}", refused.as_str()),
+            format!(
+                "judged {entity} {} {}",
+                refused.as_str(),
+                field.unwrap_or_default()
+            ),
         ) {
-            refused_answer::<E>(refused).file_at(None, ServedAddress::field(kind, root));
+            // A root no unit dispatched (a schema built by hand) names nothing a
+            // client wrote.
+            let served = field.map_or_else(ServedAddress::default, |field| {
+                ServedAddress::field(kind, field)
+            });
+            refused_answer::<E>(refused).file_at(root.map(Site::handler), served);
         }
         Err(match refused {
             Refused::Withheld => crate::graphql::forbidden(),
@@ -342,21 +352,6 @@ fn answers_subscriber<T: JudgedRow>(row: &T, site: &'static Site) -> bool {
         );
     }
     false
-}
-
-/// The root field a nested one resolves under, as the client wrote it.
-#[cfg(feature = "graphql")]
-fn root_field<'c>(ctx: &'c nest_rs_graphql::async_graphql::Context<'_>) -> &'c str {
-    use nest_rs_graphql::async_graphql::QueryPathSegment;
-    let mut root = None;
-    let mut node = ctx.path_node.as_ref();
-    while let Some(at) = node {
-        if let QueryPathSegment::Name(name) = at.segment {
-            root = Some(name);
-        }
-        node = at.parent;
-    }
-    root.unwrap_or_else(|| nest_rs_graphql::__private::field_name(ctx))
 }
 
 /// The columns of an `#[expose]`d entity a reply's grant must not withhold: those

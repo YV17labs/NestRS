@@ -351,8 +351,8 @@ opening. An MCP tool's answer is written inside its site. What a refused row or 
 row judged for another caller files is one line per operation and per fact, naming
 the unit as its `mounted` line does: the serializer hands its refusal to the edge
 answering, which files it there (`nest_rs_core::__private::answering`), and one no
-edge claims is filed where it is met; a GraphQL column names its operation's `kind`
-and root `field`.
+edge claims is filed where it is met; a GraphQL column names its root field's site,
+which the operation notes as each root field runs, never the alias a client wrote.
 
 **A dispatched method answers no `Model`**, `#[expose]`d or not, held by rustc: every
 type its return type spells is asked of `nest_rs_core::__private::RowProbe`, a

@@ -509,9 +509,11 @@ files it once at the unit its `mounted` line names — HTTP's site with the rout
 `method`, `verb` and `path`, WS's reply with the message's `path` and `event`, MCP's answer
 with the operation's `path` and `tool` or `resource` — and a push names its `event`; a
 refusal no edge claims is filed where it is met, naming no unit, so none is lost. GraphQL's
-column refusal names the operation's `kind` and the root `field` once per operation and
-reason: it resolves after the root field's unit, which alone knows its `host` and `method`
-(`TODO.md` §3).
+column refusal resolves after its root field's unit, so each operation notes the site of
+every root field it dispatches, by its response key, and the column names that site, once
+per operation and reason: seen at `a1f890594`, the line quoted the alias a client wrote
+(`"field": "chosen_by_the_client"`). A row inside a GraphQL `Json` scalar, which
+async-graphql serializes itself, still names no unit (`TODO.md` §4).
 
 **And a field resolver's parent.** A `#[field_resolver]` read its parent's columns in
 Rust, past the checks each column makes where GraphQL resolves it: seen at `200bca723`,

@@ -261,6 +261,7 @@ where
     Fut: Future<Output = Result<T, FieldFailure>> + Send + 'a,
 {
     let operation = ctx.query_env.operation.node.ty;
+    crate::root_fields::note_root(ctx, site);
     let role = match kind {
         GraphqlSite::Entity => "entity",
         _ => operation_label(operation),
@@ -348,6 +349,10 @@ where
     Fut: Future<Output = Result<T, FieldFailure>> + Send + 'a,
 {
     let operation = ctx.query_env.operation.node.ty;
+    if kind == GraphqlSite::Operation {
+        // A subscription's opening: its items resolve under it.
+        crate::root_fields::note_root(ctx, site);
+    }
     let mut unit = FieldUnit::new(
         site,
         ctx.data_unchecked::<Container>(),

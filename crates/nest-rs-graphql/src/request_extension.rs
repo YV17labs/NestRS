@@ -23,6 +23,7 @@ use crate::loader::LoaderSeeds;
 use crate::operation_units::{OperationRefusal, selected_operation};
 use crate::own_key::OwnKey;
 use crate::redact::unparsed;
+use crate::root_fields::RootFields;
 
 /// Hands each request the schema's one [`RequestExtension`], which holds nothing of
 /// a request's.
@@ -118,7 +119,8 @@ impl Extension for RequestExtension {
             ctx,
             self.seeds
                 .seed(request)
-                .data(std::sync::Arc::new(FiledFacts::default())),
+                .data(std::sync::Arc::new(FiledFacts::default()))
+                .data(std::sync::Arc::new(RootFields::default())),
         )
         .await
     }

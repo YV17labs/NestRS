@@ -276,13 +276,11 @@ dispatched method answering a `Model` does not compile (`mask-provenance.md`,
 **Operator lines**
 - `http.request`, `ws.message` and `mcp.operation` name no `host` nor
   `method`; an error's `Display` can still quote a path. *read*
-- A wire row's column refused where GraphQL resolves it names the operation's
-  `kind` and the root `field` once per operation and reason, never the root
-  field's `host` and `method`, and a row inside a `Json` scalar, which
-  async-graphql serializes itself, names no unit at all: both resolve after the
-  root field's unit, which alone holds its site. Close: with the `#[public]`
-  field's line of §3, the root field's answer resolved under its unit. *seen*
-  (the column line); *read* (the scalar's)
+- A wire row inside a GraphQL `Json` scalar, which async-graphql serializes
+  itself outside any edge's claim, files its refusal naming no unit, where a
+  column names its root field's `host`, `method`, `kind` and `field`. Close: with
+  the `#[public]` field's line of §3, the root field's answer resolved under its
+  unit. *read*
 
 **Docs, bench, tooling**
 - The benchmark figures are 4.0.0's, dated as such on every page. Close: the

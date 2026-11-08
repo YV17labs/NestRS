@@ -64,6 +64,7 @@ mod parent_probe;
 mod redact;
 mod request_extension;
 mod resolver;
+mod root_fields;
 mod scope;
 mod subscription;
 #[cfg(test)]
@@ -106,6 +107,7 @@ pub mod __private {
         GraphqlResolverRegistration, GraphqlRootMember, GraphqlSiteRegistration,
         GraphqlSubscriptionObject, ResolverDescriptor,
     };
+    pub use crate::root_fields::root_site;
     pub use crate::scope::{scoped_parameter, unprovided};
     pub use crate::subscription::compose_schema;
 

@@ -653,6 +653,46 @@ async fn a_row_judged_for_another_caller_resolves_for_no_one() {
     assert!(!read.to_string().contains("member 1"), "{read}");
 }
 
+/// A column's refusal names its root field as the field's `mounted` line does, by
+/// its host, its method and its schema name, never the alias a client wrote.
+#[tokio::test]
+async fn a_columns_refusal_names_its_root_field_never_the_clients_alias() {
+    let app = TestApp::for_module::<MembersGraphqlModule>()
+        .await
+        .expect("boots");
+    *cache().lock().expect("the cache") = Some(published());
+    let logs = nest_rs_testing::LogCapture::install();
+    let read = graphql_as(
+        &app,
+        "admin",
+        "{ chosen_by_the_client: cached { id name } }",
+    )
+    .await;
+    assert_eq!(
+        read["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{read}"
+    );
+    let filed = logs.find(
+        nest_rs_authz::TARGET,
+        "a wire row answered a caller it was not judged for",
+    );
+    assert_eq!(filed.len(), 1, "{filed:#?}");
+    assert!(
+        !format!("{filed:?}").contains("chosen_by_the_client"),
+        "{filed:#?}"
+    );
+    for (field, named) in [
+        ("entity", "members"),
+        ("reason", "judged_for_another"),
+        ("host", "MembersResolver"),
+        ("method", "cached"),
+        ("kind", "query"),
+        ("field", "cached"),
+    ] {
+        assert_eq!(filed[0].field(field).as_deref(), Some(named), "{field}");
+    }
+}
+
 /// A field resolver reads its parent's columns: a parent judged for another caller
 /// hands it nothing to derive from, as its own columns resolve for no one.
 #[tokio::test]

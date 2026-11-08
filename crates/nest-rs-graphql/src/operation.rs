@@ -523,9 +523,8 @@ where
         let line = this.line.take();
         match ended {
             Ok(answered) => {
-                if let Some(mut line) = line {
-                    let outcome = line.answered(&answered);
-                    line.file(outcome);
+                if let Some(line) = line {
+                    FieldLine::answered(line, &answered);
                 }
                 Poll::Ready(answered)
             }
@@ -552,21 +551,21 @@ struct FieldLine {
 }
 
 impl FieldLine {
-    /// What the field answered files: `ok`, or `error`, which its span records
+    /// File what the field answered: `ok`, or `error`, which its span records
     /// unless its caller's request earned it, as an HTTP `4xx` fails nothing on
     /// the server's span.
-    fn answered<T, E: AnsweredError>(&mut self, answered: &Result<T, E>) -> &'static str {
+    fn answered<T, E: AnsweredError>(mut line: FiledOnce<Self>, answered: &Result<T, E>) {
         if answered
             .as_ref()
             .is_err_and(|error| !error.failed_the_server())
         {
-            self.span = tracing::Span::none();
+            line.span = tracing::Span::none();
         }
-        if answered.is_ok() {
+        line.file(if answered.is_ok() {
             nest_rs_core::operation_log::OK
         } else {
             nest_rs_core::operation_log::ERROR
-        }
+        });
     }
 }
 

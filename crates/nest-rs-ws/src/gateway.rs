@@ -973,18 +973,18 @@ impl<'a> UnitLine<'a> {
         )
     }
 
-    /// What a message answered files: `ok`, or `error`, which its span records
+    /// File what a message answered: `ok`, or `error`, which its span records
     /// unless its client's own frame earned it, as an HTTP `4xx` fails nothing on
     /// the server's span.
-    fn answered(&mut self, answered: &Answered) -> &'static str {
+    fn answered(mut line: FiledOnce<Self>, answered: &Answered) {
         if answered.refused_its_client() {
-            self.span = tracing::Span::none();
+            line.span = tracing::Span::none();
         }
-        if answered.failed {
+        line.file(if answered.failed {
             operation_log::ERROR
         } else {
             operation_log::OK
-        }
+        });
     }
 
     /// The unit unwound: file `panic`, and give the operator the panic's text,
@@ -1178,7 +1178,7 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
         ws.event = %named,
         ws.connection_id = conn_id,
     );
-    let mut line = UnitLine::open(message, path, conn_id, correlation.clone(), span.clone());
+    let line = UnitLine::open(message, path, conn_id, correlation.clone(), span.clone());
     let ran = nest_rs_core::with_request_scope(
         Some(wiring.scopes.open()),
         correlation,
@@ -1188,8 +1188,7 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
     .await;
     match ran {
         Ok(answered) => {
-            let outcome = line.answered(&answered);
-            line.file(outcome);
+            UnitLine::answered(line, &answered);
             answered.reply
         }
         Err(payload) => {

@@ -159,7 +159,7 @@ impl<E: Executor> OperationUnits<E> {
             Some(deadline) => spec.with_deadline(deadline.at()),
             None => spec,
         };
-        let mut line = OperationLine::open(selected, correlation.clone(), span.clone());
+        let line = OperationLine::open(selected, correlation.clone(), span.clone());
         let body = async {
             let Some(deadline) = cut else {
                 return Answered::Executed(body.await);
@@ -183,8 +183,7 @@ impl<E: Executor> OperationUnits<E> {
         let answered = nest_rs_core::panic::contain(scoped).instrument(span).await;
         match answered {
             Ok(answered) => {
-                let outcome = line.answered(&answered);
-                line.file(outcome);
+                OperationLine::answered(line, &answered);
                 answered.into_response()
             }
             Err(unwound) => {
@@ -762,14 +761,14 @@ impl OperationLine {
         )
     }
 
-    /// What the operation answered files: `ok`, or `error`, which its span
+    /// File what the operation answered: `ok`, or `error`, which its span
     /// records unless its caller's document earned it, as an HTTP `4xx` fails
     /// nothing on the server's span.
-    fn answered(&mut self, answered: &Answered) -> &'static str {
+    fn answered(mut line: FiledOnce<Self>, answered: &Answered) {
         if answered.refused_its_caller() {
-            self.span = tracing::Span::none();
+            line.span = tracing::Span::none();
         }
-        answered.outcome()
+        line.file(answered.outcome());
     }
 
     /// Said inside the operation's unit when the request's deadline cuts it,

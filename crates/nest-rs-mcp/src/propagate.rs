@@ -272,7 +272,7 @@ impl OperationUnits {
             path: self.served_at.as_deref().map(|served| &*served.0),
         };
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
-        let mut line = OperationLine::open(named, address, correlation.clone(), operation.clone());
+        let line = OperationLine::open(named, address, correlation.clone(), operation.clone());
 
         let deadline = timeout.map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
         let spec = UnitSpec::new(
@@ -330,11 +330,10 @@ impl OperationUnits {
                     answered.answer
                 }
                 Some(Ok(answered)) => {
-                    let outcome = match answered.failed_as() {
-                        None => operation_log::OK,
-                        Some(failed_as) => line.failed(failed_as),
-                    };
-                    line.file(outcome);
+                    match answered.failed_as() {
+                        None => line.file(operation_log::OK),
+                        Some(failed_as) => OperationLine::failed(line, failed_as),
+                    }
                     answered.answer
                 }
                 Some(Err(payload)) => {
@@ -771,9 +770,9 @@ impl LineAddress<'_> {
 }
 
 /// One operation's `mcp.operation` line: by the end the dispatch saw, else
-/// `cancelled` when it is dropped first. It names the server's values only: the protocol's method or
-/// [`OTHER`](operation_log::OTHER) as `mcp_method`, and what the method
-/// addressed as its `mounted` line does.
+/// `cancelled` when it is dropped first. It names the server's values only:
+/// the protocol's method or [`OTHER`](operation_log::OTHER) as `mcp_method`,
+/// and what the method addressed as its `mounted` line does.
 struct OperationLine<'a> {
     mcp_method: &'static str,
     address: &'a LineAddress<'a>,
@@ -810,8 +809,8 @@ impl<'a> OperationLine<'a> {
     /// place of the outcome word its line files, `error`: `tracing-opentelemetry`
     /// keeps every value a field is recorded with, so the class is recorded once
     /// and the line files with the span taken out.
-    fn failed(&mut self, failed_as: FailedAs) -> &'static str {
-        let span = std::mem::replace(&mut self.span, tracing::Span::none());
+    fn failed(mut line: FiledOnce<Self>, failed_as: FailedAs) {
+        let span = std::mem::replace(&mut line.span, tracing::Span::none());
         match failed_as {
             FailedAs::ToolError => operation_log::record_error(&span, TOOL_ERROR),
             FailedAs::Answered(code) => {
@@ -822,7 +821,7 @@ impl<'a> OperationLine<'a> {
             }
             FailedAs::Unit => operation_log::record_error(&span, operation_log::ERROR),
         }
-        operation_log::ERROR
+        line.file(operation_log::ERROR);
     }
 
     /// The operation unwound: file `panic`, the word every edge's span gives an

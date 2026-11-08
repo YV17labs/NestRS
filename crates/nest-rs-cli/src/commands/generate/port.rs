@@ -110,25 +110,32 @@ fn tree(index_file: &Path, root: &Path, index: syn::File) -> CliResult<Vec<Modul
             let name = declared.ident.to_string();
             let mut path = module.path.clone();
             path.push(name.clone());
+            // At a file's top a `#[path]` is read from that file's folder, its
+            // own name never added; inside an inline module, from its children's.
+            let attributed = path_attribute(&declared.attrs).map(|relative| {
+                let from = if at_file_root {
+                    module.file.parent().unwrap_or(&children)
+                } else {
+                    &children
+                };
+                from.join(relative)
+            });
             if let Some((_, items)) = &declared.content {
+                // On an inline module a `#[path]` names its children's folder.
+                let below = attributed.unwrap_or_else(|| children.join(&name));
                 pending.push((
                     Module {
                         file: module.file.clone(),
                         path,
                         items: items.clone(),
                     },
-                    children.join(&name),
+                    below,
                     false,
                 ));
                 continue;
             }
-            let (file, below) = match path_attribute(&declared.attrs) {
-                Some(relative) => {
-                    let file = if at_file_root {
-                        module.file.parent().unwrap_or(&children).join(relative)
-                    } else {
-                        children.join(relative)
-                    };
+            let (file, below) = match attributed {
+                Some(file) => {
                     // A `#[path]` file owns its directory, as a `mod.rs` does.
                     let below = file
                         .parent()
@@ -523,7 +530,9 @@ mod tests {
 
     /// Every module the port's tree declares, by the path the compiler gives it:
     /// a file beside `mod.rs`, a folder's `mod.rs`, a file owning a folder, an
-    /// inline module, a `#[path]`; a file no `mod` names is none of them.
+    /// inline module, a `#[path]` on a file or on an inline module, which names
+    /// its children's folder; a file no `mod` names is none of them, and each
+    /// that does not parse sits where the compiler reads nothing.
     #[test]
     fn the_tree_is_every_module_the_port_declares_and_nothing_else() {
         let dir = tempfile::tempdir().expect("a temp dir");
@@ -536,17 +545,32 @@ mod tests {
         write(
             "mod.rs",
             "mod store;\nmod services;\nmod nested;\n#[path = \"legacy/writer.rs\"]\nmod writer;\n\
-             mod inline {\n    mod deeper;\n}\n",
+             mod inline {\n    mod deeper;\n    #[path = \"moved\"]\n    mod shifted {\n        \
+             mod leaf;\n    }\n}\n#[path = \"pathed\"]\nmod relocated {\n    mod item;\n}\n",
         );
         write("store.rs", "");
-        write("services.rs", "mod articles;\n");
+        write(
+            "services.rs",
+            "mod articles;\n#[path = \"kept\"]\nmod grouped {\n    mod one;\n}\n",
+        );
         write("services/articles.rs", "");
         write("nested/mod.rs", "mod inner;\n");
         write("nested/inner.rs", "");
         write("legacy/writer.rs", "mod part;\n");
         write("legacy/part.rs", "");
         write("inline/deeper.rs", "");
-        write("stray.rs", "fn half(\n");
+        write("inline/moved/leaf.rs", "");
+        write("pathed/item.rs", "");
+        write("kept/one.rs", "");
+        for unread in [
+            "stray.rs",
+            "inline/shifted/leaf.rs",
+            "relocated/item.rs",
+            "services/grouped/one.rs",
+            "services/kept/one.rs",
+        ] {
+            write(unread, "fn half(\n");
+        }
 
         let index = parse(&root.join("mod.rs"))
             .expect("parses")
@@ -565,10 +589,16 @@ mod tests {
             ("", "mod.rs"),
             ("inline", "mod.rs"),
             ("inline::deeper", "inline/deeper.rs"),
+            ("inline::shifted", "mod.rs"),
+            ("inline::shifted::leaf", "inline/moved/leaf.rs"),
             ("nested", "nested/mod.rs"),
             ("nested::inner", "nested/inner.rs"),
+            ("relocated", "mod.rs"),
+            ("relocated::item", "pathed/item.rs"),
             ("services", "services.rs"),
             ("services::articles", "services/articles.rs"),
+            ("services::grouped", "services.rs"),
+            ("services::grouped::one", "kept/one.rs"),
             ("store", "store.rs"),
             ("writer", "legacy/writer.rs"),
             ("writer::part", "legacy/part.rs"),

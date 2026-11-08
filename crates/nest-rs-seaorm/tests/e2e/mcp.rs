@@ -3,7 +3,7 @@
 //! listed, under the ability the request's in-band guards kept, and commits
 //! only an operation that answered `Ok` with no tool error in band.
 
-use nest_rs_authz::{AbilityBuilder, Action, Read, current_ability, subject};
+use nest_rs_authz::{AbilityBuilder, Action, Read, current_ability};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_database::{ExecutorScope, current_executor_scope};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
@@ -15,9 +15,23 @@ use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool;
 use sea_orm::ConnectionTrait;
 
-/// What `inspect` reads: an operation naming no read reads under no ability.
-#[subject]
-struct Inspection;
+/// What `inspect` names its read of, so its unit reads under the ability its
+/// guards kept: a posture naming no entity's read reads under none.
+mod inspected {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "mcp_unit_inspected")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
 
 /// Attaches an ability to every request, as the authorization guard does,
 /// naming its caller as the authentication guard does.
@@ -34,7 +48,7 @@ impl Guard for Granting {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         nest_rs_core::__private::set_actor_id("granted");
         let mut ability = AbilityBuilder::new();
-        ability.can(Action::Read, Inspection);
+        ability.can(Action::Read, inspected::Entity);
         let ability = ability.build().expect("one grant builds");
         cx.attach(nest_rs_authz::__private::AmbientAbility::new(ability));
         Ok(())
@@ -64,7 +78,7 @@ struct UnitTools;
 #[tools]
 impl UnitTools {
     #[tool(description = "Says what the operation runs on.")]
-    #[public(Read, Inspection)]
+    #[public(Read, inspected::Entity)]
     async fn inspect(&self) -> Result<CallToolResult, McpError> {
         let seen = format!(
             "lazy={} request={} ability={}",

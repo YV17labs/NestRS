@@ -128,6 +128,14 @@ dispatched method answering a `Model` does not compile (`mask-provenance.md`,
   unaffected. Close: nest-rs-graphql resolving a root field's answer under the
   ability its unit attached (a wrapper `OutputType` installing it), as MCP writes
   a tool's answer inside its site. *seen* (`gate::public::a_subscription_whose_own_guard_attaches_its_ability_streams_no_row`)
+- **A unit gated on a `#[subject]` reads under no ability**, as a bare
+  `#[public]` does: `unmasked` was its one opening and nothing replaced it, so a
+  capability-gated body reading the caller's rows through `Repo` reads none. No
+  demo body reads so. Close: a subject's posture opening its unit's reads, each
+  row being judged where it is built, with a dated entry in
+  `unmasked-reply-withholds-the-ability.md`. *seen* (the seaorm e2e's WS message
+  and MCP tool under `#[public(Read, Inspection)]` read `ability=false` at
+  `c43aaaa21`; their fixtures now name an entity)
 
 ## 4. Known gaps by area
 

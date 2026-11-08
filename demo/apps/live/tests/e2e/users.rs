@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::harness::*;
 
 #[tokio::test]
-async fn users_list_over_ws_is_org_scoped_and_email_masked() {
+async fn users_list_over_ws_is_org_scoped_and_email_withheld() {
     let app = serve().await;
 
     let conn = connection(app.container());
@@ -33,9 +33,10 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
     for row in rows {
         assert!(row.get("id").is_some(), "id is exposed: {row:?}");
         assert!(row.get("name").is_some(), "name is exposed: {row:?}");
-        assert!(
-            row.get("email").is_none(),
-            "a member must not see email over WS: {row:?}",
+        assert_eq!(
+            row.get("email"),
+            Some(&Value::Null),
+            "a member must not see email over WS, its key written: {row:?}",
         );
     }
 

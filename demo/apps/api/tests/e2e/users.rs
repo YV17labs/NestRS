@@ -217,7 +217,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
 }
 
 #[tokio::test]
-async fn a_plain_user_get_by_id_masks_the_email() {
+async fn a_plain_user_get_by_id_withholds_the_email() {
     let app = boot().await;
     let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &bootstrap, "Initech").await;
@@ -261,14 +261,15 @@ async fn a_plain_user_get_by_id_masks_the_email() {
     let json = got.json().await;
     let body = json.value().object();
     assert_eq!(body.get("name").string(), "Bob");
-    assert!(
-        body.get_opt("email").is_none(),
-        "a plain user's GET by id masks the email field",
+    assert_eq!(
+        body.get("email").deserialize::<serde_json::Value>(),
+        serde_json::Value::Null,
+        "a plain user's GET by id withholds the email field, its key written",
     );
 }
 
 #[tokio::test]
-async fn a_plain_user_listing_masks_the_email() {
+async fn a_plain_user_listing_withholds_the_email() {
     let app = boot().await;
     let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &bootstrap, "Initech").await;
@@ -298,9 +299,10 @@ async fn a_plain_user_listing_masks_the_email() {
         .expect("one user")
         .object();
     assert_eq!(first.get("name").string(), "Bob");
-    assert!(
-        first.get_opt("email").is_none(),
-        "a plain user's listing masks the email field",
+    assert_eq!(
+        first.get("email").deserialize::<serde_json::Value>(),
+        serde_json::Value::Null,
+        "a plain user's listing withholds the email field, its key written",
     );
 }
 

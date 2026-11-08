@@ -1,11 +1,11 @@
-//! An `#[entity]` resolved by reference is scoped and masked like any other
+//! An `#[entity]` resolved by reference is scoped and judged like any other
 //! operation: a row the ability does not reach is not reachable by key either.
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
 use nest_rs_core::{injectable, module};
 use nest_rs_graphql::GraphqlView;
-use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
+use nest_rs_graphql::async_graphql::{Context, Result as GqlResult};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
 use nest_rs_guards::GlobalGuards;
 use nest_rs_http::EndpointGuards;
@@ -14,7 +14,6 @@ use nest_rs_seaorm::{
 };
 use nest_rs_testing::TestApp;
 use sea_orm::prelude::Uuid;
-use serde::{Deserialize, Serialize};
 
 use crate::always_authenticated::AlwaysAuthenticated;
 
@@ -22,7 +21,8 @@ mod post {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[expose(name = "PostRow")]
+    /// The federated type; its `@key` is the entity resolver's `id` argument.
+    #[expose(name = "Post", graphql)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "federated_probe_posts")]
     pub(super) struct Model {
@@ -31,7 +31,7 @@ mod post {
         pub id: Uuid,
         #[expose]
         pub title: String,
-        #[expose]
+        #[expose(nullable)]
         pub published: bool,
         pub secret: String,
     }
@@ -42,28 +42,6 @@ mod post {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/// The federated type; its `@key` is the entity resolver's `id` argument.
-///
-/// `crate = `: async-graphql resolves its paths from the call site. `published`
-/// is `Option`: GraphQL cannot ship a masked-out non-nullable field.
-#[derive(SimpleObject, Serialize, Deserialize)]
-#[graphql(crate = "::nest_rs_graphql::async_graphql")]
-struct Post {
-    id: String,
-    title: String,
-    published: Option<bool>,
-}
-
-impl From<post::Model> for Post {
-    fn from(model: post::Model) -> Self {
-        Self {
-            id: model.id.to_string(),
-            title: model.title,
-            published: Some(model.published),
-        }
-    }
-}
-
 struct PostsService;
 
 impl CrudService for PostsService {
@@ -71,7 +49,8 @@ impl CrudService for PostsService {
 }
 
 /// Grants the published rows and two columns: `published` is exposed yet
-/// withheld, so only the mask can strip it (the expose set alone strips `secret`).
+/// withheld, so only the row's judgement can leave it out (the expose set alone
+/// leaves out `secret`).
 #[injectable]
 #[derive(Default)]
 struct PublishedOnly;
@@ -93,16 +72,20 @@ struct PostsResolver;
 
 #[operations]
 impl PostsResolver {
-    /// Resolved by reference. `#[authorize]` is what gates it and masks what it
-    /// returns; `access` is what puts the ability's `WHERE` on the read.
+    /// Resolved by reference. `#[authorize]` is what gates it and opens its read;
+    /// `access` is what puts the ability's `WHERE` on the read.
     #[entity]
     #[authorize(Read, post::Entity)]
-    async fn find_post_by_id(&self, _ctx: &Context<'_>, id: String) -> GqlResult<Option<Post>> {
+    async fn find_post_by_id(
+        &self,
+        _ctx: &Context<'_>,
+        id: String,
+    ) -> GqlResult<Option<post::Post>> {
         let Ok(key) = id.parse::<Uuid>() else {
             return Ok(None);
         };
         match PostsService.access(Action::Read, key).await {
-            Ok(Access::Found(model)) => Ok(Some(Post::from(model))),
+            Ok(Access::Found(model)) => Ok(Some(post::Post::from(&model))),
             // Answered alike: telling them apart is an existence oracle by id.
             Ok(Access::Denied | Access::Missing) => Ok(None),
             Err(err) => Err(nest_rs_graphql::async_graphql::Error::new(
@@ -187,7 +170,7 @@ async fn resolve(app: &TestApp, id: &str) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn a_row_the_ability_reaches_resolves_by_key_and_arrives_masked() {
+async fn a_row_the_ability_reaches_resolves_by_key_and_arrives_judged() {
     let app = boot().await;
     let body = resolve(&app, PUBLISHED).await;
     let entity = &body["data"]["_entities"][0];
@@ -198,8 +181,8 @@ async fn a_row_the_ability_reaches_resolves_by_key_and_arrives_masked() {
     );
     assert!(
         entity["published"].is_null(),
-        "and the mask strained the column the field grant withholds, exactly as \
-         it does on a `#[query]` — with no masking call anywhere in the entity \
+        "and the row's judgement withheld the column the field grant leaves out, \
+         exactly as on a `#[query]` — with no call anywhere in the entity \
          resolver's body, `#[authorize]` being the whole declaration: {body}",
     );
     assert!(

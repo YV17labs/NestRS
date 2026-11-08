@@ -1,5 +1,6 @@
 //! A `#[public]` route serving rows to an anonymous caller: the ability from
-//! `AbilityFactory::define_visitor` scopes `Repo`'s `SELECT` and masks the response.
+//! `AbilityFactory::define_visitor` scopes `Repo`'s `SELECT` and judges each wire
+//! row the route answers.
 
 use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
@@ -10,13 +11,12 @@ use nest_rs_http::{controller, routes};
 use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError};
 use nest_rs_testing::{LogCapture, TestApp};
 use sea_orm::DatabaseConnection;
-use serde::Serialize;
 
 mod post {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[expose(name = "Post")]
+    #[expose(name = "VisitorPost", graphql)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "visitor_probe_posts")]
     pub(super) struct Model {
@@ -25,7 +25,7 @@ mod post {
         pub id: i32,
         #[expose]
         pub title: String,
-        #[expose]
+        #[expose(nullable)]
         pub published: bool,
         pub secret: String,
     }
@@ -34,24 +34,6 @@ mod post {
     pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
-}
-
-// `JsonSchema`: a route with no response shaper advertises its payload in OpenAPI.
-#[derive(Serialize, schemars::JsonSchema)]
-struct PostDto {
-    id: i32,
-    title: String,
-    published: bool,
-}
-
-impl From<post::Model> for PostDto {
-    fn from(model: post::Model) -> Self {
-        Self {
-            id: model.id,
-            title: model.title,
-            published: model.published,
-        }
-    }
 }
 
 struct PostsService;
@@ -110,18 +92,18 @@ macro_rules! visitor_app {
             impl PostsController {
                 #[get("/")]
                 #[public(Read, post::Entity)]
-                async fn list(&self) -> nest_rs_http::Result<Json<Vec<PostDto>>> {
+                async fn list(&self) -> nest_rs_http::Result<Json<Vec<post::VisitorPost>>> {
                     let rows = PostsService.list().await.map_err(ServiceError::from)?;
-                    Ok(Json(rows.into_iter().map(PostDto::from).collect()))
+                    Ok(Json(rows.iter().map(post::VisitorPost::from).collect()))
                 }
 
                 // The bare word names no read: the ability the guard attached is
                 // withheld from what `Repo` reads.
                 #[get("/bare")]
                 #[public]
-                async fn bare(&self) -> nest_rs_http::Result<Json<Vec<PostDto>>> {
+                async fn bare(&self) -> nest_rs_http::Result<Json<Vec<post::VisitorPost>>> {
                     let rows = PostsService.list().await.map_err(ServiceError::from)?;
-                    Ok(Json(rows.into_iter().map(PostDto::from).collect()))
+                    Ok(Json(rows.iter().map(post::VisitorPost::from).collect()))
                 }
             }
 
@@ -177,7 +159,7 @@ visitor_app!(
     TitleToVisitors,
     fn define_visitor(&self, ab: &mut AbilityBuilder) {
         ab.can(Action::Read, post::Entity)
-            .fields([post::Column::Title]);
+            .fields([post::Column::Id, post::Column::Title]);
     }
 );
 
@@ -230,7 +212,7 @@ async fn a_conditional_visitor_grant_scopes_the_query() {
 }
 
 #[tokio::test]
-async fn a_field_restricted_visitor_grant_masks_the_response() {
+async fn a_field_restricted_visitor_grant_withholds_the_column_it_leaves_out() {
     let _conn = seeded_db().await;
     let app = title_only::boot().await;
 
@@ -241,13 +223,14 @@ async fn a_field_restricted_visitor_grant_masks_the_response() {
     assert_eq!(rows.len(), 3, "the rows themselves are all granted");
     for row in rows {
         assert!(
-            row.get("title").is_some(),
-            "the granted field survives: {row:?}",
+            row["id"].is_i64() && row["title"].is_string(),
+            "the granted fields survive: {row:?}",
         );
-        assert!(
-            row.get("id").is_none() && row.get("published").is_none(),
-            "`.fields([Title])` masks a visitor's response exactly as it masks \
-             an authenticated one: {row:?}",
+        assert_eq!(
+            row.get("published"),
+            Some(&serde_json::Value::Null),
+            "`.fields([Id, Title])` withholds a visitor's column exactly as it \
+             withholds an authenticated caller's, its key written: {row:?}",
         );
     }
 }
@@ -302,7 +285,6 @@ async fn the_unexposed_column_never_reaches_a_visitor() {
 mod every_edge {
     use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read};
     use nest_rs_core::{injectable, module};
-    use nest_rs_graphql::async_graphql::SimpleObject;
     use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
     use nest_rs_http::{EndpointGuards, Json, StatusCode, controller, routes};
     use nest_rs_mcp::{McpAccess, McpModule, mcp, tools};
@@ -312,36 +294,15 @@ mod every_edge {
     use nest_rs_testing::mcp::call_tool;
     use nest_rs_testing::{LogCapture, TestApp};
     use nest_rs_ws::{WsModule, gateway, messages};
-    use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
     use super::{PostsService, post, seeded_db};
 
-    /// What every edge answers: each member optional, so a field grant has a
-    /// representation in a typed answer.
-    #[derive(Clone, Debug, Serialize, Deserialize, SimpleObject, schemars::JsonSchema)]
-    struct PostRow {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        id: Option<i32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        title: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        published: Option<bool>,
-    }
-
-    impl From<post::Model> for PostRow {
-        fn from(model: post::Model) -> Self {
-            Self {
-                id: Some(model.id),
-                title: Some(model.title),
-                published: Some(model.published),
-            }
-        }
-    }
-
-    async fn feed() -> Result<Vec<PostRow>, ServiceError> {
+    /// What every edge answers: the wire rows of what the visitor may read, each
+    /// judged where it is built.
+    async fn feed() -> Result<Vec<post::VisitorPost>, ServiceError> {
         let rows = PostsService.list().await.map_err(ServiceError::from)?;
-        Ok(rows.into_iter().map(PostRow::from).collect())
+        Ok(rows.iter().map(post::VisitorPost::from).collect())
     }
 
     /// A post a route binds by id, its key a UUID v7.
@@ -358,7 +319,7 @@ mod every_edge {
             pub id: Uuid,
             #[expose]
             pub title: String,
-            #[expose]
+            #[expose(nullable)]
             pub published: bool,
         }
 
@@ -412,10 +373,10 @@ mod every_edge {
         fn define_visitor(&self, ab: &mut AbilityBuilder) {
             ab.can(Action::Read, post::Entity)
                 .when(|p| p.eq(post::Column::Published, true))
-                .fields([post::Column::Title]);
+                .fields([post::Column::Id, post::Column::Title]);
             ab.can(Action::Read, bound::Entity)
                 .when(|p| p.eq(bound::Column::Published, true))
-                .fields([bound::Column::Title]);
+                .fields([bound::Column::Id, bound::Column::Title]);
         }
     }
 
@@ -437,7 +398,8 @@ mod every_edge {
         );
     }
 
-    /// The titles a visitor's grant serves, in any order.
+    /// The rows a visitor's grant serves, in any order: each its key and its
+    /// title, and `published` withheld.
     fn assert_the_published_titles_alone(rows: &Value) {
         let rows = rows.as_array().expect("a list of rows");
         let mut titles: Vec<&str> = rows
@@ -447,7 +409,8 @@ mod every_edge {
         titles.sort_unstable();
         assert_eq!(titles, ["published one", "published two"], "{rows:?}");
         for row in rows {
-            assert_eq!(row.as_object().map(serde_json::Map::len), Some(1), "{row}");
+            assert!(row["id"].is_i64(), "{row}");
+            assert_eq!(row.get("published"), Some(&Value::Null), "{row}");
         }
     }
 
@@ -459,7 +422,7 @@ mod every_edge {
     impl PostsController {
         #[get("/")]
         #[public(Read, post::Entity)]
-        async fn named(&self) -> nest_rs_http::Result<Json<Vec<PostRow>>> {
+        async fn named(&self) -> nest_rs_http::Result<Json<Vec<post::VisitorPost>>> {
             Ok(Json(feed().await?))
         }
 
@@ -480,13 +443,13 @@ mod every_edge {
     impl PostsResolver {
         #[query]
         #[public(Read, post::Entity)]
-        async fn named(&self) -> Result<Vec<PostRow>, ServiceError> {
+        async fn named(&self) -> Result<Vec<post::VisitorPost>, ServiceError> {
             feed().await
         }
 
         #[query]
         #[public]
-        async fn bare(&self) -> Result<Vec<PostRow>, ServiceError> {
+        async fn bare(&self) -> Result<Vec<post::VisitorPost>, ServiceError> {
             feed().await
         }
     }
@@ -554,7 +517,7 @@ mod every_edge {
         published.assert_status_is_ok();
         assert_eq!(
             super::body_of(published).await,
-            json!({ "title": "published" })
+            json!({ "id": PUBLISHED, "title": "published", "published": null })
         );
 
         for (id, status) in [
@@ -578,8 +541,8 @@ mod every_edge {
         let rows = answer["data"]["named"].as_array().expect("rows");
         assert_eq!(rows.len(), 2, "{answer}");
         for row in rows {
-            assert!(row["title"].is_string(), "{row}");
-            assert!(row["id"].is_null() && row["published"].is_null(), "{row}");
+            assert!(row["title"].is_string() && row["id"].is_i64(), "{row}");
+            assert!(row["published"].is_null(), "{row}");
         }
     }
 
@@ -602,14 +565,14 @@ mod every_edge {
         #[subscribe_message("named")]
         #[public(Read, post::Entity)]
         #[use_guards(VisitorGuard)]
-        async fn named(&self) -> Result<Vec<PostRow>, ServiceError> {
+        async fn named(&self) -> Result<Vec<post::VisitorPost>, ServiceError> {
             feed().await
         }
 
         #[subscribe_message("bare")]
         #[public]
         #[use_guards(VisitorGuard)]
-        async fn bare(&self) -> Result<Vec<PostRow>, ServiceError> {
+        async fn bare(&self) -> Result<Vec<post::VisitorPost>, ServiceError> {
             feed().await
         }
     }
@@ -667,14 +630,14 @@ mod every_edge {
         /// What a visitor may read.
         #[tool]
         #[public(Read, post::Entity)]
-        async fn named(&self) -> Result<nest_rs_mcp::Json<Vec<PostRow>>, ServiceError> {
+        async fn named(&self) -> Result<nest_rs_mcp::Json<Vec<post::VisitorPost>>, ServiceError> {
             feed().await.map(nest_rs_mcp::Json)
         }
 
         /// The same read, naming nothing.
         #[tool]
         #[public]
-        async fn bare(&self) -> Result<nest_rs_mcp::Json<Vec<PostRow>>, ServiceError> {
+        async fn bare(&self) -> Result<nest_rs_mcp::Json<Vec<post::VisitorPost>>, ServiceError> {
             feed().await.map(nest_rs_mcp::Json)
         }
     }
@@ -707,8 +670,12 @@ mod every_edge {
         assert!(reply.contains("published two"), "{reply}");
         assert!(!reply.contains("a draft"), "{reply}");
         assert!(
-            !reply.contains("published\\\":"),
+            !reply.contains("published\\\":true") && !reply.contains("\"published\":true"),
             "the field grant holds: {reply}"
+        );
+        assert!(
+            reply.contains("published\\\":null") || reply.contains("\"published\":null"),
+            "the withheld column's key is written: {reply}"
         );
     }
 

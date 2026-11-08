@@ -4,7 +4,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use nest_rs_authz::{AbilityBuilder, Action, Read, current_ability, subject};
+use nest_rs_authz::{AbilityBuilder, Action, Read, current_ability};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_database::{ExecutorScope, current_executor_scope};
 use nest_rs_guards::{Denial, Guard, GuardFor};
@@ -16,9 +16,23 @@ use nest_rs_ws::{WsModule, gateway, messages};
 use sea_orm::{ActiveValue::Set, ConnectionTrait};
 use serde_json::json;
 
-/// What `inspect` reads: a message naming no read reads under no ability.
-#[subject]
-struct Inspection;
+/// What `inspect` names its read of, so its unit reads under the ability its
+/// guards kept: a posture naming no entity's read reads under none.
+mod inspected {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "ws_unit_inspected")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
 
 /// Attaches an ability to every upgrade, as the authorization guard does.
 #[injectable]
@@ -33,7 +47,7 @@ impl Guard for Granting {
 
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         let mut ability = AbilityBuilder::new();
-        ability.can(Action::Read, Inspection);
+        ability.can(Action::Read, inspected::Entity);
         let ability = ability.build().expect("one grant builds");
         cx.attach(nest_rs_authz::__private::AmbientAbility::new(ability));
         Ok(())
@@ -62,7 +76,7 @@ pub(crate) struct UnitGateway;
 #[messages]
 impl UnitGateway {
     #[subscribe_message("inspect")]
-    #[public(Read, Inspection)]
+    #[public(Read, inspected::Entity)]
     async fn inspect(&self) -> serde_json::Value {
         json!({
             "lazy": matches!(current_executor(), Some(SeaOrmExecutor::Lazy(_))),

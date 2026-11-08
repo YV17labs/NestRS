@@ -1,7 +1,7 @@
 //! What `#[expose]` emits on a relation against Postgres: the batches read through
-//! `Repo`, so SQL decides the rows, and each field masks the columns by its own
-//! selection, a `.fields` grant narrower than the wire type's non-null columns
-//! included. `tests/integration/graphql/relations.rs` holds the rule.
+//! `Repo`, so SQL decides the rows, and each row its loader builds is judged there,
+//! a column a `.fields` grant withholds reading `null` whatever the selection.
+//! `tests/integration/graphql/relations.rs` holds the rule.
 
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{injectable, module};
@@ -34,9 +34,9 @@ pub(crate) mod writer {
         pub id: Uuid,
         #[expose]
         pub name: String,
-        #[expose]
+        #[expose(nullable)]
         pub email: String,
-        #[expose]
+        #[expose(nullable)]
         pub org: i32,
         #[sea_orm(has_many)]
         #[expose]
@@ -60,7 +60,7 @@ pub(crate) mod book {
         pub id: Uuid,
         #[expose]
         pub title: String,
-        #[expose]
+        #[expose(nullable)]
         pub isbn: String,
         #[expose]
         pub writer_id: Uuid,
@@ -139,8 +139,11 @@ fn ability_of(role: &str) -> nest_rs_authz::Ability {
         "member" => {
             ab.can(Action::Read, writer::Entity)
                 .fields([writer::Column::Id, writer::Column::Name]);
-            ab.can(Action::Read, book::Entity)
-                .fields([book::Column::Id, book::Column::Title]);
+            ab.can(Action::Read, book::Entity).fields([
+                book::Column::Id,
+                book::Column::Title,
+                book::Column::WriterId,
+            ]);
         }
         // Narrowly, and the writers of its own org alone.
         "org_member" => {
@@ -229,17 +232,10 @@ async fn boot() -> TestApp {
         .expect("the schema boots")
 }
 
-/// Every refusal of `answer` says one thing, and no value of the row.
+/// `answer` resolved with no error and holds no value its grant withholds.
 #[track_caller]
-fn assert_refused(answer: &Value, fields: &[&str]) {
-    let errors = answer["errors"]
-        .as_array()
-        .unwrap_or_else(|| panic!("a refusal: {answer}"));
-    assert!(!errors.is_empty(), "{answer}");
-    for error in errors {
-        assert_eq!(error["extensions"]["code"], "FORBIDDEN", "{answer}");
-        assert_eq!(error["extensions"]["fields"], json!(fields), "{answer}");
-    }
+fn assert_withheld(answer: &Value) {
+    assert!(answer.get("errors").is_none(), "{answer}");
     let text = answer.to_string();
     assert!(
         !text.contains(ADA_EMAIL) && !text.contains(ISBN),
@@ -276,9 +272,13 @@ async fn a_has_one_answers_what_its_grant_allows() {
     assert!(served.get("errors").is_none(), "{served}");
     assert_eq!(first_book(&served)["writer"]["name"], "Ada", "{served}");
 
-    let refused = answer(&app, "member", "{ probeBooks { id writer { email } } }").await;
-    assert_refused(&refused, &["email"]);
-    assert_eq!(first_book(&refused)["writer"], Value::Null, "{refused}");
+    let withheld = answer(&app, "member", "{ probeBooks { id writer { email } } }").await;
+    assert_withheld(&withheld);
+    assert_eq!(
+        first_book(&withheld)["writer"],
+        json!({ "email": null }),
+        "{withheld}"
+    );
 
     let whole = answer(&app, "reader", "{ probeBooks { id writer { email } } }").await;
     assert!(whole.get("errors").is_none(), "{whole}");
@@ -303,13 +303,18 @@ async fn a_has_many_answers_what_its_grant_allows() {
     assert_eq!(edges[0]["node"]["title"], "Sketches", "{served}");
     assert_eq!(edges[0]["cursor"], FIRST_BOOK, "{served}");
 
-    let refused = answer(
+    let withheld = answer(
         &app,
         "member",
         "{ probeWriters { id books { edges { node { isbn } } } } }",
     )
     .await;
-    assert_refused(&refused, &["isbn"]);
+    assert_withheld(&withheld);
+    assert_eq!(
+        writer_named(&withheld, ADA)["books"]["edges"][0]["node"]["isbn"],
+        Value::Null,
+        "{withheld}"
+    );
 
     let whole = answer(
         &app,
@@ -334,10 +339,10 @@ async fn two_aliases_read_through_one_batch_each_answer_their_own_selection() {
         "{ probeBooks { id granted: writer { name } withheld: writer { email } } }",
     )
     .await;
-    assert_refused(&read, &["email"]);
+    assert_withheld(&read);
     let book = first_book(&read);
     assert_eq!(book["granted"]["name"], "Ada", "{read}");
-    assert_eq!(book["withheld"], Value::Null, "{read}");
+    assert_eq!(book["withheld"], json!({ "email": null }), "{read}");
 
     let read = answer(
         &app,
@@ -345,7 +350,14 @@ async fn two_aliases_read_through_one_batch_each_answer_their_own_selection() {
         "{ probeWriters { id granted: books(first: 1) { nodes { title } } withheld: books(first: 1) { nodes { isbn } } } }",
     )
     .await;
-    assert_refused(&read, &["isbn"]);
+    assert_withheld(&read);
+    let writer = writer_named(&read, ADA);
+    assert_eq!(writer["granted"]["nodes"][0]["title"], "Sketches", "{read}");
+    assert_eq!(
+        writer["withheld"]["nodes"][0]["isbn"],
+        Value::Null,
+        "{read}"
+    );
 
     assert_no_error_line(&logs);
 }

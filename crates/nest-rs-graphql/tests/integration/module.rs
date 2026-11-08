@@ -4,7 +4,8 @@
 //! mounts no schema.
 
 use nest_rs_core::{
-    App, ContainerBuilder, Discoverable, Discovery, Module, Registering, module, target,
+    App, AppLifecycle, Collecting, ContainerBuilder, Discoverable, Discovery, Module, Registering,
+    module, target,
 };
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_http::{HttpConfig, HttpEndpointMeta, HttpModule};
@@ -277,6 +278,77 @@ async fn a_resolver_seeded_with_no_transport_is_named_at_run() {
 
     let unserved = logs.expect_one(target::APP, UNSERVED);
     assert_eq!(unserved.field("import").as_deref(), Some("GraphqlModule"));
+}
+
+/// Registers the host itself beside its module, which mounts what a `#[module]`
+/// lists: what the line above says to import is here, and the edge's own line
+/// takes over.
+struct HandRegistersPingBesideGraphql;
+
+impl Module for HandRegistersPingBesideGraphql {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<GraphqlModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        <PingResolver as Discoverable>::register(builder.import::<GraphqlModule>())
+    }
+}
+
+#[module(imports = [
+    HttpModule::for_root(HttpConfig {
+        host: "127.0.0.1".into(),
+        port: 0,
+        ..HttpConfig::default()
+    }),
+    HandRegistersPingBesideGraphql,
+])]
+struct HandRegisteredPingOnTheLoopback;
+
+#[tokio::test]
+async fn a_resolver_registered_by_hand_beside_its_module_is_told_to_list_it() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<HandRegistersPingBesideGraphql>()
+        .build()
+        .await
+        .expect("the module boots");
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ ping }" }))
+        .send()
+        .await;
+    let body = resp.0.into_body().into_string().await.unwrap_or_default();
+    assert!(body.contains("ping") && body.contains("errors"), "{body}");
+    let skipped = logs.find(
+        nest_rs_graphql::TARGET,
+        "unreachable resolver skipped from the GraphQL schema",
+    );
+    let ping = skipped
+        .iter()
+        .find(|line| line.field("host").as_deref() == Some("PingResolver"))
+        .unwrap_or_else(|| panic!("the host is not said: {skipped:?}"));
+    assert_eq!(ping.level, "warn");
+
+    let logs = LogCapture::install();
+    let app = App::builder()
+        .module::<HandRegisteredPingOnTheLoopback>()
+        .build()
+        .await
+        .expect("the module boots");
+    let lifecycle = app
+        .container()
+        .get::<AppLifecycle>()
+        .expect("every app is seeded its lifecycle");
+    let running = tokio::spawn(app.run());
+    assert!(lifecycle.ready().await, "the app serves");
+    running.abort();
+    logs.expect_none(target::APP, UNSERVED);
+    logs.expect_none(
+        target::APP,
+        "host not served: its edge does not mount an instance",
+    );
 }
 
 #[module(imports = [GraphqlModule])]

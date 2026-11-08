@@ -5,7 +5,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_core::{App, AppLifecycle, Module, injectable, module, target};
+use nest_rs_core::{
+    App, AppLifecycle, Collecting, ContainerBuilder, Module, Registering, injectable, module,
+    target,
+};
 use nest_rs_queue::{BoundConsumer, Jobs, QueueConfig, QueueModule, processor, queue};
 use nest_rs_testing::{HeadlessApp, LogCapture};
 use serde::{Deserialize, Serialize};
@@ -226,6 +229,59 @@ async fn a_process_host_seeded_beside_the_worker_is_served() {
 
     let mounted = logs.expect_one(nest_rs_queue::TARGET, "mounted");
     assert_eq!(mounted.field("host").as_deref(), Some("ReindexProcessor"));
+    logs.expect_none(
+        target::APP,
+        "host not served: its edge's transport is not attached",
+    );
+}
+
+/// Registers the host itself beside the worker, which reads what a `#[module]`
+/// lists: what the line above says to import is here, and the worker's own line
+/// takes over.
+struct HandRegistersTheProcessorBesideTheWorker;
+
+impl Module for HandRegistersTheProcessorBesideTheWorker {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<QueueModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<QueueModule>().provide(ReindexProcessor)
+    }
+}
+
+#[tokio::test]
+async fn a_process_host_registered_by_hand_beside_the_worker_is_told_to_list_it() {
+    let logs = LogCapture::install();
+    let memory = Memory::new(&PLAIN, Duration::from_secs(30));
+    let app = App::builder()
+        .provide(BoundConsumer::new(memory.consumer()))
+        .provide(Jobs::new(Arc::new(memory.clone())))
+        .module::<HandRegistersTheProcessorBesideTheWorker>()
+        .build()
+        .await
+        .expect("the app boots");
+    let lifecycle = app
+        .container()
+        .get::<AppLifecycle>()
+        .expect("every app is seeded its lifecycle");
+    let running = tokio::spawn(app.run());
+    assert!(lifecycle.ready().await, "the worker runs");
+    running.abort();
+
+    let skipped = logs.find(
+        nest_rs_queue::TARGET,
+        "skipped #[process] method: no instance of the provider in this app's container",
+    );
+    let reindex = skipped
+        .iter()
+        .find(|line| line.field("host").as_deref() == Some("ReindexProcessor"))
+        .unwrap_or_else(|| panic!("the host is not said: {skipped:?}"));
+    assert_eq!(reindex.field("method").as_deref(), Some("reindex"));
+    assert_eq!(
+        reindex.field("cause").as_deref(),
+        Some("registered_outside_modules")
+    );
     logs.expect_none(
         target::APP,
         "host not served: its edge's transport is not attached",

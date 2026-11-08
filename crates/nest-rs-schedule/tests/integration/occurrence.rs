@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, injectable, module};
+use nest_rs_core::{
+    AccessGraphError, App, Collecting, ContainerBuilder, Module, Registering, injectable, module,
+};
 use nest_rs_schedule::{
     BACKEND_REMEDY, Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError, Replicas,
     ScheduleModule, ScheduledMethod, Scheduler, scheduled,
@@ -247,15 +249,79 @@ struct ReadsTheLock {
 #[module(providers = [ReadsTheLock])]
 struct LockWithNoBinding;
 
+/// `AppLockModule` below lists the lock in this binary, a module this app does
+/// not reach, so the access graph says it: the port's line all the same. With
+/// no module listing it, `tests/unlisted` holds the unmet dependency's.
 #[tokio::test]
 async fn a_provider_injecting_the_lock_with_no_binding_is_told_the_binding() {
-    let Err(refused) = nest_rs_core::App::builder()
-        .module::<LockWithNoBinding>()
+    let Err(refused) = App::builder().module::<LockWithNoBinding>().build().await else {
+        panic!("no module binds the lock");
+    };
+    let violation = refused
+        .downcast_ref::<AccessGraphError>()
+        .unwrap_or_else(|| panic!("not an access violation: {refused:#}"));
+    assert_eq!(violation.remedy, Some(BACKEND_REMEDY), "{violation}");
+    assert!(
+        violation.to_string().ends_with(BACKEND_REMEDY),
+        "{violation}"
+    );
+}
+
+/// A lock the app binds itself, in a module of its own.
+#[injectable]
+#[derive(Default)]
+struct AppLock;
+
+#[async_trait::async_trait]
+impl OccurrenceLock for AppLock {
+    async fn claim(&self, _: &Occurrence) -> Result<OccurrenceClaim, OccurrenceLockError> {
+        Ok(OccurrenceClaim::Claimed)
+    }
+
+    async fn claimed(&self, _: &str) -> Result<bool, OccurrenceLockError> {
+        Ok(false)
+    }
+}
+
+#[module(providers = [AppLock as dyn OccurrenceLock])]
+struct AppLockModule;
+
+#[module(imports = [AppLockModule, LockWithNoBinding])]
+struct LockListedBesideItsReader;
+
+/// The module listing the lock is the fix, whatever the port names: a binding
+/// imported beside it would register the key twice.
+#[tokio::test]
+async fn a_reader_beside_the_module_listing_the_lock_is_told_that_module() {
+    let Err(refused) = App::builder()
+        .module::<LockListedBesideItsReader>()
         .build()
         .await
     else {
-        panic!("no module binds the lock");
+        panic!("the reader imports nothing");
     };
-    let said = format!("{refused:#}");
-    assert!(said.ends_with(BACKEND_REMEDY), "{said}");
+    let violation = refused
+        .downcast_ref::<AccessGraphError>()
+        .unwrap_or_else(|| panic!("not an access violation: {refused:#}"));
+    assert_eq!(
+        (violation.consumer, violation.owner),
+        ("ReadsTheLock", "AppLockModule")
+    );
+    let said = violation.to_string();
+    assert!(said.contains("— add `AppLockModule` to"), "{said}");
+    assert!(!said.contains(BACKEND_REMEDY), "{said}");
+}
+
+#[module(imports = [AppLockModule], providers = [ReadsTheLock])]
+struct ReaderOverItsLock;
+
+#[tokio::test]
+async fn following_that_sentence_boots_on_the_apps_lock() {
+    let app = App::builder()
+        .module::<ReaderOverItsLock>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("the import is the fix: {refused:#}"));
+    assert!(app.container().get::<ReadsTheLock>().is_some());
+    assert!(app.container().get::<AppLock>().is_some());
 }

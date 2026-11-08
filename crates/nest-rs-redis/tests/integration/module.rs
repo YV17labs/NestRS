@@ -410,6 +410,42 @@ struct ReadsTheConnection {
 #[module(providers = [ReadsTheConnection])]
 struct NoConnectionModule;
 
+#[expect(
+    dead_code,
+    reason = "the connection is declared for the container to resolve, never read"
+)]
+#[nest_rs_core::injectable]
+struct ReadsTheCache {
+    #[inject]
+    conn: std::sync::Arc<RedisConnection<Cache>>,
+}
+
+#[module(providers = [ReadsTheCache])]
+struct NoCacheModule;
+
+/// A remedy is filed by key, and a named instance's key is the app's type, so
+/// the refusal is the kernel's: it names the instance, never the module.
+#[tokio::test]
+async fn a_provider_injecting_a_named_instance_no_module_opens_is_refused_naming_it() {
+    let Err(refused) = App::builder().module::<NoCacheModule>().build().await else {
+        panic!("no module opens the instance");
+    };
+    let missing = refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(
+        (missing.consumer, missing.remedy),
+        ("ReadsTheCache", None),
+        "{missing}"
+    );
+    let said = missing.to_string();
+    assert!(
+        said.contains("depends on `RedisConnection<Cache>`")
+            && said.contains("Import the module that opens it"),
+        "{said}"
+    );
+}
+
 #[tokio::test]
 async fn a_provider_injecting_a_connection_no_module_opens_is_refused_naming_the_module() {
     let Err(refused) = App::builder().module::<NoConnectionModule>().build().await else {

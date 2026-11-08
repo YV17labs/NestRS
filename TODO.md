@@ -241,9 +241,11 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   framework's, a break of every service's `?`. *seen*
 
 **Configuration and telemetry**
-- Several boot refusals are read, not run (`dyn OccurrenceLock`,
-  `dyn OutboxStore`, `dyn UnitOfWork`, `Jobs` beside a reached module). Close:
-  one fixture per port. *read*
+- A provider injecting a named instance's resource with no import
+  (`RedisConnection<Cache>`) is refused in the kernel's words, naming the
+  instance and no module: a remedy is filed by key, and that key is the app's
+  type. Close: a probe at each `#[inject]` site reading a remedy the type
+  carries, a change to every `#[injectable]` expansion. *seen*
 - The new plaintext `warn` lines (`redis://`, `sslmode=disable`, OTLP
   `http://`) were seen by unit tests only, never on a live plaintext server.
   *read*

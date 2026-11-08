@@ -914,17 +914,80 @@ struct InjectsTheBinding {
 #[module(providers = [InjectsTheBinding])]
 struct NoBindingModule;
 
+/// `AppUnitsModule` below lists the port in this binary, a module this app does
+/// not reach, so the access graph says it: the port's line all the same. With
+/// no module listing it, `tests/unlisted` holds the unmet dependency's.
 #[tokio::test]
 async fn a_provider_injecting_the_port_with_no_binding_is_refused_naming_the_first_party_one() {
     let Err(refused) = App::builder().module::<NoBindingModule>().build().await else {
         panic!("nothing binds the port");
     };
-    let missing = refused
-        .downcast::<nest_rs_core::MissingDependencyError>()
-        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
-    assert_eq!(missing.remedy, Some(BACKEND_REMEDY));
+    let violation = refused
+        .downcast::<nest_rs_core::AccessGraphError>()
+        .unwrap_or_else(|refused| panic!("not an access violation: {refused:#}"));
+    assert_eq!(violation.remedy, Some(BACKEND_REMEDY));
     assert!(
         BACKEND_REMEDY.contains("`nest_rs::seaorm::SeaOrmDatabaseModule`"),
         "{BACKEND_REMEDY}"
     );
+}
+
+/// A unit of work the app binds itself, in a module of its own.
+#[injectable]
+#[derive(Default)]
+struct AppUnits;
+
+impl UnitOfWork for AppUnits {
+    fn open(&self, _: &UnitSpec) -> Result<Box<dyn OpenUnit>, Unhonoured> {
+        Err(Unhonoured::deterministic(
+            "the app's units open nothing here",
+        ))
+    }
+
+    fn settle_net(&self) -> Duration {
+        Duration::from_secs(16)
+    }
+}
+
+#[module(providers = [AppUnits as dyn UnitOfWork])]
+struct AppUnitsModule;
+
+#[module(imports = [AppUnitsModule, NoBindingModule])]
+struct UnitsListedBesideTheirReader;
+
+/// The module listing the port is the fix, whatever the port names: a driver's
+/// binding imported beside it would register the key twice.
+#[tokio::test]
+async fn a_reader_beside_the_module_listing_the_port_is_told_that_module() {
+    let Err(refused) = App::builder()
+        .module::<UnitsListedBesideTheirReader>()
+        .build()
+        .await
+    else {
+        panic!("the reader imports nothing");
+    };
+    let violation = refused
+        .downcast::<nest_rs_core::AccessGraphError>()
+        .unwrap_or_else(|refused| panic!("not an access violation: {refused:#}"));
+    assert_eq!(
+        (violation.consumer, violation.owner),
+        ("InjectsTheBinding", "AppUnitsModule")
+    );
+    let said = violation.to_string();
+    assert!(said.contains("— add `AppUnitsModule` to"), "{said}");
+    assert!(!said.contains(BACKEND_REMEDY), "{said}");
+}
+
+#[module(imports = [AppUnitsModule], providers = [InjectsTheBinding])]
+struct ReaderOverItsUnits;
+
+#[tokio::test]
+async fn following_that_sentence_boots_on_the_apps_units() {
+    let app = App::builder()
+        .module::<ReaderOverItsUnits>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("the import is the fix: {refused:#}"));
+    assert!(app.container().get::<InjectsTheBinding>().is_some());
+    assert!(app.container().get::<AppUnits>().is_some());
 }

@@ -123,6 +123,7 @@ mod guard_outside_for_root {
 
     /// `store_the_app_binds` below links a module listing the store, one this app
     /// does not reach, so the access graph says it: the crate's line, all the same.
+    /// With no module listing it, `tests/unlisted` holds the unmet dependency's.
     #[tokio::test]
     async fn a_provider_injecting_the_store_with_no_port_imported_is_told_the_import() {
         let Err(refused) = App::builder().module::<StoreWithoutThePort>().build().await else {

@@ -275,7 +275,7 @@ says what its `check` attaches at a carried unit of that posture, by default the
 gated unit reads the ability its request attached, and the rules a gated unit runs under
 still never depend on where the guard is listed. A route keeps one chain,
 `validate_gate_reached`; every carried unit's site calls
-`validate_carried_ability_reached` with its handler's posture and whether a class gate
+`validate_carried_unit` with its handler's posture and whether a class gate
 reads the ability, and a guard at the unit attaching for another posture alone, with
 nothing ahead of it or at the request attaching one, is refused with its name, the `401`
 every call would answer, and where to bind it, class gate or not. A field resolver reads

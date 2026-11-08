@@ -61,13 +61,15 @@ pub(crate) fn contained(condition: Condition) -> Result<Option<Expr>, Uncontaine
 
 /// Refuses a value of `active` whose enum type name would leave its quotes: the one
 /// text a bound value writes into the statement.
-pub(crate) fn contained_values<A: ActiveModelTrait>(active: &A) -> Result<(), Uncontained> {
-    <A::Entity as EntityTrait>::Column::iter().try_for_each(|column| {
-        active
-            .get(column)
-            .into_value()
-            .map_or(Ok(()), |value| contained_value(&value))
-    })
+pub(crate) fn contained_values<A: ActiveModelTrait>(active: &A) -> Result<(), DbErr> {
+    <A::Entity as EntityTrait>::Column::iter()
+        .try_for_each(|column| {
+            active
+                .get(column)
+                .into_value()
+                .map_or(Ok(()), |value| contained_value(&value))
+        })
+        .map_err(refused::<A::Entity>)
 }
 
 /// Refuses an order by field whose values `contained_value` refuses: sea-query writes

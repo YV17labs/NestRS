@@ -156,13 +156,29 @@ fn unattached(label: &str, guard: &str, expected: crate::PrincipalClaim) -> Stri
     )
 }
 
+/// Validate a unit an in-band edge carries, declaring `posture`, whose `request` runs
+/// ahead of its `unit` chain: the principals its guards require
+/// (`validate_carried_chain`), then the ability what reads one finds attached
+/// (`validate_carried_ability_reached`), `class_gated` when its posture declares a
+/// class gate.
+pub fn validate_carried_unit(
+    label: &str,
+    posture: Posture,
+    class_gated: bool,
+    unit: &[ResolvedLayer<dyn Guard>],
+    request: impl Fn() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
+) -> Result<(), String> {
+    validate_carried_chain(label, unit, &request)?;
+    validate_carried_ability_reached(label, posture, class_gated, unit, request)
+}
+
 /// [`validate_guard_chain`] on a unit an in-band edge carries, whose `request`
 /// runs ahead of its `unit` chain: no authentication guard follows an authorization
 /// guard across the two, and each guard of `unit` requiring a principal finds a
 /// guard attaching it in either. The closure composes the request only for a chain
 /// holding such a guard, and a guard doing without its principal reads what it
 /// finds.
-pub fn validate_carried_chain(
+fn validate_carried_chain(
     label: &str,
     unit: &[ResolvedLayer<dyn Guard>],
     request: impl FnOnce() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
@@ -214,7 +230,7 @@ pub fn validate_gate_reached(
 /// attaching one, for every call would answer `401`; or a class gate (`class_gated`) no
 /// guard attaches it for, at the unit or its request, for every call would answer
 /// `500`. The closure composes the request only where the unit's chain answers neither.
-pub fn validate_carried_ability_reached(
+fn validate_carried_ability_reached(
     label: &str,
     posture: Posture,
     class_gated: bool,

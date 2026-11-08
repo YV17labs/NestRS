@@ -362,7 +362,10 @@ impl Ability {
     /// [`missing_scopes`](Self::missing_scopes) at a site gated on `Manage`, no
     /// denial barring it.
     fn missing_scopes_of_every_action(&self, subject: TypeId) -> Vec<String> {
-        let wildcard = self.withheld.get(&(Action::Manage, subject));
+        let widest = self
+            .withheld
+            .get(&(Action::Manage, subject))
+            .and_then(|grants| fewest(grants.iter()));
         let mut choices: Vec<&[Vec<String>]> = Vec::new();
         let mut needs_the_wildcard = false;
         for action in Action::CONCRETE {
@@ -371,11 +374,10 @@ impl Ability {
             }
             match self.withheld.get(&(action, subject)) {
                 Some(own) if !own.is_empty() => choices.push(own),
-                _ if wildcard.is_some_and(|grants| !grants.is_empty()) => needs_the_wildcard = true,
+                _ if widest.is_some() => needs_the_wildcard = true,
                 _ => return Vec::new(),
             }
         }
-        let widest = wildcard.and_then(|grants| fewest(grants.iter()));
         if needs_the_wildcard {
             return widest.cloned().unwrap_or_default();
         }

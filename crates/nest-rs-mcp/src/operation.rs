@@ -21,7 +21,7 @@ use nest_rs_core::{
 };
 use nest_rs_guards::__private::{
     GuardSpec, NeededPrincipal, RefusalMark, carried_stage_idle, check_guards, identifying_guard,
-    resolve_global_guards, validate_carried_ability_reached, validate_carried_chain,
+    resolve_global_guards, validate_carried_unit,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::carried_request_chain;
@@ -185,8 +185,7 @@ pub fn operation_guard_stage(
         _ => carried_request_chain::<McpView>(container, &label)
             .map_err(|unresolved| unresolved.to_string()),
     };
-    validate_carried_chain(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
-    validate_carried_ability_reached(
+    validate_carried_unit(
         &label,
         handler.posture(),
         declared.class_gated,

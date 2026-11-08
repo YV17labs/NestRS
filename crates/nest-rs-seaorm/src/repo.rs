@@ -12,7 +12,7 @@ use sea_orm::{
 };
 
 use crate::column_default::fill_column_defaults;
-use crate::contained::{contained_values, refused};
+use crate::contained::contained_values;
 use crate::error::{AtomicDbError, write_refused};
 use crate::executor::{SeaOrmExecutor, current_executor};
 use crate::insertion::Insertion;
@@ -409,7 +409,7 @@ impl<E: EntityTrait> Repo<E> {
         fill_column_defaults::<E>(&mut active);
         holding_key_of::<E>(&active, key)?;
         let active = E::ActiveModel::before_save(active, &conn, true).await?;
-        contained_values(&active).map_err(refused::<E>)?;
+        contained_values(&active)?;
         let held = holding_key_of::<E>(&active, key)?;
         let entity = E::default().table_name();
         // sea-orm 2.0's single-row `exec_with_returning`, `TryInsert`'s included,
@@ -482,7 +482,7 @@ impl<E: EntityTrait> Repo<E> {
             _ => scope_for::<E>(action),
         };
         let active = A::before_save(active, &conn, false).await?;
-        contained_values(&active).map_err(refused::<E>)?;
+        contained_values(&active)?;
         let key = active.get_primary_key_value();
         let update = Update::one(active).validate()?;
         // Setting nothing, sea-orm sends no `UPDATE` and reads the row back by its key
@@ -579,7 +579,7 @@ where
     E::Model: IntoActiveModel<E::ActiveModel>,
 {
     let active = E::ActiveModel::before_save(active, conn, true).await?;
-    contained_values(&active).map_err(refused::<E>)?;
+    contained_values(&active)?;
     let model = E::insert(active).exec_with_returning(conn).await?;
     E::ActiveModel::after_save(model, conn, true).await
 }

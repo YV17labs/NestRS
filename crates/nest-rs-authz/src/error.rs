@@ -29,24 +29,7 @@ pub struct MalformedRuleError {
     /// `"grant"` (a `can`) or `"denial"` (a `cannot`) — a denial is the
     /// fail-open case, a grant merely the silent one.
     pub kind: &'static str,
-    defect: Defect,
-}
-
-impl MalformedRuleError {
-    /// The rule `kind` for `action` on `subject`, refused for `defect`.
-    pub(crate) fn new(
-        action: Action,
-        subject: &'static str,
-        kind: &'static str,
-        defect: Defect,
-    ) -> Self {
-        Self {
-            action,
-            subject,
-            kind,
-            defect,
-        }
-    }
+    pub(crate) defect: Defect,
 }
 
 /// What made a rule malformed, which its refusal says.

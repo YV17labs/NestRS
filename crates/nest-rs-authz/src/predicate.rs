@@ -109,10 +109,7 @@ impl RelatedPredicate {
         let from_tbl = def.from_tbl.sea_orm_table().clone();
         let to_tbl = def.to_tbl.sea_orm_table().clone();
 
-        let mut where_cond = self.sub_condition.clone();
-        if let Some(on) = &self.on {
-            where_cond = where_cond.add(on.clone());
-        }
+        let where_cond = self.sub_condition.clone().add_option(self.on.clone());
 
         match def.rel_type {
             RelationType::HasOne => {

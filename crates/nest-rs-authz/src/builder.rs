@@ -326,12 +326,12 @@ impl<S: Subject> RuleSpec<'_, S> {
 impl<S: Subject, K> RuleSpec<'_, S, K> {
     /// Remember this rule as refused for `defect`, so the build fails.
     fn malformed(&mut self, defect: Defect) {
-        self.builder.malformed.push(MalformedRuleError::new(
-            self.action,
-            std::any::type_name::<S>(),
-            if self.inverted { "denial" } else { "grant" },
+        self.builder.malformed.push(MalformedRuleError {
+            action: self.action,
+            subject: std::any::type_name::<S>(),
+            kind: if self.inverted { "denial" } else { "grant" },
             defect,
-        ));
+        });
     }
 }
 

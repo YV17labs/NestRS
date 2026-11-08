@@ -148,19 +148,15 @@ impl<E: EntityTrait> RepoSelect<E> {
         self.map_select(|select| select.filter(condition))
     }
 
-    /// The query, refused for `why`: it builds `FALSE` and runs nothing.
-    fn refusing(self, why: Uncontained) -> Self {
+    /// The query, refused for `why` when there is one: it then builds `FALSE` and runs
+    /// nothing.
+    fn refusing(self, why: Option<Uncontained>) -> Self {
+        if why.is_none() {
+            return self;
+        }
         Self {
             select: self.select.filter(Condition::any()),
-            refused: self.refused.or(Some(why)),
-        }
-    }
-
-    /// The query, refused for `why` when there is one.
-    fn refusing_for(self, why: Option<Uncontained>) -> Self {
-        match why {
-            Some(why) => self.refusing(why),
-            None => self,
+            refused: self.refused.or(why),
         }
     }
 
@@ -209,7 +205,7 @@ impl<E: EntityTrait> RepoSelect<E> {
         match contained(condition.into_condition()) {
             Ok(None) => self,
             Ok(Some(operand)) => self.within(operand),
-            Err(why) => self.refusing(why),
+            Err(why) => self.refusing(Some(why)),
         }
     }
 
@@ -218,7 +214,7 @@ impl<E: EntityTrait> RepoSelect<E> {
     pub fn order_by(self, column: E::Column, order: Order) -> Self {
         let refusal = contained_order(&order).err();
         self.map_select(|select| select.order_by(column, order))
-            .refusing_for(refusal)
+            .refusing(refusal)
     }
 
     /// Orders the rows by `column`, ascending.
@@ -235,7 +231,7 @@ impl<E: EntityTrait> RepoSelect<E> {
     pub fn order_by_with_nulls(self, column: E::Column, order: Order, nulls: NullOrdering) -> Self {
         let refusal = contained_order(&order).err();
         self.map_select(|select| select.order_by_with_nulls(column, order, nulls))
-            .refusing_for(refusal)
+            .refusing(refusal)
     }
 
     /// Keeps at most `limit` rows; `None` keeps them all.

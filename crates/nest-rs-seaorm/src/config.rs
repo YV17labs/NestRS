@@ -362,7 +362,9 @@ impl SeaOrmConfig {
     ///
     /// The one constructor every path reaches — the app's pool,
     /// [`connect_from_env`](crate::connect_from_env), a tool or a test
-    /// opening a connection of its own — so each refuses what the boot does:
+    /// opening a connection of its own — so each says once at `warn` a
+    /// plaintext opening a deployed profile wrote, as the pool does, and
+    /// refuses what the boot does:
     /// an empty URL, a mode that encrypts without verifying, a certificate file
     /// the URL or a libpq variable names that this process cannot read, and a
     /// connect budget or a pool bound outside its range, or a minimum above the
@@ -380,6 +382,7 @@ impl SeaOrmConfig {
         let tls = self.tls()?;
         let budget = Self::CONNECT_TIMEOUT.check(Self::NAMESPACE, self.connect_timeout)?;
         let (most, least) = self.pool_bounds()?;
+        warn_when_open(&tls(self.parsed()?));
         let mut opts = ConnectOptions::new(self.url.expose_secret().clone());
         opts.map_sqlx_postgres_opts(tls);
         opts.max_connections(most);
@@ -442,11 +445,11 @@ fn unverified_mode(mode: PgSslMode) -> &'static str {
     }
 }
 
-/// One `warn` when a deployment opens `options`, what every connection of the
-/// pool opens with, in plaintext off this machine: honoured, since `sslmode=disable`
-/// or libpq's `PGSSLMODE` wrote it. A server on the loopback or a socket is
-/// reached over no network, a sidecar proxy's common shape.
-pub(crate) fn warn_when_open(options: &PgConnectOptions) {
+/// One `warn` when a deployment builds `options`, what every connection of an
+/// opening opens with, in plaintext off this machine: honoured, since
+/// `sslmode=disable` or libpq's `PGSSLMODE` wrote it. A server on the loopback
+/// or a socket is reached over no network, a sidecar proxy's common shape.
+fn warn_when_open(options: &PgConnectOptions) {
     if matches!(options.get_ssl_mode(), PgSslMode::Disable)
         && crate::module::socket(options).is_none()
         && !is_loopback(options.get_host())
@@ -530,6 +533,23 @@ mod tests {
             ] {
                 assert!(pinned(url).connect_options().is_ok(), "{url}");
             }
+            Ok(())
+        });
+    }
+
+    /// The one constructor files the line, so a connection a tool or a test
+    /// opens of its own says it as the app's pool does, once per opening built.
+    #[test]
+    fn options_a_tool_builds_for_plaintext_off_this_machine_say_so_once() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::Environment::var_name(), "production");
+            let config = pinned("postgres://app:s3cret@db.internal:5433/app?sslmode=disable");
+            let logs = nest_rs_testing::LogCapture::install();
+            config
+                .connect_options()
+                .expect("a plaintext URL is honoured");
+            let line = logs.expect_one(crate::target::ORM, PLAINTEXT_OPEN);
+            assert_eq!(line.field("endpoint").as_deref(), Some("db.internal:5433"));
             Ok(())
         });
     }

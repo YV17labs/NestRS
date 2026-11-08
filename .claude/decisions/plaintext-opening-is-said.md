@@ -65,3 +65,15 @@ shape. Held by each driver's unit tests.
   fact; the line would fill a log during an outage.
 - **A setting that silences the line.** An opening is visible by rule; closing it
   is writing `rediss://`, `sslmode=verify-full` or `https://`.
+
+## 2026-11-08 — Postgres says it where the options are built
+
+The owner's mandate of 2026-11-07 closes the limit the entry named: a connection a
+tool or a test opened itself from `SeaOrmConfig::connect_options` said nothing, so a
+migration tool reaching production in plaintext was the one opening no line named.
+The line moves into `connect_options`, the one constructor every Postgres opening
+goes through — the app's pool, `connect_from_env`, `EphemeralDatabase` and a tool's
+own — and leaves the pool's `connect`, so each opening built says it once. A caller
+building options it never connects with reads the line too: the deployment wrote
+plaintext, and that is what the line states. **Refused:** a public opening function
+beside `connect_options`, a second way to open what the constructor already builds.

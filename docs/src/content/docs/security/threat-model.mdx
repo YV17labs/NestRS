@@ -56,9 +56,9 @@ still never leaves the process in plaintext with a token on it.
 A plaintext opening is a visible line. A deployed profile — staging, production,
 or none declared — files one `warn` for each, naming the endpoint and never what
 its URL carries: Postgres when the pool opens, Redis when each instance opens,
-OTLP for each signal it exports, storage when the store opens; a connection you
-open yourself from `SeaOrmConfig::connect_options` says nothing, the open being
-yours. What reaches this machine's loopback or a socket crosses no network, the
+OTLP for each signal it exports, storage when the store opens, and a connection
+you open yourself as `SeaOrmConfig::connect_options` builds its options, which
+every Postgres opening goes through. What reaches this machine's loopback or a socket crosses no network, the
 common shape of a sidecar or an authenticating proxy, and says nothing; storage
 alone says it there too,
 since `ALLOW_HTTP` is a setting a deployment opts into anywhere, and a Sentinel or

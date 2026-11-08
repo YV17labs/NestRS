@@ -267,7 +267,6 @@ async fn connect(
     let probe = config.probe_options()?;
     let root = config.trust_root();
     let endpoint = endpoint(&probe);
-    crate::config::warn_when_open(&probe);
     let budget = options
         .get_connect_timeout()
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT);
@@ -489,8 +488,8 @@ mod tests {
             drop(logs);
 
             let config = SeaOrmConfig::load().expect("the variable reads");
-            let options = config.app_connect_options().expect("the app's pool");
             let logs = nest_rs_testing::LogCapture::install();
+            let options = config.app_connect_options().expect("the app's pool");
             let app = runtime.block_on(async {
                 tokio::time::timeout(answer_never, connect(&config, options)).await
             });

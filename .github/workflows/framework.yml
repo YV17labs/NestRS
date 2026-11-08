@@ -98,3 +98,22 @@ jobs:
         with:
           tool: cargo-nextest@0.9,just@1
       - run: just test
+
+  # The `not(unix)` branches — Ctrl-C on the way down, a file read without
+  # `O_NONBLOCK` — and the C the TLS and compression crates build: no other job
+  # compiles for Windows. A cold Windows build, so a release branch's push alone.
+  windows:
+    name: windows
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          cache-key: windows
+      - run: cargo check --workspace --all-features --locked

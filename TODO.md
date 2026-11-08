@@ -59,10 +59,18 @@ mutual TLS, are dev container environments of their own (`CLAUDE.md`, *Testing*)
   Figures are relative, never for publication.
 - **The first CI run after the push** is the only proof of a fresh
   `create-bucket.sh`, the dev-services action's `/etc/hosts` mapping, the
-  default stacks on x86_64, and of three jobs no run has started yet:
+  default stacks on x86_64, and of four jobs no run has started yet:
   `Demo`'s `chart` (the render cases, seen green on the host) and `image`
-  (the demo's image), and `Bench`'s `image` for each contestant, whose two
-  NestJS images were never built anywhere.
+  (the demo's image), `Bench`'s `image` for each contestant, whose two
+  NestJS images were never built anywhere, and `Framework`'s `windows`, the
+  one proof that the `not(unix)` branches (`way_down.rs`, `material.rs`,
+  `static-files`' `disk.rs`) and the C of `aws-lc-sys` and `zstd-sys`
+  compile for Windows. Sooner, for the Rust half: `cargo check --target
+  x86_64-pc-windows-msvc` of `nest-rs-core` (every feature) and
+  `nest-rs-config` (its defaults) on any host holding that target's
+  standard library; `nest-rs-static-files` reaches the C through
+  `nest-rs-http`, so it needs a C cross compiler. Nothing runs or tests on
+  Windows.
 - **Postgres mutual TLS never ran live**: `nest-rs-seaorm`'s two `mutual_tls`
   tests. Close: open the `postgres-mutual-tls` dev container environment, set
   `postgres := "mutual-tls"` in `test.just`, `just test e2e`.
@@ -280,8 +288,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 **Docs, bench, tooling**
 - The benchmark figures are 4.0.0's, dated as such on every page. Close: the
   runbook in `bench/` on a dedicated Linux host. *read*
-- Windows is not proven: no job compiles `way_down.rs`'s `not(unix)` branch.
-  *read*
 - Five docs pages exceed the 300-line budget (`guards.mdx`,
   `http/configuration.mdx`, `cli/index.mdx`, `testing/e2e.mdx`,
   `schedule/index.mdx`). Close: split each.

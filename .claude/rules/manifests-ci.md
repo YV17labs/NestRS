@@ -138,7 +138,8 @@ builds the image the chart deploys. `docs.yml` builds the site on a change to
 their host: no workflow lints, audits or runs them, and `bench.yml` builds each
 contestant's image on a release branch's change to the bench's own tree alone, so
 a framework change never turns it red. **What no other job compiles, a release
-branch compiles once**: an image. **A workflow skips only what no build
+branch compiles once**: an image, or a target no other job builds
+(`framework.yml`'s `windows`). **A workflow skips only what no build
 or test reads**: a file under a crate's `src/` is compiled whatever its
 extension, and a docs page a test reads is listed in `framework.yml`'s paths.
 The cargo cache is saved by `main` and `release/**` alone.

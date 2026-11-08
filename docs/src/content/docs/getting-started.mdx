@@ -30,8 +30,9 @@ As with any Rust dependency, `cargo install nest-rs-cli` and your first
 `nestrs run` compile the crate graph once — a few minutes, cached from then on.
 Every build after that is an incremental, sub-second rebuild.
 
-CI proves Linux on x86_64 alone; macOS is run by hand as a development host, and
-no job builds or runs Windows.
+CI proves Linux on x86_64, where every test runs. A release branch also compiles
+every crate for Windows, where nothing is tested or run, and macOS is run by hand
+as a development host.
 
 ## Scaffold and start
 

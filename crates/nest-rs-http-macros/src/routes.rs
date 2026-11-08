@@ -292,13 +292,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(None) => ApiMeta::default(),
             Err(err) => return err.to_compile_error().into(),
         };
-        let answered: Vec<&Type> = match &method.sig.output {
-            ReturnType::Default => Vec::new(),
-            ReturnType::Type(_, ty) => vec![&**ty],
-        }
-        .into_iter()
-        .chain(api.response.as_ref())
-        .collect();
+        let answered: Vec<&Type> = nest_rs_codegen::__private::return_type(&method.sig.output)
+            .into_iter()
+            .chain(api.response.as_ref())
+            .collect();
         handler_consts.push(no_row_answered(&method_name, &cfgs, &answered));
         let deprecation = match api
             .deprecated

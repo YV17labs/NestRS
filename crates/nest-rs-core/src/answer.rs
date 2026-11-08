@@ -16,12 +16,8 @@ pub struct ResultAnswer;
 pub struct ValueAnswer;
 
 /// A `Result` answer kept whole inside the edge's own `Result` — what a split
-/// and a mask hand on, so the edge can still tell the two failures apart.
+/// hands on, so the edge can still tell the two failures apart.
 type Lifted<T, E, X> = Result<Result<T, E>, X>;
-
-/// What [`Answer::mapper`] hands back: `f` applied to the value inside a
-/// `Result` answer, the answer kept whole.
-type Masking<T, E, X, F> = fn(Result<T, E>, F) -> Lifted<T, E, X>;
 
 impl<T, E> Answer<'_, Result<T, E>> {
     /// A `Result` answer with its error lifted out into the edge's own, so a
@@ -44,18 +40,6 @@ impl<T, E> Answer<'_, Result<T, E>> {
         |answer, f| answer.map(f)
     }
 
-    /// Apply `f` to the value inside a `Result` answer — what a mask reads, so
-    /// it masks the row rather than the `Result` around it.
-    pub fn mapper<X, F>(&self) -> Masking<T, E, X, F>
-    where
-        F: FnOnce(T) -> Result<T, X>,
-    {
-        |answer, f| match answer {
-            Ok(value) => f(value).map(Ok),
-            Err(error) => Ok(Err(error)),
-        }
-    }
-
     /// A `Result`.
     pub fn kind(&self) -> ResultAnswer {
         ResultAnswer
@@ -75,11 +59,6 @@ pub trait AnswerFallback {
     where
         F: FnOnce(Self::Value) -> U;
 
-    /// Apply `f` to the answer itself.
-    fn mapper<X, F>(&self) -> fn(Self::Value, F) -> Result<Self::Value, X>
-    where
-        F: FnOnce(Self::Value) -> Result<Self::Value, X>;
-
     /// A value.
     fn kind(&self) -> ValueAnswer;
 }
@@ -94,13 +73,6 @@ impl<R> AnswerFallback for Answer<'_, R> {
     fn map<U, F>(&self) -> fn(R, F) -> U
     where
         F: FnOnce(R) -> U,
-    {
-        |answer, f| f(answer)
-    }
-
-    fn mapper<X, F>(&self) -> fn(R, F) -> Result<R, X>
-    where
-        F: FnOnce(R) -> Result<R, X>,
     {
         |answer, f| f(answer)
     }
@@ -162,18 +134,5 @@ mod tests {
         let value = SearchResult(2);
         let mapped: i32 = Answer(&value).map()(value, |value: SearchResult| value.0);
         assert_eq!(mapped, 2);
-    }
-
-    #[test]
-    fn the_mapper_reaches_the_value_inside_a_result() {
-        let renamed: Renamed<i32> = Ok(1);
-        let mapped: Result<Renamed<i32>, String> =
-            Answer(&renamed).mapper()(renamed, |inner: i32| Ok(inner + 1));
-        assert_eq!(mapped, Ok(Ok(2)));
-
-        let value = SearchResult(2);
-        let mapped: Result<SearchResult, String> =
-            Answer(&value).mapper()(value, |inner: SearchResult| Ok(SearchResult(inner.0 + 1)));
-        assert_eq!(mapped, Ok(SearchResult(3)));
     }
 }

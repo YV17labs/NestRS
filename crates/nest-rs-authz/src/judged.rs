@@ -5,7 +5,7 @@
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use nest_rs_core::__private::{
     AnswerRefusal, Audience, RefusedAnswer, Site, WireRow, audience, refuse_answer,
@@ -154,8 +154,7 @@ impl Judged {
     /// key's own column, which a refused row still answers: a write's reply names
     /// the row it wrote.
     fn answers(self, key: bool) -> Result<(), Refused> {
-        let installed = crate::context::installed();
-        match (self.judge, installed.as_deref().map(Ability::id)) {
+        match (self.judge, crate::context::installed_id()) {
             (Judge::Nobody, _) => Err(Refused::JudgedByNothing),
             (Judge::Ability(_), _) if audience() == Audience::Others => {
                 Err(Refused::PushedToOthers)
@@ -207,7 +206,7 @@ fn refused_answer<E: EntityTrait>(refused: Refused) -> RefusedAnswer {
 fn file(refused: &RefusedAnswer, handler: Option<&Handler>, served: ServedAddress<'_>) {
     let host = handler.map(Handler::host_name);
     let method = handler.map(Handler::method);
-    macro_rules! line {
+    macro_rules! filed {
         ($level:ident, $said:literal) => {
             tracing::$level!(
                 target: crate::TARGET,
@@ -228,8 +227,8 @@ fn file(refused: &RefusedAnswer, handler: Option<&Handler>, served: ServedAddres
         };
     }
     match refused.refusal() {
-        AnswerRefusal::Withheld => line!(warn, "a reply's row is withheld from its caller"),
-        _ => line!(error, "a wire row answered a caller it was not judged for"),
+        AnswerRefusal::Withheld => filed!(warn, "a reply's row is withheld from its caller"),
+        _ => filed!(error, "a wire row answered a caller it was not judged for"),
     }
 }
 
@@ -299,12 +298,9 @@ impl<T: JudgedRow> PushedItem<T> {
 impl<T: JudgedRow> PushedItem<Vec<T>> {
     /// The rows that answer the subscriber; `site` is the subscription's.
     pub fn kept(self, site: &'static Site) -> Option<Vec<T>> {
-        Some(
-            self.0
-                .into_iter()
-                .filter(|row| answers_subscriber(row, site))
-                .collect(),
-        )
+        let mut rows = self.0;
+        rows.retain(|row| answers_subscriber(row, site));
+        Some(rows)
     }
 }
 
@@ -367,13 +363,13 @@ pub struct WireColumns {
 inventory::collect!(WireColumns);
 
 /// Each `#[expose]`d entity's columns no grant may withhold, beside their fields.
-type Answered = HashMap<TypeId, Arc<[(&'static str, &'static str)]>>;
+type Answered = HashMap<TypeId, Vec<(&'static str, &'static str)>>;
 
 /// Every `#[expose]`d entity's columns no grant may withhold, read once.
 static ANSWERED: LazyLock<Answered> = LazyLock::new(|| {
     inventory::iter::<WireColumns>
         .into_iter()
-        .map(|columns| ((columns.entity)(), Arc::from((columns.answered)())))
+        .map(|columns| ((columns.entity)(), (columns.answered)()))
         .collect()
 });
 

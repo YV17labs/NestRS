@@ -36,8 +36,8 @@ pub(crate) mod reason {
     /// A principal whose token is too narrow — RFC 6750 §3.1.
     pub(crate) const INSUFFICIENT_SCOPE: &str = "insufficient_scope";
     /// Nothing installed an ability: a wiring failure, reported by every
-    /// fail-closed exit (via [`mask_reason`](crate::ability::mask_reason)).
-    pub(crate) const NO_AMBIENT_ABILITY: &str = crate::ability::mask_reason::NO_AMBIENT_ABILITY;
+    /// fail-closed exit.
+    pub(crate) const NO_AMBIENT_ABILITY: &str = "no_ambient_ability";
     /// The ability guard's rules would not build — the request is refused
     /// rather than given an ability whose denial evaporates.
     #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]

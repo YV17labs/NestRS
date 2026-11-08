@@ -421,25 +421,16 @@ impl Rendered {
 /// its `mounted` line does, a row the caller may not read answering `FORBIDDEN`
 /// and one judged for someone else the opaque frame.
 pub fn reply_at<T: Serialize>(value: &T, at: Option<(&Handler, &str)>) -> WsReply {
-    use nest_rs_core::__private::{AnswerRefusal, answering};
-    match answering(|| serde_json::to_value(value)) {
+    match nest_rs_core::__private::answering(|| serde_json::to_value(value)) {
         (Ok(data), _) => WsReply::Reply(data),
         (Err(_), Some(refused)) => {
             let path = crate::gateway::served_path();
             let served = at.map_or_else(ServedAddress::default, |(_, event)| {
                 ServedAddress::event(event)
             });
-            let served = match path.as_deref() {
-                Some(path) => served.at(path),
-                None => served,
-            };
+            let served = path.as_deref().map_or(served, |path| served.at(path));
             refused.file_at(at.map(|(handler, _)| handler), served);
-            WsReply::Error(match refused.refusal() {
-                AnswerRefusal::Withheld => {
-                    WsError::from_problem(&Problem::new(403, code::FORBIDDEN))
-                }
-                _ => WsError::internal(),
-            })
+            WsReply::Error(WsError::from_problem(&refused.refusal().problem()))
         }
         (written, None) => match written.opaque() {
             Ok(data) => WsReply::Reply(data),

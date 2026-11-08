@@ -5,8 +5,10 @@
 
 use std::cell::Cell;
 use std::fmt;
+use std::thread::LocalKey;
 
 use crate::handler::Handler;
+use crate::problem::{Problem, code};
 use crate::served_address::ServedAddress;
 
 /// Who the value being written answers.
@@ -27,6 +29,17 @@ pub enum AnswerRefusal {
     Withheld,
     /// A row judged for someone else, or by nothing: a wiring defect.
     Unjudged,
+}
+
+impl AnswerRefusal {
+    /// What the unit answers in the value's place: `FORBIDDEN` for a denial, the
+    /// opaque `INTERNAL` for a defect.
+    pub const fn problem(self) -> Problem {
+        match self {
+            Self::Withheld => Problem::new(403, code::FORBIDDEN),
+            Self::Unjudged => Problem::new(500, code::INTERNAL),
+        }
+    }
 }
 
 /// A value's refusal to be written, as the edge answering with it hands it on: its
@@ -104,17 +117,27 @@ thread_local! {
     static PUSHED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Run `run` with `cell` holding `value`, and what it held before after it, an
+/// unwind included.
+fn holding<C: Copy + 'static, T>(
+    cell: &'static LocalKey<Cell<C>>,
+    value: C,
+    run: impl FnOnce() -> T,
+) -> T {
+    struct Restore<C: Copy + 'static>(&'static LocalKey<Cell<C>>, C);
+    impl<C: Copy + 'static> Drop for Restore<C> {
+        fn drop(&mut self) {
+            self.0.with(|cell| cell.set(self.1));
+        }
+    }
+    let _restore = Restore(cell, cell.with(|cell| cell.replace(value)));
+    run()
+}
+
 /// Run `build`, every value it builds a push, which no read under the caller's
 /// ability filtered: a subscription's items, built as its stream is polled.
 pub fn as_pushed<T>(build: impl FnOnce() -> T) -> T {
-    struct Restore(bool);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            PUSHED.with(|pushed| pushed.set(self.0));
-        }
-    }
-    let _restore = Restore(PUSHED.with(|pushed| pushed.replace(true)));
-    build()
+    holding(&PUSHED, true, build)
 }
 
 /// Whether the value being built on this thread is a push ([`as_pushed`]).
@@ -129,30 +152,16 @@ pub fn audience() -> Audience {
 
 /// Run `write`, which serializes a push, for [`Audience::Others`].
 pub fn for_others<T>(write: impl FnOnce() -> T) -> T {
-    struct Restore(Audience);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            AUDIENCE.with(|audience| audience.set(self.0));
-        }
-    }
-    let _restore = Restore(AUDIENCE.with(|audience| audience.replace(Audience::Others)));
-    write()
+    holding(&AUDIENCE, Audience::Others, write)
 }
 
 /// Run `write`, the serializer an edge answers with: a refusal it meets is handed
 /// back for the edge to file at the unit it answers, rather than filed here.
 pub fn answering<T>(write: impl FnOnce() -> T) -> (T, Option<RefusedAnswer>) {
-    struct Restore(Option<Option<RefusedAnswer>>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            CLAIMED.with(|claimed| claimed.set(self.0));
-        }
-    }
-    let restore = Restore(CLAIMED.with(|claimed| claimed.replace(Some(None))));
-    let written = write();
-    let refused = CLAIMED.with(Cell::take).flatten();
-    drop(restore);
-    (written, refused)
+    holding(&CLAIMED, Some(None), || {
+        let written = write();
+        (written, CLAIMED.with(Cell::get).flatten())
+    })
 }
 
 /// A value refused to be written: handed to the edge whose serializer met it

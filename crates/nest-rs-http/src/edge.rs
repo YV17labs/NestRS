@@ -363,16 +363,17 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
             false => resp,
         };
         // A reply answered outside every site, whose row refused as it serialized.
-        if resp
-            .extensions()
-            .get::<nest_rs_core::__private::RefusedAnswer>()
-            .is_some()
+        if let Some(refused) = resp
+            .extensions_mut()
+            .remove::<nest_rs_core::__private::RefusedAnswer>()
         {
             span.in_scope(|| {
                 continuation.enter(|| {
                     let path = matched.route();
-                    let served = nest_rs_core::ServedAddress::route(&method, path.as_deref());
-                    crate::site::file_refused_reply(None, served, &mut resp);
+                    refused.file_at(
+                        None,
+                        nest_rs_core::ServedAddress::route(&method, path.as_deref()),
+                    );
                 });
             });
         }

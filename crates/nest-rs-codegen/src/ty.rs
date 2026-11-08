@@ -244,6 +244,14 @@ pub fn returns_unit(output: &syn::ReturnType) -> bool {
     }
 }
 
+/// The type a method's return writes, `None` where it writes none.
+pub fn return_type(output: &syn::ReturnType) -> Option<&Type> {
+    match output {
+        syn::ReturnType::Type(_, ty) => Some(ty),
+        syn::ReturnType::Default => None,
+    }
+}
+
 /// Where a type probe refuses what a method answers: its return type, or its
 /// name when it writes none.
 pub fn answer_span(sig: &syn::Signature) -> proc_macro2::Span {

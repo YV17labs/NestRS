@@ -24,9 +24,9 @@ use nest_rs_codegen::__private::{
     host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, injected_per_request_method, injects_impls,
     interceptor_specs, key_as_written, layer_deps, no_row_answered, normalize_forwarded_args,
-    nth_generic_type, one_role_per_method, piped_input, reject_meta_on_operations, scoped_specs,
-    shared_receiver, site_items, site_ref, spelled, tail_param, take_posture, takes_value,
-    type_label, unit_of_work_required, unknown_argument, validate_argument, withheld,
+    nth_generic_type, one_role_per_method, piped_input, reject_meta_on_operations, return_type,
+    scoped_specs, shared_receiver, site_items, site_ref, spelled, tail_param, take_posture,
+    takes_value, type_label, unit_of_work_required, unknown_argument, validate_argument, withheld,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -1013,9 +1013,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         let tail = tail_args(&sig);
         scoped_params.extend(scoped_types(&tail).map(|ty| (cfgs.clone(), ty)));
         let ambient = ambient_type_ids(tail.iter().map(|(_, ty, _)| ty));
-        if let syn::ReturnType::Type(_, answered) = &method.sig.output {
-            sites.push(no_row_answered(&method_name, &cfgs, &[&**answered]));
-        }
+        sites.push(no_row_answered(
+            &method_name,
+            &cfgs,
+            return_type(&method.sig.output).as_slice(),
+        ));
 
         if is_field {
             if authorize_spec.is_some() || is_public {

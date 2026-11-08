@@ -54,20 +54,20 @@
 use std::error::Error as StdError;
 
 use nest_rs_core::__private::{
-    AnswerRefusal, RefusedAnswer, SaidFailure, Withheld, caught_problem, find_in_chain,
+    RefusedAnswer, SaidFailure, Withheld, caught_problem, find_in_chain,
 };
 use nest_rs_core::{Code, DecodeError, Failure, Handler, Problem, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
 use rmcp::model::ErrorCode;
-
-use crate::operation::McpOperationKind;
-use crate::view::served_operation;
 use rmcp::transport::streamable_http_server::session::local::{
     LocalSessionManagerError, SessionError,
 };
 use rmcp::transport::streamable_http_server::session::store::SessionStoreError;
+
+use crate::operation::McpOperationKind;
+use crate::view::served_operation;
 
 /// Turn a failure the model must not read into one it may.
 ///
@@ -206,15 +206,11 @@ pub(crate) fn refused_answer(
 ) -> McpError {
     let served = served_operation(kind, name);
     let path = crate::operation::served_path();
-    let served = match path.as_deref() {
-        Some(path) => served.at(path),
-        None => served,
-    };
-    refused.file_at(Some(handler), served);
-    match refused.refusal() {
-        AnswerRefusal::Withheld => rendered(&Problem::new(403, code::FORBIDDEN)),
-        _ => rendered(&Problem::new(500, code::INTERNAL)),
-    }
+    refused.file_at(
+        Some(handler),
+        path.as_deref().map_or(served, |path| served.at(path)),
+    );
+    rendered(&refused.refusal().problem())
 }
 
 /// A problem as the JSON-RPC error an MCP operation answers with.

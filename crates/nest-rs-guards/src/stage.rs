@@ -71,17 +71,12 @@ impl Refused {
         first: impl FnOnce(String) -> bool,
     ) -> Denial {
         match self {
-            Self::Guard {
-                guard,
-                target,
-                denial,
-            } => {
-                if first(format!("{guard} {}", denial.http_status())) {
-                    file_denial(message, guard, target, cx, &denial);
-                }
+            Self::Guard { guard, denial, .. }
+                if !first(format!("{guard} {}", denial.http_status())) =>
+            {
                 denial
             }
-            Self::Filed(denial) => denial,
+            refused => refused.into_denial(message, cx),
         }
     }
 }

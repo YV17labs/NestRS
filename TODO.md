@@ -310,7 +310,7 @@ dispatched method answering a `Model` does not compile (`mask-provenance.md`,
 - The names the retired reply mask left on internal seams read as what they now
   mean, a posture naming no entity's read: `UnmaskedReply`, the HTTP guard
   stage's `StageKind::Route { unmasked }`, `RouteGuards::masked` and
-  `HttpRouteMeta::masked`, `mask_reason`, core's `Answer` `mapper`, and about
+  `HttpRouteMeta::masked`, and about
   150 internal comments saying "mask" for the judged row (the
   docs site, the decorators' rustdoc, the refusal sentences and the CLI's templates
   no longer do). Close: one rename with its naming set stated, across

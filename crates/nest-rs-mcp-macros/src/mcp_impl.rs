@@ -30,9 +30,9 @@ use nest_rs_codegen::__private::{
     PostureRules, SiteGuards, SiteItems, TailParam, ambient_type_ids, answer_span, await_if_async,
     cfg_attrs, concrete_signature, force_guard_typeids, forwarded_arg_idents, generic_args,
     guard_capability_bounds, handler_const, handler_ref, impl_self_ident, layer_deps,
-    no_row_answered, normalize_forwarded_args, one_role_per_method, piped_input,
-    reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident, site_items,
-    site_ref, tail_param, ungrouped_expr, unit_of_work_required, validate_argument,
+    no_row_answered, normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
+    reject_meta_on_operations, return_type, scoped_specs, shared_receiver, site_const_ident,
+    site_items, site_ref, tail_param, ungrouped_expr, unit_of_work_required, validate_argument,
 };
 use nest_rs_codegen::snake_case;
 
@@ -866,11 +866,9 @@ fn dispatch(
 /// The `T` of a return spelled `Json<T>` or `Result<Json<T>, E>`, where rmcp's own
 /// `#[tool]` reads a structured output schema.
 fn authored_json(sig: &Signature) -> Option<&Type> {
-    let syn::ReturnType::Type(_, ty) = &sig.output else {
-        return None;
-    };
-    let ok = nest_rs_codegen::__private::nth_generic_type(ty, "Result", 0).unwrap_or(ty);
-    nest_rs_codegen::__private::nth_generic_type(ok, "Json", 0)
+    let ty = return_type(&sig.output)?;
+    let ok = nth_generic_type(ty, "Result", 0).unwrap_or(ty);
+    nth_generic_type(ok, "Json", 0)
 }
 
 /// The `T` of a return spelled `Result<T, E>`, two arguments written; `None`
@@ -1199,10 +1197,7 @@ fn operation_sites(self_ty: &Type, base: &syn::Ident, operations: &Operations) -
             }),
             class_gate: class_gate(&op.posture),
         });
-        let no_row = match &op.sig.output {
-            syn::ReturnType::Type(_, answered) => no_row_answered(method, cfgs, &[&**answered]),
-            syn::ReturnType::Default => TokenStream2::new(),
-        };
+        let no_row = no_row_answered(method, cfgs, return_type(&op.sig.output).as_slice());
         quote! {
             #handler
 

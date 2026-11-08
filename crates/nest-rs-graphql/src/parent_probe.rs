@@ -6,8 +6,7 @@
 //! other parent.
 
 use async_graphql::{Context, Error};
-use nest_rs_core::__private::{AnswerRefusal, Site, WireRow};
-use nest_rs_core::{Problem, code};
+use nest_rs_core::__private::{Site, WireRow};
 
 use crate::filed_facts::first_in_operation;
 use crate::operation::served_field;
@@ -36,10 +35,7 @@ impl<P: WireRow + ?Sized> ParentProbe<'_, P> {
         ) {
             refused.file_at(Some(handler), served_field(ctx, Some(site)));
         }
-        Err(crate::problem_error(&match refused.refusal() {
-            AnswerRefusal::Withheld => Problem::new(403, code::FORBIDDEN),
-            _ => Problem::new(500, code::INTERNAL),
-        }))
+        Err(crate::problem_error(&refused.refusal().problem()))
     }
 }
 

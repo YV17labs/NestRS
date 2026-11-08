@@ -2606,8 +2606,6 @@ dependencies = [
  "nest-rs-mcp",
  "nest-rs-ws",
  "sea-orm",
- "serde",
- "serde_json",
  "thiserror 2.0.21",
  "tracing",
 ]

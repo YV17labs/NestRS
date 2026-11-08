@@ -89,13 +89,9 @@ pub(crate) fn stamp_answer<'a>(caller_path: impl Fn() -> &'a str, response: &mut
 /// File the refusal a reply's wire row met as it serialized (`Json`), at the unit
 /// `handler` dispatches, served at `served`: once, by the first stage holding the
 /// answer that names the unit.
-pub(crate) fn file_refused_reply(
-    handler: Option<&Handler>,
-    served: ServedAddress<'_>,
-    response: &mut Response,
-) {
+fn file_refused_reply(handler: &Handler, served: ServedAddress<'_>, response: &mut Response) {
     if let Some(refused) = response.extensions_mut().remove::<RefusedAnswer>() {
-        refused.file_at(handler, served);
+        refused.file_at(Some(handler), served);
     }
 }
 
@@ -220,7 +216,7 @@ impl<T: SiteTail> SiteEndpoint<T> {
             return match self.tail.answer(&mut req).await {
                 Ok(mut response) => {
                     let served = ServedAddress::route(req.verb(), req.route());
-                    file_refused_reply(Some(self.handler), served, &mut response);
+                    file_refused_reply(self.handler, served, &mut response);
                     Answered {
                         commits: !is_error(&response),
                         response,
@@ -249,7 +245,7 @@ impl<T: SiteTail> SiteEndpoint<T> {
         let mut response = render(self.handler, &mut view, outcome);
         // What a layer answered around the tail: an exception filter's own reply.
         let served = view.served_address().unwrap_or_default();
-        file_refused_reply(Some(self.handler), served, &mut response);
+        file_refused_reply(self.handler, served, &mut response);
         Answered { response, commits }
     }
 }
@@ -272,14 +268,13 @@ impl<T: SiteTail> Tail for Running<'_, T> {
     fn call(&mut self, cx: &mut UnitContext<'_>) -> impl Future<Output = Outcome> + Send {
         let tail = self.0;
         async move {
+            let handler = cx.handler();
             let view = HttpView::of(cx)?;
             let answered = tail.answer(view.request_mut()).await;
             match answered {
                 Ok(mut response) => {
-                    let handler = cx.handler();
-                    let served = cx.served_address().unwrap_or_default();
-                    file_refused_reply(Some(handler), served, &mut response);
-                    let view = HttpView::of(cx)?;
+                    let served = view.served_address().unwrap_or_default();
+                    file_refused_reply(handler, served, &mut response);
                     let status = response.status();
                     let failed = is_error(&response);
                     let settled = view.respond(response);

@@ -138,8 +138,7 @@ impl<'a, T: DeserializeOwned> FromRequest<'a> for Json<T> {
 
 impl<T: Serialize + Send> IntoResponse for Json<T> {
     fn into_response(self) -> Response {
-        use nest_rs_core::__private::{AnswerRefusal, answering};
-        match answering(|| serde_json::to_vec(&self.0)) {
+        match nest_rs_core::__private::answering(|| serde_json::to_vec(&self.0)) {
             (Ok(bytes), _) => Response::builder()
                 .content_type(HeaderValue::from_static("application/json; charset=utf-8"))
                 .body(bytes),
@@ -147,11 +146,7 @@ impl<T: Serialize + Send> IntoResponse for Json<T> {
             // which rolls the request's unit back as any `403` does, and one judged
             // for someone else a defect. The site answering files its line.
             (Err(_), Some(refused)) => {
-                let status = match refused.refusal() {
-                    AnswerRefusal::Withheld => StatusCode::FORBIDDEN,
-                    _ => StatusCode::INTERNAL_SERVER_ERROR,
-                };
-                let mut response = ProblemDetails::from_status(status).into_response();
+                let mut response = crate::problem::problem_response(&refused.refusal().problem());
                 response.extensions_mut().insert(refused);
                 response
             }

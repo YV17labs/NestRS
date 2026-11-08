@@ -54,10 +54,15 @@ fn wire_value(field: &ResourceField) -> TokenStream2 {
 }
 
 /// The schema function a nullable field's `#[schemars(schema_with)]` names: its
-/// value's schema or `null`, the key required, since a reply always writes it.
-fn nullable_schema_fn(field: &ResourceField, base: &TokenStream2) -> (Ident, TokenStream2) {
+/// value's schema or `null`, in `format`, the key required, since a reply always
+/// writes it.
+fn nullable_schema_fn(
+    field: &ResourceField,
+    base: &TokenStream2,
+    format: Option<&str>,
+) -> (Ident, TokenStream2) {
     let ident = format_ident!("__nullable_schema_{}", field.ident.unraw());
-    let format = match wire_format(field) {
+    let format = match format {
         Some(format) => quote! { ::core::option::Option::Some(#format) },
         None => quote! { ::core::option::Option::None },
     };
@@ -99,20 +104,18 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
         } else {
             TokenStream2::new()
         };
-        let base = if wire_format(field).is_some() {
+        let format = wire_format(field);
+        let base = if format.is_some() {
             quote! { ::std::string::String }
         } else {
             let ty = &field.ty;
             quote! { #ty }
         };
         let value = wire_value(field);
-        let withheld = field
-            .withholdable()
-            .then_some(())
-            .and(field.column.as_ref());
+        let withheld = field.column.as_ref().filter(|_| field.withholdable());
         match (field.nullable, withheld) {
             (true, Some(column)) => {
-                let (schema_fn, body) = nullable_schema_fn(field, &base);
+                let (schema_fn, body) = nullable_schema_fn(field, &base, format);
                 let schema_with = format!("{output}::{schema_fn}");
                 schema_fns.push(body);
                 decls.push(quote! {
@@ -136,7 +139,7 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
                 });
             }
             (_, None) => {
-                let format = wire_format(field).map(|format| {
+                let format = format.map(|format| {
                     quote! { #[schemars(extend("format" = #format))] }
                 });
                 decls.push(quote! { #complexity #guard #format pub #name: #base });

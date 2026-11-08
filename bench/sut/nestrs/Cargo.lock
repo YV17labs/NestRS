@@ -1605,14 +1605,13 @@ dependencies = [
 name = "nest-rs-authz"
 version = "7.0.0"
 dependencies = [
+ "inventory",
  "nest-rs-authz-macros",
  "nest-rs-core",
  "nest-rs-database",
  "nest-rs-guards",
  "nest-rs-http",
  "sea-orm",
- "serde",
- "serde_json",
  "thiserror",
  "tracing",
 ]

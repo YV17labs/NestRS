@@ -18,7 +18,6 @@ use crate::attr::{
     RelationKind, ResourceField, ResourceModel, complexity_attr, graphql_root, graphql_root_str,
     is_uuid,
 };
-use crate::lifecycle::is_option_type;
 
 /// Default complexity expression for an auto-emitted `HasMany` field resolver.
 ///
@@ -478,8 +477,8 @@ fn emit_belongs_to_method(
 
     let complexity = complexity_attr(&field.complexity, None);
     let root = graphql_root();
-    let key = if fk_field.nullable || is_option_type(&fk_field.ty) {
-        let parsed = wire_key_expr(&fk_field.ty, &format_ident!("__link"), true);
+    let key = if fk_field.withholdable() {
+        let parsed = wire_key_expr(&fk_field.ty, quote!(__link));
         quote! {
             let ::core::option::Option::Some(__link) = &self.#fk else {
                 return ::core::result::Result::Ok(::core::option::Option::None);
@@ -487,7 +486,7 @@ fn emit_belongs_to_method(
             let __key = #parsed;
         }
     } else {
-        let parsed = wire_key_expr(&fk_field.ty, fk, false);
+        let parsed = wire_key_expr(&fk_field.ty, quote!(&self.#fk));
         quote! { let __key = #parsed; }
     };
 
@@ -520,7 +519,8 @@ fn emit_has_many_method(
     pk: &ResourceField,
 ) -> syn::Result<TokenStream2> {
     let name = &field.ident;
-    let key_expr = wire_key_expr(&pk.ty, &pk.ident, false);
+    let pk_ident = &pk.ident;
+    let key_expr = wire_key_expr(&pk.ty, quote!(&self.#pk_ident));
     let complexity = complexity_attr(&field.complexity, Some(DEFAULT_HAS_MANY_COMPLEXITY));
     let related = related_to_path(target, via)?;
     let root = graphql_root();
@@ -568,15 +568,9 @@ fn emit_has_many_method(
     })
 }
 
-/// The wire representation of a column → key the dataloader expects: a `Uuid`
-/// is a `String` on the wire, so it is parsed back. `bound` reads an ident bound
-/// to the value by reference rather than a field of `self`.
-fn wire_key_expr(ty: &Type, ident: &Ident, bound: bool) -> TokenStream2 {
-    let place = if bound {
-        quote! { #ident }
-    } else {
-        quote! { &self.#ident }
-    };
+/// The wire representation of a column, borrowed at `place`, → key the
+/// dataloader expects: a `Uuid` is a `String` on the wire, so it is parsed back.
+fn wire_key_expr(ty: &Type, place: TokenStream2) -> TokenStream2 {
     if is_uuid(ty) {
         let root = graphql_root();
         quote! {

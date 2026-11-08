@@ -52,6 +52,15 @@ pub(crate) fn installed() -> Option<Arc<Ability>> {
     nest_rs_core::ambient::<AmbientAbility>().and_then(|held| held.ability())
 }
 
+/// The [`Ability::id`] of the ability [`installed`] answers, read without a clone:
+/// a wire row checks it at every column it writes.
+pub(crate) fn installed_id() -> Option<u64> {
+    nest_rs_core::ambient::<AmbientAbility>()?
+        .0
+        .as_deref()
+        .map(Ability::id)
+}
+
 /// The ability the unit `cx` runs carries: attached earlier in its stage, else
 /// ambient.
 pub(crate) fn carried(cx: &UnitContext<'_>) -> Option<Arc<Ability>> {

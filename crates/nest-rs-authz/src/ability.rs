@@ -55,15 +55,6 @@ pub(crate) enum Provenance {
     Pushed,
 }
 
-/// Why a unit fell closed, as a value an incident query groups on.
-pub(crate) mod mask_reason {
-    /// Nothing installed an ability, so nothing decided what may be shown.
-    ///
-    /// Declared here and aliased by [`gate::reason`](crate::gate::reason):
-    /// `gate` is feature-gated, this module is not.
-    pub(crate) const NO_AMBIENT_ABILITY: &str = "no_ambient_ability";
-}
-
 /// Which columns of a subject a grant permits.
 #[derive(Default)]
 #[non_exhaustive]

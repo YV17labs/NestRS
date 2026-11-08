@@ -18,8 +18,8 @@ use nest_rs_codegen::__private::{
     await_if_async, cfg_attrs, concrete_signature, declared_handler, force_guard_typeids,
     guard_capability_bounds, handler_const, handler_ref, host_runtime_entry, impl_self_ident,
     injected_methods_with_layers, injected_per_request_method, layer_deps, no_row_answered,
-    one_role_per_method, piped_input, reject_meta_on_operations, returns_unit, scoped_specs,
-    shared_receiver, site_items, site_ref, tail_param, takes_value, ungrouped_expr,
+    one_role_per_method, piped_input, reject_meta_on_operations, return_type, returns_unit,
+    scoped_specs, shared_receiver, site_items, site_ref, tail_param, takes_value, ungrouped_expr,
     validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
@@ -254,9 +254,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             method_meta: &metas,
             cfgs: &cfgs,
         }));
-        if let ReturnType::Type(_, answered) = &method.sig.output {
-            sites.push(no_row_answered(&method.sig.ident, &cfgs, &[&**answered]));
-        }
+        sites.push(no_row_answered(
+            &method.sig.ident,
+            &cfgs,
+            return_type(&method.sig.output).as_slice(),
+        ));
         message_guards.extend(guards.iter().map(|guard| (cfgs.clone(), guard.clone())));
         message_layers.extend(
             [&guards, &interceptors, &exception_filters, &pipes]

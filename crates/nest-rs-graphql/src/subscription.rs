@@ -808,6 +808,18 @@ impl<S> Inbound<S> {
         }
     }
 
+    /// Give up a peer that sent nothing back within the Ping's timeout.
+    fn peer_silent<T>(&self) -> Poll<Option<T>> {
+        tracing::warn!(
+            target: crate::TARGET,
+            host = self.site.host(),
+            path = &*self.site.path,
+            ping_timeout_ms = self.ping_timeout.as_millis(),
+            "closing subscription socket: the peer sent nothing back within the ping timeout",
+        );
+        self.refuse(Refusal::Silent)
+    }
+
     /// End the peer's half, so the engine ends and the loop closes with
     /// `refusal`.
     fn refuse<T>(&self, refusal: Refusal) -> Poll<Option<T>> {
@@ -945,17 +957,7 @@ where
         loop {
             match this.keep_alive.poll_due(cx) {
                 Poll::Ready(Due::Ping) => this.ping.notify_one(),
-                Poll::Ready(Due::Silent) => {
-                    tracing::warn!(
-                        target: crate::TARGET,
-                        host = this.site.host(),
-                        path = &*this.site.path,
-                        ping_timeout_ms = this.ping_timeout.as_millis(),
-                        "closing subscription socket: the peer sent nothing back within the \
-                         ping timeout",
-                    );
-                    return this.refuse(Refusal::Silent);
-                }
+                Poll::Ready(Due::Silent) => return this.peer_silent(),
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -1376,6 +1378,13 @@ mod tests {
         SocketBounds::of(&GraphqlConfig::default())
     }
 
+    /// The mount a test's socket names on its lines.
+    fn site() -> SocketSite {
+        SocketSite {
+            path: Arc::from("/graphql"),
+        }
+    }
+
     /// The peer's half asks the loop for a Ping once the peer has been silent for
     /// the interval, takes any frame back as its answer, and once none comes
     /// within the timeout ends, refusing the socket as a silent peer's. Fed from
@@ -1390,15 +1399,7 @@ mod tests {
 
         let (peer, mut frames) = tokio::sync::mpsc::unbounded_channel();
         let socket = futures_util::stream::poll_fn(move |cx| frames.poll_recv(cx));
-        let mut inbound = Inbound::new(
-            socket,
-            std::future::pending(),
-            bounds(),
-            None,
-            SocketSite {
-                path: Arc::from("/graphql"),
-            },
-        );
+        let mut inbound = Inbound::new(socket, std::future::pending(), bounds(), None, site());
         let ping = Arc::clone(&inbound.ping);
         let refusal = Arc::clone(&inbound.refusal);
         peer.send(Ok(Message::text(r#"{"type":"connection_init"}"#)))
@@ -1454,15 +1455,7 @@ mod tests {
         let timeout = nest_rs_http::DEFAULT_PING_TIMEOUT;
         let (peer, mut frames) = tokio::sync::mpsc::unbounded_channel();
         let socket = futures_util::stream::poll_fn(move |cx| frames.poll_recv(cx));
-        let mut inbound = Inbound::new(
-            socket,
-            std::future::pending(),
-            bounds(),
-            None,
-            SocketSite {
-                path: Arc::from("/graphql"),
-            },
-        );
+        let mut inbound = Inbound::new(socket, std::future::pending(), bounds(), None, site());
         let ping = Arc::clone(&inbound.ping);
         let refusal = Arc::clone(&inbound.refusal);
         peer.send(Ok(Message::text(r#"{"type":"connection_init"}"#)))
@@ -1525,9 +1518,7 @@ mod tests {
             },
             bounds(),
             None,
-            SocketSite {
-                path: Arc::from("/graphql"),
-            },
+            site(),
         );
         let ending = Arc::clone(&inbound.ending);
         for _ in 0..4 {
@@ -1577,9 +1568,7 @@ mod tests {
             },
             bounds(),
             None,
-            SocketSite {
-                path: Arc::from("/graphql"),
-            },
+            site(),
         );
         let started = Arc::clone(&inbound.started);
         for _ in 0..3 {

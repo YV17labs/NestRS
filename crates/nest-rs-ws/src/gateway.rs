@@ -1429,6 +1429,26 @@ mod tests {
         MessageTable::new(&Container::default())
     }
 
+    /// A socket's two ends over an in-memory pipe holding `capacity` bytes, the
+    /// server's first.
+    async fn socket_pair(
+        capacity: usize,
+    ) -> (
+        tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+        tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+    ) {
+        use tokio_tungstenite::tungstenite::protocol::Role;
+
+        let (server_end, client_end) = tokio::io::duplex(capacity);
+        let server =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(server_end, Role::Server, None)
+                .await;
+        let client =
+            tokio_tungstenite::WebSocketStream::from_raw_socket(client_end, Role::Client, None)
+                .await;
+        (server, client)
+    }
+
     /// The table of a gateway serving `moderated`, whose guard refuses every
     /// message, and `open`, which runs nothing around its handler.
     fn moderated() -> MessageTable {
@@ -1701,16 +1721,8 @@ mod tests {
     /// reads the end of the stream with no Close frame, §7.4.1's 1006.
     #[tokio::test]
     async fn a_writer_that_panics_over_a_socket_ends_it_and_the_disconnect_hook_runs() {
-        use tokio_tungstenite::tungstenite::protocol::Role;
-
         let logs = nest_rs_testing::LogCapture::install();
-        let (server_end, client_end) = tokio::io::duplex(64 * 1024);
-        let server_socket =
-            tokio_tungstenite::WebSocketStream::from_raw_socket(server_end, Role::Server, None)
-                .await;
-        let mut client =
-            tokio_tungstenite::WebSocketStream::from_raw_socket(client_end, Role::Client, None)
-                .await;
+        let (server_socket, mut client) = socket_pair(64 * 1024).await;
         let server = Arc::new(WsServer::<crate::server::Global>::default());
         let serving = tokio::spawn(serve_connection(
             Arc::new(Echo),
@@ -1773,20 +1785,13 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_peer_answering_its_pings_keeps_its_socket_and_one_answering_none_is_dropped() {
         use tokio::time::Instant;
-        use tokio_tungstenite::tungstenite::protocol::Role;
 
         const INTERVAL: Duration = Duration::from_secs(20);
         const TIMEOUT: Duration = Duration::from_secs(5);
         const ROUNDS: u32 = 30;
 
         let logs = nest_rs_testing::LogCapture::install();
-        let (server_end, client_end) = tokio::io::duplex(64 * 1024);
-        let server_socket =
-            tokio_tungstenite::WebSocketStream::from_raw_socket(server_end, Role::Server, None)
-                .await;
-        let mut client =
-            tokio_tungstenite::WebSocketStream::from_raw_socket(client_end, Role::Client, None)
-                .await;
+        let (server_socket, mut client) = socket_pair(64 * 1024).await;
         let server = Arc::new(WsServer::<crate::server::Global>::default());
         let start = Instant::now();
         let mut serving = tokio::spawn(serve_connection(
@@ -1874,8 +1879,6 @@ mod tests {
     /// since it was never asked, is dropped.
     #[tokio::test(start_paused = true)]
     async fn a_peer_reading_a_socket_whose_outbox_never_empties_is_pinged_and_keeps_it() {
-        use tokio_tungstenite::tungstenite::protocol::Role;
-
         const INTERVAL: Duration = Duration::from_secs(1);
         const TIMEOUT: Duration = Duration::from_secs(1);
         const READ_EVERY: Duration = Duration::from_millis(10);
@@ -1883,13 +1886,7 @@ mod tests {
         const HORIZON: Duration = Duration::from_secs(5);
 
         let logs = nest_rs_testing::LogCapture::install();
-        let (server_end, client_end) = tokio::io::duplex(4 * 1024);
-        let server_socket =
-            tokio_tungstenite::WebSocketStream::from_raw_socket(server_end, Role::Server, None)
-                .await;
-        let mut client =
-            tokio_tungstenite::WebSocketStream::from_raw_socket(client_end, Role::Client, None)
-                .await;
+        let (server_socket, mut client) = socket_pair(4 * 1024).await;
         let server = Arc::new(WsServer::<crate::server::Global>::default());
         let _serving = tokio::spawn(serve_connection(
             Arc::new(Echo),

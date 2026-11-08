@@ -284,10 +284,10 @@ pub(crate) async fn unserved(
 /// withholds is filed here, once, as it goes out.
 fn rendered(view: WsView, outcome: Outcome, event: &str) -> Answered {
     let failed = outcome.is_err();
-    let rendered_class = match &outcome {
-        Err(failure) => view.server_failed(failure),
-        Ok(_) => None,
-    };
+    let rendered_class = outcome
+        .as_ref()
+        .err()
+        .and_then(|failure| view.server_failed(failure));
     let (reply, withheld, server_failed) = match (outcome, view.into_answer()) {
         (Ok(_), (Some(reply), withheld)) => (reply, withheld, false),
         (Ok(_), (None, _)) => {

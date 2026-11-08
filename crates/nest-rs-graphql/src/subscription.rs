@@ -26,8 +26,8 @@ use nest_rs_core::__private::Site;
 use nest_rs_core::anyhow;
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
 use nest_rs_http::__private::websocket::{
-    self, CloseCode, Due, HandshakeRefused, KeepAlive, Message, WebSocketLimits, WebSocketStream,
-    WebSocketUpgrade,
+    self, CloseCode, Due, HandshakeRefused, KeepAlive, Message, Signal, WebSocketLimits,
+    WebSocketStream, WebSocketUpgrade,
 };
 use nest_rs_http::{DetachedWork, Endpoint, Request, Response};
 use tracing::Instrument;
@@ -517,6 +517,7 @@ async fn serve_socket<E: Executor>(
     served_at: ServedPath,
 ) -> Ended {
     let (mut sink, socket) = stream.split();
+    let pings = bounds.ping_interval.is_some();
     let inbound = Inbound::new(socket, end, bounds, pipes, served_at.clone());
     let started = Arc::clone(&inbound.started);
     let ending = Arc::clone(&inbound.ending);
@@ -534,11 +535,12 @@ async fn serve_socket<E: Executor>(
             continue;
         }
         // A subscription's stream is developer code polled here: a panic closes
-        // the socket with 1011.
+        // the socket with 1011. The two signals are polled beside every frame,
+        // so lock-free, and the Ping's not at all with the Pings off.
         let next = tokio::select! {
-            () = withheld.ready.notified() => continue,
+            () = withheld.ready.taken() => continue,
             // The peer's half owns the keepalive; this half owns the `Sink`.
-            () = ping.notified() => {
+            () = ping.taken(), if pings => {
                 if let Err(error) = sink.send(Message::Ping(Default::default())).await {
                     return stopped_writing(&served_at, &error);
                 }
@@ -663,13 +665,13 @@ struct Withheld {
     /// The protocol's `error` message answering it.
     frame: Mutex<Option<String>>,
     /// Wakes the loop, which the engine never would: it saw no message.
-    ready: tokio::sync::Notify,
+    ready: Signal,
 }
 
 impl Withheld {
     fn hold(&self, frame: String) {
         *self.slot() = Some(frame);
-        self.ready.notify_one();
+        self.ready.raise();
     }
 
     fn take(&self) -> Option<String> {
@@ -768,7 +770,7 @@ struct Inbound<S> {
     ping_timeout: Duration,
     max_message_bytes: usize,
     /// Wakes the loop to send the Ping the keepalive owes.
-    ping: Arc<tokio::sync::Notify>,
+    ping: Arc<Signal>,
     served_at: ServedPath,
 }
 
@@ -983,7 +985,7 @@ where
         // ended is its answer.
         loop {
             match this.keep_alive.poll_due(cx) {
-                Poll::Ready(Due::Ping) => this.ping.notify_one(),
+                Poll::Ready(Due::Ping) => this.ping.raise(),
                 Poll::Ready(Due::Silent) => return this.peer_silent(),
                 Poll::Pending => return Poll::Pending,
             }
@@ -1475,7 +1477,7 @@ mod tests {
                     "nothing reaches the engine, the socket not ended: {}",
                     read.is_some(),
                 ),
-                () = ping.notified() => {
+                () = ping.taken() => {
                     pinged_at.push(Instant::now() - start);
                     peer.send(Ok(Message::Pong(Default::default()))).expect("open");
                 }
@@ -1524,7 +1526,7 @@ mod tests {
         ));
         tokio::select! {
             read = inbound.next() => panic!("nothing reaches the engine before the Ping: {}", read.is_some()),
-            () = ping.notified() => {}
+            () = ping.taken() => {}
         }
 
         peer.send(Ok(Message::Pong(Default::default())))

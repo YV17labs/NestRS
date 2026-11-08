@@ -82,3 +82,16 @@ sends nothing.
   sockets read what waits before they judge the peer silent, so a loop busy
   writing as the wait ends never drops a peer that answered in time; the
   subscription socket's peer half judged first.
+
+**2026-11-08, the Ping reaches the writer without a lock** (found by this
+branch's review). The writer polls the Ping's wake-up beside every frame it
+writes: a `tokio::sync::Notify` registered each wait under its waiters' lock
+and took the lock again to drop it, two round trips a pushed frame for an event
+due once per interval. The wake-up is a `Signal` in `nest_rs_http`'s socket
+ground, a flag and an `AtomicWaker`, a few atomic operations a poll; a writer
+whose Pings are off polls nothing for it. graphql-ws's withheld `subscribe`
+refusal wakes the same loop, and takes the same signal.
+
+- Refused: a `Notified` pinned across frames, which still takes the lock on
+  each poll to refresh its waker; an `mpsc(1)` arm, lock-free too, whose full
+  channel a raise would have to set aside as no error.

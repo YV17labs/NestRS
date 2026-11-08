@@ -14,7 +14,7 @@ use nest_rs_core::{
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_guards::__private::GuardSpec;
 use nest_rs_http::__private::websocket::{
-    self, CloseCode, Due, KeepAlive, Message, WebSocketLimits, WebSocketUpgrade,
+    self, CloseCode, Due, KeepAlive, Message, Signal, WebSocketLimits, WebSocketUpgrade,
 };
 use nest_rs_http::{BoxEndpoint, DetachedWork, Endpoint, Request, Response};
 use nest_rs_pipes::__private::PipeSpec;
@@ -314,15 +314,17 @@ async fn serve_connection<G, N, S>(
     let (writer_ends, mut writer_stopped) = tokio::sync::oneshot::channel::<()>();
     // The read loop owns the keepalive; the Ping it owes goes out here, since
     // this task owns the `Sink`, and ahead of the replies: an outbox that never
-    // empties would hold it back until its peer was dropped as silent.
-    let ping = Arc::new(tokio::sync::Notify::new());
+    // empties would hold it back until its peer was dropped as silent. Polled
+    // beside every frame, so lock-free, and not at all with the Pings off.
+    let ping = Arc::new(Signal::default());
     let pinged = Arc::clone(&ping);
+    let pings = limits.ping_interval.is_some();
     let writer_served = Arc::clone(&wiring.served);
     let mut writer = Writer(tokio::spawn(nest_rs_core::panic::contain(async move {
         loop {
             let frame = tokio::select! {
                 biased;
-                () = pinged.notified() => Message::Ping(Default::default()),
+                () = pinged.taken(), if pings => Message::Ping(Default::default()),
                 frame = rx.recv() => match frame {
                     Some(frame) => Message::Text(frame),
                     None => break,
@@ -447,7 +449,7 @@ async fn serve_connection<G, N, S>(
             }
             // Last, so a frame that arrived in the same instant answers the Ping.
             due = keep_alive.due() => match due {
-                Due::Ping => ping.notify_one(),
+                Due::Ping => ping.raise(),
                 Due::Silent => break peer_silent(served, conn_id, limits.ping_timeout),
             },
         }

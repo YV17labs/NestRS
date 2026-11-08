@@ -309,8 +309,8 @@ pub mod __private {
         pub use crate::websocket::requested;
         #[cfg(feature = "websocket")]
         pub use crate::websocket::{
-            CloseCode, Due, Error, KeepAlive, Message, Utf8Bytes, WebSocketLimits, WebSocketStream,
-            WebSocketUpgrade, close_frame, read_failed,
+            CloseCode, Due, Error, KeepAlive, Message, Signal, Utf8Bytes, WebSocketLimits,
+            WebSocketStream, WebSocketUpgrade, close_frame, read_failed,
         };
     }
 }

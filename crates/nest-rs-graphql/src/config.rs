@@ -260,7 +260,8 @@ pub struct GraphqlConfig {
     /// How long a graphql-ws socket's peer may send nothing before the socket
     /// sends it a Ping (RFC 6455 §5.5.2), which a browser's `WebSocket` and
     /// every other client answer as they read; any frame from the peer counts,
-    /// so a socket in use is never pinged. `None` ⇒ no Ping, and a peer gone
+    /// so a peer that talks is never pinged, and one that only listens is
+    /// pinged however busy its socket is. `None` ⇒ no Ping, and a peer gone
     /// without a close holds its socket to
     /// [`max_connection`](Self::max_connection).
     ///

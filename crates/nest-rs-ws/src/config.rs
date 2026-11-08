@@ -72,7 +72,8 @@ pub struct WsConfig {
     pub disconnect_timeout: Option<Duration>,
     /// How long the peer may send nothing before the socket sends it a Ping
     /// (RFC 6455 §5.5.2), which a client answers as it reads; any frame from
-    /// the peer counts, so a socket in use is never pinged. `None` ⇒ no Ping,
+    /// the peer counts, so a peer that talks is never pinged, and one that only
+    /// listens is pinged however busy its socket is. `None` ⇒ no Ping,
     /// and a peer gone without a close holds its socket to
     /// [`max_connection`](Self::max_connection). Read from
     /// `<PREFIX>_WS__PING_INTERVAL_SECS`, whole seconds from 1 to 3600 or `0`

@@ -61,6 +61,10 @@ serde_json.workspace = true
 # `figment::Jail` sets and restores the working directory and the environment
 # the loader reads, as `nest-rs-config`'s own suite does.
 figment = { workspace = true, features = ["test"] }
+# The scaffold's `compose.yml`, read as Compose reads it, against the URLs the
+# profiles boot on.
+yaml_serde.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true

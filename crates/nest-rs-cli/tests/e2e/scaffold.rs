@@ -1,6 +1,6 @@
 //! Covers `src/templates/` and `src/commands/generate/` as the tutorial drives
 //! them: its pages replayed from the workspace root as a reader follows them,
-//! and the suite they end on run against the live Postgres and store.
+//! and the suite they end on run against the live Postgres, Valkey and store.
 
 use std::path::{Path, PathBuf};
 
@@ -317,6 +317,117 @@ async fn the_store_the_environment_names_opens_and_holds_a_key() {
 }
 "#;
 
+/// The processor `g queue`, the tasks `g schedule` and the listener `g events`
+/// write over the every-type resource, each run by what serves it: the app boots
+/// with all three, its outbox relays and its worker runs a job it pushes, its
+/// scheduler starts, and an event it emits reaches the listener — where the
+/// scaffold suite only compiles them.
+const WORKERS_TEST: &str = r#"use std::time::Duration;
+
+use nest_rs::core::operation_log;
+use nest_rs::events::EventBus;
+use nest_rs::queue::{Jobs, OutboxRelay, QueueWorker};
+use nest_rs::schedule::Scheduler;
+use nest_rs::testing::{HeadlessApp, LogCapture, wait_until};
+
+use blog::BlogModule;
+use features::gauges::{GaugeChangedEvent, GaugesQueue, ProcessGaugeCommand};
+
+#[tokio::test]
+async fn the_generated_processor_tasks_and_listener_run_where_the_app_serves_them() {
+    let logs = LogCapture::install();
+    let app = HeadlessApp::builder()
+        .module::<BlogModule>()
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
+        .build_headless()
+        .await
+        .expect("BlogModule boots with its processor, tasks and listener");
+    app.init().await.expect("its init phases run");
+    let relay = app
+        .spawn_transport(OutboxRelay::new())
+        .await
+        .expect("the outbox relays over its migrated table");
+    let worker = app
+        .spawn_transport(QueueWorker::new())
+        .await
+        .expect("the processor's worker configures against Redis");
+    let scheduler = app
+        .spawn_transport(Scheduler::new())
+        .await
+        .expect("the tasks' scheduler starts");
+
+    let jobs = app.container().get::<Jobs>().expect("the app's jobs handle");
+    let receipt = jobs
+        .push(
+            GaugesQueue,
+            ProcessGaugeCommand {
+                id: "replayed".into(),
+            },
+        )
+        .await
+        .expect("the job is filed");
+    let job = receipt.id().to_string();
+    wait_until(Duration::from_secs(30), || {
+        logs.find(operation_log::TARGET, nest_rs::queue::unit::JOB.name())
+            .iter()
+            .any(|line| {
+                line.field("job_id").as_deref() == Some(job.as_str())
+                    && line.field("outcome").as_deref() == Some(operation_log::OK)
+            })
+    })
+    .await;
+
+    let bus = app.container().get::<EventBus>().expect("the port's bus");
+    bus.emit(GaugeChangedEvent {
+        id: "replayed".into(),
+    })
+    .await;
+    let heard = logs.find(operation_log::TARGET, nest_rs::events::unit::DISPATCH.name());
+    assert!(
+        heard.iter().any(|line| {
+            line.field("method").as_deref() == Some("on_changed")
+                && line.field("outcome").as_deref() == Some(operation_log::OK)
+        }),
+        "{heard:#?}"
+    );
+
+    scheduler.shutdown().await.expect("the scheduler stops");
+    worker.shutdown().await.expect("the worker stops");
+    relay.shutdown().await.expect("the relay stops");
+}
+"#;
+
+/// The logical database the replay's app files its jobs on: the framework's
+/// shared one, which `test.just` exports for every e2e suite and
+/// `nest-rs-redis`'s suite holds as `DB_SHARED`. Never 0, development's, nor 1
+/// to 8, the demo's suites'.
+const REDIS_DATABASE: &str = "16";
+
+/// The Redis the replay's app reaches: the suite's own URL when `test.just`
+/// exports one, held to [`REDIS_DATABASE`], else the dev container's one server
+/// on it.
+fn replay_redis_url() -> String {
+    let name = nest_rs_config::var_name("redis", "URL");
+    let Some(url) = nest_rs_config::ConfigService::for_namespace("redis")
+        .get("URL")
+        .unwrap_or_else(|refused| panic!("{name} reads: {refused}"))
+    else {
+        return format!("rediss://valkey-standalone:6379/{REDIS_DATABASE}");
+    };
+    let database = url
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split('?').next())
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(_, database)| database);
+    assert_eq!(
+        database,
+        Some(REDIS_DATABASE),
+        "{name} names the framework's shared database, {REDIS_DATABASE}, for the replay's jobs"
+    );
+    url
+}
+
 /// A table for each shape of key `g migration create_<table>s` reads off a `Model`,
 /// the three replacing what `g entity <table>s` wrote.
 const KEY_SHAPES: [(&str, &str); 3] = [
@@ -426,8 +537,9 @@ const GAUGES_GRANT: (&str, &str) = (
 /// modes, the refusal the narrowed policy answers, and the token route and the
 /// GraphQL query `blog` serves — run against the live Postgres, beside the
 /// round trip of a resource taking every column type, a call through the gateway
-/// and the tool generated over it, a key in the store, and each shape of key a
-/// generated migration writes. `blog`'s root is the generators' alone, so one
+/// and the tool generated over it, a job its generated processor runs beside the
+/// generated tasks and listener on Redis, a key in the store, and each shape of
+/// key a generated migration writes. `blog`'s root is the generators' alone, so one
 /// that stops wiring the app `--app` names, a template drifting from the page
 /// that shows it, or a page whose `module.rs` drops an import, fails here.
 #[test]
@@ -471,7 +583,7 @@ fn the_tutorial_reaches_a_protected_endpoint_as_written() {
     gauges.extend(EVERY_COLUMN_TYPE);
     gauges.extend(["--app", "blog"]);
     nestrs(&workspace, &gauges, &[]);
-    for edge in ["ws", "mcp"] {
+    for edge in ["ws", "mcp", "queue", "schedule", "events"] {
         nestrs(&workspace, &["g", edge, "gauges", "--app", "blog"], &[]);
     }
     let ability = workspace.join("crates/features/src/authz/ability.rs");
@@ -504,13 +616,14 @@ fn the_tutorial_reaches_a_protected_endpoint_as_written() {
         ("tutorial.rs", CURLS_TEST),
         ("edges.rs", EDGES_TEST),
         ("key_shapes.rs", KEY_SHAPES_TEST),
+        ("workers.rs", WORKERS_TEST),
     ] {
         std::fs::write(suite.join(file), test).expect("the suite is writable");
     }
     let main = std::fs::read_to_string(suite.join("main.rs")).expect("the suite's root");
     std::fs::write(
         suite.join("main.rs"),
-        format!("{main}\nmod edges;\nmod key_shapes;\nmod tutorial;\n"),
+        format!("{main}\nmod edges;\nmod key_shapes;\nmod tutorial;\nmod workers;\n"),
     )
     .expect("the suite's root is writable");
     let manifest = workspace.join("apps/blog/Cargo.toml");
@@ -530,20 +643,27 @@ fn the_tutorial_reaches_a_protected_endpoint_as_written() {
     if let Err(stderr) = cargo_check(&workspace) {
         panic!("the tutorial's workspace does not compile:\n{stderr}");
     }
-    // The test profile names the store `compose.yml` publishes on localhost; these
-    // point it at the dev container's, as a deployment's variables outrank a profile.
-    let store = [
-        ("URL", "s3://nestrs-test"),
-        ("ENDPOINT", "https://rustfs:9000"),
-        ("ACCESS_KEY", "nestrs"),
-        ("SECRET_KEY", "nestrs"),
+    // The test profile names the store and the Redis `compose.yml` publishes on
+    // localhost; these point them at the dev container's, as a deployment's
+    // variables outrank a profile.
+    let redis = replay_redis_url();
+    let services = [
+        ("storage", "URL", "s3://nestrs-test"),
+        ("storage", "ENDPOINT", "https://rustfs:9000"),
+        ("storage", "ACCESS_KEY", "nestrs"),
+        ("storage", "SECRET_KEY", "nestrs"),
+        ("redis", "URL", redis.as_str()),
     ]
-    .map(|(key, value)| (nest_rs_config::var_name("storage", key), value));
-    let store = store
+    .map(|(namespace, key, value)| (nest_rs_config::var_name(namespace, key), value));
+    let services = services
         .each_ref()
         .map(|(name, value)| (name.as_str(), *value));
-    let run = cargo(&workspace, &["test", "-p", "blog", "--test", "e2e"], &store)
-        .unwrap_or_else(|err| panic!("{err}"));
+    let run = cargo(
+        &workspace,
+        &["test", "-p", "blog", "--test", "e2e"],
+        &services,
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
     let printed = format!(
         "{}{}",
         String::from_utf8_lossy(&run.stdout),
@@ -564,6 +684,7 @@ fn the_tutorial_reaches_a_protected_endpoint_as_written() {
         "edges::the_store_the_environment_names_opens_and_holds_a_key",
         "key_shapes::the_keys_the_generated_migrations_create_do_what_they_declare",
         "tutorial::the_tutorial_s_curls_answer_as_its_pages_print",
+        "workers::the_generated_processor_tasks_and_listener_run_where_the_app_serves_them",
     ] {
         assert!(
             printed.contains(&format!("test {test} ... ok")),

@@ -1,4 +1,4 @@
-//! `nestrs` CLI suite against the dev container's Postgres and store: what the
+//! `nestrs` CLI suite against the dev container's Postgres, Valkey and store: what the
 //! generators write, run as a developer runs it — the tutorial replayed from
 //! its pages, its suite passing on those live services.
 #![allow(

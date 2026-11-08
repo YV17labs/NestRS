@@ -156,6 +156,10 @@ redis = { version = "=1.8", default-features = false, features = [
 
 clap = { version = "4.6", features = ["derive", "env"] }
 toml_edit = "0.25"
+# The CLI's suite reads the `compose.yml` a scaffold writes as YAML: serde_yaml's
+# maintained continuation, published by the YAML Organization, whose API the
+# ecosystem already reads (serde_yaml itself has had no release since 2024-03).
+yaml_serde = "0.10"
 
 syn = { version = "3.0", features = ["full"] }  # public
 quote = "1.0"

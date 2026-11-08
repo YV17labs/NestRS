@@ -223,19 +223,143 @@ mod tests {
 
             assert_eq!(development, "s3://shop");
             assert_eq!(test, "s3://shop-test");
+            Ok(())
+        });
+    }
+
+    /// The ports a Compose service publishes on the host, from its `ports`
+    /// list's `host:container` pairs.
+    fn published(service: &yaml_serde::Value) -> Vec<(u16, u16)> {
+        service["ports"]
+            .as_sequence()
+            .expect("the service publishes ports")
+            .iter()
+            .map(|pair| {
+                let (host, container) = pair
+                    .as_str()
+                    .and_then(|pair| pair.split_once(':'))
+                    .expect("a `host:container` pair");
+                (
+                    host.parse().expect("a host port"),
+                    container.parse().expect("a container port"),
+                )
+            })
+            .collect()
+    }
+
+    /// A Compose service's `environment` entry `key`.
+    fn set<'a>(service: &'a yaml_serde::Value, key: &str) -> &'a str {
+        service["environment"][key]
+            .as_str()
+            .unwrap_or_else(|| panic!("the service sets {key}"))
+    }
+
+    /// What each profile boots on is what `compose.yml` runs, read as Compose
+    /// reads the file: every URL, endpoint and credential the development and
+    /// test profiles name reaches a service it declares, on a port it publishes,
+    /// with the account it creates, in a bucket it creates.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail's closure signature is fixed"
+    )]
+    fn every_service_a_profile_boots_on_is_one_compose_runs() {
+        let prefix = nest_rs_core::EnvPrefix::current();
+        figment::Jail::expect_with(|jail| {
+            let rendering = with_env_prefix(Renderer::new(&Names::parse("shop")), prefix);
+            let mut scaffold = Scaffold::new();
+            queue_env_files(&mut scaffold, jail.directory(), &rendering);
+            scaffold.apply(false).expect("the profiles are written");
+            let compose: yaml_serde::Value =
+                yaml_serde::from_str(&rendering.render(crate::templates::shared::COMPOSE))
+                    .expect("compose.yml is YAML");
+            let services = &compose["services"];
+            let (postgres, redis, storage) = (
+                &services["postgres"],
+                &services["redis"],
+                &services["storage"],
+            );
+            let buckets = &services["storage-buckets"];
+            let script = buckets["command"][0].as_str().expect("the bucket script");
+            let created: Vec<&str> = script
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("for bucket in "))
+                .and_then(|list| list.strip_suffix("; do"))
+                .expect("the buckets the script creates")
+                .split_whitespace()
+                .collect();
+            let listening: u16 = set(storage, "RUSTFS_ADDRESS")
+                .rsplit_once(':')
+                .and_then(|(_, port)| port.parse().ok())
+                .expect("the store's listening port");
+            assert!(
+                published(storage)
+                    .iter()
+                    .any(|(_, inside)| *inside == listening),
+                "the store publishes the port it listens on"
+            );
+            assert!(
+                script.contains(&format!(
+                    "--user '{}:{}'",
+                    set(storage, "RUSTFS_ACCESS_KEY"),
+                    set(storage, "RUSTFS_SECRET_KEY")
+                )) && script.contains(&format!("http://storage:{listening}/")),
+                "the bucket script signs as the store's account, at its port: {script}"
+            );
+            assert_eq!(
+                buckets["depends_on"]["storage"]["condition"].as_str(),
+                Some("service_healthy")
+            );
+
             for profile in [Environment::Development, Environment::Test] {
+                jail.clear_env();
+                load_cascade(jail.directory(), profile);
+                let read = |namespace: &str, key: &str| {
+                    ConfigService::for_namespace(namespace)
+                        .get(key)
+                        .expect("the setting reads")
+                        .unwrap_or_else(|| panic!("{profile:?} names {namespace} {key}"))
+                };
+                let url = |namespace, key| {
+                    url::Url::parse(&read(namespace, key)).expect("the setting is a URL")
+                };
+                let on_compose = |url: &url::Url, service: &yaml_serde::Value| {
+                    assert_eq!(url.host_str(), Some("localhost"), "{profile:?}: {url}");
+                    let port = url.port_or_known_default().expect("a port");
+                    assert!(
+                        published(service).iter().any(|(host, _)| *host == port),
+                        "{profile:?}: {url} on a port compose publishes"
+                    );
+                };
+
+                let database = url("seaorm", "URL");
+                on_compose(&database, postgres);
+                assert_eq!(database.username(), set(postgres, "POSTGRES_USER"));
                 assert_eq!(
-                    storage(profile, "ENDPOINT"),
-                    "http://localhost:9000",
-                    "compose's store, on the port it publishes"
+                    database.password(),
+                    Some(set(postgres, "POSTGRES_PASSWORD"))
+                );
+                assert_eq!(&database.path()[1..], set(postgres, "POSTGRES_DB"));
+
+                on_compose(&url("redis", "URL"), redis);
+
+                on_compose(&url("storage", "ENDPOINT"), storage);
+                assert_eq!(
+                    read("storage", "ACCESS_KEY"),
+                    set(storage, "RUSTFS_ACCESS_KEY")
+                );
+                assert_eq!(
+                    read("storage", "SECRET_KEY"),
+                    set(storage, "RUSTFS_SECRET_KEY")
+                );
+                let bucket = url("storage", "URL");
+                assert!(
+                    bucket
+                        .host_str()
+                        .is_some_and(|bucket| created.contains(&bucket)),
+                    "{profile:?}: {bucket} is a bucket compose creates, among {created:?}"
                 );
             }
-            let compose =
-                Renderer::new(&Names::parse("shop")).render(crate::templates::shared::COMPOSE);
-            assert!(
-                compose.contains("for bucket in shop shop-test; do"),
-                "compose creates both buckets: {compose}"
-            );
             Ok(())
         });
     }

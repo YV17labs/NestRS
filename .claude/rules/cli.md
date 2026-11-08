@@ -93,8 +93,9 @@ the result to the scaffold's own `clippy -D warnings`; `g auth`, `g graphql` and
 `migrations` and `seed` read it there. Its e2e half replays
 every tutorial page that edits `blog` from the workspace root — `--app` naming
 the app, as a reader with two apps types it — and runs the suite they leave
-against the live Postgres, beside what booting alone proves: a call through a
-generated gateway and tool, a key in the store the environment names, and each
+against the live Postgres and Valkey, beside what booting alone proves: a call
+through a generated gateway and tool, a job a generated processor runs beside the
+generated tasks and listener, a key in the store the environment names, and each
 shape of key a generated migration writes, applied and written to. A page's block
 either marks the lines the reader writes or reads a file a generator wrote, so a
 generator that stops writing one fails its page. The integration suite's text

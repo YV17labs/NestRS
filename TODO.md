@@ -239,9 +239,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   every framework error holding one says it by its SQLSTATE, and `?` into a
   `ServiceError` never meets it. Close: `Repo` answering an error of the
   framework's, a break of every service's `?`. *seen*
-- Generated processors, scheduled tasks and listeners are neither compiled
-  nor booted by the CLI's replay; the scaffold's `compose.yml` runs nowhere.
-  *read*
 
 **Configuration and telemetry**
 - Several boot refusals are read, not run (`dyn OccurrenceLock`,
@@ -273,6 +270,13 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   `schedule/index.mdx`). Close: split each.
 - No CI job builds the demo image, so nothing holds its Dockerfile between
   runs. Close: a job on `release/**`, at the CI minutes it costs.
+- No run has started the scaffold's `compose.yml`: a unit test reads it as
+  YAML against every URL and credential its two profiles boot on, and
+  `docker compose config` accepted it by hand (2026-11-08), but its images,
+  healthchecks and bucket script have run nowhere, and the gate's container
+  reaches no docker. Close: a by-hand `docker compose up` on a machine whose
+  ports 5432, 6379 and 9000 are free, or a CI job running it, at the minutes it
+  costs. *read*
 - Copies left: the "line written once" guard eight times, the site emitter
   five times, spec vectors six times; `impl Layer for X {}` beside
   `#[derive(Layer)]` in about 260 fixtures.

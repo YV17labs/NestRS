@@ -118,13 +118,6 @@ the row (`#[expose(nullable)]` or an `Option`), a grant withholding any other
 fails `build()`, and the row answers only the caller whose ability judged it
 (`mask-provenance.md`, 2026-11-08). What remains:
 
-- **A row type with no `#[expose]` crosses a wire through a derive**: a `Model`
-  deriving `Serialize` answers `Json<secret::Model>`, and with `nest-rs-seaorm`'s
-  `graphql` feature off, `SimpleObject` or `#[Object]` on a row compiles and
-  answers a hidden column. Close: a probe per edge refusing an answer that is a
-  `ModelTrait` (`Json<T>`, a list, an `Option`, a `Result` around one), read by
-  type as `#[routes]`' payload probe reads a body, a compile error naming
-  `#[expose]`. *seen* (2026-11-05)
 - **A `#[public]` GraphQL field whose own guard attaches the ability**, its
   request carrying none, answers no wire row: the rows its body builds are judged
   under the field's unit, and their columns resolve after it, where no ability is
@@ -342,8 +335,9 @@ client TLS reload.
 Each is recorded in `.claude/decisions/` with its reason, re-read and still
 holding: a body reading a column off a whole `Model` and answering it as its
 own value (`initials(row.name)`, `row.email` in a DTO), which no type tells from a
-column it derives, so it stays the body's visible line, as an entity no
-`#[expose]` decorates is read in review; a list a body built by hand holding a row
+column it derives, so it stays the body's visible line, as a row a body serializes by
+hand is read in review (`serde_json::to_value(&row)`, a push, a DTO holding it: a
+dispatched method answering a `Model` does not compile); a list a body built by hand holding a row
 its grants refuse failing the whole reply closed, where a `Repo` read never hands
 it one; a push to other connections carrying no row judged for a caller, so a
 per-recipient row is built per recipient or is a DTO (`mask-provenance.md`,

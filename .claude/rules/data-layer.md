@@ -350,9 +350,12 @@ opening. An MCP tool's answer is written inside its site. What a refused row or 
 row judged for another caller files is one line per operation and per fact, naming
 the unit as its `mounted` line does.
 
-**What no type tells stays the body's visible line**: a column a body reads off a
-whole `Model` and answers as its own value — `initials(row.name)`, `row.email` in a
-DTO — and an entity no `#[expose]` decorates, read in review
+**A dispatched method answers no `Model`**, `#[expose]`d or not, held by rustc: every
+type its return type spells is asked of `nest_rs_core::__private::RowProbe`, a
+route's `#[api(response = T)]` included. **What no type tells stays the body's
+visible line**: a column a body reads off a whole `Model` and answers as its own
+value — `initials(row.name)`, `row.email` in a DTO — and a row a body serializes by
+hand (`serde_json::to_value`, a push, a DTO field), read in review
 (`.claude/decisions/mask-provenance.md`, 2026-11-08).
 
 ## Extractors and the carried ability

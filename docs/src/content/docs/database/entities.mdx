@@ -78,14 +78,16 @@ types and the `#[sea_orm(...)]` attributes — `#[expose]` only **reads**
 them and decides what crosses the wire. The two decorators compose:
 `#[sea_orm::model]` builds the `Entity`, `Column`, `ActiveModel`, and
 `Relation` machinery; `#[expose]` builds the transport surface on top. The
-`Model` crosses no wire: `#[expose]` writes the wire type and the round
-trip a mask reads a row through, and refuses a `Serialize`, `Deserialize` or
+`Model` crosses no wire: `#[expose]` writes the wire type, judged on the whole
+row where it is built, and refuses a `Serialize`, `Deserialize` or
 `JsonSchema` on the row, derived or written by hand, and with the `graphql`
 feature a `SimpleObject` or `InputObject` too, so it serializes nowhere but as
-`Post`, and a hidden column has no way onto a wire. Two things sit outside
-that: with the feature off, an app naming `async-graphql` itself can still put a
-row on a GraphQL field, so turn `graphql` on; and an entity with no `#[expose]`
-is yours, a derive on it and `Json<Model>` included.
+`Post`, and a hidden column has no way onto a wire. A route, a message, a
+GraphQL field, a tool or a resource answering any `Model` — one no `#[expose]`
+decorates included, whatever it derives, inside a `Json`, a `Vec`, an `Option`
+or a stream — fails to compile at its type, ``a row crosses no wire``. What
+stays yours is a body serializing a row by hand: `serde_json::to_value(&row)`, a
+push, a DTO holding the row in a field.
 For everything about columns, types, relations, and migrations, the
 [official SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/)
 is the source of truth.

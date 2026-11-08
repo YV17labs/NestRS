@@ -462,3 +462,42 @@ reply closed, where a `Repo` read never hands it one; a `#[public]` GraphQL fiel
 guard attaches the ability, its request carrying none, answers no wire row, its columns
 resolving outside that field's unit; a push to other connections carries no row judged for
 a caller, so a per-recipient row is built per recipient or is a DTO.
+
+## 2026-11-08 — a row no `#[expose]` decorates is refused where a method answers it
+
+The 2026-11-05 entry left a `Model` no `#[expose]` decorates held by no rung: deriving
+`Serialize` and `JsonSchema`, with a `password_hash`, it answered `Json<secret::Model>`
+under `#[routes]`. Seen again at `ac578c866`, one fixture per edge, each compiling: a
+route answering `Json<secret::Model>`, `Result<Json<Vec<…>>, HttpError>`,
+`Json<Option<…>>` and `#[api(response = secret::Model)]`; a message answering the row and
+`Result<Vec<…>, WsError>`; a tool's `Result<Json<…>, McpError>` and a resource's
+`Result<Json<Vec<…>>, McpError>`; a `#[query]` answering a row deriving `SimpleObject`, and
+`async_graphql::Result<Vec<…>>`.
+
+**Decided: a probe per dispatched method, asking the compiler of every type its answer
+spells.** `#[routes]`, `#[messages]`, `#[operations]` and `#[tools]` write beside each
+method an associated function, compiled and never called
+(`nest_rs_codegen::__private::no_row_answered`), asking
+`nest_rs_core::__private::RowProbe` of each type the return type spells — a path and
+every type argument it carries, through references, slices, tuples and an `impl Trait`'s
+bounds, so a stream's `Item` is asked too — and, on a route, of `#[api(response = T)]`. The
+inherent arm, which method resolution prefers, exists for a `sea_orm::ModelTrait` alone,
+under `nest-rs-core`'s `seaorm` feature, which `nest-rs-seaorm` turns on; its bound is a
+trait no type meets, whose `on_unimplemented` says the fix at the type's own name:
+``a row crosses no wire: `secret::Model` holds every column of its table``. Spelling only
+finds what to ask; whether a type is a row is the compiler's answer, an alias included
+when it is the leaf. An `#[expose]`d `Model` meets it beside its coherence refusal.
+
+- **Developer first**: no line of everyday code moves — a method answers the exposed
+  type or a DTO, as every page already shows — and no build without `sea-orm` holds a row
+  to ask of. Compile cost: one never-called function per method.
+- **Refused: `nestrs lint` on the derive.** Reads source, so a row from another crate,
+  a macro's derive or a re-export escape it; a rung below the type's is the weaker one.
+- **Refused: a negative bound on `Json<T>`, `WsServer::emit` and rmcp's `Json`.** No
+  stable Rust writes `T: !ModelTrait`, and specialization is nightly.
+
+**The limit named, in `TODO.md` §6:** a body serializing a row by hand —
+`serde_json::to_value(&row)`, a push (`WsServer::emit(&row)`), an `#[sse]` event, a DTO
+holding the row in a field, a type alias hiding the row inside a wrapper the probe cannot
+open — stays that body's visible line, as the derive on the row it needs is.
+

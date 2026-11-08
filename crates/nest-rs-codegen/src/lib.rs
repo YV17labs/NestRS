@@ -86,6 +86,7 @@ mod refusals;
 mod replicas;
 mod root;
 mod route_path;
+mod row_probe;
 mod site;
 mod specs;
 mod time_zone;
@@ -166,6 +167,7 @@ pub mod __private {
     pub use crate::replicas::{REPLICAS, Replicas, replicas_value};
     pub use crate::root::{CHECKED_BY_CRUD, refused_without, reroot_as, reroot_impl_half};
     pub use crate::route_path::RoutePath;
+    pub use crate::row_probe::no_row_answered;
     pub use crate::site::{SiteGuards, SiteItems, site_items, site_ref};
     pub use crate::specs::{
         exception_filter_specs, force_guard_typeids, interceptor_specs, scoped_specs,

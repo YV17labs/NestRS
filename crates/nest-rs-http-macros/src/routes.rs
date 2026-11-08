@@ -20,10 +20,10 @@ use nest_rs_codegen::__private::{
     cfg_attrs, concrete_signature, deprecation_header, force_guard_typeids,
     guard_capability_bounds, handler_const, host_runtime_entry, impl_self_ident,
     injected_methods_with_layers, injected_per_request_method, layer_deps, mixed_site_ident,
-    normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
-    refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
-    site_items, site_ref, spelled, take_posture, takes_value, ungrouped_expr,
-    unit_of_work_required, unknown_argument, validate_argument,
+    no_row_answered, normalize_forwarded_args, nth_generic_type, one_role_per_method,
+    posture_key_unsupported, refuse_rust_deprecated, reject_meta_on_operations, scoped_specs,
+    shared_receiver, site, site_items, site_ref, spelled, take_posture, takes_value,
+    ungrouped_expr, unit_of_work_required, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -296,6 +296,14 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(None) => ApiMeta::default(),
             Err(err) => return err.to_compile_error().into(),
         };
+        let answered: Vec<&Type> = match &method.sig.output {
+            ReturnType::Default => Vec::new(),
+            ReturnType::Type(_, ty) => vec![&**ty],
+        }
+        .into_iter()
+        .chain(api.response.as_ref())
+        .collect();
+        handler_consts.push(no_row_answered(&method_name, &cfgs, &answered));
         let deprecation = match api
             .deprecated
             .as_ref()

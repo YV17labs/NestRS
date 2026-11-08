@@ -154,8 +154,10 @@ relation's `#[expose]` is its visible opening.
 No type tells a column a body copies into a value of its own from a column it
 derives: `initials(row.name)` and `row.email` in a DTO read alike. A body reading a
 column off a whole `Model` and answering it as its own value is that body's
-visible line, read in review — as is an entity no `#[expose]` decorates. Return the
-exposed type, built from the row, and the judgement is the framework's.
+visible line, read in review — as is a body serializing a row by hand. A method
+answering a `Model` itself, whatever wraps it and whatever it derives, does not
+compile: return the exposed type, built from the row, and the judgement is the
+framework's.
 
 ## What it costs
 

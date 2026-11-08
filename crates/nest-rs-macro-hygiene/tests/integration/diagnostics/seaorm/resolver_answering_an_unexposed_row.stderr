@@ -1,0 +1,41 @@
+error[E0277]: a row crosses no wire: `secret::Model` holds every column of its table, the ones no reply answers included
+  --> tests/integration/diagnostics/seaorm/resolver_answering_an_unexposed_row.rs:31:33
+   |
+31 |     fn secret(&self) -> secret::Model {
+   |                                 ^^^^^ this answers a `Model`
+   |
+help: the trait `nest_rs::core::__private::CrossesAWire` is not implemented for `secret::Model`
+  --> tests/integration/diagnostics/seaorm/resolver_answering_an_unexposed_row.rs:10:5
+   |
+10 |     pub struct Model {
+   |     ^^^^^^^^^^^^^^^^
+   = note: answer the type `#[expose]` builds from the row (`From<&Model>`), or a DTO naming the columns it answers: a derive on a `Model` opens no wire
+note: required by a bound in `nest_rs::core::__private::RowProbe::<T>::answered`
+  --> $WORKSPACE/crates/nest-rs-core/src/row_probe.rs
+   |
+   |     pub fn answered(&self)
+   |            -------- required by a bound in this associated function
+   |     where
+   |         T: CrossesAWire,
+   |            ^^^^^^^^^^^^ required by this bound in `RowProbe::<T>::answered`
+
+error[E0277]: a row crosses no wire: `secret::Model` holds every column of its table, the ones no reply answers included
+  --> tests/integration/diagnostics/seaorm/resolver_answering_an_unexposed_row.rs:37:66
+   |
+37 |     async fn secrets(&self) -> async_graphql::Result<Vec<secret::Model>> {
+   |                                                                  ^^^^^ this answers a `Model`
+   |
+help: the trait `nest_rs::core::__private::CrossesAWire` is not implemented for `secret::Model`
+  --> tests/integration/diagnostics/seaorm/resolver_answering_an_unexposed_row.rs:10:5
+   |
+10 |     pub struct Model {
+   |     ^^^^^^^^^^^^^^^^
+   = note: answer the type `#[expose]` builds from the row (`From<&Model>`), or a DTO naming the columns it answers: a derive on a `Model` opens no wire
+note: required by a bound in `nest_rs::core::__private::RowProbe::<T>::answered`
+  --> $WORKSPACE/crates/nest-rs-core/src/row_probe.rs
+   |
+   |     pub fn answered(&self)
+   |            -------- required by a bound in this associated function
+   |     where
+   |         T: CrossesAWire,
+   |            ^^^^^^^^^^^^ required by this bound in `RowProbe::<T>::answered`

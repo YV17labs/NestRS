@@ -43,6 +43,27 @@ note: required for `post::Model` to implement `for<'de> nest_rs::mcp::rmcp::serd
    = note: required for `nest_rs::http::Json<post::Model>` to implement `FromRequest<'_>`
    = note: this error originates in the attribute macro `routes` which comes from the expansion of the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
 
+error[E0277]: a row crosses no wire: `post::Model` holds every column of its table, the ones no reply answers included
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:35:38
+   |
+35 |     fn answered(&self) -> Json<post::Model> {
+   |                                      ^^^^^ this answers a `Model`
+   |
+help: the trait `nest_rs::core::__private::CrossesAWire` is not implemented for `post::Model`
+  --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:11:5
+   |
+11 |     pub struct Model {
+   |     ^^^^^^^^^^^^^^^^
+   = note: answer the type `#[expose]` builds from the row (`From<&Model>`), or a DTO naming the columns it answers: a derive on a `Model` opens no wire
+note: required by a bound in `nest_rs::core::__private::RowProbe::<T>::answered`
+  --> $WORKSPACE/crates/nest-rs-core/src/row_probe.rs
+   |
+   |     pub fn answered(&self)
+   |            -------- required by a bound in this associated function
+   |     where
+   |         T: CrossesAWire,
+   |            ^^^^^^^^^^^^ required by this bound in `RowProbe::<T>::answered`
+
 error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
   --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:31:1
    |

@@ -10,9 +10,9 @@ use async_graphql::Context;
 /// Held in each operation's data. Built by the first line, so an operation filing none
 /// pays for one empty value.
 #[derive(Default)]
-pub(crate) struct FiledOnce(OnceLock<Mutex<HashSet<String>>>);
+pub(crate) struct FiledFacts(OnceLock<Mutex<HashSet<String>>>);
 
-impl FiledOnce {
+impl FiledFacts {
     fn first(&self, fact: String) -> bool {
         self.0
             .get_or_init(Mutex::default)
@@ -25,17 +25,17 @@ impl FiledOnce {
 /// Whether the operation `ctx` runs has yet to file `fact`. A schema no app composed
 /// keeps no record, so there each files its own.
 pub fn first_in_operation(ctx: &Context<'_>, fact: String) -> bool {
-    ctx.data_opt::<FiledOnce>()
+    ctx.data_opt::<FiledFacts>()
         .is_none_or(|filed| filed.first(fact))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::FiledOnce;
+    use super::FiledFacts;
 
     #[test]
     fn a_fact_is_first_once() {
-        let filed = FiledOnce::default();
+        let filed = FiledFacts::default();
 
         assert!(filed.first("one".to_owned()));
         assert!(!filed.first("one".to_owned()));

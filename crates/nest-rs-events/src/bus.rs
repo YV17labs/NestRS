@@ -11,6 +11,7 @@ use futures_util::Stream;
 use nest_rs_core::__private::{
     Site, Tail, UnitChains, caught_problem, dispatch, new_unit_context, settled, short_type_name,
 };
+use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::tracing::Instrument;
 use nest_rs_core::{Container, Failure, Handler, Outcome, UnitContext};
 use nest_rs_database::__private::run_unit_bounded;
@@ -264,14 +265,16 @@ async fn dispatch_one(
         method = handler.method(),
     );
     let continuation = nest_rs_core::RequestContinuation::new(None, correlation.clone());
-    let line = DispatchLine {
-        event,
-        handler,
-        continuation: &continuation,
-        span: span.clone(),
-        started: std::time::Instant::now(),
-        filed: false,
-    };
+    let line = FiledOnce::new(
+        DispatchLine {
+            event,
+            handler,
+            continuation: &continuation,
+            span: span.clone(),
+            started: std::time::Instant::now(),
+        },
+        Unwinding::Shared,
+    );
     let mut tail = ListenerTail { body: Some(body) };
     // Nested, never a fresh context, which would drop what the emitter carries.
     let outcome = nest_rs_core::with_request_scope(
@@ -386,8 +389,8 @@ impl Tail for ListenerTail {
     }
 }
 
-/// One listener's `events.dispatch` line, filed exactly once — by the end the
-/// dispatch saw, or by `Drop` when the listener is dropped first.
+/// One listener's `events.dispatch` line: by the end the dispatch saw, or
+/// `cancelled` when the listener is dropped first.
 ///
 /// Filed inside the re-entered correlation: a line emitted after the `.await`
 /// otherwise carries no ids.
@@ -397,16 +400,10 @@ struct DispatchLine<'a> {
     continuation: &'a nest_rs_core::RequestContinuation,
     span: tracing::Span,
     started: std::time::Instant,
-    filed: bool,
 }
 
-impl DispatchLine<'_> {
-    fn file(mut self, outcome: &'static str) {
-        self.emit(outcome);
-    }
-
-    fn emit(&mut self, outcome: &'static str) {
-        self.filed = true;
+impl Line for DispatchLine<'_> {
+    fn file(&mut self, outcome: &'static str) {
         self.continuation.enter(|| {
             nest_rs_core::operation_line!(
                 crate::unit::DISPATCH,
@@ -418,14 +415,6 @@ impl DispatchLine<'_> {
                 method = self.handler.method(),
             );
         });
-    }
-}
-
-impl Drop for DispatchLine<'_> {
-    fn drop(&mut self) {
-        if !self.filed {
-            self.emit(nest_rs_core::operation_log::CANCELLED);
-        }
     }
 }
 

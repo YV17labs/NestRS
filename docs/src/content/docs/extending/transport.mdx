@@ -135,7 +135,10 @@ that same correlation and outside the unit's span,
 unit's ids and is nobody's child; filed bare once `scope` has returned, it
 carries none of them. The outcome is yours to file: `OK` or `ERROR`, `PANIC`
 for work that unwound (`nest_rs::core::panic::contain` catches it),
-`CANCELLED` for work dropped before it settled. The line's fields and words
+`CANCELLED` for work dropped before it settled — which no return of yours can
+say, so hold the line in a `nest_rs::core::operation_log::FiledOnce`: give your
+line type an `operation_log::Line` impl that files it, and a unit dropped first
+files `CANCELLED` on its own. The line's fields and words
 are on [the logs page](/opentelemetry/logs/#every-unit-of-work-files-one-line).
 
 ## Serving HTTP from a package

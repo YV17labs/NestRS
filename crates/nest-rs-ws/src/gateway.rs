@@ -8,6 +8,7 @@ use futures_util::future::Either;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use nest_rs_core::__private::{ClassGate, Pending, RequestScopes, install_pending};
 use nest_rs_core::code;
+use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::{
     AmbientValue, Container, Continuation, Correlation, Handler, RequestContinuation, operation_log,
 };
@@ -844,7 +845,7 @@ async fn under_connection<F: Future<Output = ()> + Send>(
             true
         }
         HookEnd::Unwound(payload) => {
-            line.unwound(&*payload);
+            UnitLine::unwound(line, &*payload);
             false
         }
         HookEnd::TimedOut(timeout) => {
@@ -932,9 +933,8 @@ impl Unit<'_> {
     }
 }
 
-/// One unit's line, filed exactly once — by the end the connection loop saw,
-/// or by `Drop` as [`CANCELLED`](operation_log::CANCELLED) when the transport
-/// stopped the socket with this unit still running.
+/// One unit's line: by the end the connection loop saw, or `cancelled` when the
+/// transport stopped the socket with this unit still running.
 ///
 /// One macro call per unit: `name:` must be a constant at each call site.
 struct UnitLine<'a> {
@@ -948,52 +948,52 @@ struct UnitLine<'a> {
     /// The unit's span, which records the outcome the line files.
     span: tracing::Span,
     started: std::time::Instant,
-    filed: bool,
 }
 
 impl<'a> UnitLine<'a> {
+    /// Nothing but the unit shares the future its line drops with: an unwind
+    /// dropping it is the unit's own.
     fn open(
         unit: Unit<'a>,
         path: &'a str,
         conn_id: ConnId,
         correlation: Correlation,
         span: tracing::Span,
-    ) -> Self {
-        Self {
-            unit,
-            path,
-            conn_id,
-            correlation,
-            span,
-            started: std::time::Instant::now(),
-            filed: false,
-        }
+    ) -> FiledOnce<Self> {
+        FiledOnce::new(
+            Self {
+                unit,
+                path,
+                conn_id,
+                correlation,
+                span,
+                started: std::time::Instant::now(),
+            },
+            Unwinding::Own,
+        )
     }
 
-    fn file(mut self, outcome: &'static str) {
-        self.emit(outcome);
-    }
-
-    /// File what a message answered: `ok`, or `error`, which its span records
+    /// What a message answered files: `ok`, or `error`, which its span records
     /// unless its client's own frame earned it, as an HTTP `4xx` fails nothing on
     /// the server's span.
-    fn answered(mut self, answered: &Answered) {
+    fn answered(&mut self, answered: &Answered) -> &'static str {
         if answered.refused_its_client() {
             self.span = tracing::Span::none();
         }
-        self.emit(if answered.failed {
+        if answered.failed {
             operation_log::ERROR
         } else {
             operation_log::OK
-        });
+        }
     }
 
     /// The unit unwound: file `panic`, and give the operator the panic's text,
     /// which the client is never told.
-    fn unwound(mut self, payload: &(dyn std::any::Any + Send)) {
-        self.emit(operation_log::PANIC);
-        let (path, conn_id) = (self.path, self.conn_id);
-        RequestContinuation::new(None, self.correlation.clone()).enter(|| match self.unit {
+    fn unwound(line: FiledOnce<Self>, payload: &(dyn std::any::Any + Send)) {
+        let (unit, path, conn_id) = (line.unit, line.path, line.conn_id);
+        let correlation = line.correlation.clone();
+        line.file(operation_log::PANIC);
+        RequestContinuation::new(None, correlation).enter(|| match unit {
             Unit::Message { event } => nest_rs_core::contained_panic!(
                 target: crate::TARGET,
                 payload,
@@ -1019,9 +1019,10 @@ impl<'a> UnitLine<'a> {
             ),
         });
     }
+}
 
-    fn emit(&mut self, outcome: &'static str) {
-        self.filed = true;
+impl Line for UnitLine<'_> {
+    fn file(&mut self, outcome: &'static str) {
         let (path, conn_id) = (self.path, self.conn_id);
         let span = &self.span;
         let started = self.started;
@@ -1052,18 +1053,6 @@ impl<'a> UnitLine<'a> {
                 conn_id,
             ),
         });
-    }
-}
-
-impl Drop for UnitLine<'_> {
-    fn drop(&mut self) {
-        if !self.filed {
-            self.emit(if std::thread::panicking() {
-                operation_log::PANIC
-            } else {
-                operation_log::CANCELLED
-            });
-        }
     }
 }
 
@@ -1189,7 +1178,7 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
         ws.event = %named,
         ws.connection_id = conn_id,
     );
-    let line = UnitLine::open(message, path, conn_id, correlation.clone(), span.clone());
+    let mut line = UnitLine::open(message, path, conn_id, correlation.clone(), span.clone());
     let ran = nest_rs_core::with_request_scope(
         Some(wiring.scopes.open()),
         correlation,
@@ -1199,11 +1188,12 @@ async fn in_message_unit<B: Future<Output = Answered> + Send>(
     .await;
     match ran {
         Ok(answered) => {
-            line.answered(&answered);
+            let outcome = line.answered(&answered);
+            line.file(outcome);
             answered.reply
         }
         Err(payload) => {
-            line.unwound(&*payload);
+            UnitLine::unwound(line, &*payload);
             WsReply::Error(crate::WsError::internal())
         }
     }

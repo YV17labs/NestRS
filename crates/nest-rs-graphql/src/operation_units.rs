@@ -27,7 +27,7 @@ use async_graphql::{
 };
 use async_graphql_value::Value as Written;
 use nest_rs_core::__private::{RequestScopes, nested_continuation};
-use nest_rs_core::operation_log::{CANCELLED, ERROR, OK, PANIC};
+use nest_rs_core::operation_log::{ERROR, FiledOnce, Line, OK, PANIC, Unwinding};
 use nest_rs_core::{Problem, code};
 use nest_rs_core::{RequestContinuation, RequestScope};
 use nest_rs_database::{
@@ -159,7 +159,7 @@ impl<E: Executor> OperationUnits<E> {
             Some(deadline) => spec.with_deadline(deadline.at()),
             None => spec,
         };
-        let line = OperationLine::open(selected, correlation.clone(), span.clone());
+        let mut line = OperationLine::open(selected, correlation.clone(), span.clone());
         let body = async {
             let Some(deadline) = cut else {
                 return Answered::Executed(body.await);
@@ -183,7 +183,8 @@ impl<E: Executor> OperationUnits<E> {
         let answered = nest_rs_core::panic::contain(scoped).instrument(span).await;
         match answered {
             Ok(answered) => {
-                line.answered(&answered);
+                let outcome = line.answered(&answered);
+                line.file(outcome);
                 answered.into_response()
             }
             Err(unwound) => {
@@ -728,10 +729,10 @@ impl From<AtomicError> for FieldFailed {
     }
 }
 
-/// One operation's `graphql.operation` line, filed exactly once — by `Drop` as
-/// [`CANCELLED`] when dropped first. It names the operation's type, never its
-/// name: the document's, which the client writes, and which the span alone
-/// carries, as the GraphQL conventions ask.
+/// One operation's `graphql.operation` line, `cancelled` when dropped first.
+/// It names the operation's type, never its name: the document's, which the
+/// client writes, and which the span alone carries, as the GraphQL conventions
+/// ask.
 ///
 /// The correlation is held: a `Drop` runs while the future is torn down, not
 /// reliably inside the scope that future installed.
@@ -740,36 +741,35 @@ struct OperationLine {
     correlation: nest_rs_core::Correlation,
     span: tracing::Span,
     started: std::time::Instant,
-    filed: bool,
 }
 
 impl OperationLine {
+    /// The operation's unit catches its own unwind and files it, so another
+    /// dropping the line is a sibling's.
     fn open(
         selected: Selected,
         correlation: nest_rs_core::Correlation,
         span: tracing::Span,
-    ) -> Self {
-        Self {
-            ty: selected.type_name(),
-            correlation,
-            span,
-            started: std::time::Instant::now(),
-            filed: false,
-        }
+    ) -> FiledOnce<Self> {
+        FiledOnce::new(
+            Self {
+                ty: selected.type_name(),
+                correlation,
+                span,
+                started: std::time::Instant::now(),
+            },
+            Unwinding::Shared,
+        )
     }
 
-    fn file(mut self, outcome: &'static str) {
-        self.emit(outcome);
-    }
-
-    /// File what the operation answered: `ok`, or `error`, which its span
+    /// What the operation answered files: `ok`, or `error`, which its span
     /// records unless its caller's document earned it, as an HTTP `4xx` fails
     /// nothing on the server's span.
-    fn answered(mut self, answered: &Answered) {
+    fn answered(&mut self, answered: &Answered) -> &'static str {
         if answered.refused_its_caller() {
             self.span = tracing::Span::none();
         }
-        self.emit(answered.outcome());
+        answered.outcome()
     }
 
     /// Said inside the operation's unit when the request's deadline cuts it,
@@ -782,9 +782,10 @@ impl OperationLine {
             "graphql operation not answered by the request deadline; it is cut",
         );
     }
+}
 
-    fn emit(&mut self, outcome: &'static str) {
-        self.filed = true;
+impl Line for OperationLine {
+    fn file(&mut self, outcome: &'static str) {
         nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
             nest_rs_core::operation_line!(
                 crate::unit::OPERATION,
@@ -794,14 +795,6 @@ impl OperationLine {
                 kind = self.ty,
             );
         });
-    }
-}
-
-impl Drop for OperationLine {
-    fn drop(&mut self) {
-        if !self.filed {
-            self.emit(CANCELLED);
-        }
     }
 }
 

@@ -24,6 +24,7 @@ use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 
 use nest_rs_core::__private::Site;
 use nest_rs_core::anyhow;
+use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
 use nest_rs_http::__private::websocket::{
     self, CloseCode, Due, HandshakeRefused, KeepAlive, Message, Signal, WebSocketLimits,
@@ -485,7 +486,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 };
                 let _ = sockets.run(served).instrument(span).await;
                 if let Some(ended) = ended {
-                    line.settle(ended);
+                    SubscriptionLine::settle(line, ended);
                 }
             },
         ))
@@ -1037,9 +1038,8 @@ async fn close_socket(
     let _ = SinkExt::close(sink).await;
 }
 
-/// Files the subscription's line **on drop**, so an aborted socket files
-/// `cancelled` (or `panic`); one that finishes says how through
-/// [`settle`](Self::settle).
+/// The subscription's line, so an aborted socket files `cancelled` (or
+/// `panic`); one that finishes says how through [`settle`](Self::settle).
 ///
 /// The correlation is held: a `Drop` runs while the future is torn down, not
 /// reliably inside the scope that future installed.
@@ -1050,63 +1050,62 @@ struct SubscriptionLine {
     /// The socket's coordinate, as `ws.connect` names a gateway's.
     served_at: ServedPath,
     started: std::time::Instant,
-    outcome: Option<&'static str>,
 }
 
 impl SubscriptionLine {
+    /// Nothing but the socket shares the future its line drops with: an unwind
+    /// dropping it is the socket's own.
     fn new(
         correlation: nest_rs_core::Correlation,
         span: tracing::Span,
         served_at: ServedPath,
-    ) -> Self {
-        Self {
-            correlation,
-            span,
-            served_at,
-            started: std::time::Instant::now(),
-            outcome: None,
-        }
+    ) -> FiledOnce<Self> {
+        FiledOnce::new(
+            Self {
+                correlation,
+                span,
+                served_at,
+                started: std::time::Instant::now(),
+            },
+            Unwinding::Own,
+        )
     }
 
     /// Say how the socket ended: `ok` by its peer, `error` refused by the
     /// protocol, which its client earned and its span leaves unrecorded, as an
     /// HTTP `4xx` fails nothing on the server's span; `cancelled` by the server,
     /// `panic` when a subscription unwound.
-    fn settle(mut self, ended: Ended) {
+    fn settle(mut line: FiledOnce<Self>, ended: Ended) {
         use nest_rs_core::operation_log::{CANCELLED, ERROR, OK, PANIC};
-        self.outcome = Some(match ended {
+        let outcome = match ended {
             Ended::ByPeer => OK,
             Ended::Refused => {
-                self.span = tracing::Span::none();
+                line.span = tracing::Span::none();
                 ERROR
             }
             Ended::ByServer => CANCELLED,
             Ended::Unwound(payload) => {
-                nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(
+                nest_rs_core::RequestContinuation::new(None, line.correlation.clone()).enter(
                     || {
                         nest_rs_core::contained_panic!(
                             target: crate::TARGET,
                             &*payload,
                             "graphql subscription panicked; the socket is closed with an internal \
                              error",
-                            path = &*self.served_at.0,
+                            path = &*line.served_at.0,
                             close_code = u16::from(CloseCode::Error),
                         );
                     },
                 );
                 PANIC
             }
-        });
+        };
+        line.file(outcome);
     }
 }
 
-impl Drop for SubscriptionLine {
-    fn drop(&mut self) {
-        let outcome = self.outcome.unwrap_or(if std::thread::panicking() {
-            nest_rs_core::operation_log::PANIC
-        } else {
-            nest_rs_core::operation_log::CANCELLED
-        });
+impl Line for SubscriptionLine {
+    fn file(&mut self, outcome: &'static str) {
         nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
             nest_rs_core::operation_line!(
                 crate::unit::SUBSCRIPTION,
@@ -1189,12 +1188,14 @@ mod tests {
             (Ended::ByServer, CANCELLED),
         ] {
             let logs = nest_rs_testing::LogCapture::install();
-            SubscriptionLine::new(
-                nest_rs_core::Correlation::minted(None),
-                tracing::Span::none(),
-                served_at(),
-            )
-            .settle(ended);
+            SubscriptionLine::settle(
+                SubscriptionLine::new(
+                    nest_rs_core::Correlation::minted(None),
+                    tracing::Span::none(),
+                    served_at(),
+                ),
+                ended,
+            );
             let served = logs.find(
                 nest_rs_core::operation_log::TARGET,
                 crate::unit::SUBSCRIPTION.name(),

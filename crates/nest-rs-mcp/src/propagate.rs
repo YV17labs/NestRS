@@ -42,6 +42,7 @@ use std::time::Duration;
 
 use futures_util::future::Either;
 use nest_rs_core::__private::{Tail, UnitChains, dispatch, new_unit_context, settled};
+use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::{
     AmbientValue, Correlation, Deadline, Failure, Outcome, RequestContinuation, ServedAddress,
     UnitContext, operation_log,
@@ -271,7 +272,7 @@ impl OperationUnits {
             path: self.served_at.as_deref().map(|served| &*served.0),
         };
         // Filed outside the scope `scoped` installs, so it holds its own correlation.
-        let line = OperationLine::open(named, address, correlation.clone(), operation.clone());
+        let mut line = OperationLine::open(named, address, correlation.clone(), operation.clone());
 
         let deadline = timeout.map(|timeout| (timeout, tokio::time::Instant::now() + timeout));
         let spec = UnitSpec::new(
@@ -329,15 +330,16 @@ impl OperationUnits {
                     answered.answer
                 }
                 Some(Ok(answered)) => {
-                    match answered.failed_as() {
-                        None => line.file(operation_log::OK),
+                    let outcome = match answered.failed_as() {
+                        None => operation_log::OK,
                         Some(failed_as) => line.failed(failed_as),
-                    }
+                    };
+                    line.file(outcome);
                     answered.answer
                 }
                 Some(Err(payload)) => {
                     let answer = opaque_answer();
-                    line.unwound(&*payload, Some(answer.code));
+                    OperationLine::unwound(line, &*payload, Some(answer.code));
                     Err(answer)
                 }
                 None => {
@@ -768,9 +770,8 @@ impl LineAddress<'_> {
     }
 }
 
-/// One operation's `mcp.operation` line, filed exactly once — by the end the
-/// dispatch saw, else by `Drop` as [`CANCELLED`](operation_log::CANCELLED).
-/// It names the server's values only: the protocol's method or
+/// One operation's `mcp.operation` line: by the end the dispatch saw, else
+/// `cancelled` when it is dropped first. It names the server's values only: the protocol's method or
 /// [`OTHER`](operation_log::OTHER) as `mcp_method`, and what the method
 /// addressed as its `mounted` line does.
 struct OperationLine<'a> {
@@ -782,35 +783,34 @@ struct OperationLine<'a> {
     /// notification, which opens none.
     span: tracing::Span,
     started: std::time::Instant,
-    filed: bool,
 }
 
 impl<'a> OperationLine<'a> {
+    /// Nothing but the operation shares the future its line drops with: an
+    /// unwind dropping it is the operation's own.
     fn open(
         mcp_method: &'static str,
         address: &'a LineAddress<'a>,
         correlation: Correlation,
         span: tracing::Span,
-    ) -> Self {
-        Self {
-            mcp_method,
-            address,
-            correlation,
-            span,
-            started: std::time::Instant::now(),
-            filed: false,
-        }
-    }
-
-    fn file(mut self, outcome: &'static str) {
-        self.emit(outcome);
+    ) -> FiledOnce<Self> {
+        FiledOnce::new(
+            Self {
+                mcp_method,
+                address,
+                correlation,
+                span,
+                started: std::time::Instant::now(),
+            },
+            Unwinding::Own,
+        )
     }
 
     /// The operation failed as `failed_as` says, which its span records in
     /// place of the outcome word its line files, `error`: `tracing-opentelemetry`
     /// keeps every value a field is recorded with, so the class is recorded once
     /// and the line files with the span taken out.
-    fn failed(mut self, failed_as: FailedAs) {
+    fn failed(&mut self, failed_as: FailedAs) -> &'static str {
         let span = std::mem::replace(&mut self.span, tracing::Span::none());
         match failed_as {
             FailedAs::ToolError => operation_log::record_error(&span, TOOL_ERROR),
@@ -822,26 +822,32 @@ impl<'a> OperationLine<'a> {
             }
             FailedAs::Unit => operation_log::record_error(&span, operation_log::ERROR),
         }
-        self.emit(operation_log::ERROR);
+        operation_log::ERROR
     }
 
     /// The operation unwound: file `panic`, the word every edge's span gives an
     /// unwind, beside `answered`, the code its client is answered with — a
     /// notification is answered nothing — and give the operator what the
     /// client is not told.
-    fn unwound(mut self, payload: &(dyn std::any::Any + Send), answered: Option<ErrorCode>) {
+    fn unwound(
+        line: FiledOnce<Self>,
+        payload: &(dyn std::any::Any + Send),
+        answered: Option<ErrorCode>,
+    ) {
         if let Some(code) = answered {
-            self.span
+            line.span
                 .record(RPC_RESPONSE_STATUS_CODE, tracing::field::display(code.0));
         }
-        self.emit(operation_log::PANIC);
-        RequestContinuation::new(None, self.correlation.clone()).enter(|| {
-            let named = self.address.named();
+        let (mcp_method, address) = (line.mcp_method, line.address);
+        let correlation = line.correlation.clone();
+        line.file(operation_log::PANIC);
+        RequestContinuation::new(None, correlation).enter(|| {
+            let named = address.named();
             nest_rs_core::contained_panic!(
                 target: crate::TARGET,
                 payload,
                 "mcp operation panicked; its client is answered with an internal error",
-                mcp_method = self.mcp_method,
+                mcp_method,
                 path = named.path,
                 tool = named.tool,
                 prompt = named.prompt,
@@ -849,9 +855,10 @@ impl<'a> OperationLine<'a> {
             );
         });
     }
+}
 
-    fn emit(&mut self, outcome: &'static str) {
-        self.filed = true;
+impl Line for OperationLine<'_> {
+    fn file(&mut self, outcome: &'static str) {
         RequestContinuation::new(None, self.correlation.clone()).enter(|| {
             let named = self.address.named();
             nest_rs_core::operation_line!(
@@ -868,18 +875,6 @@ impl<'a> OperationLine<'a> {
                 resource = named.resource,
             );
         });
-    }
-}
-
-impl Drop for OperationLine<'_> {
-    fn drop(&mut self) {
-        if !self.filed {
-            self.emit(if std::thread::panicking() {
-                operation_log::PANIC
-            } else {
-                operation_log::CANCELLED
-            });
-        }
     }
 }
 
@@ -950,7 +945,7 @@ macro_rules! notification_method {
                     async move {
                         match self.units.detached.run(handled).await {
                             Some(Ok(())) => line.file(operation_log::OK),
-                            Some(Err(payload)) => line.unwound(&*payload, None),
+                            Some(Err(payload)) => OperationLine::unwound(line, &*payload, None),
                             None => line.file(operation_log::CANCELLED),
                         }
                     },

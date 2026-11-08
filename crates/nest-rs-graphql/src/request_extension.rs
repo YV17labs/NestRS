@@ -3,7 +3,7 @@
 //! walks the document it refuses one that does not parse ([`unparsed`]) and what
 //! one that does would cost ([`document_cost`]), gives each object that could answer
 //! no key one of its own ([`OwnKey`]), seeds the request's loaders and what it files
-//! once ([`FiledOnce`]), and once validation passed answers the refusal the
+//! once ([`FiledFacts`]), and once validation passed answers the refusal the
 //! operation's read or that key's left ([`OperationRefusal`]). No other hook sits
 //! between validation and execution.
 
@@ -18,7 +18,7 @@ use async_graphql::{Request, ServerError, ServerResult, ValidationResult};
 use crate::config::GraphqlConfig;
 use crate::context::held_by;
 use crate::document_cost::{self, DocumentLimits};
-use crate::filed_once::FiledOnce;
+use crate::filed_facts::FiledFacts;
 use crate::loader::LoaderSeeds;
 use crate::operation_units::{OperationRefusal, selected_operation};
 use crate::own_key::OwnKey;
@@ -114,7 +114,7 @@ impl Extension for RequestExtension {
         {
             request.data.insert(OperationRefusal::new(refusal));
         }
-        next.run(ctx, self.seeds.seed(request).data(FiledOnce::default()))
+        next.run(ctx, self.seeds.seed(request).data(FiledFacts::default()))
             .await
     }
 

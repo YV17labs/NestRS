@@ -17,6 +17,7 @@ use nest_rs_core::__private::{
     GlobalLayers, GuardStage, ResolvedLayer, Site, Tail, dispatch, new_unit_context,
     report_unresolved, settled,
 };
+use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::{
     Container, Failure, Handler, Outcome, Posture, Problem, ServedAddress, UnitContext,
     UnresolvedLayerError,
@@ -300,14 +301,16 @@ where
         graphql.operation.role = role,
         graphql.field.name = field,
     );
-    let line = FieldLine {
-        handler,
-        kind: operation_label(operation),
-        correlation: correlation.clone(),
-        span: span.clone(),
-        started: std::time::Instant::now(),
-        filed: false,
-    };
+    let line = FiledOnce::new(
+        FieldLine {
+            handler,
+            kind: operation_label(operation),
+            correlation: correlation.clone(),
+            span: span.clone(),
+            started: std::time::Instant::now(),
+        },
+        Unwinding::Shared,
+    );
     // Combinators, never an `async fn` taking the field's future: a debug
     // build would hold every copy of it on the stack polling it
     // (rust-lang/rust#62958).
@@ -501,7 +504,7 @@ pin_project_lite::pin_project! {
     /// A root field's unit with its line, filed once it ends: `ok` or `error`
     /// by what it answered, `panic` when it unwound — the unwind then resumed.
     struct Filed<F> {
-        line: Option<FieldLine>,
+        line: Option<FiledOnce<FieldLine>>,
         #[pin]
         unit: F,
     }
@@ -520,8 +523,9 @@ where
         let line = this.line.take();
         match ended {
             Ok(answered) => {
-                if let Some(line) = line {
-                    line.answered(&answered);
+                if let Some(mut line) = line {
+                    let outcome = line.answered(&answered);
+                    line.file(outcome);
                 }
                 Poll::Ready(answered)
             }
@@ -535,8 +539,7 @@ where
     }
 }
 
-/// One root field's `graphql.field` line, filed exactly once, by `Drop` as
-/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED) when dropped first.
+/// One root field's `graphql.field` line, `cancelled` when dropped first.
 ///
 /// The correlation is held: a `Drop` runs while the future is torn down, not
 /// reliably inside the scope that future installed.
@@ -546,33 +549,29 @@ struct FieldLine {
     correlation: nest_rs_core::Correlation,
     span: tracing::Span,
     started: std::time::Instant,
-    filed: bool,
 }
 
 impl FieldLine {
-    fn file(mut self, outcome: &'static str) {
-        self.emit(outcome);
-    }
-
-    /// File what the field answered: `ok`, or `error`, which its span records
+    /// What the field answered files: `ok`, or `error`, which its span records
     /// unless its caller's request earned it, as an HTTP `4xx` fails nothing on
     /// the server's span.
-    fn answered<T, E: AnsweredError>(mut self, answered: &Result<T, E>) {
+    fn answered<T, E: AnsweredError>(&mut self, answered: &Result<T, E>) -> &'static str {
         if answered
             .as_ref()
             .is_err_and(|error| !error.failed_the_server())
         {
             self.span = tracing::Span::none();
         }
-        self.emit(if answered.is_ok() {
+        if answered.is_ok() {
             nest_rs_core::operation_log::OK
         } else {
             nest_rs_core::operation_log::ERROR
-        });
+        }
     }
+}
 
-    fn emit(&mut self, outcome: &'static str) {
-        self.filed = true;
+impl Line for FieldLine {
+    fn file(&mut self, outcome: &'static str) {
         nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
             nest_rs_core::operation_line!(
                 crate::unit::FIELD,
@@ -586,14 +585,6 @@ impl FieldLine {
                 field = self.handler.address(),
             );
         });
-    }
-}
-
-impl Drop for FieldLine {
-    fn drop(&mut self) {
-        if !self.filed {
-            self.emit(nest_rs_core::operation_log::CANCELLED);
-        }
     }
 }
 

@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use nest_rs_core::__private::{
     Tail, UnitChains, caught_problem, dispatch, new_unit_context, settled,
 };
+use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::panic::panic_message;
 use nest_rs_core::{
     Container, Correlation, Failure, Handler, Outcome, Problem, ReachableProviders, RequestScope,
@@ -719,34 +720,32 @@ struct JobIdentity {
     attempt: u32,
 }
 
-/// An attempt's `queue.job` line, filed exactly once: with the outcome the
-/// attempt settled on, or — dropped before it settled — with
-/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
+/// An attempt's `queue.job` line: with the outcome the attempt settled on, or
+/// — dropped before it settled — `cancelled`.
 struct JobLine {
     identity: JobIdentity,
     started: Instant,
     span: tracing::Span,
-    filed: bool,
 }
 
 impl JobLine {
     /// Opened first thing inside the attempt, so the span current here is the
-    /// attempt's own.
-    fn open(identity: JobIdentity) -> Self {
-        Self {
-            identity,
-            started: Instant::now(),
-            span: tracing::Span::current(),
-            filed: false,
-        }
+    /// attempt's own. The handler's panics are caught before the line is
+    /// filed: an unwind dropping it is the port's own.
+    fn open(identity: JobIdentity) -> FiledOnce<Self> {
+        FiledOnce::new(
+            Self {
+                identity,
+                started: Instant::now(),
+                span: tracing::Span::current(),
+            },
+            Unwinding::Own,
+        )
     }
+}
 
-    fn file(mut self, outcome: &'static str) {
-        self.emit(outcome);
-        self.filed = true;
-    }
-
-    fn emit(&self, outcome: &'static str) {
+impl Line for JobLine {
+    fn file(&mut self, outcome: &'static str) {
         let identity = &self.identity;
         nest_rs_core::operation_line!(
             unit::JOB,
@@ -760,21 +759,6 @@ impl JobLine {
             backend_id = identity.backend_id.as_deref(),
             attempt = identity.attempt,
         );
-    }
-}
-
-impl Drop for JobLine {
-    fn drop(&mut self) {
-        if self.filed {
-            return;
-        }
-        // The handler's panics are caught before here: this unwind is the port's own.
-        let outcome = if std::thread::panicking() {
-            nest_rs_core::operation_log::PANIC
-        } else {
-            nest_rs_core::operation_log::CANCELLED
-        };
-        self.emit(outcome);
     }
 }
 

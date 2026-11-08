@@ -15,6 +15,7 @@ use crate::app::BootStep;
 use crate::app_lifecycle::AppLifecycle;
 use crate::container::Container;
 use crate::millis::millis;
+use crate::operation_log::{FiledOnce, Line, Unwinding};
 use crate::panic;
 use crate::request_scope::RequestContinuation;
 use crate::trace_context::Correlation;
@@ -300,11 +301,13 @@ impl HookUnit {
         unit_of_work: Option<&dyn LifecycleUnitOfWork>,
         deadline: Option<Instant>,
     ) -> HookEnd {
-        let line = HookLine {
-            unit: self,
-            started: std::time::Instant::now(),
-            filed: false,
-        };
+        let line = FiledOnce::new(
+            HookLine {
+                unit: self,
+                started: std::time::Instant::now(),
+            },
+            Unwinding::Shared,
+        );
         let hook = (self.hook.run)(container);
         let body = match unit_of_work {
             Some(unit_of_work) => unit_of_work.run(deadline, hook),
@@ -327,22 +330,16 @@ impl HookUnit {
     }
 }
 
-/// A hook's `lifecycle.hook` line, filed exactly once: with how its unit ended,
-/// or `cancelled` when it is dropped first — abandoned at the shutdown hooks'
-/// budget, or stopped by a boot signal.
+/// A hook's `lifecycle.hook` line: with how its unit ended, or `cancelled`
+/// when it is dropped first — abandoned at the shutdown hooks' budget, or
+/// stopped by a boot signal. Its own panics are contained before it is filed.
 struct HookLine<'a> {
     unit: &'a HookUnit,
     started: std::time::Instant,
-    filed: bool,
 }
 
-impl HookLine<'_> {
-    fn file(mut self, outcome: &'static str) {
-        self.emit(outcome);
-    }
-
-    fn emit(&mut self, outcome: &'static str) {
-        self.filed = true;
+impl Line for HookLine<'_> {
+    fn file(&mut self, outcome: &'static str) {
         let HookUnit {
             phase, hook, span, ..
         } = self.unit;
@@ -358,14 +355,6 @@ impl HookLine<'_> {
                 origin = hook.origin,
             );
         });
-    }
-}
-
-impl Drop for HookLine<'_> {
-    fn drop(&mut self) {
-        if !self.filed {
-            self.emit(crate::operation_log::CANCELLED);
-        }
     }
 }
 

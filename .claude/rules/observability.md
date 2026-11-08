@@ -240,19 +240,22 @@ parent returns, is no unit.
 **A unit that does not settle still files its line**: `outcome = cancelled` for
 one stopped first — by its caller, by the server at the shutdown signal, by the
 shutdown window, with its worker — and `outcome = panic` for one that unwound.
-No handler's return carries either, so the line is held by a guard dropped with
-the unit's future (code that must notice a stop can miss it), and a panic is
-contained where the unit is dispatched. Where a client waits, the unwind is
+No handler's return carries either, so the line is held by the one guard
+dropped with the unit's future, `operation_log::FiledOnce`, over the edge's own
+`Line` (code that must notice a stop can miss it), and a panic is contained
+where the unit is dispatched. HTTP's line is the one exception: its request
+guard hands the line to the body, which files it at the answer's end. Where a client waits, the unwind is
 answered: HTTP answers it `500` with an opaque problem document and keeps the
 connection, and a body already streaming ends; MCP answers an internal error, WS
 an error frame with the socket kept, or `1011` on a socket whose connect hook or
 subscription unwound.
 
-- **`panic` names the unit that unwound, never one torn down by it.** A guard may
-  read an unwind in progress (`std::thread::panicking()`) only where nothing but
-  its own unit shares the future it is dropped with. Where siblings share one —
-  a GraphQL selection's fields — the unit catches its own unwind, files `panic`
-  and resumes it, and a sibling dropped by it files `cancelled`.
+- **`panic` names the unit that unwound, never one torn down by it.** A guard
+  reads an unwind in progress (`Unwinding::Own`) only where nothing but its own
+  unit shares the future it is dropped with. Where siblings share one — a
+  GraphQL selection's fields — the unit catches its own unwind, files `panic`
+  and resumes it, and a sibling dropped by it files `cancelled`
+  (`Unwinding::Shared`).
 - **A unit contains its unwind through `nest_rs_core::panic::contain`**, the
   one way the process hook `#[nest_rs::main]` installs learns the unit files
   the panic itself; any other panic the hook files once, on `nest_rs::app`. A
@@ -267,8 +270,8 @@ subscription unwound.
 its span through `operation_span!` (a hand-written span gets ids from the
 exporter's own generator, which no log line carries), one line per unit
 through `operation_line!` — filed on `nest_rs::operation` like every other —
-`cancelled` filed from a guard dropped with the unit's future, and `panic`
-contained where the unit is dispatched (`panic::contain`).
+`cancelled` filed from a `FiledOnce` dropped with the unit's future, and
+`panic` contained where the unit is dispatched (`panic::contain`).
 
 ## Targets are constants their concern's crate owns
 

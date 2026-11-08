@@ -52,7 +52,7 @@ mod endpoint;
 mod error;
 mod federation;
 mod field_spellings;
-mod filed_once;
+mod filed_facts;
 mod loader;
 mod module;
 mod null_propagation;
@@ -90,7 +90,7 @@ pub mod __private {
     pub use crate::context::{ENDPOINT, connection_data};
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate, FieldFailure};
     pub use crate::field_spellings::schema_field_spelling;
-    pub use crate::filed_once::first_in_operation;
+    pub use crate::filed_facts::first_in_operation;
     pub use crate::loader::{
         GraphqlLoaderRegistration, GraphqlRelationRegistration, GraphqlRootLoaderRegistration,
         LoaderOwner, batch_spawner, seeded_loader,

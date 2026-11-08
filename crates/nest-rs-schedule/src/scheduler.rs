@@ -13,6 +13,7 @@ use nest_rs_core::__private::{
     GlobalLayers, HandlerDeclaration, MetaLevels, RequestScopes, Site, SiteDeclaration, SiteLayers,
     Tail, caught_problem, declare_handler, declare_site, dispatch, new_unit_context, settled,
 };
+use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::{
     Container, Correlation, Discovery, Edge, Failure, Handler, JobTimedOut, Outcome, Posture,
     ReachableProviders, Transport, Unanswered, UnitContext, inventory, within,
@@ -1105,40 +1106,40 @@ fn refuse_shared_identities(ids: &[JobId]) -> Result<()> {
     )
 }
 
-/// A tick's `schedule.tick` line, filed exactly once: with the outcome its run
-/// settled on, or — dropped before it settled — with
-/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
-///
-/// The run's own panics are caught before here, so one unwinding through the
-/// guard is the scheduler's.
+/// A tick's `schedule.tick` line: with the outcome its run settled on, or —
+/// dropped before it settled — `cancelled`.
 struct TickLine {
     id: JobId,
     replicas: Replicas,
     occurrence: Option<u64>,
     started: std::time::Instant,
     span: tracing::Span,
-    filed: bool,
 }
 
 impl TickLine {
-    fn open(id: JobId, replicas: Replicas, occurrence: Option<u64>, span: tracing::Span) -> Self {
-        Self {
-            id,
-            replicas,
-            occurrence,
-            started: std::time::Instant::now(),
-            span,
-            filed: false,
-        }
+    /// The run's own panics are caught before the line is filed, so one
+    /// unwinding through it is the scheduler's.
+    fn open(
+        id: JobId,
+        replicas: Replicas,
+        occurrence: Option<u64>,
+        span: tracing::Span,
+    ) -> FiledOnce<Self> {
+        FiledOnce::new(
+            Self {
+                id,
+                replicas,
+                occurrence,
+                started: std::time::Instant::now(),
+                span,
+            },
+            Unwinding::Own,
+        )
     }
+}
 
-    /// File the line for a tick whose run settled on `outcome`.
-    fn file(mut self, outcome: &'static str) {
-        self.emit(outcome);
-        self.filed = true;
-    }
-
-    fn emit(&self, outcome: &'static str) {
+impl Line for TickLine {
+    fn file(&mut self, outcome: &'static str) {
         nest_rs_core::operation_line!(
             crate::unit::TICK,
             span: &self.span,
@@ -1149,20 +1150,6 @@ impl TickLine {
             replicas = self.replicas.as_str(),
             occurrence = self.occurrence,
         );
-    }
-}
-
-impl Drop for TickLine {
-    fn drop(&mut self) {
-        if self.filed {
-            return;
-        }
-        let outcome = if std::thread::panicking() {
-            nest_rs_core::operation_log::PANIC
-        } else {
-            nest_rs_core::operation_log::CANCELLED
-        };
-        self.emit(outcome);
     }
 }
 
@@ -1445,7 +1432,13 @@ impl Runner {
         .await
     }
 
-    async fn fire_inner(&self, id: JobId, task: Task, occurrence: Option<u64>, line: TickLine) {
+    async fn fire_inner(
+        &self,
+        id: JobId,
+        task: Task,
+        occurrence: Option<u64>,
+        line: FiledOnce<TickLine>,
+    ) {
         let chains = match task.site.chains(self.scopes.root()) {
             Ok(chains) => chains,
             Err(refused) => {

@@ -346,8 +346,8 @@ pub const PANIC: &str = "panic";
 /// It was stopped before it settled — by its caller, at the shutdown signal, or
 /// when the shutdown window closed — and what it had not yet done stays undone.
 ///
-/// No handler's return says it: an edge files it from a guard dropped with the
-/// unit's future.
+/// No handler's return says it: an edge files it from the [`FiledOnce`]
+/// dropped with the unit's future.
 pub const CANCELLED: &str = "cancelled";
 
 /// Not an outcome: the word a line names what a client addressed with when
@@ -394,6 +394,87 @@ pub const DURATION_DECIMALS: usize = 3;
 /// Elapsed milliseconds at microsecond resolution.
 pub fn duration_ms(start: Instant) -> f64 {
     (start.elapsed().as_secs_f64() * 1e6).round() / 1e3
+}
+
+/// One unit's operation line, as the crate declaring the unit files it —
+/// through [`operation_line!`](crate::operation_line), inside the unit's
+/// correlation — held by a [`FiledOnce`].
+pub trait Line {
+    /// File the line, its unit ended on `outcome`.
+    fn file(&mut self, outcome: &'static str);
+}
+
+/// Whose unwind a [`FiledOnce`] dropped while its thread unwinds reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Unwinding {
+    /// Nothing but its unit shares the future the line drops with, so an
+    /// unwind dropping it is the unit's — its code's, or the edge's carrying
+    /// it: it files [`PANIC`].
+    Own,
+    /// The unit contains its own unwind and files it, so one dropping the line
+    /// is another's — a sibling's sharing its future, as a GraphQL selection's
+    /// fields do: it files [`CANCELLED`].
+    Shared,
+}
+
+/// A unit's line, filed exactly once: by [`file`](Self::file) with the
+/// outcome the unit ended on, or, dropped first with the unit's future, as
+/// [`CANCELLED`] — [`PANIC`] for an unwind its [`Unwinding`] says is the
+/// unit's own.
+///
+/// A unit that does not settle files its line all the same; what the line
+/// carries is read through the guard.
+#[derive(Debug)]
+pub struct FiledOnce<L: Line> {
+    line: L,
+    unwinding: Unwinding,
+    filed: bool,
+}
+
+impl<L: Line> FiledOnce<L> {
+    /// Hold `line` until its unit ends, an unwind dropping it read as
+    /// `unwinding` says.
+    pub const fn new(line: L, unwinding: Unwinding) -> Self {
+        Self {
+            line,
+            unwinding,
+            filed: false,
+        }
+    }
+
+    /// File the line, its unit ended on `outcome`.
+    pub fn file(mut self, outcome: &'static str) {
+        self.filed = true;
+        self.line.file(outcome);
+    }
+}
+
+impl<L: Line> std::ops::Deref for FiledOnce<L> {
+    type Target = L;
+
+    fn deref(&self) -> &L {
+        &self.line
+    }
+}
+
+impl<L: Line> std::ops::DerefMut for FiledOnce<L> {
+    fn deref_mut(&mut self) -> &mut L {
+        &mut self.line
+    }
+}
+
+impl<L: Line> Drop for FiledOnce<L> {
+    fn drop(&mut self) {
+        if self.filed {
+            return;
+        }
+        let outcome = match self.unwinding {
+            Unwinding::Own if std::thread::panicking() => PANIC,
+            Unwinding::Own | Unwinding::Shared => CANCELLED,
+        };
+        self.line.file(outcome);
+    }
 }
 
 /// Declare one [`Unit`] of this crate —
@@ -487,6 +568,51 @@ mod tests {
         assert_eq!(Kind::Server.as_str(), "server");
         assert_eq!(Kind::Consumer.as_str(), "consumer");
         assert_eq!(Kind::Internal.as_str(), "internal");
+    }
+
+    /// A line keeping each outcome it is filed with.
+    struct Kept(std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>);
+
+    impl Line for Kept {
+        fn file(&mut self, outcome: &'static str) {
+            self.0.borrow_mut().push(outcome);
+        }
+    }
+
+    fn kept() -> (Kept, std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>) {
+        let filed = std::rc::Rc::default();
+        (Kept(std::rc::Rc::clone(&filed)), filed)
+    }
+
+    #[test]
+    fn a_line_filed_with_its_outcome_is_filed_once() {
+        for unwinding in [Unwinding::Own, Unwinding::Shared] {
+            let (line, filed) = kept();
+            FiledOnce::new(line, unwinding).file(ERROR);
+            assert_eq!(*filed.borrow(), [ERROR], "{unwinding:?}");
+        }
+    }
+
+    #[test]
+    fn a_line_dropped_before_it_is_filed_files_cancelled() {
+        for unwinding in [Unwinding::Own, Unwinding::Shared] {
+            let (line, filed) = kept();
+            drop(FiledOnce::new(line, unwinding));
+            assert_eq!(*filed.borrow(), [CANCELLED], "{unwinding:?}");
+        }
+    }
+
+    #[test]
+    fn an_unwind_dropping_a_line_files_panic_only_where_it_is_the_units_own() {
+        for (unwinding, outcome) in [(Unwinding::Own, PANIC), (Unwinding::Shared, CANCELLED)] {
+            let (line, filed) = kept();
+            let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _line = FiledOnce::new(line, unwinding);
+                panic!("the unit unwinds");
+            }));
+            assert!(unwound.is_err());
+            assert_eq!(*filed.borrow(), [outcome], "{unwinding:?}");
+        }
     }
 
     #[test]

@@ -932,9 +932,6 @@ impl Ability {
     }
 }
 
-/// The rule-map keys a concrete `action` reads: its own, then the wildcard's. A
-/// site gated on [`Action::Manage`] reads each concrete action, never this with
-/// `Manage` itself.
 /// The set asking for fewest scopes among `grants`, the first of those asking as many.
 fn fewest<'a>(grants: impl Iterator<Item = &'a Vec<String>>) -> Option<&'a Vec<String>> {
     grants.min_by_key(|grant| grant.len())
@@ -948,27 +945,27 @@ const COVER_STEPS: usize = 1024;
 /// order the choices and their scopes come: each choice's fewest first, replaced only
 /// by a union asking for strictly fewer.
 fn smallest_cover(choices: &[&[Vec<String>]]) -> Vec<String> {
-    fn extend(
-        choices: &[&[Vec<String>]],
-        held: &mut Vec<String>,
-        best: &mut Vec<String>,
+    fn extend<'a>(
+        choices: &[&'a [Vec<String>]],
+        held: &mut Vec<&'a String>,
+        best: &mut Vec<&'a String>,
         steps: &mut usize,
     ) {
-        let Some((first, rest)) = choices.split_first() else {
+        let Some((&first, rest)) = choices.split_first() else {
             if held.len() < best.len() {
                 best.clone_from(held);
             }
             return;
         };
-        for grant in first.iter() {
+        for grant in first {
             if *steps >= COVER_STEPS {
                 return;
             }
             *steps += 1;
             let before = held.len();
             for scope in grant {
-                if !held.contains(scope) {
-                    held.push(scope.clone());
+                if !held.contains(&scope) {
+                    held.push(scope);
                 }
             }
             if held.len() < best.len() {
@@ -979,17 +976,20 @@ fn smallest_cover(choices: &[&[Vec<String>]]) -> Vec<String> {
     }
 
     let mut best = Vec::new();
-    for grant in choices.iter().filter_map(|grants| fewest(grants.iter())) {
+    for grant in choices.iter().filter_map(|&grants| fewest(grants.iter())) {
         for scope in grant {
-            if !best.contains(scope) {
-                best.push(scope.clone());
+            if !best.contains(&scope) {
+                best.push(scope);
             }
         }
     }
     extend(choices, &mut Vec::new(), &mut best, &mut 0);
-    best
+    best.into_iter().cloned().collect()
 }
 
+/// The rule-map keys a concrete `action` reads: its own, then the wildcard's. A
+/// site gated on [`Action::Manage`] reads each concrete action, never this with
+/// `Manage` itself.
 fn keys_for(action: Action, subject: TypeId) -> impl Iterator<Item = (Action, TypeId)> {
     [(action, subject), (Action::Manage, subject)].into_iter()
 }

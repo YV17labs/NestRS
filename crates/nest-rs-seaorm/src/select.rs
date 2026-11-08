@@ -133,17 +133,22 @@ impl<E: EntityTrait> RepoSelect<E> {
         }
     }
 
-    /// Narrows the query by a condition the framework built — a scope, a key —
-    /// which holds no text of the developer's.
-    pub(crate) fn within(self, condition: impl IntoCondition) -> Self {
+    /// The query, its select as `step` leaves it.
+    fn map_select(self, step: impl FnOnce(Select<E>) -> Select<E>) -> Self {
         Self {
-            select: self.select.filter(condition),
+            select: step(self.select),
             ..self
         }
     }
 
+    /// Narrows the query by a condition the framework built — a scope, a key —
+    /// which holds no text of the developer's.
+    pub(crate) fn within(self, condition: impl IntoCondition) -> Self {
+        self.map_select(|select| select.filter(condition))
+    }
+
     /// The query, refused for `why`: it builds `FALSE` and runs nothing.
-    pub(crate) fn refusing(self, why: Uncontained) -> Self {
+    fn refusing(self, why: Uncontained) -> Self {
         Self {
             select: self.select.filter(Condition::any()),
             refused: self.refused.or(Some(why)),
@@ -211,53 +216,35 @@ impl<E: EntityTrait> RepoSelect<E> {
     /// one before it.
     pub fn order_by(self, column: E::Column, order: Order) -> Self {
         let refusal = contained_order(&order).err();
-        Self {
-            select: self.select.order_by(column, order),
-            ..self
-        }
-        .refusing_for(refusal)
+        self.map_select(|select| select.order_by(column, order))
+            .refusing_for(refusal)
     }
 
     /// Orders the rows by `column`, ascending.
     pub fn order_by_asc(self, column: E::Column) -> Self {
-        Self {
-            select: self.select.order_by_asc(column),
-            ..self
-        }
+        self.map_select(|select| select.order_by_asc(column))
     }
 
     /// Orders the rows by `column`, descending.
     pub fn order_by_desc(self, column: E::Column) -> Self {
-        Self {
-            select: self.select.order_by_desc(column),
-            ..self
-        }
+        self.map_select(|select| select.order_by_desc(column))
     }
 
     /// Orders the rows by `column`, `order`, with its `NULL`s where `nulls` says.
     pub fn order_by_with_nulls(self, column: E::Column, order: Order, nulls: NullOrdering) -> Self {
         let refusal = contained_order(&order).err();
-        Self {
-            select: self.select.order_by_with_nulls(column, order, nulls),
-            ..self
-        }
-        .refusing_for(refusal)
+        self.map_select(|select| select.order_by_with_nulls(column, order, nulls))
+            .refusing_for(refusal)
     }
 
     /// Keeps at most `limit` rows; `None` keeps them all.
     pub fn limit(self, limit: impl Into<Option<u64>>) -> Self {
-        Self {
-            select: self.select.limit(limit),
-            ..self
-        }
+        self.map_select(|select| select.limit(limit))
     }
 
     /// Skips the first `offset` rows; `None` skips none.
     pub fn offset(self, offset: impl Into<Option<u64>>) -> Self {
-        Self {
-            select: self.select.offset(offset),
-            ..self
-        }
+        self.map_select(|select| select.offset(offset))
     }
 
     /// Applies `narrow` with the value `value` holds, the query as it is on `None`.

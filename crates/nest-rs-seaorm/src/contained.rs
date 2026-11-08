@@ -1,8 +1,6 @@
-use std::fmt;
-
 use sea_orm::sea_query::{
-    ArrayType, Condition, Expr, OptionEnum, Order, PostgresQueryBuilder, QueryBuilder, SqlWriter,
-    Values,
+    ArrayType, Condition, Expr, OptionEnum, Order, PostgresQueryBuilder, QueryBuilder,
+    SqlWriterValues, Values,
 };
 use sea_orm::{ActiveModelTrait, DbErr, EntityTrait, Iterable, Value};
 
@@ -55,9 +53,9 @@ pub(crate) fn contained(condition: Condition) -> Result<Option<Expr>, Uncontaine
     if matches!(expr, Expr::Constant(Value::Bool(Some(true)))) {
         return Ok(None);
     }
-    let mut text = Text::default();
+    let mut text = SqlWriterValues::new("$", true);
     PostgresQueryBuilder.prepare_expr(&expr, &mut text);
-    scan(text.0.as_bytes())?;
+    scan(text.into_parts().0.as_bytes())?;
     Ok(Some(Expr::tuple([expr])))
 }
 
@@ -83,7 +81,7 @@ pub(crate) fn contained_order(order: &Order) -> Result<(), Uncontained> {
 
 /// Refuses `value` when its enum type name holds a `"`, which closes the quotes
 /// sea-query writes it between, as `$1::"<type_name>"`.
-pub(crate) fn contained_value(value: &Value) -> Result<(), Uncontained> {
+fn contained_value(value: &Value) -> Result<(), Uncontained> {
     let type_name: &str = match value {
         Value::Enum(OptionEnum::Some(value)) => &value.type_name,
         Value::Enum(OptionEnum::None(type_name)) => type_name,
@@ -222,33 +220,6 @@ fn identifier_end(sql: &[u8], mut at: usize) -> Result<usize, Uncontained> {
         }
     }
     Err(Uncontained::Identifier)
-}
-
-/// The text sea-query writes for an expression, each value a placeholder.
-#[derive(Default)]
-struct Text(String);
-
-impl fmt::Write for Text {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.0.push_str(s);
-        Ok(())
-    }
-}
-
-impl fmt::Display for Text {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl SqlWriter for Text {
-    fn push_param<T: QueryBuilder>(&mut self, _: Value, _: &T) {
-        self.0.push_str("$1");
-    }
-
-    fn as_writer(&mut self) -> &mut dyn fmt::Write {
-        self
-    }
 }
 
 #[cfg(test)]

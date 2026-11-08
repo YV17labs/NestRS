@@ -419,11 +419,8 @@ where
 /// `extra` as the one operand [`RepoSelect::filter`](crate::RepoSelect::filter) makes
 /// of a condition, or its refusal.
 fn operand<E: EntityTrait>(extra: Condition) -> Result<Condition, DbErr> {
-    match contained(extra) {
-        Ok(Some(operand)) => Ok(Condition::all().add(operand)),
-        Ok(None) => Ok(Condition::all()),
-        Err(why) => Err(refused::<E>(why)),
-    }
+    let operand = contained(extra).map_err(refused::<E>)?;
+    Ok(Condition::all().add_option(operand))
 }
 
 #[cfg(test)]

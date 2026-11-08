@@ -298,8 +298,8 @@ and there is no comment, no dollar quoting, no `$` but a placeholder, no backsla
 plain string and no NUL. Text failing makes the select build `FALSE` and its run answer
 `DbErr::Custom` before it reads an executor, said at `warn` on `nest_rs::orm` by entity
 and `reason`, never by its text. An order by field and a write's values (update, soft
-delete, both unscoped inserts, `Creatable`, each after its hook) refuse an enum value
-whose type name holds a `"`, the one text a bound value or an inline one writes beside
+delete, both unscoped inserts, `Creatable`, each after its hook) refuse an enum value,
+alone or at any depth of an array, whose type name holds a `"`, the one text a bound value or an inline one writes beside
 the quotes sea-query puts around it; a key cannot hold one, sea-orm reading no key into
 a `sea_query::Enum`.
 

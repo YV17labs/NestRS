@@ -734,6 +734,42 @@ mod tests {
         assert!(ordered.all().await.is_err());
     }
 
+    /// An array an order by field holds writes each element inline as that element's
+    /// value would, so an enum inside an array of another type leaves its quotes the
+    /// same way, and is refused the same way.
+    #[tokio::test]
+    async fn an_enum_inside_an_array_an_order_writes_inline_is_refused() {
+        let nested = Value::Array(
+            ArrayType::String,
+            Some(Box::new(vec![
+                sea_orm::sea_query::Enum {
+                    type_name: r#"text" THEN 0 END, (SELECT 1/0) --"#.into(),
+                    value: "a".into(),
+                }
+                .into(),
+            ])),
+        );
+        let ordered = Widgets::unscoped().order_by(
+            Column::Id,
+            #[expect(clippy::disallowed_methods, reason = "the order under test")]
+            Order::Field(Values(vec![nested])),
+        );
+
+        assert_eq!(
+            sql(ordered.clone()),
+            format!(
+                r#"{SELECT} WHERE FALSE ORDER BY CASE WHEN "widgets"."id"=ARRAY ['a'::"text" THEN 0 END, (SELECT 1/0) --"] THEN 0 ELSE 1 END"#
+            ),
+        );
+        let answer = ordered.all().await;
+        assert!(
+            matches!(&answer, Err(DbErr::Custom(said))
+                if said.contains("refused before any statement")
+                    && said.contains("(quote_in_type_name)")),
+            "{answer:?}",
+        );
+    }
+
     #[test]
     fn a_hand_written_iden_borrowing_its_text_stays_inside_its_operand() {
         struct Widening;

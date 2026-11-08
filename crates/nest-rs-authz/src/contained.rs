@@ -56,15 +56,29 @@ pub fn contained_text(expr: &Expr) -> Result<(), Uncontained> {
     scan(text.into_parts().0.as_bytes())
 }
 
-/// Refuses `value` when its enum type name holds a `"`, which closes the quotes
-/// sea-query writes it between, as `$1::"<type_name>"`.
+/// Refuses `value` when an enum type name it holds, itself or at any depth of an
+/// array, holds a `"`, which closes the quotes sea-query writes it between, as
+/// `$1::"<type_name>"`.
 pub fn contained_value(value: &Value) -> Result<(), Uncontained> {
-    let type_name: &str = match value {
-        Value::Enum(OptionEnum::Some(value)) => &value.type_name,
-        Value::Enum(OptionEnum::None(type_name)) => type_name,
-        Value::Array(ArrayType::Enum(type_name), _) => type_name,
-        _ => return Ok(()),
-    };
+    match value {
+        Value::Enum(OptionEnum::Some(value)) => contained_type_name(&value.type_name),
+        Value::Enum(OptionEnum::None(type_name)) => contained_type_name(type_name),
+        // sea-query writes an inline array element by element, each enum's type name
+        // raw, whatever type the array declares.
+        Value::Array(of, values) => {
+            if let ArrayType::Enum(type_name) = of {
+                contained_type_name(type_name)?;
+            }
+            values
+                .iter()
+                .flat_map(|values| values.iter())
+                .try_for_each(contained_value)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn contained_type_name(type_name: &str) -> Result<(), Uncontained> {
     if type_name.contains(['"', '\0']) {
         Err(Uncontained::TypeName)
     } else {
@@ -268,5 +282,49 @@ mod tests {
             Err(Uncontained::TypeName),
         );
         assert_eq!(contained_value(&Value::from(r#"a " b"#)), Ok(()));
+    }
+
+    /// An array writes each element as that element's value would, its own type
+    /// whatever it is, so an enum inside one is read at whatever depth it sits.
+    #[test]
+    #[expect(clippy::disallowed_methods, reason = "the values under test")]
+    fn an_enum_inside_an_array_is_read_at_every_depth() {
+        let named = |type_name: &str| {
+            Value::from(sea_orm::sea_query::Enum {
+                type_name: type_name.into(),
+                value: "a".into(),
+            })
+        };
+        let array = |of: ArrayType, values: Vec<Value>| Value::Array(of, Some(Box::new(values)));
+
+        for refused in [
+            array(ArrayType::String, vec![named(r#"text" OR 1 = 1 --"#)]),
+            array(ArrayType::String, vec![Value::from("a"), named("te\0a")]),
+            array(
+                ArrayType::String,
+                vec![array(ArrayType::String, vec![named(r#"a"b"#)])],
+            ),
+            array(
+                ArrayType::Enum(Box::new("tea".into())),
+                vec![named(r#"a"b"#)],
+            ),
+        ] {
+            assert_eq!(
+                contained_value(&refused),
+                Err(Uncontained::TypeName),
+                "{refused:?}"
+            );
+        }
+        for passing in [
+            array(
+                ArrayType::String,
+                vec![Value::from(r#"a " b"#), named("tea")],
+            ),
+            array(ArrayType::Enum(Box::new("tea".into())), vec![named("tea")]),
+            array(ArrayType::String, vec![]),
+            Value::Array(ArrayType::String, None),
+        ] {
+            assert_eq!(contained_value(&passing), Ok(()), "{passing:?}");
+        }
     }
 }

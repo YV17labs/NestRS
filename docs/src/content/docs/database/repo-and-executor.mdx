@@ -126,7 +126,7 @@ stays inside its parentheses, so a `sea_query::Enum` literal or a hand-written
 `impl Iden` whose text reaches past its column still reads within what the ability
 allows. A page's `extra` condition goes through the same check, and so does an
 order by field; a write refuses a value whose enum type name would leave its
-quotes.
+quotes, alone or at any depth of an array.
 
 What you write when no typed builder reaches it keeps working, with nothing new
 to write: a function call, a full-text search, a string holding a parenthesis. Two

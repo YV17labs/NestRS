@@ -59,7 +59,7 @@ Every unit runs the same stages, outermost first:
    the order written breaking a tie, then the host's, then the method's.
 7. **The tail**: the global pipes over the input, the rules each decoded
    argument's type declares, the per-argument pipes, the handler, the
-   response mask, the reply.
+   reply — each wire row it carries judged where the handler built it.
 
 Each layer reads the unit through one [execution
 context](/fundamentals/execution-context/): which unit, which handler, what

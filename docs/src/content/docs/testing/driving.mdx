@@ -128,8 +128,8 @@ assert_eq!(item["data"]["postPublished"]["title"], "Launch");
 real upgrade attaches it, and `attach(..)` any other value a guard would attach,
 a principal. The socket carries them the way a real one does: ambient for every
 operation, where `#[authorize]`'s class gate reads the ability, and forwarded
-into the connection's context by the app's seeds, where the response mask reads
-it. `data(..)` adds a value to that context alone. What this
+into the connection's context by the app's seeds, where each wire row an
+operation builds is judged by it. `data(..)` adds a value to that context alone. What this
 does *not* exercise is the upgrade itself: the guards that authenticate it,
 the socket-lifetime ceiling that bounds it, and `max_connection`. Those need a real connection, so
 a suite that must cover them binds a transport (`HeadlessApp::builder()` +

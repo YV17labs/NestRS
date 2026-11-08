@@ -153,10 +153,9 @@ Two decorators, one per item shape:
   answers a `Result`, known by its type: it fails with whatever error it
   holds — an `McpError`, a domain error — answered by that type, an alias
   such as `type Publishing<T> = Result<T, PublishError>` serves as well as the
-  spelled one, and a `String` is refused at the return type. Two readings go
-  by the spelling: a *masked* operation spells its `Result<…>`, since the mask
-  reads `Json<T>` — a resource's `Option<Json<T>>` — off it, and rmcp derives a tool's output schema only from a
-  return spelled `Result<Json<T>, …>`.
+  spelled one, and a `String` is refused at the return type. One reading goes
+  by the spelling: rmcp derives a tool's output schema only from a return
+  spelled `Result<Json<T>, …>`.
 - **The description is `#[tool(description = "…")]`** — the sentence the model
   reads to pick this tool, so it is a value the decorator compiles in rather
   than commentary. Write a doc comment instead and it is used as a fallback, so
@@ -321,7 +320,8 @@ fetch, a resource read and a listing run the layers their host and their
 method bind, then the app's,
 each family once: the guards' `check`, the posture's gate, the exception
 filters, the interceptors, then the pipes, the `Scoped<T>` and `Ambient<T>`
-parameters, the body and the mask. A layer reads the operation through `McpView`:
+parameters and the body, whose answer is written inside the operation, for the
+caller its site answers. A layer reads the operation through `McpView`:
 
 ```rust title="crates/features/src/posts/mcp/tool.rs"
 #[mcp(path = "/mcp/posts")]

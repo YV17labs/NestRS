@@ -176,9 +176,9 @@ For a production app:
    catch the missing one).
 4. **Exposure is opt-in — no `#[expose]` on server-only columns.**
    A column crosses the wire only when its field carries `#[expose]`,
-   so a forgotten or newly-migrated column is hidden, not leaked. The
-   masker is the second line for columns you *do* expose but restrict,
-   covering them only when the field rule is `.fields([...])`.
+   so a forgotten or newly-migrated column is hidden, not leaked. Each
+   wire row's judgement is the second line for columns you *do* expose but
+   restrict, covering them only when the field rule is `.fields([...])`.
 5. **CDN / WAF** in front for DDoS and bot defense.
 6. **Real secret store** for `<PREFIX>_AUTHN__PRIVATE_KEY`, OAuth secrets, DB
    credentials.

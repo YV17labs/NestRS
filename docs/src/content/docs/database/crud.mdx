@@ -14,7 +14,7 @@ of that type, types every operation off that service and its entity's
 `#[expose]`, synthesises every operation the developer did not hand-write, and
 re-emits
 the block under `#[routes]` (HTTP) or `#[operations]` (GraphQL). Auth, row-level
-filtering, by-id binding and response masking come from the same data context
+filtering, by-id binding and each row's judgement come from the same data context
 described in [Database](/database/) and [Security](/security/) — `#[crud]`
 just wires the endpoints.
 
@@ -123,7 +123,7 @@ impl OrgsController {}
   field of the same type fails the build at that field.
 - Every type an operation names comes off that service and its entity: the
   answer is the entity's `#[expose]`d wire type (`Org`), never the SeaORM
-  `Model`, and the shaper masks it; the create and update bodies are the
+  `Model`, each row judged for the caller as it is built; the create and update bodies are the
   service's `Creatable::Create` and `Updatable::Update`, the
   `#[expose(input(create, update))]` types (bare `CreateOrg` /
   `UpdateOrg`, not `…Dto`).
@@ -244,7 +244,7 @@ impl UsersResolver {}
 ```
 
 Every operation — generated or hand-written — declares its posture with
-`#[authorize(Action, Entity)]` (gate + automatic response masking) or
+`#[authorize(Action, Entity)]` (gate, and reads under the caller's ability) or
 `#[public]`; an operation with none does not compile. Posture is **always**
 a visible attribute — a parameter type never stands in for it.
 
@@ -345,7 +345,7 @@ the actor to the caller, so no parameter carries who is publishing; its
 Two pieces, each with one job:
 
 - `#[authorize(Update, bind = PostsService)]` is the **posture** — the class
-  gate before the body and the response mask after it, the entity derived
+  gate before the body and the caller's ability for its reads, the entity derived
   from `PostsService::Entity` — and the **binding**: it parses the id, runs
   the row-level access check for `Update` (404 on a missing row, `FORBIDDEN`
   on a denied one) after the gate, and loads the row. This is the only thing
@@ -388,7 +388,7 @@ the whole path names it alone.
 | `paginate = none`   | HTTP + GraphQL | full ability-scoped collection, hard-capped by `CrudService::list` |
 
 Keyset pagination (`cursor`) is the default — stable under inserts, and the
-body stays a plain array so response masking works unchanged. Those two
+body stays a plain array of wire rows. Those two
 values are the whole knob: there is no offset mode, and a consumer that
 needs page numbers plus a total hand-writes that operation on the service.
 An `after` no page issued is refused — a `400` on REST, a field error on
@@ -528,7 +528,7 @@ the migration creating them beside the entity's own.
 
 - [Database](/database/) — `CrudService`, `Repo`, the ambient executor;
   why every CRUD call goes through the service.
-- [Security](/security/) — `Ability`, `Authorize`, the masking shaper;
+- [Security](/security/) — `Ability`, `Authorize`, the judged wire row;
   what makes `Read` / `Create` / `Update` / `Delete` mean what they
   mean here.
 - [OpenAPI](/openapi/) — every generated route ships with an `#[api]`

@@ -9,7 +9,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="caution">
 This page reads the reference **`api`**'s `users` feature, not your **`blog`**.
-Per-caller filtering needs a tenant column and a masked field, and `blog`'s
+Per-caller filtering needs a tenant column and a column a grant withholds, and `blog`'s
 `Post` deliberately has neither. Clone the repo to follow along
 (`nestrs run dev api`), then apply the last section to your own `posts`.
 </Aside>
@@ -19,9 +19,9 @@ This is the feature behind [See the security payoff](/tutorial/checkpoint/)
 guards from [Expose over HTTP](/tutorial/http/), with one blanket `Manage`
 rule standing in for a real policy. Here that policy gets teeth: the framework
 filters every read by the caller's organisation, gates every by-id load against
-their ability, and masks the response before it leaves the process. By the end
+their ability, and judges every row it answers against that ability. By the end
 of this page, a cross-tenant `GET /users/{id}` returns `403`, a plain user sees
-only their org, and the `email` column disappears from a non-admin listing.
+only their org, and the `email` column reads `null` in a non-admin listing.
 
 ## Two layers, two guards
 
@@ -111,8 +111,9 @@ Two patterns to read here:
   rule — every read and every by-id write the caller issues filters by
   that condition. Cross-tenant access becomes structurally impossible.
 - **`.fields([...])`** is the field-level rule — when a plain user
-  reads a `User`, only the listed columns survive the response masker;
-  `email` is dropped before the body leaves the process.
+  reads a `User`, the wire row `User::from(&row)` builds holds only the
+  listed columns; `email`, declared `#[expose(nullable)]` so a grant may
+  withhold it, reads `null`.
 
 ## Bind the guards on the controller
 
@@ -174,8 +175,8 @@ use crate::users::UsersModule;
 pub struct UsersHttpModule;
 ```
 
-`AuthzModule` carries the `AuthzGuard` provider and the response
-masker. Forgetting the import is caught at boot by the access graph —
+`AuthzModule` carries the `AuthzGuard` provider. Forgetting the import is
+caught at boot by the access graph —
 the binary fails to start with a `module access violation` naming the guard and the
 module to import, rather
 than running silently unprotected.
@@ -234,18 +235,17 @@ existence itself is confidential: see [by-id
 binding](/security/authorization/by-id-binding/). A `500` would mean the ambient ability
 didn't install; that's a wiring bug.
 
-**Response masking on every body.** The masker runs after the handler
-returns. It reconstructs the full `User` model from the body, walks
-`Ability::mask`, and drops any column outside the caller's
-`.fields([...])` grant. A plain user's listing returns:
+**Every row judged where it is built.** `User::from(&row)` judges the whole
+row against the caller's ability as it builds the wire type, so a column
+outside the caller's `.fields([...])` grant is no value in it. A plain
+user's listing returns:
 
 ```json
-[{ "id": "018f…", "name": "Bob" }]
+[{ "id": "018f…", "org_id": null, "name": "Bob", "email": null, "created_at": null, "updated_at": null }]
 ```
 
-— no `email`, even though the handler returned a `Json<User>` that
-included it. Forgetting per-handler redaction is structurally
-impossible.
+— the email never reaches the wire row, so no handler can forget to
+redact it.
 
 ## See it for yourself
 
@@ -406,7 +406,7 @@ this page just walked through, at the size your domain is.
 - A `UsersController` guarded by `AuthnGuard` + `AuthzGuard` — every
   route requires a valid JWT and a matching ability.
 - An `AuthzAbility` policy that scopes reads to the caller's org and
-  masks the email column for plain users.
+  withholds the email column from plain users.
 - A by-id route that loads through the service — `403` on a denied
   row, `404` on a missing one, both without manual checks.
 

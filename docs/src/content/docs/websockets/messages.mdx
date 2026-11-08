@@ -129,7 +129,7 @@ impl ChatGateway {
     async fn on_message(&self, msg: SendMessageDto) -> Result<(), WsError> { /* ... */ }
 
     #[subscribe_message("users.list")]
-    #[authorize(Read, users::Entity)]  // class gate + reply mask, both emitted
+    #[authorize(Read, users::Entity)]  // class gate, and reads under the caller's ability
     async fn list(&self) -> Result<Vec<User>, ServiceError> {
         Ok(self.svc.list().await?.iter().map(User::from).collect())
     }
@@ -171,7 +171,7 @@ word is true.
 
 **A bare `#[public]` reads nothing a grant guards.** A ticker keeps the bare word and
 pays nothing for it. A message serving rows to a visitor names them, with
-`#[authorize]`'s arguments and its mask:
+`#[authorize]`'s arguments, its gate and its reads:
 
 ```rust title="crates/features/src/posts/ws/gateway.rs"
 #[gateway(path = "/feed")]
@@ -191,37 +191,26 @@ The guard beside it builds the rules
 reached a message under an upgrade no guard ran at: those rules answer every caller
 of such a socket.
 
-**`#[authorize(Action, Entity)]` emits two things you would otherwise
-write by hand.** Right after the message's guards, before any interceptor,
-exception filter or pipe, a class-level gate asks the caller's ambient
-`Ability` whether it may perform `Action` on `Entity`; a refusal is an error
-frame and nothing else runs. After the handler returns, the reply is masked —
-rows the ability refuses are dropped, columns a field grant withholds are
-stripped. **You write no masking call**, and the mask reads the reply by its type,
-as the frame does: a bare value, a `Result` and a `Result` behind an alias
-(`type ServiceResult<T> = Result<T, MyError>`) all mask the value they answer.
+**`#[authorize(Action, Entity)]` emits what you would otherwise write by
+hand.** Right after the message's guards, before any interceptor, exception
+filter or pipe, a class-level gate asks the caller's ambient `Ability` whether
+it may perform `Action` on `Entity`; a refusal is an error frame and nothing
+else runs. The handler then reads through `Repo` under that ability, so its rows
+are the ones the caller may read, and each wire row it answers was judged for
+the caller where `User::from(&row)` built it: a column a field grant withholds
+reads `null` in the frame. **You write no masking call**, and nothing reads the
+reply back.
 
-### What the mask does, and what it does not
+### What a refused row answers
 
-The mask acts on the **serialized** reply. A withheld column is
-absent from the frame — the same thing the HTTP response shaper does to a
-body, because a WS envelope promises no schema that a missing key would
-violate. This is where WebSockets differ from GraphQL and MCP, which
-reconstruct the operation's return type and fail the operation when a
-stripped key was required.
-
-Two cases stay fail-closed, and both are wiring or data faults rather
-than policy: **no ambient ability** (nothing decided what the caller may
-read; a gated message no ability guard reaches refuses the boot, so this is
-the last line behind that refusal), and a body that cannot be reconciled with
-the entity at all. Both answer an error frame and log a `warn` on
-`nest_rs::authz`.
-
-The reply is what the handler read through `Repo` under the caller's
-ability, so a rule the frame cannot show — a relation, a hidden column — is
-the read's to have decided. A frame pushed to *other* connections is not a
-reply and is not masked for them; see
-[Server-side push](/websockets/server-push/#a-push-is-not-masked).
+A wire row the caller may not read at all — a write's reply to a caller whose
+`Read` grants refuse that row — answers a `FORBIDDEN` frame, and one judged for
+someone else (a row kept from another socket's message) the opaque `INTERNAL`
+frame; each files one line on `nest_rs::authz` naming the message as its
+`mounted` line does, `path` and `event`. A gated message no ability guard reaches
+refuses the boot, so a message never runs with no ability to judge its rows. A
+frame pushed to *other* connections is not a reply and carries no caller's row;
+see [Server-side push](/websockets/server-push/#a-push-carries-no-callers-row).
 
 ## The payload
 
@@ -488,7 +477,7 @@ guard stage — the app's pool, the message's `#[use_guards]`, then the class
 gate its posture declares — the exception filters (the message's, the
 gateway's, the app's), the handler stage (the app's interceptors, the
 gateway's, the message's), and last the message itself: its data pipes, its
-payload's own pipe, the call and the mask.
+payload's own pipe, and the call.
 
 Bound on the `#[gateway]` struct, a layer runs around every message of the
 gateway; bound beside a `#[subscribe_message]`, around that one. Each runs once
@@ -536,8 +525,8 @@ payload's own pipe's is.
 The connection hooks run no layer yet: `#[use_interceptors]` and
 `#[use_exception_filters]` beside `#[on_connect]` are named compile errors, as
 are a guard (the upgrade's guards admitted the socket), a pipe (a hook has no
-payload), a `#[meta]` value (no layer would read it) and a posture (no mask shapes
-what a hook sends, so it reads nothing a grant guards).
+payload), a `#[meta]` value (no layer would read it) and a posture (no gate stands
+before a hook, so it reads nothing a grant guards).
 
 ## The envelope itself
 

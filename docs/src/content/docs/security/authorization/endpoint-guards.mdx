@@ -72,10 +72,10 @@ pub struct UsersController { /* ... */ }
 `AuthzAbility::define(&actor, &mut builder)`, and attaches the `Ability`
 with `cx.attach`. Once the guards pass it is ambient for the rest of the
 request, so `Repo::scoped` sees it in the handler and in a streaming body
-the route returns — on a route a response mask shapes. A route no mask
-shapes, every `#[sse]` stream included, reads nothing scoped: the ability
-is withheld there, so a read fails closed rather than answering what a
-mask would have narrowed.
+the route returns — on a route whose posture names an entity. A route
+naming none, every `#[sse]` stream included, reads nothing scoped: the
+ability is withheld there, so a read fails closed rather than answering
+rows no posture declared.
 
 ## `EndpointGuards` — guards a module adds to an endpoint's request
 
@@ -220,7 +220,7 @@ pub struct UsersWsModule;
 ```
 
 The ability the upgrade's guards attach crosses the connection into every
-message and stays off a connection hook's reads, which no mask shapes. The gateway
+message and stays off a connection hook's reads, which no posture names. The gateway
 runs each as a unit of work of its own — a transaction opened on its first query,
 committed unless the reply is an error frame — with no shared state across messages.
 
@@ -254,14 +254,11 @@ does: the guards at the upgrade cover it, so it needs none of its own, and one n
 guard identifying a caller covers says `#[public]` or fails the boot; a rate limit
 identifies no one, so it covers nothing. `#[authorize(Action, Entity)]`
 emits the class gate (`nest_rs::authz::class_gate`, every edge's) before the payload
-is deserialized and the reply mask afterwards — so a handler answering with entity
-rows writes **no masking call**. A gate no `AuthzGuard` reaches, at the upgrade or
-beside the message, refuses the boot, and one still finding no ambient ability
-fails closed.
-
-The mask acts on the serialized reply, so a withheld column is absent
-from the frame rather than an error — HTTP's behaviour, not GraphQL's,
-because an envelope promises no schema. See
+is deserialized, and the handler reads under the caller's ability — so a handler
+answering with entity rows writes **no masking call**: each wire row it builds is
+judged for the caller, a withheld column reading `null` in the frame. A gate no
+`AuthzGuard` reaches, at the upgrade or beside the message, refuses the boot, and
+one still finding no ambient ability fails closed. See
 [WebSockets / Messages](/websockets/messages/) for the full contract.
 
 An optional per-message `#[use_guards(...)]` still adds event-level
@@ -329,9 +326,9 @@ async fn health(&self) -> &'static str { "ok" }
 
 `#[public]` makes `AuthnGuard` non-rejecting (anonymous requests pass
 through with no claims). Bare, it withholds what the guards attached from the
-unit's reads, so the row-level filter returns nothing and no mask is owed. Named,
-the `AbilityGuard` builds the visitor's ability, the class gate reads it and the
-mask keeps what it grants: see [Public reads](/security/authorization/public-reads/).
+unit's reads, so the row-level filter returns nothing. Named, the `AbilityGuard`
+builds the visitor's ability, the class gate reads it and each wire row holds what
+it grants: see [Public reads](/security/authorization/public-reads/).
 
 <Aside type="note">
 Cross-transport rule: **same `AuthzAbility` everywhere**. Each edge builds the

@@ -1,13 +1,13 @@
 ---
 title: Policy tests
-description: "Ability::mask and condition_for are policy code — a regression is a silent data leak. Assert against them directly."
+description: "Ability::permitted_fields and condition_for are policy code — a regression is a silent data leak. Assert against them directly."
 sidebar:
   order: 6
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-[`Ability::mask`](/security/authorization/response-masking/) and
+[`Ability::permitted_fields`](/security/authorization/response-masking/) and
 [`Ability::condition_for`](/security/authorization/row-level-filtering/)
 are the policy code of a nestrs app — they decide which fields a caller
 sees and which rows the data layer accepts (through
@@ -146,13 +146,14 @@ not a property of `condition_for`.
 
 Policy unit tests prove the code is correct in isolation. The
 [e2e negative path](/testing/negative-path/) proves it is wired in — that
-`Repo` reads through the ambient ability, the shaper masks the response
-on the way out, and forgetting to import `AuthzModule` fails the boot
+`Repo` reads through the ambient ability, each wire row is judged for its
+caller, and forgetting to import `AuthzModule` fails the boot
 rather than silently allowing unscoped reads.
 
-- **Unit** — every branch of `mask`, `condition_for`, `can`. Fast, exhaustive.
-- **E2E negative path** — the wrong caller gets `403`, the masked response
-  excludes unexposed columns, a missing authz module fails the boot loudly.
+- **Unit** — every branch of `permitted_fields`, `condition_for`, `can`. Fast, exhaustive.
+- **E2E negative path** — the wrong caller gets `403`, the reply reads `null`
+  where a grant withholds a column and never holds an unexposed one, a missing
+  authz module fails the boot loudly.
 
 ## Going further
 

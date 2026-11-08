@@ -10,8 +10,8 @@ import { Aside } from '@astrojs/starlight/components';
 `#[authorize(Action, bind = Service)]` turns `/posts/{id}` into a loaded,
 authorized model, handed to the handler's `Authorized<Action, E>`
 parameter. The attribute is the route's posture: it runs the class gate
-with the guards and arms the response mask, as `#[authorize(Action,
-Entity)]` does. The load then runs through the service's `access` method,
+with the guards and opens the reads under the caller's ability, as
+`#[authorize(Action, Entity)]` does. The load then runs through the service's `access` method,
 which reads the row **under the caller's own grant** — one SQL lookup,
 filtered by the same condition a list query uses. Three outcomes, three
 HTTP statuses:
@@ -50,7 +50,7 @@ for `Update` on that row, refuse with 404 or 403 otherwise". The action
 comes first and the **service** (not the entity) after `bind =`; the entity
 is `PostsService::Entity`, or written beside the action when you want it
 spelled out — the service's own: another one does not compile, since the
-gate and the mask would read it while the load reads the service's. The service is what the framework calls `access` on.
+gate and the wire row would read it while the load reads the service's. The service is what the framework calls `access` on.
 
 `Authorized<Update, PostEntity>` carries the row and nothing else: it
 derefs to the entity's `Model`, and `into_inner()` takes ownership. It is

@@ -39,11 +39,11 @@ grant guards:
   caller's org is rolled back and answers `403`.
 - **Gates every by-id write.** A denied-but-existing row updates zero
   rows and returns `403`, not the row.
-- **Masks the reply.** Fields the caller cannot read are stripped from the
-  body before it leaves the process.
+- **Judges each wire row.** A column the caller cannot read is no value in
+  the row it is answered, which reads `null` there.
 
 One predicate AST is interpreted twice — as SQL and in memory — so the
-rows a query returns and the rows the masker keeps cannot diverge. The
+rows a query returns and the rows a reply may answer cannot diverge. The
 mechanics live on one canonical page:
 [Row-level filtering](/security/authorization/row-level-filtering/).
 This page does not re-derive them; it covers what happens at the edges

@@ -158,12 +158,12 @@ the framework can answer that status too, so a generated client types both.
 
 ## Ability-shaped responses
 
-A route declaring `#[authorize(Action, Entity)]` on an entity masks its response per
-caller, so the fields a given client receives are a **subset** of the published schema. The
-document publishes the full shape anyway and says so in the response
-description: a schema a caller may see less of is far more useful to a
-generated client than no schema at all. A `#[subject]`'s posture gates and masks
-nothing, so its route documents a plain response.
+A route declaring `#[authorize(Action, Entity)]` on an entity answers wire rows judged
+per caller, and the published schema says exactly what any of them can hold: every key
+required, a column a grant may withhold nullable. The response description says so,
+since a nullable property reads `null` for a caller whose grant withholds it. A
+`#[subject]`'s posture gates and opens no read, so its route documents a plain
+response.
 
 ## Tags
 

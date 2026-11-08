@@ -175,7 +175,7 @@ pub struct UsersController {
 
 Once the [security modules](/security/) are imported, every read through the
 data layer is filtered, every mutating write is gated, and every operation declaring
-`#[authorize]` on an entity has its response masked. A route declaring none reads no
+`#[authorize]` on an entity answers rows judged for its caller. A route declaring none reads no
 row, and one no guard identifying a caller covers refuses the boot unless it says
 `#[public]`.
 

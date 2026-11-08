@@ -73,7 +73,7 @@ impl GreetingResolver {
 - **`#[public]`** declares the operation's **access posture** — a caller with no
   credential is admitted, and it reads nothing a grant guards. Every `#[query]` /
   `#[mutation]` carries a posture: that, `#[authorize(Action, Subject)]` (ability
-  gate + automatic response masking) or
+  gate, and reads under the caller's ability) or
   [`#[public(Action, Subject)]`](/security/authorization/public-reads/); a method
   with none does not compile.
 - Arguments are mapped to GraphQL input arguments by serde. `Option<T>`

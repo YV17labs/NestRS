@@ -15,9 +15,9 @@ conditional rules, restricted fields, denials.
 
 Predicates compile through a single `Predicate` AST that lowers to
 [SeaORM](https://docs.rs/sea-orm)'s `Condition` for the SQL filter
-and matches in-memory for the by-id check and the response mask.
+and matches in-memory for the by-id check and each wire row's judgement.
 One AST, two interpreters — the rows the query returns and the rows
-the response check accepts cannot diverge.
+a reply may answer cannot diverge.
 
 ## A minimal policy
 
@@ -92,9 +92,9 @@ and every operation that exercises it declares the posture on it —
 a GraphQL field, a WebSocket message or an MCP tool alike. It is the
 same [class gate](/security/authorization/#one-class-gate-on-every-edge)
 as on an entity, with the same refusals and the same RFC 6750 scope
-challenge, and it arms **no mask**: the subject has no model, so the
-reply goes out as written. A unit gated this way still withholds the
-ability from its reads, on every edge, as every unit no mask shapes does.
+challenge, and it opens **no read**: the subject has no model, so the
+reply goes out as written. A unit gated this way withholds the ability
+from its reads, on every edge, as every unit naming no entity does.
 
 The type system keeps the two kinds apart. `when` and `fields` narrow an
 entity's rows and columns, so a subject no table holds refuses them; so
@@ -269,15 +269,17 @@ lowered condition (see
 [By-id binding](/security/authorization/by-id-binding/)). `Ability::can`
 grants nothing on a relation, and `Repo::can` decides it in SQL. A pushed
 value went through no SQL read, so a relational grant admits none of it
-([What the mask cannot see](/security/authorization/response-masking/#each-row-is-judged-on-its-whole-row)).
+([Each row is judged on its whole row](/security/authorization/response-masking/#each-row-is-judged-on-its-whole-row)).
 
 ## Field grants
 
-`.fields([cols])` restricts the response mask to a set of columns. A
-rule without `.fields` permits every field. The masker unions the
+`.fields([cols])` restricts what a wire row holds to a set of columns. A
+rule without `.fields` permits every field. The judgement unions the
 permitted fields across every matching grant — so an admin grant
 with no `.fields` clears the field restriction even if a narrower
-grant existed.
+grant existed. A column a grant on `Read` may leave out is declared
+`#[expose(nullable)]`, or is an `Option`; leaving out any other fails
+`build()` naming it.
 
 ```rust title="crates/features/src/authz/ability.rs"
 ab.can(Action::Read, user::Entity)
@@ -285,9 +287,9 @@ ab.can(Action::Read, user::Entity)
     .fields([user::Column::Id, user::Column::Name]);
 ```
 
-A member reads `id` and `name`; the masker drops every other column
-from the response — including columns the wire DTO exposes that the
-member should not see.
+A member reads `id` and `name`; every other exposed column of the wire
+row the member's request builds reads `null` — including columns the wire
+type exposes that the member should not see.
 
 A grant names a column, not a spelling of it: `.fields([post::Column::Headline])`
 keeps `headline` on the wire whatever `#[sea_orm(column_name = …)]` calls it in the

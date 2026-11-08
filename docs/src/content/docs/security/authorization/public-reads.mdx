@@ -27,7 +27,7 @@ impl AbilityFactory for AuthzAbility {
 
 Everything downstream is the machinery you already have: the grant
 becomes the `WHERE` clause on the visitor's query, the class-level gate
-on the unit, and the field set the response mask keeps.
+on the unit, and the columns each wire row built under it holds.
 
 ## Wire it in
 
@@ -55,7 +55,8 @@ pub async fn feed(&self) -> Result<Vec<Post>, ServiceError> {
 `#[public(Read, post::Entity)]` takes `#[authorize]`'s arguments and does what it
 does, for a caller with no credential as well: `AuthnGuard` admits that caller,
 `AuthzGuard` builds the ability from `define_visitor`, the class gate runs against
-it right after the guards, and the mask keeps the fields it grants; with no
+it right after the guards, and each wire row the unit builds holds the fields it
+grants; with no
 `AuthzGuard` to build it, the boot refuses. Every edge
 reads the line the same way, so a `#[query]`, a `#[subscribe_message]` and a
 `#[tool]` serve the same rows and the same fields:
@@ -97,8 +98,8 @@ A sign-in, a health check or a ticker reads no row, and keeps the bare word:
 async fn login(&self, Json(body): Json<LoginDto>) -> Result<Json<TokenDto>> { /* … */ }
 ```
 
-**A bare `#[public]` reads nothing a grant guards, on every edge.** No mask would
-shape what it answers, so the ability is withheld from its reads: `Repo` renders
+**A bare `#[public]` reads nothing a grant guards, on every edge.** It names no
+subject its reads are for, so the ability is withheld from them: `Repo` renders
 `1 = 0`, the route answers `200 []`, and the `warn` on `nest_rs::orm` names the
 entity, the action and the line to write.
 
@@ -185,7 +186,8 @@ request, so on those edges a `#[public(...)]` unit answers by `define_visitor`
 alone. One app serving both audiences on one operation does it on HTTP or GraphQL.
 
 **An `#[sse]` stream takes a subject no table holds**, as `#[authorize]` there
-does: a mask reconciles a body, and an event stream is none.
+does: its events are written after the route's unit ended, where no ability is left
+to judge a row.
 
 **A malformed visitor rule denies the request.** A rule whose relation
 predicate cannot be lowered fails ability construction, and the guard

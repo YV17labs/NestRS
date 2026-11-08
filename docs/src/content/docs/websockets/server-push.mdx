@@ -70,7 +70,7 @@ is gone or its outbox refused the frame). A serializer failure surfaces as
 `Err(serde_json::Error)`; a frame an outbox refuses is shed, with one `warn` on
 `nest_rs::ws` — see [Backpressure](#backpressure).
 
-## A push is not masked
+## A push carries no caller's row
 
 A wire row is judged for the caller whose ability builds it. A push has no
 such caller: every connection `WsServer` reaches receives the same frame,

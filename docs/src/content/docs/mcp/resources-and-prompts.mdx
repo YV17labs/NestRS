@@ -11,7 +11,8 @@ import { Aside } from '@astrojs/starlight/components';
 MCP defines two primitives beyond tools: **prompts** (parameterized templates
 the user picks) and **resources** (documents the model can list and read).
 Both are methods in the same `#[tools]` block as your tools, and each takes
-the same posture, guards, filters and mask a tool does.
+the same posture, guards and filters a tool does, its answer written inside the
+operation for the caller its site answers.
 
 ## Prompts
 
@@ -70,7 +71,7 @@ impl PostsTool {
 A client reads `post://0192…` and the framework does the rest: it finds the
 template the URI was written from, runs the operation's guards and its class gate,
 loads the row `id` names through `PostsService` under the caller's ability, calls
-`post`, masks the post and answers it as the contents of the URI it read. `resources/templates/list`
+`post`, writes the post judged for that caller and answers it as the contents of the URI it read. `resources/templates/list`
 advertises every template with its `name` (the method's, unless you state
 one), its `title` and `description`, and the media type its answer is read as;
 `resources/list` is the `#[resources]` method's answer. The `resources`

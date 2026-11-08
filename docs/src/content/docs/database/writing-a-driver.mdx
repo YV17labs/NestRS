@@ -489,7 +489,7 @@ yet, so these cases are yours to write.
 ## What the seam carries, and what stays store-native
 
 The SeaORM-typed primitives — `Repo<E>`'s row-level filter through
-`Ability::condition_for`, the `#[expose]` response mask, the subject
+`Ability::condition_for`, the `#[expose]` wire row's judgement, the subject
 `bind = Service` loads, `CrudService` — read SeaORM's typed `Column` and
 `EntityTrait`, so a driver
 ships their equivalents in its store's terms: Postgres RLS, an

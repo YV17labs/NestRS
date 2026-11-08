@@ -102,8 +102,8 @@ Three third-party lines arrive beside the `anyhow` and `tracing` `nestrs new` wr
 and each is there because the feature's own source writes it: `sea_orm::entity::prelude::*`, `serde` on the claims the auth
 adapter derives, `Uuid` as the primary-key type. The entity itself derives no
 serde: what `#[expose]` emits — the wire type's `serde` and
-`schemars::JsonSchema`, `validator::Validate`, the round trip a mask reads a
-row through — is routed back through the framework with a `crate = `
+`schemars::JsonSchema`, `validator::Validate`, the judgement of each wire row it
+builds — is routed back through the framework with a `crate = `
 override, so none of it appears here.
 
 ## The post's columns
@@ -151,8 +151,8 @@ pub struct Model {
 
 The crate this page builds on is
 [**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) —
-it provides the `#[expose]` macro, which also writes the round trip the
-masking layer reads a row through when a feature adds authorization — so the
+it provides the `#[expose]` macro, which also writes the wire type's conversion,
+judging each row for the caller once a feature adds authorization — so the
 `Model` takes no serde (`#[expose]` refuses one, derived or written by hand), and
 serializes nowhere but as `Post`. SeaORM itself
 is the source of truth for entities, columns, and migrations.
@@ -186,12 +186,12 @@ Two patterns cover this entity; a third shows up when you copy
 | `#[expose]` | Bare — the field is read-only on the wire (appears in `Post`), but not in any input |
 | `#[expose(input(create, update), validate(length(min = 1)))]` | Field appears in `Post` (input implies read) and in `CreatePost` and `UpdatePost`, with the `validator` rule wired |
 | `#[expose(input(create))]` | Field appears in `Post` and only in `CreatePost` — common for fields that can be set but not edited |
-| *(no `#[expose]`)* | Field is hidden from `Post` and from every input — `deleted_at` here; the masker rebuilds it from a placeholder so the ability's rules see the whole row |
+| *(no `#[expose]`)* | Field is hidden from `Post` and from every input — `deleted_at` here; the ability's rules still read it, since each row is judged on its whole `Model` |
 
 Leaving a field unexposed matters once a feature carries server-side
 columns — password hashes, tenant ids set from a JWT. Because exposure
 is opt-in, those columns stay off the wire by default;
-[`api`](/publish/) is where unexposed columns and masking become
+[`api`](/publish/) is where unexposed columns and field grants become
 load-bearing.
 
 <Aside type="caution">

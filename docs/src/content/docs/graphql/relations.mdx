@@ -155,10 +155,11 @@ transport — see [Repo and executor](/database/repo-and-executor/).
 This is the killer property: turning a per-row leak into a wire-level
 omission needs no controller code and no manual `if` in the resolver.
 
-The batch decides the rows and the field the columns. A batch serves every alias of
-a field at once, so each field masks what it answers by its own selection, as a root
-field does: under a `.fields([Id, Name])` grant on `User`, `post.author { id name }`
-answers and `post.author { email }` is refused naming `email`
+The batch decides the rows and the caller's grants their columns: each row it answers
+is a wire row judged for the caller whose request runs the batch, as a root field's
+is, so under a `.fields([Id, Name])` grant on `User`, `post.author { id name }`
+answers and `post.author { email }` reads `null`, the column declared
+`#[expose(nullable)]` as a grant withholding it needs
 ([Response masking](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds)).
 
 ## What fails if you get it wrong

@@ -169,11 +169,11 @@ ability, and `Repo` denies every row, with the `warn` on `nest_rs::orm`. Read th
 the field's own body. A caller a token backs reads through the loader by `define`, on either
 line.
 
-A loader's rows hold every exposed column, as rows out of `Repo` do: the batch decides
-the rows, and the field answering decides the columns. `namesakes` answers `Vec<Post>`,
-so it is [masked by the caller's grants](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds)
-and its own selection, as a root field is. A scalar it derived from a row would be its
-own line, which no mask reads.
+A loader's rows are wire rows, judged where the batch builds them for the caller whose
+request runs it: the batch decides the rows, and [the caller's grants their
+columns](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds),
+a withheld one reading `None`, as a root field's rows do. A scalar a body derives from a
+`Model` it read whole is [its own line](/security/authorization/response-masking/#what-stays-the-bodys-own-line).
 
 The parameter is the whole wiring, and it declares the need. A loader is seeded
 only for an owner the app reaches, so the schema build reads the parameter and

@@ -39,9 +39,9 @@ compile:
 
 - `#[public]` — a caller with no credential is admitted, and the operation reads
   nothing a grant guards.
-- `#[authorize(Action, Subject)]` — ability gate + automatic response
-  masking, for a caller a principal backs.
-- `#[public(Action, Subject)]` — the same gate and mask on the ability a caller with
+- `#[authorize(Action, Subject)]` — ability gate, and reads under the caller's
+  ability, each wire row judged for that caller, for a caller a principal backs.
+- `#[public(Action, Subject)]` — the same gate and reads on the ability a caller with
   no credential has: [what a visitor reads](/security/authorization/public-reads/).
 
 The posture is **always** one of these visible attributes — a parameter
@@ -258,7 +258,7 @@ schema argument:
   [Dataloaders](/database/dataloaders/#reading-a-loader).
 
 The caller's `Ability` is none of them: the field's unit carries it, the one its
-class gate checked, and its mask and every read under it see that one.
+class gate checked, and every read and wire row under it see that one.
 
 An optional `ctx: &Context<'_>`, the first argument after `&self`, reaches what
 async-graphql itself offers: the selection a field looks ahead at, a header to
@@ -386,8 +386,8 @@ the `Create` grant that pins it, so the mutation reads no principal. The service
 The
 resolver only translates between the wire shape and the service —
 `#[authorize(Action, Entity)]` is each operation's access posture,
-gating the call against the ambient ability and masking the returned
-value automatically. The `#[use_guards(AuthzGuard)]` binding on the
+gating the call against the ambient ability, each row it answers judged
+for the caller as it is built. The `#[use_guards(AuthzGuard)]` binding on the
 struct scopes each operation to the caller's ability. Authentication runs
 at the `/graphql` request, through the
 [endpoint guards](/security/authorization/endpoint-guards/)

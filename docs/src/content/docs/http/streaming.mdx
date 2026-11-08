@@ -38,13 +38,13 @@ server without ever sitting whole in process memory.
 
 The stream is polled after the handler returned, and it runs under what the
 handler ran under: the request's trace and actor, every ambient value a layer
-added, and the caller's ability on a route a response mask shapes. A service
+added, and the caller's ability on a route whose posture names an entity. A service
 the stream calls reads on the **pool**, never on the route's transaction —
 that one has settled by the time the body is written — so a read in the stream
 of a `POST` sees what the route committed.
 
-A route no mask shapes withholds the ability, so a scoped read there fails
-closed rather than answering rows a mask would have narrowed. An `#[sse]`
+A route whose posture names no entity withholds the ability, so a scoped read
+there fails closed rather than answering rows no posture declared. An `#[sse]`
 stream is one — a posture naming an entity is refused there — so what it emits comes from
 reads that need no scope.
 
@@ -169,10 +169,10 @@ response.extensions_mut().insert(OpenEndedBody);
 
 Gate a stream on a **capability**: `#[authorize(Manage, Transcoding)]`, on a
 subject [`#[subject]`](/security/authorization/policies/#subjects-no-table-holds)
-declares, runs the class gate and arms no mask. An entity's posture would mask
-the response against the entity model, and an event stream is no wire model to
-reconcile, so `#[authorize]` naming an entity on an `#[sse]` route is a
-compile error saying so, decided by the subject's type.
+declares, runs the class gate and opens no read. An entity's posture would open
+reads whose wire rows the stream writes after the route's unit ended, where no
+ability is left to judge them, so `#[authorize]` naming an entity on an `#[sse]`
+route is a compile error saying so, decided by the subject's type.
 
 ## Limits
 

@@ -62,7 +62,7 @@ what doesn't:
 | Risk you carry | Technique it earns |
 |---|---|
 | Wiring (DI graph, routes mounted, guards bound) | E2E — `TestApp` boots the real module tree |
-| Security policy regressions (`Ability::mask`, `condition_for`, `permitted_fields`) | [Policy tests](/testing/policy/) — pure unit tests on the policy types |
+| Security policy regressions (`condition_for`, `permitted_fields`, `can`) | [Policy tests](/testing/policy/) — pure unit tests on the policy types |
 | Failure modes (401 / 403 / 400 / rollback) | [Negative-path tests](/testing/negative-path/) in the app's e2e |
 | Pure logic — calculations, conversions, validators | [Unit tests](/testing/unit/) next to the code |
 | Edge cases in parsers and validators | Property-based testing with [`proptest`](https://crates.io/crates/proptest) |
@@ -150,7 +150,7 @@ the examples in doc comments. Bare `nestrs run test` runs every kind, and
   own, the outbox relay, the way down.
 - [Negative-path tests](/testing/negative-path/) — auth refused,
   cross-tenant denied, validation failed, rollback verified.
-- [Policy tests](/testing/policy/) — asserting on `Ability::mask` and
+- [Policy tests](/testing/policy/) — asserting on `Ability::permitted_fields` and
   `condition_for` directly, because a regression there is a leak.
 
 ## Going further

@@ -58,9 +58,9 @@ generated `create_user` needs nothing from you to land in the caller's org:
 the `Create` grant pins `org_id`, and the create fills it from there.
 
 `#[authorize(Action, Entity)]` is each operation's **access posture**:
-the macro emits the class-level gate before your body runs and masks
-the returned value after it — you never call `authorize` or a masking
-function by hand. A deliberately open operation declares `#[public]`
+the macro emits the class-level gate before your body runs, and each
+`User::from(&row)` judges its row for the caller — you never call
+`authorize` or a masking function by hand. A deliberately open operation declares `#[public]`
 instead.
 
 <Aside type="note">
@@ -76,7 +76,7 @@ posture attribute, and so is the principal's parameter:
 
 | HTTP | GraphQL | Job |
 |------|---------|-----|
-| `#[authorize(Create, users::Entity)]` attribute | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
+| `#[authorize(Create, users::Entity)]` attribute | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** read under the caller's ability |
 | `#[authorize(Read, bind = UsersService)]` attribute, an `Authorized<Read, UserEntity>` parameter | the same attribute and parameter, the `id` argument synthesised | Load the row through the service, refuse it on a denied ability |
 | `Ambient<Claims>` parameter | `Ambient<Claims>` parameter, no argument of the schema | Read the principal the endpoint's guards attached |
 

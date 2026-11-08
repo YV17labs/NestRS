@@ -48,7 +48,7 @@ It is therefore a `#[query]` in every respect that matters:
 | Guard chain | runs — resolver-scope and method-scope, each declaring `GuardFor<GraphqlView>` |
 | Access posture | **mandatory** — `#[authorize(Action, Entity)]` or `#[public]`, no posture ⇒ compile error |
 | Argument rules and pipes | run — the key arguments' rules, then a `Piped<P>` on any of them |
-| Response mask | runs — the entity is masked against the caller's ability like any other row |
+| Wire rows | judged — the entity's row is judged for the caller's ability like any other row |
 
 Four things it refuses that a `#[query]` does not, each a named compile error:
 
@@ -262,6 +262,6 @@ no dependency to do the router's work.
 - [Queries and mutations](/graphql/queries-mutations/) — the operation shape an
   `#[entity]` follows in every respect but how it is reached.
 - [Authorization](/security/authorization/) — what the mandatory posture gates
-  and masks.
+  and reads.
 - [Configuration](/graphql/configuration/) — the rest of the `<PREFIX>_GRAPHQL__*`
   surface, including the introspection switch this one is not covered by.

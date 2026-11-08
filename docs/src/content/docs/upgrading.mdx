@@ -276,15 +276,15 @@ lists what the boot, a log or the wire shows when one is missed.
    | `post: Bind<Update, PostsService>` on a route, `nest_rs::seaorm::Bind` | `#[authorize(Update, bind = PostsService)]` on the route and `post: Authorized<Update, PostEntity>` as its parameter, `nest_rs::seaorm::Authorized`; the route's whole path, its controller's included, names the id alone (`/{id}`, `/{id}/publish`) |
    | `nest_rs::seaorm::graphql::bind::<A, S>(ctx, &id)` or `bind_required::<A, S>(ctx, &id)` in a resolver | `#[authorize(A, bind = S)]` on the operation and an `Authorized<A, E>` parameter, its `id` argument synthesised; a nullable lookup is `#[crud]`'s generated query, or `CrudService::access` in the body |
    | a hand-written `Authorize<A, E>` parameter on a route that is not `#[public]` | `#[authorize(A, E)]` on the route, the parameter dropped |
-   | `#[public]` and `_authz: Authorize<Read, post::Entity>` on a route | `#[public(Read, post::Entity)]`, the parameter dropped: the same gate, the same mask, and no line a cleanup can take for unused |
+   | `#[public]` and `_authz: Authorize<Read, post::Entity>` on a route | `#[public(Read, post::Entity)]`, the parameter dropped: the same gate, the same reads, and no line a cleanup can take for unused |
    | `#[public]` on a route loading its row with `CrudService::access` in the body | `#[public(Read, bind = PostsService)]` and a `post: Authorized<Read, PostEntity>` parameter |
-   | `#[public]` on a GraphQL operation, a WS message or an MCP operation reading rows under `define_visitor` | `#[public(Read, post::Entity)]`, returning the wire type: a read under a bare `#[public]` now answers nothing, and `.fields([...])` holds there. `unmasked` beside it where the body masks, as a `#[prompt]` or a `#[resources]` listing has to |
-   | a covered WS message or MCP operation stating no posture, or gated on a `#[subject]`, reading rows | `#[authorize(Read, Entity)]`: such a read now answers nothing, as on a route. `unmasked` where the body masks |
+   | `#[public]` on a GraphQL operation, a WS message or an MCP operation reading rows under `define_visitor` | `#[public(Read, post::Entity)]`, returning the wire type: a read under a bare `#[public]` now answers nothing, and `.fields([...])` holds there |
+   | a covered WS message or MCP operation stating no posture, or gated on a `#[subject]`, reading rows | `#[authorize(Read, Entity)]`: such a read now answers nothing, as on a route |
    | a `#[field_resolver]` or a relation serving a visitor's rows | a root field naming them, `#[public(Read, Entity)]`, or a query returning what it read: a nested read answers a visitor nothing |
    | a guard of your own covering a route, a message or an operation, its `phase()` left at the default | `fn phase(&self) -> GuardPhase { GuardPhase::Authentication }`, or `Authorization`: the boot reads it |
    | a route, a message or an operation under `ThrottlerGuard` or another guard identifying no one, alone | `#[public]` on the unit, a guard identifying a caller beside it, or for an MCP host writing its own handler `McpModule::for_root(McpAccess::Public)` |
    | `HttpRouteMeta::scoped_guarded`, `HttpRouteMeta::access_is_implicit`, `HttpRouteParts::scoped_guarded` | nothing public: the boot reads the composed chain |
-   | `nest_rs::authz::http::AbilityShaping` | nothing public: `#[authorize]` arms the mask |
+   | `nest_rs::authz::http::AbilityShaping` | nothing public: `#[authorize]` declares the gate, and each wire row judges itself |
    | a hand-written `get` or `user` override on a `#[crud]` block, kept only for its `#[api]` text | `api(get(summary = "…", description = "…"))` in the `#[crud]` arguments, the override deleted |
    | `paginate = …` on a `#[crud]` block that writes its list operation by hand | the key dropped: nothing generated read it, and your method bounds its own list |
    | a `#[crud]` block generating `get`, `update` or `delete` under a controller path naming a parameter (`/orgs/{org}/users`) | those operations written by hand, reading every parameter, or the resource mounted under a path naming none: the generated ones answered `500` on every request |
@@ -614,7 +614,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `ServiceError::Internal(msg)` built or matched | `ServiceError::internal(msg)`; match `ServiceError::Internal { .. }`, the detail, then the cause's chain, read as `err.source()`'s `Display` |
    | `err.source()` of a `ServiceError::Validation` or a `ServiceError::Db`, downcast to `ValidationErrors` or `DbErr` | the variant's own field, `ServiceError::Db(db)`: `source()` says the failure as `error_message` does, and holds neither |
    | `err.source()` of a `ServiceError::Internal`, walked to the cause `internal_because` was given and downcast | a variant of your own error holding it, for a failure a caller decides on: `source()` is one sentence, what `error_message` says of the detail and the cause's chain, with nothing beneath it |
-   | `ServiceError::Masking(msg)` built or matched | nothing: the variant is gone, as no path built it. A mask's failure is the edge's opaque answer, and a failure of your own is `ServiceError::internal(msg)` |
+   | `ServiceError::Masking(msg)` built or matched | nothing: the variant is gone, as no path built it. A wire row's refusal is the edge's own answer, and a failure of your own is `ServiceError::internal(msg)` |
    | `AuthError::Failed(format!("…: {e}"))`, `AuthError::Failed(msg)` | `AuthError::failed_because("…", e)`, `AuthError::failed(msg)` |
    | `AuthError::Unavailable(detail)` or `AuthError::Unavailable { detail, retry_after }` built | `AuthError::unavailable(detail, retry_after)`, or `AuthError::unavailable_because(detail, retry_after, e)` |
    | `match err { AuthError::Failed(msg) => … }`, `AuthError::Unavailable { detail, retry_after }` matched | `AuthError::Failed { .. }`, `AuthError::Unavailable { retry_after, .. }`, the detail read as `err.source()`'s `Display` or the chain as `nest_rs::core::error_message(&err)` |
@@ -973,8 +973,8 @@ lists what the boot, a log or the wire shows when one is missed.
     | a `#[resource]` reading one row with `CrudService::access(&*self.svc, Action::Read, id)` and a match over `Access` | `#[authorize(Read, bind = PostsService)]` and a `post: Authorized<Read, PostEntity>` parameter, no `id: Uuid`: `Denied`, `Missing` and an id no v7 answer *Resource not found*, and the body runs on the row alone |
     | `#[public]` on a message or an MCP operation behind an upgrade or an endpoint whose guards authenticate it | nothing: the guards cover it, and the boot refuses a `#[public]` that could open nothing there. `#[authorize(Action, Subject)]` where it needs a gate |
     | a hand-written `Posture::Gated` self-mount (`declare_endpoint`) with no guard, which served every caller after one `warn` | `GlobalGuards` covering it, or `Posture::Public` where it is open on purpose: the boot refuses it |
-    | `#[authorize(Action, Entity, unmasked)]` on a message only because it returns a bare value or a `Result` behind an alias | `#[authorize(Action, Entity)]`: the mask reads the reply by its type |
-    | a `#[prompt]`, or a `#[tool]` answering `ContentBlock` or `InputRequiredResult`, beside `#[authorize(Action, Entity)]` | `#[authorize(Action, Entity, unmasked)]`: the mask failed every call closed on what is no row, and now does not compile |
+    | `#[authorize(Action, Entity, unmasked)]` on a message only because it returns a bare value or a `Result` behind an alias | `#[authorize(Action, Entity)]`: nothing reads the reply back, and `unmasked` is refused |
+    | a `#[prompt]`, or a `#[tool]` answering `ContentBlock` or `InputRequiredResult`, beside `#[authorize(Action, Entity)]` | nothing: the posture stands as written, since no mask reads the answer back |
     | `input: Valid<T>` on a GraphQL argument, a WebSocket payload or a job; `Parameters<Valid<T>>` on MCP; `nest_rs::mcp::Valid` | `input: T`, `Parameters<T>`: each edge validates what it decodes |
     | `Piped<P, T>` on a GraphQL argument, a WebSocket payload or a job, `Parameters<Piped<P, T>>` on MCP; `nest_rs::mcp::Piped` | `Piped<P>` from `nest_rs::pipes`, whose wire value is the pipe's `In`, bound `Piped(value)` |
 
@@ -1859,9 +1859,9 @@ lists what the boot, a log or the wire shows when one is missed.
   | Edge | Before | After |
   |---|---|---|
   | HTTP | `#[public]`, `_authz: Authorize<Read, E>` | `#[public(Read, E)]` |
-  | GraphQL | `#[public]` | `#[public(Read, E)]`, each stripped field `Option` on the wire type |
+  | GraphQL | `#[public]` | `#[public(Read, E)]`, each column a grant withholds `#[expose(nullable)]` or an `Option` |
   | WebSocket | `#[public]`, `#[use_guards(AuthzGuard)]` | `#[public(Read, E)]`, the guard kept |
-  | MCP | `#[public]` on an opened `/mcp` | `#[public(Read, E)]`, each stripped field `Option`; `unmasked` on a prompt or a listing |
+  | MCP | `#[public]` on an opened `/mcp` | `#[public(Read, E)]`, each column a grant withholds `#[expose(nullable)]` or an `Option` |
 - **`Authorize<…>` is not a handler parameter**, `E0277` on a route keeping the parameter:
   the error names `#[public(Action, Subject)]`.
 - **A gateway or an MCP endpoint whose guards authenticate, still saying `#[public]`**
@@ -1892,36 +1892,18 @@ lists what the boot, a log or the wire shows when one is missed.
   spells it, `workStatus` where it read `work_status`. A scalar's keys stay what it reads
   in the scalar.
 - **A `#[field_resolver]` answering an `#[expose]`d wire type**, whatever holds its rows,
-  answers `FORBIDDEN` naming a selected column the caller's `.fields` grant withholds, and
-  every selected column to a caller no grant reaches on that entity, where 6.x served
-  them. Grant the column, or answer a DTO of your own where the field means to show it. A
-  body reading a row out of a loader now holds every exposed column, as a row out of
-  `Repo`: what it derives from one is no mask's.
-- **A `#[field_resolver]` answering a row it built** that the mask cannot read back into
-  the entity, an `id` no key can hold, answers `INTERNAL` where 6.x served it, and an
-  answer to a visitor on a rule only a read could decide reads `null` or is refused. Answer
-  a DTO of your own.
-- **A `#[field_resolver]` answering a wire type where no ability is attached** answers
-  `INTERNAL` with one `no_ambient_ability` line per operation, as a root and a relation do,
-  where it served every column. Attach the ability at `/graphql`'s request, or answer a DTO of
-  your own.
-- **An object of your own holding a wire type's row, answered by a `#[field_resolver]`,**
-  fails the boot naming the field and where it holds the row, where it shipped what a grant
-  withholds to any caller: a column of the wire type, a `#[graphql(flatten)]` or a
-  `MergedObject` of it, a union or an interface with it among its members, an `Edge`
-  answered alone, an `Arc` around a `Connection`, an object a `Connection` or its `Edge` holds
-  beside its nodes, a `Connection` of any of those. Give the column `#[graphql(skip)]` and
-  serve it from a `#[field_resolver]` of the object.
-- **A `#[field_resolver]` answering `&'static Wire`, `&'static [Wire]` or `Weak<Wire>`,**
-  however deep it sits, does not compile, naming the shape, where it shipped what a grant
-  withholds. Answer the row by value, or behind an `Arc`.
-- **A `Json<Wire>` scalar, at a root or as a subscription item,** answers `FORBIDDEN`
-  naming every column the grant takes, or drops the item, where it shipped whole: it has
-  no selection to acquit them. **A subscription item that is a list** is masked row by
-  row, where it passed unmasked. Grant the columns, or answer the object type.
+  reads `null` in each column the caller's `.fields` grant withholds, where 6.x served it,
+  and a row judged for another caller, or built where no ability is attached, answers
+  `INTERNAL` with one line per operation, as a root and a relation do. A body reading a row
+  out of a loader reads `None` where the grant withholds a column: a loader answers judged
+  rows. **A `#[field_resolver]` whose parent answers no one** — a row kept from another
+  request, one the caller may not read — refuses before it runs, `INTERNAL` or
+  `FORBIDDEN`, where it derived a scalar from the parent's columns.
+- **A subscription item that is a list** keeps the rows that answer the subscriber,
+  where it passed whole.
 - **A WebSocket `#[on_connect]` or `#[on_disconnect]` going through `Repo`** fails closed,
-  a read and a by-id write alike, and `current_ability()` answers `None` there: no mask
-  shapes what a hook sends, so the ability the upgrade attached stays off its reads. The
+  a read and a by-id write alike, and `current_ability()` answers `None` there: no posture
+  stands before a hook, so the ability the upgrade attached stays off its reads. The
   principal stays readable. Read what a client should see in a message whose posture names
   it; a hook's system write is `Repo::insert_unscoped`, a visible line.
 - **`use_guards_global`, `use_pipes_global`, `use_interceptors_global` or
@@ -2110,8 +2092,10 @@ lists what the boot, a log or the wire shows when one is missed.
   type's last segment (`PostPublishedEvent`), `related` the table, and `provider`,
   `context_type`, `strategy`, `store`, a bound `service`, a stop's `type_name` and an unresolved
   `layer` a short name.
-- **A log filter on `response masking failed`'s `event`** still matches, on a WebSocket
-  message; the line now says `host`, `method` and the unit's coordinates on every edge, and
+- **A log filter on `response masking failed`** matches nothing: a wire row refusing
+  where it is written says `a reply's row is withheld from its caller` at `warn`, or `a wire
+  row answered a caller it was not judged for` at `error`, with `entity`, `reason`, `host`,
+  `method` and the unit's coordinates on every edge, and
   `authorization denied` does on a field grant's refusal, so a filter on `tool` or `method`
   finds them.
 - **A log filter on a versioned route's `mounted` line** under `header` or `media_type`
@@ -2444,7 +2428,7 @@ lists what the boot, a log or the wire shows when one is missed.
   `Update` grant of its own beside it widens them. A row whose grants do not permit each column
   answers `404`, as any row outside the scope.
 - **`.fields([Headline])` on a `#[sea_orm(column_name = …)]` column** keeps `headline` in the
-  reply, where the mask stripped it: a client reading its absence reads the value.
+  reply, where 6.x stripped it: a client reading its absence reads the value.
 - **`Repo::update` of an active model setting nothing** answers `DbErr::RecordNotUpdated`, a
   `404`, for a row outside the caller's `Update` scope or a tombstone, where it handed the row
   back, and for a key no row holds, where it said `RecordNotFound`. A service using it to read
@@ -2498,7 +2482,7 @@ lists what the boot, a log or the wire shows when one is missed.
   which never crosses the wire``.
 - **A serde derive left on an `#[expose]`d entity** fails to compile at the
   derive: ``#[expose]: `Model` derives `Serialize`, which writes every column,
-  hidden ones included, onto a wire no mask shapes — a reply answers `User`
+  hidden ones included, onto a wire — a reply answers `User`
   (`Json(User::from(&model))`): drop the derive``, and the same for
   `Deserialize`, naming the entity's inputs. Once it goes, a handler answering
   the row — `Json(model)`, `WsReply::reply(&model)`, a `Vec<Model>` in a DTO — fails
@@ -2510,7 +2494,7 @@ lists what the boot, a log or the wire shows when one is missed.
   Serialize for type Model`, its note naming `AModelCrossesNoWire`: the same goes
   for `Deserialize`, `JsonSchema`, `#[output]`, `#[input]`, and with the `graphql`
   feature for async-graphql's `SimpleObject`, `InputObject` and `#[Object]`, which
-  write or read columns no mask shapes. Delete it and answer the exposed type
+  write or read every column. Delete it and answer the exposed type
   (step 9). A blanket of your own over one of those traits reports the same beside
   a specific impl on the row: the row's impl goes (step 9).
 - **A grant on `Read` withholding a column no `null` answers** fails when the
@@ -2651,8 +2635,8 @@ folder; what a 6.1 project most often meets:
   does not offer (`` `NotesService` offers no create``), or a parameterised prefix.
 - **A posture** (`#[authorize]`, `#[public]`): twice, both at once, of the wrong shape, an unknown
   key, or `bind` naming another entity, no resource service, no `Authorized<A, E>` parameter or
-  more than one route parameter; `id_arg` off GraphQL; `unmasked` on HTTP; a type that is no
-  `#[subject]`; an `#[sse]` route naming an entity; a masked MCP prompt or `CallToolResult`.
+  more than one route parameter; `id_arg` off GraphQL; `unmasked` on any edge; a type that is no
+  `#[subject]`; an `#[sse]` route naming an entity.
 - **A guard** bound where it declares no `GuardFor` for that edge's view: `` `HttpOnlyGuard` does
   not declare that it checks `GraphqlView` units``; one writing `check_http` alone is rustc's
   `E0046`. `#[use_pipes]` on a GraphQL operation, a tool, a connection hook or a processor is

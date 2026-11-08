@@ -57,7 +57,7 @@ That is the whole declaration. When the caller's token does not carry the scope,
 not added at all. Every layer then refuses together, exactly as it would for
 a grant you never wrote: the class gate says no, the [query
 pre-filter](/security/authorization/row-level-filtering/) matches nothing,
-and the [response mask](/security/authorization/response-masking/) has
+and the [wire row](/security/authorization/response-masking/) holds
 nothing to expose.
 
 Call it more than once to require **all** the named scopes. Scopes are
@@ -245,8 +245,8 @@ happening.
 ## A scope on a capability no table holds
 
 Not every scope names rows. The demo advertises `audio:transcode`, and
-transcoding is a capability: there is no table to filter and no reply to
-mask. Declare it as a [subject no table
+transcoding is a capability: there is no table to filter and no row to
+judge. Declare it as a [subject no table
 holds](/security/authorization/policies/#subjects-no-table-holds) and gate
 it like any other rule — the scope goes on the rule, never in a guard:
 

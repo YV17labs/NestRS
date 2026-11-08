@@ -30,7 +30,8 @@ slice: the port at the feature root, one adapter folder per edge.
   prove, so a copied feature inherits no test of the framework.
 - **Security is wired by composition, not ceremony.** `SeaOrmDatabaseModule`
   opens the unit of work, `Repo` filters rows by the ability the authz guard
-  attaches, and `#[authorize]` arms the gate and the mask. An adapter imports
+  attaches, `#[authorize]` arms the gate, and each wire row `From<&Model>` builds
+  is judged for its caller. An adapter imports
   what its edge's guards need: `AuthzModule` on HTTP and WS, whose host binds
   them, `AuthzGraphqlModule` and `AuthzMcpModule` on the two edges whose shared
   request no host can gate. A feature's guards are its host's or that module's

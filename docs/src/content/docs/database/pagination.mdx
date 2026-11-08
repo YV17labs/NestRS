@@ -31,8 +31,8 @@ collections.
 ## Keyset, the REST shape
 
 The generated `GET /posts` returns a plain `Vec<Post>` body and, when more rows
-remain, the next page as an RFC 8288 `Link`. The body stays a flat array so
-response masking works unchanged. The link is in the
+remain, the next page as an RFC 8288 `Link`. The body stays a flat array of
+wire rows, each judged for the caller. The link is in the
 [OpenAPI document](/openapi/) and, under CORS, exposed to a browser on another
 origin without being listed.
 
@@ -70,7 +70,7 @@ the value it was sent.
 ## Keyset, the GraphQL shape
 
 The generated list query takes the same two cursor arguments and returns a
-plain list — the body stays maskable, exactly like REST:
+plain list of judged wire rows, exactly like REST:
 
 ```graphql title="the query a client sends"
 query {

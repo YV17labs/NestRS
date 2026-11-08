@@ -37,10 +37,10 @@ deep on each.
 
 ## Request layers
 
-- **[Shaper](/fundamentals/request-lifecycle/)** — the response mask the
-  `#[routes]` expansion arms for a route its posture shapes: the ability
-  shaper runs masking on the way out. A shaper is plumbing the framework
-  writes, never a unit you declare.
+- **[Shaper](/fundamentals/request-lifecycle/)** — what the `#[routes]`
+  expansion selects by type off a route's posture: its class gate, and
+  whether the route reads under the caller's ability, as an entity's posture
+  does. A shaper is plumbing the framework writes, never a unit you declare.
 - **[Guard](/fundamentals/guards/)** — a pre-handler gate; returns
   `Ok(())` to let the request through or a typed `Denial` mapped to
   401/403/429, and may attach context a handler on any edge reads
@@ -63,8 +63,8 @@ deep on each.
   failed whatever it answers.
 - **Ability shaper** — the `Authorize<A, S>` wrapper the `#[routes]`
   macro emits when a route declares `#[authorize(A, S)]` or `#[public(A, S)]`,
-  never a parameter; runs response masking after a 2xx. Innermost per-route layer, just outside
-  the handler. [Layer order](/fundamentals/guard-scopes/#where-guards-run-in-the-chain).
+  never a parameter; declares the route's class gate and opens its reads under
+  the caller's ability. [Layer order](/fundamentals/guard-scopes/#where-guards-run-in-the-chain).
 - **Unit** — one piece of work the framework dispatches and files one
   operation line for: an HTTP request, a GraphQL field, a WebSocket message,
   an MCP operation, a job's attempt, a tick, a listener call. Every layer
@@ -158,11 +158,12 @@ deep on each.
   condition a rule attaches to an action (`org_id = $caller_org_id`);
   what `condition_for` lifts into SQL.
 - **[Field set](/security/authorization/policies/)** — the column list
-  a rule grants on `Read`; what `Ability::mask` keeps, with everything
-  else zeroed.
-- **[Masking](/security/authorization/response-masking/)** — the
-  shaper's post-handler pass that rebuilds a `Model` from the wire
-  body, runs `Ability::mask`, then re-emits only the wire keys.
+  a rule grants on `Read`; what a wire row holds, every other exposed
+  column reading `null`.
+- **[Masking](/security/authorization/response-masking/)** — withholding a
+  column from a caller: each wire row is judged on its whole `Model` where
+  `From<&Model>` builds it, a withheld column no value in it. Nothing reads
+  a reply back.
 - **[Row-level filtering](/security/authorization/row-level-filtering/)**
   — `Ability::condition_for` joined into the SQL by `Repo::scoped`, so
   every read returns only rows the ability allows.

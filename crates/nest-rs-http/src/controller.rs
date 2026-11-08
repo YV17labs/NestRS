@@ -244,9 +244,9 @@ impl HttpRouteMeta {
         self.parts.error_responses
     }
 
-    /// An ability shaper (`Authorize<_, _>`) masks this route's response, so a
-    /// caller may receive a **subset** of [`response`](Self::response)'s
-    /// properties — whichever ones its ability grants.
+    /// The route's posture names an entity (`Authorize<_, _>`), so it reads under
+    /// the caller's ability and a nullable property of
+    /// [`response`](Self::response) reads `null` where that ability withholds it.
     pub fn masked(&self) -> bool {
         self.parts.masked
     }

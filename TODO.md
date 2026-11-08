@@ -302,11 +302,6 @@ fails `build()`, and the row answers only the caller whose ability judged it
   stage's `StageKind::Route { unmasked }`, `RouteSite::masked` and the shaper's
   masking probe. Close: one rename across `nest-rs-core`, `nest-rs-http`,
   `nest-rs-authz` and the rules naming them, a tier-2 move.
-- Docs pages beside the rewritten *Response masking* still say "mask" for the
-  judged row in passing (`graphql/field-resolvers`, `graphql/relations`,
-  `database/dataloaders`, `security/authorization/public-reads`,
-  `websockets/messages`, `mcp/index`, `tutorial/security`). Close: reword each,
-  and run the docs build (the anchors they link to were moved and resolve).
 
 ## 5. Additive features for 7.x (no caller yet)
 

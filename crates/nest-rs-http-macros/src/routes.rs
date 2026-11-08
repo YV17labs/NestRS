@@ -740,7 +740,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // alias documents both; a type no expression can name, or an `#[sse]`
         // stream, is not probed.
         let answered = answer_type(&method.sig.output).filter(|_| !is_sse);
-        // Kept under a shaper: masking returns a subset of this shape, recorded as `masked`.
+        // Kept under a posture naming an entity, recorded as `masked`: its nullable
+        // properties read `null` where a grant withholds them.
         let response = match (&api.response, answered) {
             (Some(ty), _) => quote! {
                 ::core::option::Option::Some(::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn)

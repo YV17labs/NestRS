@@ -22,6 +22,7 @@
 mod ability;
 mod action;
 mod builder;
+mod contained;
 mod context;
 mod error;
 mod factory;
@@ -95,6 +96,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::contained::{Uncontained, contained_text, contained_value};
     pub use crate::context::{AmbientAbility, install_ability, visitors_read_unnamed};
     #[cfg(feature = "graphql")]
     pub use crate::graphql::mask::{

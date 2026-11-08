@@ -15,7 +15,8 @@ use sea_orm::{EntityTrait, IdenStatic};
 
 use crate::ability::{Ability, FieldSet, Rule, When};
 use crate::action::Action;
-use crate::error::MalformedRuleError;
+use crate::contained::Uncontained;
+use crate::error::{Defect, MalformedRuleError};
 use crate::predicate::{Predicate, PredicateBuilder};
 use crate::{RowSubject, Subject};
 
@@ -26,8 +27,8 @@ use crate::{RowSubject, Subject};
 #[derive(Default)]
 pub struct AbilityBuilder {
     ability: Ability,
-    /// Rules whose relation predicate was rejected, so [`build`](Self::build)
-    /// fails rather than a malformed denial going fail-open.
+    /// Rules refused as malformed, so [`build`](Self::build) fails rather than a
+    /// malformed denial going fail-open.
     malformed: Vec<MalformedRuleError>,
     /// What the actor's credential was granted, or `None` when the credential
     /// is not scope-aware. See [`with_granted_scopes`](Self::with_granted_scopes).
@@ -114,8 +115,9 @@ impl AbilityBuilder {
         RuleSpec::new(self, action, true)
     }
 
-    /// Finalize the rule set. Fails with [`MalformedRuleError`] if any rule's
-    /// relation predicate was rejected as malformed.
+    /// Finalize the rule set. Fails with [`MalformedRuleError`] if any rule was
+    /// refused: a relation predicate rejected as malformed, or a text its condition
+    /// writes that would not stay where the scope writes it.
     pub fn build(mut self) -> Result<Ability, MalformedRuleError> {
         match self.malformed.drain(..).next() {
             Some(err) => Err(err),
@@ -179,6 +181,9 @@ trait ErasedPredicate: Any + Send + Sync {
     /// Whether it holds for every row by its shape, so it narrows nothing.
     fn is_always(&self) -> bool;
 
+    /// Why a text it writes would not stay where the scope writes it, if one would not.
+    fn uncontained(&self) -> Option<Uncontained>;
+
     fn condition(&self) -> Condition;
 }
 
@@ -193,6 +198,10 @@ where
 
     fn is_always(&self) -> bool {
         self.holds_for_every_row()
+    }
+
+    fn uncontained(&self) -> Option<Uncontained> {
+        Predicate::uncontained(self)
     }
 
     fn condition(&self) -> Condition {
@@ -314,16 +323,36 @@ impl<S: Subject> RuleSpec<'_, S> {
     }
 }
 
+impl<S: Subject, K> RuleSpec<'_, S, K> {
+    /// Remember this rule as refused for `defect`, so the build fails.
+    fn malformed(&mut self, defect: Defect) {
+        self.builder.malformed.push(MalformedRuleError::new(
+            self.action,
+            std::any::type_name::<S>(),
+            if self.inverted { "denial" } else { "grant" },
+            defect,
+        ));
+    }
+}
+
 impl<S: Subject, K> Drop for RuleSpec<'_, S, K> {
     fn drop(&mut self) {
         // A `Deny` predicate only comes from a rejected `related(...)`. Checked
         // before the scope gate, so a developer error surfaces whatever the token.
         if self.rows.as_deref().is_some_and(|rows| rows.is_deny()) {
-            self.builder.malformed.push(MalformedRuleError {
-                action: self.action,
-                subject: std::any::type_name::<S>(),
-                kind: if self.inverted { "denial" } else { "grant" },
-            });
+            self.malformed(Defect::Relation);
+        }
+        // No parenthesis of its own holds the rule in the scope, beside its denials
+        // and the tombstone's: a text leaving its place there reaches past them.
+        if let Some(why) = self.rows.as_deref().and_then(|rows| rows.uncontained()) {
+            tracing::error!(
+                target: crate::TARGET,
+                action = self.action.as_str(),
+                subject = S::__line_name(),
+                reason = why.as_str(),
+                "invalid ability rule — its condition's text would not stay where the scope puts it",
+            );
+            self.malformed(Defect::Uncontained(why));
         }
 
         // A grant alone is withheld, and remembered so the refusal can name the

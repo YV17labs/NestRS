@@ -18,6 +18,8 @@ use sea_orm::{
     ColumnTrait, EntityTrait, Identity, ModelTrait, RelationDef, RelationTrait, RelationType, Value,
 };
 
+use crate::contained::{Uncontained, contained_text, contained_value};
+
 /// Scalar comparison operator for [`Predicate::Cmp`]; equality is [`Predicate::Eq`].
 #[derive(Clone, Copy, Debug)]
 pub enum CmpOp {
@@ -76,14 +78,21 @@ pub struct RelatedPredicate {
     relation: RelationDef,
     /// `R`'s filter, already lowered to SQL over `R`'s own columns.
     sub_condition: Condition,
+    /// The relation's custom `on_condition`, lowered once and checked alone, as the
+    /// one parenthesized operand the subquery's `WHERE` folds in.
+    on: Option<Expr>,
+    /// Why the `on_condition`'s text or a value of `R`'s filter would not stay where
+    /// the scope writes it, if either would not.
+    uncontained: Option<Uncontained>,
 }
 
 impl RelatedPredicate {
     /// Lower to a semi-join against the related table. `belongs_to`/`has_one`
     /// ([`RelationType::HasOne`]) becomes an uncorrelated `IN (subquery)`;
     /// `has_many` becomes a correlated `EXISTS`. A relation's custom
-    /// `on_condition` is folded into the subquery's `WHERE` so the scope is not
-    /// widened past the join.
+    /// `on_condition` is folded into the subquery's `WHERE`, so the scope is not
+    /// widened past the join, as one operand, so an `OR` it holds widens nothing
+    /// beside it.
     fn to_condition(&self) -> Condition {
         let def = &self.relation;
         // Unreachable: `PredicateBuilder::related` rejects a composite key. Fail
@@ -101,8 +110,8 @@ impl RelatedPredicate {
         let to_tbl = def.to_tbl.sea_orm_table().clone();
 
         let mut where_cond = self.sub_condition.clone();
-        if let Some(on) = &def.on_condition {
-            where_cond = where_cond.add(on(from_tbl.clone(), to_tbl.clone()));
+        if let Some(on) = &self.on {
+            where_cond = where_cond.add(on.clone());
         }
 
         match def.rel_type {
@@ -233,6 +242,21 @@ impl<E: EntityTrait> Predicate<E> {
             Predicate::Or(parts) => parts.iter().all(Self::holds_for_no_row),
             Predicate::Not(inner) => inner.holds_for_every_row(),
             _ => false,
+        }
+    }
+
+    /// Why a text it writes into the scope would not stay where the scope writes it:
+    /// a value's enum type name, or a relation's `on_condition`, each read alone.
+    pub(crate) fn uncontained(&self) -> Option<Uncontained> {
+        match self {
+            Predicate::Always | Predicate::Deny | Predicate::IsNull(..) => None,
+            Predicate::Eq(_, value) | Predicate::Cmp(_, _, value) => contained_value(value).err(),
+            Predicate::In(_, values) => values.iter().find_map(|v| contained_value(v).err()),
+            Predicate::And(parts) | Predicate::Or(parts) => {
+                parts.iter().find_map(Self::uncontained)
+            }
+            Predicate::Not(inner) => inner.uncontained(),
+            Predicate::Related(rp) => rp.uncontained,
         }
     }
 
@@ -551,7 +575,10 @@ impl<E: EntityTrait> PredicateBuilder<E> {
     ///
     /// A relation not pointing at `R`, or a composite key, logs an `error!` and
     /// returns [`Predicate::Deny`], which fails
-    /// [`AbilityBuilder::build`](crate::AbilityBuilder::build).
+    /// [`AbilityBuilder::build`](crate::AbilityBuilder::build). A relation's
+    /// `on_condition` whose text, read alone, would not stay one operand — closing a
+    /// parenthesis, a string or an identifier it did not open, leaving one open, or
+    /// holding a comment — fails it too, as the rule holding it commits.
     pub fn related<R, F>(&self, relation: E::Relation, build: F) -> Predicate<E>
     where
         R: EntityTrait,
@@ -578,9 +605,20 @@ impl<E: EntityTrait> PredicateBuilder<E> {
             return Predicate::Deny;
         }
         let sub = build(PredicateBuilder::<R>::new());
+        let on = def.on_condition.as_ref().map(|on| {
+            Expr::from(on(
+                def.from_tbl.sea_orm_table().clone(),
+                def.to_tbl.sea_orm_table().clone(),
+            ))
+        });
+        let uncontained = sub
+            .uncontained()
+            .or_else(|| on.as_ref().and_then(|on| contained_text(on).err()));
         Predicate::Related(Box::new(RelatedPredicate {
             relation: def,
             sub_condition: sub.to_condition(),
+            on: on.map(|on| Expr::tuple([on])),
+            uncontained,
         }))
     }
 }
@@ -1126,6 +1164,8 @@ mod tests {
         let rp = RelatedPredicate {
             relation: def,
             sub_condition: sub.to_condition(),
+            on: None,
+            uncontained: None,
         };
         let s = parent::Entity::find()
             .filter(rp.to_condition())

@@ -322,17 +322,16 @@ rows each copying 4 KiB still holds 400 MB and a list under a list multiplies
 by both row counts (the field's `complexity` and page bound it; closing it
 takes async-graphql sharing an argument's value across the rows, §7); a guard
 overriding the hidden `__attaches_ability` to claim an ability it never
-attaches, met by the gate's fail-closed `500`; a rule's `when` predicate
-written into `Repo`'s scope unscanned, where a value typed `sea_query::Enum`
-whose type name holds a `"` widens the rows that rule admits (policy the
-factory writes once, while the call site's condition, which changes per
-query, is scanned; closing it costs every scoped query a second render of its
-scope); past the cover search's bound of 1,024 partial unions, which six
-grants per refused action reach, `missing_scopes` at a `Manage` site naming
-the smallest set it met, which a scope lifting every action, declared after
-each action's own grants, leaves larger than the smallest (closing it: an
-exact search, which grows as the fourth power of the grants per refused
-action, on the refusal path).
+attaches, met by the gate's fail-closed `500`; the text an entity's own
+definition writes into a rule's scope, an `impl Iden` written by hand to
+answer its name borrowed or a `save_as` cast, read as its schema (closing it:
+check each identifier and cast an entity writes, once per entity); past the
+cover search's bound of 1,024 partial unions, which six grants per refused
+action reach, `missing_scopes` at a `Manage` site naming the smallest set it
+met, which a scope lifting every action, declared after each action's own
+grants, leaves larger than the smallest (closing it: an exact search, which
+grows as the fourth power of the grants per refused action, on the refusal
+path).
 
 ## 7. Upstream
 

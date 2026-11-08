@@ -335,6 +335,34 @@ through a crate-private `within` and pay nothing, and an empty `all` adds nothin
 The clippy lists stay as a second rung: they say it where it is written, at compile
 time, where the scan says it when the query runs. Their reasons now say so.
 
+An ability's rules write text into the scope too, and nothing parenthesizes a rule there:
+the scope is the rules' conditions side by side, their denials and the tombstone's beside
+them. A rule's typed `when` writes the entity's columns and bound values, of which a
+value's enum type name is written as it is; and `PredicateBuilder::related` folds in the
+relation's `on_condition`, any `Condition` an entity's `#[sea_orm(on_condition = …)]` or a
+hand-written `RelationDef` writes, raw text included. Seen in review: an `on_condition` of
+`1 = 1)) OR ((1 = 1` closed the rule's own subquery and read every row but the one a
+denial named. The builder now holds each text where it is written, as `filter` does:
+`related` lowers the `on_condition` once, scans it alone and folds it in as one
+parenthesized operand, so a balanced `OR` it writes bare widens nothing beside it; a value
+whose type name holds a `"` is refused. A rule failing either fails
+`AbilityBuilder::build` with a `MalformedRuleError` naming the `reason`, one `error` on
+`nest_rs::authz` beside it, and the guard answers `500`, as for a relation `related`
+rejects; a denial left out would fail open. A scan of a rule's whole rendered text would not
+do: a fragment balanced against the subquery around it passes one (tried before this was
+written). It costs nothing per query: a typed rule renders nothing, the builder reading its
+values, and an `on_condition` renders once, alone, as its rule is built. Measured in release
+(200,000 builds, three rounds, two passes each): four typed rules, one through a relation,
+build in about 1.06 µs before and after; with a fifth whose relation holds an
+`on_condition`, 1.68 µs before and 1.67 to 1.71 µs after, within the rounds' spread.
+
+What it leaves, kept and listed among the limits kept on purpose: the text an entity's own
+definition writes, an `impl Iden` written by hand to answer its name borrowed, which
+sea-query writes unescaped, or a `save_as` cast, is read as its schema, in a rule's scope as
+in every statement `Repo` writes for that entity. `DeriveEntityModel` writes neither
+unescaped. Closing it takes checking each identifier and cast an entity writes, once per
+entity.
+
 **Refused:**
 
 - **`filter` answering `Result`**: every chain would take a `?`, everyday code harder
@@ -343,9 +371,5 @@ time, where the scan says it when the query runs. Their reasons now say so.
 - **Closed comments and dollar quotes read as Postgres reads them**: nesting `/* */`,
   matching `$tag$` and the token boundaries around them are what a scan reads wrong
   silently, and a condition needs neither.
-- **Checking the ability's own condition**: the factory writes it once, as policy, and
-  the call site's condition is what changes per query; scanning the scope too would cost
-  every scoped query a second render for text no caller hands it. Its limit, kept and
-  listed among the limits kept on purpose: a rule's `when` predicate is typed, the
-  entity's columns and bound values, but a value typed `sea_query::Enum` writes its type
-  name into the scope unchecked, so one holding a `"` widens the rows that rule admits.
+- **Scanning the scope a query reads**: a second render on every scoped query, for text
+  each rule's builder checks once.

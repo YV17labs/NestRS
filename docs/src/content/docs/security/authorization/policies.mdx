@@ -243,17 +243,23 @@ ab.can(Action::Read, message::Entity).when(|p| {
 
 The SQL lowering is a semi-join: `belongs_to` / `has_one` becomes an
 uncorrelated `IN (subquery)`, `has_many` a correlated `EXISTS`. A
-relation's custom `on_condition` is folded into the subquery so the
-scope is never widened past the join.
+relation's custom `on_condition` is folded into the subquery, in parentheses
+of its own, so the scope is never widened past the join, nor past what the
+`on_condition` says.
 
-Two checks close the gap that type erasure opens. A rule failing either files
+Three checks close the gaps a rule's text could open. A rule failing one files
 one `error` on `nest_rs::authz` and fails `AbilityBuilder::build`, so the guard
 answers `500` rather than install a silently-wrong filter:
 
 - the relation must point at `R` (its target table is checked);
 - the relation must be single-column — a tenant key is one column by
   design; denormalize it onto the child rather than scoping through a
-  composite key.
+  composite key;
+- what the rule writes as text must stay where the scope writes it: the
+  relation's `on_condition`, read alone, closes every parenthesis, string and
+  identifier it opens and holds no comment, as a raw fragment in `Repo`'s
+  `filter` must, and no value it compares is an enum whose type name holds a
+  `"`. Its `reason` field says which.
 
 One consequence for the read-back path: the in-memory check cannot
 traverse the relation without loading the parent, so row visibility

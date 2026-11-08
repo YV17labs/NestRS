@@ -194,6 +194,129 @@ fn a_well_formed_relation_predicate_says_nothing() {
     );
 }
 
+/// What a relation's `on_condition` can write unescaped: a fragment closing the
+/// parentheses around it, and a keyword holding an `OR` sea-query writes bare.
+#[expect(clippy::disallowed_methods, reason = "the fragments under test")]
+mod fragments {
+    use sea_orm::sea_query::{Expr, ExprTrait};
+
+    pub(super) fn closing() -> Expr {
+        Expr::cust("1 = 1)) OR ((1 = 1")
+    }
+
+    pub(super) fn holding_an_or() -> Expr {
+        Expr::col(("parents", "id")).eq(Expr::custom_keyword("1 OR 1 = 1"))
+    }
+}
+
+/// A child of `parent` reached through relations whose `on_condition` writes text.
+mod ward {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "wards")]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub parent_id: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(crate) enum Relation {
+        #[sea_orm(
+            belongs_to = "crate::parent::Entity",
+            from = "Column::ParentId",
+            to = "crate::parent::Column::Id",
+            on_condition = r#"super::fragments::closing()"#
+        )]
+        Closing,
+        #[sea_orm(
+            belongs_to = "crate::parent::Entity",
+            from = "Column::ParentId",
+            to = "crate::parent::Column::Id",
+            on_condition = r#"super::fragments::holding_an_or()"#
+        )]
+        HoldingAnOr,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// Org 7's wards, reached through `relation`, but ward 1.
+fn wards_of_org_seven(relation: ward::Relation) -> AbilityBuilder {
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Read, ward::Entity)
+        .when(|p| p.related::<parent::Entity, _>(relation, |c| c.eq(parent::Column::OrgId, 7)));
+    b.cannot(Action::Read, ward::Entity)
+        .when(|p| p.eq(ward::Column::Id, 1));
+    b
+}
+
+/// The scope writes a rule's condition bare beside its denials: a relation's
+/// `on_condition` closing what holds it would read every row but the one denied.
+#[test]
+fn a_rule_whose_condition_closes_what_holds_it_fails_ability_construction() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let err = match wards_of_org_seven(ward::Relation::Closing).build() {
+        Ok(_) => panic!("a text leaving its place in the scope must fail construction"),
+        Err(e) => e,
+    };
+    assert_eq!(err.kind, "grant");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unbalanced_parenthesis") && msg.contains("on_condition"),
+        "the error says why and where to look: {msg}",
+    );
+    assert!(!msg.contains("1 = 1"), "never the text: {msg}");
+
+    let event = logs.expect_one(
+        "nest_rs::authz",
+        "invalid ability rule — its condition's text would not stay where the scope puts it",
+    );
+    assert_eq!(event.level, "error");
+    assert_eq!(
+        event.field("reason").as_deref(),
+        Some("unbalanced_parenthesis")
+    );
+    assert_eq!(event.field("subject").as_deref(), Some("wards"));
+    assert_eq!(event.field("action").as_deref(), Some("read"));
+}
+
+/// A relation's `on_condition` is one operand of the subquery's `WHERE`: an `OR` it
+/// writes bare stays beside the rule's own condition, which still holds.
+#[test]
+fn a_relations_on_condition_holding_an_or_stays_one_operand() {
+    let ability = wards_of_org_seven(ward::Relation::HoldingAnOr)
+        .build()
+        .unwrap_or_else(|e| panic!("its text closes what it opens: {e}"));
+    let sql = ward::Entity::find()
+        .filter(ability.condition_for::<ward::Entity>(Action::Read))
+        .build(DatabaseBackend::Postgres)
+        .to_string();
+    assert!(
+        sql.contains(r#""parents"."org_id" = 7 AND ("parents"."id" = 1 OR 1 = 1))"#),
+        "{sql}",
+    );
+}
+
+/// A value's enum type name is the one text a bound value writes, between quotes it
+/// can close: refused holding any `"`, an `OR` it would write reaching past the rule.
+#[test]
+fn a_rule_comparing_an_enum_whose_type_name_leaves_its_quotes_fails_construction() {
+    let label = sea_orm::Value::from(sea_orm::sea_query::Enum {
+        type_name: r#"text" OR 1 = 1 OR "x"#.into(),
+        value: "a".into(),
+    });
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Read, widget::Entity)
+        .when(|p| p.eq(widget::Column::Name, label));
+    let err = match b.build() {
+        Ok(_) => panic!("a type name leaving its quotes must fail construction"),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("quote_in_type_name"), "{err}");
+}
+
 #[test]
 fn no_grant_for_a_subject_produces_a_one_equals_zero_filter() {
     let ability = AbilityBuilder::new().build().expect("valid test ability");

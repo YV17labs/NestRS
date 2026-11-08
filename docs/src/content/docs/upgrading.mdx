@@ -2320,6 +2320,14 @@ lists what the boot, a log or the wire shows when one is missed.
   holds a comment, dollar quoting or a backslash in a plain `'…'` string. Close what it
   opens, write the string `E'…'`, or better, bind the value (`cust_with_values`). A
   statement a log or a test reads now holds each condition in parentheses of its own.
+- **`AbilityBuilder::build` fails, the ability guard answering `500`**, with `malformed
+  authorization rule: … writes text into its condition that would not stay where the scope
+  puts it` and its `reason`, filed at `error` on `nest_rs::authz`: a relation's
+  `on_condition` that a rule's `related(…)` reads closes a parenthesis, a string or an
+  identifier it did not open, leaves one open or holds a comment, or a `when` compares an enum
+  value whose type name holds a `"`. Write the `on_condition` with sea-query's typed calls
+  and the enum as a `DeriveActiveEnum`. A scope's subquery now holds the `on_condition` in
+  parentheses of its own.
 - **A derive expanding to a listed call** fails the same way with `this error
   originates in the derive macro`, and an `#[expect]` on the struct adds `this lint
   expectation is unfulfilled`: it goes on the module holding the entity.

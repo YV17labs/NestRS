@@ -1,10 +1,11 @@
+use nest_rs_authz::__private::Uncontained;
 use sea_orm::sea_query::{Condition, IntoCondition, NullOrdering, Order};
 use sea_orm::{
     DbBackend, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
     QueryTrait, Select, SelectExt, Statement,
 };
 
-use crate::contained::{Uncontained, contained, contained_order, refused};
+use crate::contained::{contained, contained_order, refused};
 use crate::repo::Repo;
 
 /// A query [`Repo`] built — [`scoped`](Repo::scoped), an escape such as

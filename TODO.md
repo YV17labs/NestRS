@@ -189,7 +189,14 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   and the suite's renewed lease, which lengthens the long attempt (its hold is
   half again the lease) and the lost settle (its wait is twice the lease) with
   it, each among the suite's slowest tests. *read*
-- The Valkey `HELLO` race is forced by no test on a real connection. *seen*
+- A `HELLO` sent as its connection's driver ends is neither answered nor
+  dropped (B-200), and no test strands one on a real connection: the window
+  lies inside `redis` 1.8's send, between `Sender::reserve` granting a permit
+  and `Permit::send` pushing the message on the caller's thread, which a
+  double cannot place. The boot's recovery from it is seen end to end in
+  process
+  (`tls::a_first_hello_nothing_answers_is_asked_again_and_the_boot_opens_on_a_dial_of_its_own`,
+  red with one ask). Close: a hook in `redis`'s send, upstream (§7). *seen*
 - A command blocked elsewhere still waits its whole budget. Close: a change in
   `redis`, upstream. *read*
 - `RustFS` answered `404 NoSuchKey` to a first `PUT` twice; cause not found.
@@ -392,8 +399,10 @@ and `get_param_value` cloning, which the framework bounds meanwhile with
 that union is resolved, `Fields::add_set`; a later copy of a list of lists
 dropped, `insert_value` joining list items only where they are objects, which
 the framework refuses meanwhile); redis-rs (`PipelineSink` loses a
-read error with nothing in flight); sse-stream 0.2.6 (keep-alive on std's
-clock).
+read error with nothing in flight; a command sent as its connection's driver
+ends is neither answered nor dropped, so its caller waits out its budget, and
+no hook in the send lets a test place one there); sse-stream 0.2.6
+(keep-alive on std's clock).
 
 Known limits whose cause is upstream: `RUSTSEC-2026-0253` (lru through
 async-graphql 7.2.1) ignored until async-graphql 8 is final; a statement cut

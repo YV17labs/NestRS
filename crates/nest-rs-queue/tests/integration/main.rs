@@ -27,6 +27,7 @@ mod worker;
 
 use std::any::TypeId;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use nest_rs_core::Container;
 use nest_rs_queue::{Capabilities, Capability, ProcessMethod, QueueBackend, processor, queue};
@@ -98,6 +99,11 @@ fn method(name: &str) -> &'static ProcessMethod {
     nest_rs_core::inventory::iter::<ProcessMethod>()
         .find(|method| method.name() == name)
         .unwrap_or_else(|| panic!("`{name}` is submitted to the inventory"))
+}
+
+/// Whether `waited` honours `asked`: never before it, at most a fifth after.
+fn honours(waited: Duration, asked: Duration) -> bool {
+    waited >= asked && waited <= asked.mul_f64(1.2)
 }
 
 /// A container reaching exactly `providers` — the gate `consume::discover`

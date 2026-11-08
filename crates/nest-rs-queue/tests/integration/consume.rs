@@ -24,7 +24,8 @@ use serde_json::json;
 const JOB_ID: &str = "01890a5d-ac96-774b-bcce-b302099a8057";
 
 use crate::{
-    BARE, FULL, TRANSCODED, TranscodeCommand, TranscodeProcessor, TranscodeQueue, method, reaching,
+    BARE, FULL, TRANSCODED, TranscodeCommand, TranscodeProcessor, TranscodeQueue, honours, method,
+    reaching,
 };
 
 fn transcode_delivery(file: &str) -> Delivery {
@@ -2438,11 +2439,6 @@ fn waited(outcome: AttemptOutcome) -> Duration {
         panic!("a problem another attempt may clear retries: {outcome:?}");
     };
     after
-}
-
-/// Whether `waited` honours `asked`: never before it, at most a fifth after.
-fn honours(waited: Duration, asked: Duration) -> bool {
-    waited >= asked && waited <= asked.mul_f64(1.2)
 }
 
 #[tokio::test]

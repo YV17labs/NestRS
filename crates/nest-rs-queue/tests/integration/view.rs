@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::memory::{Memory, PLAIN};
-use crate::{BARE, method};
+use crate::{BARE, honours, method};
 
 /// A job id as a push mints it.
 const JOB_ID: &str = "01890a5d-ac96-774b-bcce-b302099a8057";
@@ -375,9 +375,8 @@ async fn a_filter_answering_a_wait_holds_the_next_attempt_back_that_long() {
     let AttemptOutcome::Retry { after } = outcome else {
         panic!("a 503 another attempt may clear retries: {outcome:?}");
     };
-    let asked = std::time::Duration::from_secs(30);
     assert!(
-        after >= asked && after <= asked.mul_f64(1.2),
+        honours(after, Duration::from_secs(30)),
         "what the filter asked, stretched by a fifth at most: {after:?}"
     );
 }

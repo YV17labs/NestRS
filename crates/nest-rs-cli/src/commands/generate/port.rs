@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use syn::{Expr, ImplItem, Item, Lit, Meta, Type, UseTree, Visibility};
+use syn::{Expr, ExprLit, ImplItem, Item, Lit, Meta, MetaNameValue, Type, UseTree, Visibility};
 
 use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::Names;
@@ -36,33 +36,28 @@ impl Port {
     /// module path.
     pub(super) fn read(root: &Path, names: &Names) -> CliResult<Self> {
         let index_file = root.join("mod.rs");
-        let Some(index) = parse(&index_file)? else {
-            return Ok(Self {
-                crud: None,
-                has_entity: root.join("entity.rs").is_file(),
-            });
+        let (flat, modules) = match parse(&index_file)? {
+            Some(index) => (
+                flat_entity(&index, &names.snake),
+                tree(&index_file, root, index)?,
+            ),
+            None => (None, Vec::new()),
         };
-        let flat = flat_entity(&index, &names.snake);
         let mut found = Vec::new();
-        for module in tree(&index_file, root, index)? {
+        for module in &modules {
+            let at = At {
+                module: &module.path,
+                port: &names.snake,
+            };
             for implemented in crud_impls(&module.items) {
+                let entity = implemented
+                    .entity
+                    .and_then(|named| entity_file(&module.items, &named, at, flat.as_deref()))
+                    .map(|relative| root.join(relative));
                 found.push(CrudPort {
                     service: implemented.service,
                     file: module.file.clone(),
-                    entity: implemented
-                        .entity
-                        .and_then(|named| {
-                            entity_file(
-                                &module.items,
-                                &named,
-                                At {
-                                    module: &module.path,
-                                    port: &names.snake,
-                                },
-                                flat.as_deref(),
-                            )
-                        })
-                        .map(|relative| root.join(relative)),
+                    entity,
                 });
             }
         }
@@ -127,18 +122,27 @@ fn tree(index_file: &Path, root: &Path, index: syn::File) -> CliResult<Vec<Modul
                 ));
                 continue;
             }
-            let file = match path_attribute(&declared.attrs) {
-                Some(relative) if at_file_root => {
-                    module.file.parent().unwrap_or(&children).join(relative)
+            let (file, below) = match path_attribute(&declared.attrs) {
+                Some(relative) => {
+                    let file = if at_file_root {
+                        module.file.parent().unwrap_or(&children).join(relative)
+                    } else {
+                        children.join(relative)
+                    };
+                    // A `#[path]` file owns its directory, as a `mod.rs` does.
+                    let below = file
+                        .parent()
+                        .map_or_else(|| children.join(&name), Path::to_path_buf);
+                    (file, below)
                 }
-                Some(relative) => children.join(relative),
                 None => {
                     let flat = children.join(format!("{name}.rs"));
-                    if flat.is_file() {
+                    let file = if flat.is_file() {
                         flat
                     } else {
                         children.join(&name).join("mod.rs")
-                    }
+                    };
+                    (file, children.join(&name))
                 }
             };
             if !seen.insert(canonical(&file)) {
@@ -146,15 +150,6 @@ fn tree(index_file: &Path, root: &Path, index: syn::File) -> CliResult<Vec<Modul
             }
             let Some(source) = parse(&file)? else {
                 continue;
-            };
-            // A `#[path]` file owns its directory, as a `mod.rs` does.
-            let below = if declared.attrs.iter().any(is_path_attribute)
-                || file.file_name().is_some_and(|n| n == "mod.rs")
-            {
-                file.parent()
-                    .map_or_else(|| children.join(&name), Path::to_path_buf)
-            } else {
-                children.join(&name)
             };
             pending.push((
                 Module {
@@ -177,23 +172,20 @@ fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn is_path_attribute(attribute: &syn::Attribute) -> bool {
-    attribute.path().is_ident("path")
-}
-
 /// The file a `#[path = "…"]` names, relative to where it is resolved.
 fn path_attribute(attributes: &[syn::Attribute]) -> Option<PathBuf> {
     attributes
         .iter()
-        .filter(|attribute| is_path_attribute(attribute))
+        .filter(|attribute| attribute.path().is_ident("path"))
         .find_map(|attribute| match &attribute.meta {
-            Meta::NameValue(named) => match &named.value {
-                Expr::Lit(literal) => match &literal.lit {
-                    Lit::Str(path) => Some(PathBuf::from(path.value())),
-                    _ => None,
-                },
-                _ => None,
-            },
+            Meta::NameValue(MetaNameValue {
+                value:
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Str(path),
+                        ..
+                    }),
+                ..
+            }) => Some(PathBuf::from(path.value())),
             _ => None,
         })
 }

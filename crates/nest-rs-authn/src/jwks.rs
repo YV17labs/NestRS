@@ -446,9 +446,17 @@ impl State {
             .filter(|held| now < held.fresh_until + JWKS_STALE_CEILING)
     }
 
-    /// The fetch in flight, or a new one when the floor allows it — its
-    /// sender in `started` — or neither, when a fetch started within the floor
-    /// and has settled.
+    /// The earliest the next fetch may start: past the floor since the last
+    /// one, and past what the issuer last asked.
+    fn next_fetch(&self) -> Option<Instant> {
+        self.last_attempt
+            .map(|started| started + JWKS_REFRESH_FLOOR)
+            .max(self.asked_until)
+    }
+
+    /// The fetch in flight, or a new one when [`next_fetch`](Self::next_fetch)
+    /// allows it — its sender in `started` — or neither, when the last fetch
+    /// has settled and the next may not start yet.
     fn join(&mut self, now: Instant) -> Joined {
         if let Some(fetch) = self
             .in_flight
@@ -460,11 +468,7 @@ impl State {
                 started: None,
             };
         }
-        if self
-            .last_attempt
-            .is_some_and(|started| now.duration_since(started) < JWKS_REFRESH_FLOOR)
-            || self.asked_until.is_some_and(|until| now < until)
-        {
+        if self.next_fetch().is_some_and(|at| now < at) {
             return Joined {
                 fetch: None,
                 started: None,
@@ -510,14 +514,10 @@ impl State {
     /// the time until the next fetch may start — past the floor and past what
     /// the issuer asked.
     fn unavailable(&self, endpoint: &str, now: Instant) -> AuthError {
-        let floor = self.last_attempt.map_or(Duration::ZERO, |started| {
-            JWKS_REFRESH_FLOOR.saturating_sub(now.duration_since(started))
-        });
-        let asked = self
-            .asked_until
-            .map_or(Duration::ZERO, |until| until.saturating_duration_since(now));
-        let next_fetch = floor.max(asked);
-        let next_fetch = (!next_fetch.is_zero()).then_some(next_fetch);
+        let next_fetch = self
+            .next_fetch()
+            .map(|at| at.saturating_duration_since(now))
+            .filter(|wait| !wait.is_zero());
         match &self.failure {
             Some(failure) => AuthError::Unavailable {
                 retry_after: next_fetch,

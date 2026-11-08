@@ -144,12 +144,24 @@ pub(crate) fn run_cargo_check(project_dir: &Path) -> CliResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use nest_rs_config::{ConfigService, Environment, load_cascade};
 
     use super::{queue_env_files, with_env_prefix};
     use crate::naming::Names;
     use crate::scaffold::{Renderer, Scaffold};
     use crate::templates::{hello, workspace};
+
+    /// The env profiles `nestrs new shop` writes, written into `dir` under the
+    /// env prefix `prefix`, and the renderer that wrote them.
+    fn write_profiles(dir: &Path, prefix: &str) -> Renderer {
+        let rendering = with_env_prefix(Renderer::new(&Names::parse("shop")), prefix);
+        let mut scaffold = Scaffold::new();
+        queue_env_files(&mut scaffold, dir, &rendering);
+        scaffold.apply(false).expect("the profiles are written");
+        rendering
+    }
 
     /// The logical database a Redis URL selects: its path, `0` when it has none.
     fn database(url: &str) -> u8 {
@@ -167,13 +179,7 @@ mod tests {
     fn the_generated_test_profile_enqueues_on_a_redis_database_development_never_drains() {
         let prefix = nest_rs_core::EnvPrefix::current();
         figment::Jail::expect_with(|jail| {
-            let mut scaffold = Scaffold::new();
-            queue_env_files(
-                &mut scaffold,
-                jail.directory(),
-                &with_env_prefix(Renderer::new(&Names::parse("shop")), prefix),
-            );
-            scaffold.apply(false).expect("the profiles are written");
+            write_profiles(jail.directory(), prefix);
             let mut redis = |profile| {
                 jail.clear_env();
                 load_cascade(jail.directory(), profile);
@@ -203,13 +209,7 @@ mod tests {
     fn the_generated_test_profile_files_into_a_bucket_development_never_lists() {
         let prefix = nest_rs_core::EnvPrefix::current();
         figment::Jail::expect_with(|jail| {
-            let mut scaffold = Scaffold::new();
-            queue_env_files(
-                &mut scaffold,
-                jail.directory(),
-                &with_env_prefix(Renderer::new(&Names::parse("shop")), prefix),
-            );
-            scaffold.apply(false).expect("the profiles are written");
+            write_profiles(jail.directory(), prefix);
             let mut storage = |profile, key| {
                 jail.clear_env();
                 load_cascade(jail.directory(), profile);
@@ -266,10 +266,7 @@ mod tests {
     fn every_service_a_profile_boots_on_is_one_compose_runs() {
         let prefix = nest_rs_core::EnvPrefix::current();
         figment::Jail::expect_with(|jail| {
-            let rendering = with_env_prefix(Renderer::new(&Names::parse("shop")), prefix);
-            let mut scaffold = Scaffold::new();
-            queue_env_files(&mut scaffold, jail.directory(), &rendering);
-            scaffold.apply(false).expect("the profiles are written");
+            let rendering = write_profiles(jail.directory(), prefix);
             let compose: yaml_serde::Value =
                 yaml_serde::from_str(&rendering.render(crate::templates::shared::COMPOSE))
                     .expect("compose.yml is YAML");

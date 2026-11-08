@@ -115,8 +115,10 @@ otherwise.
 **Today.** Rows are filtered in SQL, and each wire row is judged on its whole
 `Model` where `From<&Model>` builds it: a column a grant withholds is no value in
 the row (`#[expose(nullable)]` or an `Option`), a grant withholding any other
-fails `build()`, and the row answers only the caller whose ability judged it
-(`mask-provenance.md`, 2026-11-08). What remains:
+fails `build()`, the row answers only the caller whose ability judged it, a
+`#[field_resolver]` under a row that answers no one refuses before it runs, and a
+dispatched method answering a `Model` does not compile (`mask-provenance.md`,
+2026-11-08). What remains:
 
 - **A `#[public]` GraphQL field whose own guard attaches the ability**, its
   request carrying none, answers no wire row: the rows its body builds are judged
@@ -276,9 +278,11 @@ fails `build()`, and the row answers only the caller whose ability judged it
   `method`; an error's `Display` can still quote a path. *read*
 - A wire row's column refused where GraphQL resolves it names the operation's
   `kind` and the root `field` once per operation and reason, never the root
-  field's `host` and `method`: the column resolves after the root field's unit,
-  which alone holds its site. Close: with the `#[public]` field's line of §3, the
-  root field's answer resolved under its unit. *seen*
+  field's `host` and `method`, and a row inside a `Json` scalar, which
+  async-graphql serializes itself, names no unit at all: both resolve after the
+  root field's unit, which alone holds its site. Close: with the `#[public]`
+  field's line of §3, the root field's answer resolved under its unit. *seen*
+  (the column line); *read* (the scalar's)
 
 **Docs, bench, tooling**
 - The benchmark figures are 4.0.0's, dated as such on every page. Close: the

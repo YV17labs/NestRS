@@ -165,7 +165,7 @@ async fn replace_source(&self, id: Path<Uuid>, body: RawBody) -> Result<()> {
 
 A webhook's signature is a credential, so it is verified in a guard that reads
 the same bytes and hands them on, never in the handler — see
-[Read the body in a guard](/fundamentals/guards/#read-the-body-in-a-guard).
+[Read the body in a guard](/fundamentals/guard-context/#read-the-body-in-a-guard).
 
 For a tighter cap on a specific route, take the body and read it under
 your own:

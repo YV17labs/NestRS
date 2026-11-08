@@ -83,7 +83,7 @@ run:
 | [A WebSocket frame no handler reads](/websockets/messages/): an event none serves, a frame no envelope holds | 1, 3, 5 | no unit of work, no guard; the app's exception filters alone |
 | [MCP request](/mcp/#layers-around-an-operation) | 1 to 3 | one unit per JSON-RPC request the `/mcp` request carries |
 | its tool call or prompt fetch | 4 to 7, inside the request | its guards run `check` |
-| [Job](/queue/#layers-around-a-job), [tick](/schedule/#layers-around-a-tick), [listener call](/events/dispatch/#layers-around-a-listener-call) | 1 to 3, 5 to 7 | no caller, so no guard stage; the decorator's `timeout` is its deadline |
+| [Job](/queue/#layers-around-a-job), [tick](/schedule/ticks/#layers-around-a-tick), [listener call](/events/dispatch/#layers-around-a-listener-call) | 1 to 3, 5 to 7 | no caller, so no guard stage; the decorator's `timeout` is its deadline |
 
 A WebSocket `#[on_connect]` or `#[on_disconnect]` hook carries what the
 upgrade's guards attached, the ability withheld from its reads, and runs no layer yet.
@@ -93,7 +93,7 @@ stage, after routing, because a guard reads the site's declarations —
 `#[public]`, `#[meta]` — that only exist once the site is known. Nothing the
 framework runs before them reads an HTTP body: the transport wraps it, and
 whatever reads it first — a guard, the pipe pool, an extractor — reads it
-under [the body cap and its gap bound](/http/configuration/#request-body-size-limit).
+under [the body cap and its gap bound](/http/limits/#request-body-size-limit).
 
 One spelling per stage. At the handler stage an app-wide interceptor is the
 app's list, `GlobalInterceptors<(…)>`, declared by the module it boots: a feature

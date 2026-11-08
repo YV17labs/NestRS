@@ -153,7 +153,7 @@ impl GuardFor<HttpView> for AuthnGuard {}
 async fn me(&self, auth: Ambient<Claims>) -> Json<User> { /* ... */ }
 ```
 
-See [Guards / Attach context](/fundamentals/guards/#attach-context-and-route-metadata).
+See [Guards / Attach context](/fundamentals/guard-context/#attach-context-and-route-metadata).
 
 ## What about raw HTTP middleware?
 

@@ -64,7 +64,7 @@ deep on each.
 - **Ability shaper** — the `Authorize<A, S>` wrapper the `#[routes]`
   macro emits when a route declares `#[authorize(A, S)]` or `#[public(A, S)]`,
   never a parameter; runs response masking after a 2xx. Innermost per-route layer, just outside
-  the handler. [Layer order](/fundamentals/guards/#where-guards-run-in-the-chain).
+  the handler. [Layer order](/fundamentals/guard-scopes/#where-guards-run-in-the-chain).
 - **Unit** — one piece of work the framework dispatches and files one
   operation line for: an HTTP request, a GraphQL field, a WebSocket message,
   an MCP operation, a job's attempt, a tick, a listener call. Every layer

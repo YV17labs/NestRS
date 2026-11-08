@@ -797,7 +797,7 @@ async fn a_scheduler_runs_through_exactly_the_acl_its_page_prescribes() {
     let user = crate::acl_user(CONFINED_USER);
     let _forgetting_user = crate::forgetting_user(&user);
     let config =
-        crate::documented_user("schedule/index.mdx", "schedule", &user, crate::DB_SCHEDULE).await;
+        crate::documented_user("schedule/once.mdx", "schedule", &user, crate::DB_SCHEDULE).await;
     let started_ms = now_ms();
     let scheduler = schedule_replica::<ConfinedModule>(config).await;
     await_claims(&conn, &job("ConfinedTasks:sweep"), started_ms, 3).await;

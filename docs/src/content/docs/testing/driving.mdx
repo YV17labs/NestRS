@@ -1,0 +1,146 @@
+---
+title: Driving the app
+description: "What an end-to-end test sends a booted app — a bearer its guards admit, a request through its real HTTP transport, a GraphQL subscription with no socket."
+sidebar:
+  order: 4.1
+---
+
+An [end-to-end test](/testing/e2e/) boots the real module; this page is what it
+sends that app. The test signs its own bearer, drives the HTTP surface through
+the transport production runs, and speaks graphql-ws to the composed schema —
+each in process, with no socket bound.
+
+## A bearer the app verifies
+
+`ephemeral_signing_key()` has the app verify the tokens of a key pair the test
+holds, issued in process for that boot — so no app's suite commits a private
+key, and an app that only verifies, a resource server, is tested as one. Its
+`JwtService` checks signatures with the pair's public half in place of the key
+material its configuration names — a secret, a key, an issuer's JWK Set — and
+signs with the private half only where that material signs. A configuration
+naming no key, the deployment's to set, boots verifying only. Everything else
+is the app's: the audience it requires, the issuer it trusts, the resource it
+serves.
+
+`app.bearer(&claims)` signs a claims value of your own with the private half
+and hands back the `Authorization` value, for the app's audience and as its
+issuer, `iat` and `jti` stamped and `exp` at the app's token lifetime when the
+claims carry none:
+
+```rust title="apps/blog/tests/e2e/blog.rs"
+let app = TestApp::builder()
+    .module::<BlogModule>()
+    .ephemeral_database::<migrations::Migrator>()
+    .ephemeral_signing_key()
+    .build()
+    .await?;
+let auth = app.bearer(&Claims {
+    sub: Subject::User(Uuid::now_v7()),
+    roles: vec![Role::User],
+});
+```
+
+A claim the claims carry is kept, which is how a test proves a refusal: an
+`aud` naming another resource, an `iss` the app does not trust, a claim set with
+no `sub`.
+
+```rust title="apps/assistant/tests/e2e/authorization.rs"
+let mut forged = serde_json::to_value(admin_claims())?;
+forged["aud"] = API.into();
+post_message(app.http(), "/mcp", None, Some(&app.bearer(&forged)), &initialize_request())
+    .await
+    .assert_status(StatusCode::UNAUTHORIZED);
+```
+
+`WsApp::bearer` signs the same way for a socket's upgrade, set with
+`.header("authorization", …)`. The boot refuses the key on an app that provides
+no `JwtService`, and on one whose `JwtService` refuses a token of the pair —
+seeded or overridden past the module that builds it. `ephemeral_signing_key` and
+`bearer` are `nest-rs`'s `authn` feature beside `testing`.
+
+## Driving the HTTP surface
+
+`app.http()` returns a `TestClient` — typed requests, typed responses, no
+socket. A request runs through everything a socket's would, the edge
+included, and its failed assertion names what differed: the status, the
+header, or the JSON path it stood at (`$.data.items[2]`). GraphQL
+(`POST /graphql`), the OpenAPI document (`GET /api-json`), and MCP all
+ride the same client because they self-mount as HTTP endpoints.
+
+In process a request has no peer address, so `ClientIp` reads `0.0.0.0`
+until the request names one — `.peer_addr(addr)` — which is how a suite
+proves what a proxy listed in `<PREFIX>_HTTP__TRUSTED_PROXIES` may forward:
+
+```rust title="tests/integration/client.rs"
+app.http()
+    .get("/who")
+    .peer_addr("10.0.0.9:5000".parse().unwrap())
+    .header("x-forwarded-for", "203.0.113.7")
+    .send()
+    .await
+    .assert_text("203.0.113.7 forwarded=true")
+    .await;
+```
+
+It drives **the transport your app's `HttpModule::for_root(cfg)` describes**, not
+a bare one — so a global prefix, a versioning strategy, a body cap or a request
+timeout you pin on the module is what the suite exercises. A suite that needs
+another value seeds the whole config, which the harness boots from in place of
+the module's:
+
+```rust title="apps/api/tests/e2e/http.rs"
+let app = TestApp::builder()
+    .module::<ApiModule>()
+    .provide(HttpConfig {
+        compression: true,
+        ..Default::default()
+    })
+    .build()
+    .await?;
+```
+
+```rust title="apps/api/tests/e2e/openapi.rs"
+let resp = app.http().get("/api-json").send().await;
+resp.assert_status_is_ok();
+let body = resp.json().await;
+let paths = body.value().object().get("paths").object();
+assert!(paths.get_opt("/users").is_some());
+```
+
+## Subscriptions
+
+`TestApp`'s client speaks HTTP, and a subscription does not. `graphql_socket`
+drives the **graphql-transport-ws** protocol against the app's composed schema
+— `connection_init` → `connection_ack` → `subscribe` → `next` — with no socket
+bound. (`graphql-ws` is the *legacy* subprotocol identifier, which the mount
+also negotiates and this driver does not speak.)
+
+```rust title="apps/api/tests/e2e/subscription.rs"
+let mut socket = app.graphql_socket().ability(ability).open();
+socket.connect().await;
+socket.subscribe("1", "subscription { postPublished { id title } }");
+
+let item = socket.next_item("1").await.expect("an item");
+assert_eq!(item["data"]["postPublished"]["title"], "Launch");
+```
+
+`ability(..)` takes the caller's `Arc<Ability>`, as the ability guard at a
+real upgrade attaches it, and `attach(..)` any other value a guard would attach,
+a principal. The socket carries them the way a real one does: ambient for every
+operation, where `#[authorize]`'s class gate reads the ability, and forwarded
+into the connection's context by the app's seeds, where the response mask reads
+it. `data(..)` adds a value to that context alone. What this
+does *not* exercise is the upgrade itself: the guards that authenticate it,
+the socket-lifetime ceiling that bounds it, and `max_connection`. Those need a real connection, so
+a suite that must cover them binds a transport (`HeadlessApp::builder()` +
+`spawn_transport`) and
+connects a WebSocket client to it.
+
+## Going further
+
+- [End-to-end tests](/testing/e2e/) — booting the real module on a throwaway
+  database.
+- [Negative-path tests](/testing/negative-path/) — the refusals these clients
+  prove.
+- [JWT](/security/authentication/jwt/) — the claims a bearer carries, and what
+  the app requires of them.

@@ -175,7 +175,7 @@ app serves only its shell: the playground's script, stylesheet and icon load
 from `cdn.jsdelivr.net`, and its fonts from Google Fonts
 (`fonts.googleapis.com`, `fonts.gstatic.com`). The browser that opens it needs
 to reach those hosts, and a `Content-Security-Policy` the app sets (see
-[Default security headers](/http/configuration/#default-security-headers))
+[Default security headers](/http/cors/#default-security-headers))
 must admit them and the page's inline script and styles.
 
 The page hits the same mount path for its requests, so a

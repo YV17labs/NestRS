@@ -61,7 +61,7 @@ expired token it returns `401` automatically — the controller never
 sees the request.
 
 Both aliases, their modules, and the `Claims` above are what
-[`nestrs g auth`](/cli/#generate-features-and-adapters) writes. They are app
+[`nestrs g auth`](/cli/generators/) writes. They are app
 code by necessity — the framework is generic over the principal and the policy,
 so it cannot ship a `Claims` or an `AuthzAbility` for you.
 

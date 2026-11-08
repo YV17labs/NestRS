@@ -316,9 +316,13 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 **Docs, bench, tooling**
 - The benchmark figures are 4.0.0's, dated as such on every page. Close: the
   runbook in `bench/` on a dedicated Linux host. *read*
-- Five docs pages exceed the 300-line budget (`guards.mdx`,
-  `http/configuration.mdx`, `cli/index.mdx`, `testing/e2e.mdx`,
-  `schedule/index.mdx`). Close: split each.
+- 48 docs pages still exceed the ~300-line budget of `docs/STYLE.md`, the
+  longest `security/authentication/oauth2.mdx` (594),
+  `websockets/messages.mdx` (571), `configuration/index.mdx` (557),
+  `database/crud.mdx` (539), `opentelemetry/logs.mdx` (511) and
+  `database/writing-a-driver.mdx` (508); `upgrading.mdx` (2718) is the 6.x
+  checklist, one ordered path. Close: split each by subject, as the five
+  longest were (`wc -l` over `docs/src/content/docs`). *seen*
 - No run has started the scaffold's `compose.yml`: a unit test reads it as
   YAML against every URL and credential its two profiles boot on, and
   `docker compose config` accepted it by hand (2026-11-08), but its images,
@@ -406,10 +410,19 @@ no hook in the send lets a test place one there); sse-stream 0.2.6
 steps, `pipe` then `FD_CLOEXEC`, so a process another thread spawns between
 them inherits them: nextest's `LEAK` mark on a test whose stdout another test
 process holds, seen on a test only sleeping 30 ms, benign; `posix_spawn`'s
-`POSIX_SPAWN_CLOEXEC_DEFAULT` would close it, in std or in nextest).
+`POSIX_SPAWN_CLOEXEC_DEFAULT` would close it, in std or in nextest); Starlight
+0.42.5 (two of the docs build's three warnings: `The collection "i18n" does
+not exist or is empty` on a site defining none, its `console.warn` mute around
+`getCollection("i18n")` missing Astro 7's logger; `Could not render /404 from
+route /[...slug]`, the `404.md` its docs offer as the custom page rendered by
+its 404 route and offered again by the catch-all — harmless, `/404.html` is
+that page).
 
 Known limits whose cause is upstream: `RUSTSEC-2026-0253` (lru through
 async-graphql 7.2.1) ignored until async-graphql 8 is final; a statement cut
 mid-flight is not cancelled (sqlx keeps the backend pid private); a presigned
 `PUT` binds its type, not its length (object_store); `parking_lot` 0.12 and
-0.13 both in the lockfiles.
+0.13 both in the lockfiles; the docs build's third warning, `Some chunks are
+larger than 500 kB`, is mermaid's own 647 kB chunk, which astro-mermaid
+imports only on a page drawing a diagram (four pages), and raising the limit
+would hide the next chunk to cross it (`decisions/docs-vendor-first.md`).

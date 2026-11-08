@@ -256,7 +256,6 @@ export default defineConfig({
             { label: 'Benchmarks', slug: 'benchmarks' },
             { label: 'Coming from NestJS', slug: 'coming-from-nestjs' },
             { label: 'Getting started', slug: 'getting-started' },
-            { label: 'CLI', slug: 'cli' },
             { label: 'The demo apps (Publish)', slug: 'publish' },
             { label: 'Semver policy', slug: 'semver' },
             // Last in the group a returning reader opens first: the one page a
@@ -265,6 +264,7 @@ export default defineConfig({
             { label: 'Upgrading from 6.x', slug: 'upgrading' },
           ],
         },
+        { label: 'CLI', items: [{ autogenerate: { directory: 'cli' } }] },
         { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },
         {
           // `architecture` sits last, not first: it is the group's deep
@@ -323,6 +323,8 @@ export default defineConfig({
           items: [
             { autogenerate: { directory: 'queue' } },
             { label: 'Scheduling', slug: 'schedule' },
+            { label: 'Running a tick', slug: 'schedule/ticks' },
+            { label: 'Firing once across replicas', slug: 'schedule/once' },
             { label: 'Writing an occurrence lock', slug: 'schedule/writing-a-lock' },
             { label: 'Events', slug: 'events' },
             { label: 'Event dispatch', slug: 'events/dispatch' },

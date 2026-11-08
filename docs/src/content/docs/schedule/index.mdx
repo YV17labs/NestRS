@@ -81,7 +81,7 @@ impl AudioTasks {
   once, which three replicas left at the default would do three times. So
   each occurrence is claimed through the app's occurrence lock and fires on
   the one replica that wins it; see
-  [Firing once across replicas](#firing-once-across-replicas). A failure
+  [Firing once across replicas](/schedule/once/). A failure
   returns `Err`; it is logged and the schedule continues — one failed run
   never stops the job.
 - **The cron method is thin.** Its only job is to decide *when* and
@@ -155,8 +155,8 @@ alone, so one block is one place to read them.
 | `#[cron("0 */5 * * * *")]`                    | 6-field cron expression                  |
 | `#[cron(CronExpression::EVERY_5_SECONDS)]`    | Named preset (validated at boot)         |
 | `#[cron("0 9 * * MON", tz = "Europe/Paris")]` | Cron + named timezone (default UTC)      |
-| `#[every("5m", replicas = "one")]`            | Once per occurrence across replicas — see [Firing once across replicas](#firing-once-across-replicas) |
-| `#[every("1h", timeout = "30m")]`             | A run lasting past 30 minutes is cut — see [How long a run lasts](#how-long-a-run-lasts) |
+| `#[every("5m", replicas = "one")]`            | Once per occurrence across replicas — see [Firing once across replicas](/schedule/once/) |
+| `#[every("1h", timeout = "30m")]`             | A run lasting past 30 minutes is cut — see [How long a run lasts](/schedule/ticks/#how-long-a-run-lasts) |
 
 A cron string literal and a `tz` name are validated at **compile time**; a
 `CronExpression` constant when the scheduler configures at boot, which fails
@@ -171,45 +171,6 @@ That copy is your lockfile's — `cargo update -p jiff-tzdb` brings the latest
 IANA release — and the job's boot line names the release it read
 (`tzdb="2026e"`).
 
-## How long a run lasts
-
-A replica runs one occurrence of a job at a time, so a tick waiting on a call
-that never answers would skip every later occurrence for as long as the process
-lives. A run therefore lasts at most **ten minutes** unless its trigger says
-otherwise — `timeout` takes a whole number of `ms`, `s`, `m` or `h`, up to
-`"24h"`, on `#[every]`, `#[cron]` and `#[after]` alike. It bounds the method's
-body: past it, the run is cut where it waits, what it wrote in its transaction
-is rolled back, and the next occurrence fires as usual. The run is reported
-failed, naming the deadline:
-
-```text frame="terminal"
-ERROR nest_rs::schedule: scheduled job failed host="AudioTasks" method="heartbeat" error=the attempt did not end within its 600s timeout, and was cut — the `timeout` key on its job decorator sets it retryable=true trace_id=… span_id=…
-```
-
-A run whose body returned in time is never cut while it commits. One whose
-commit did not answer within the driver's bound is reported failed with
-`retryable=false`: what it wrote may have landed.
-
-`#[process]` takes the same key, with the same default and ceiling — see
-[How long an attempt runs](/queue/retries-and-failure/#how-long-an-attempt-runs).
-
-## Layers around a tick
-
-A tick runs through the same pipeline as a job: the app's interceptors and
-exception filters, then those a `#[scheduled]` block and its trigger bind
-(`#[use_interceptors]`, `#[use_exception_filters]`), then the method. A layer
-reads the tick through `ScheduleView` — its `job()`, as `key = "…"` spells it,
-the `occurrence()` a job firing once claimed, and its `replicas()` — and the
-deadline through `cx.deadline()`. An interceptor returning `Ok(tick.skip())`
-settles the tick without running it, and the next occurrence fires as usual.
-
-A tick has no retry, so a failure is reported, never acted on. One a filter
-answers with `tick.skip()`, or with a client's `Problem` (a `4xx`), is one the
-app expected: it is said at `warn` as `scheduled job failed; a layer answered
-it` rather than at `error`. A `5xx` problem is still the server's failure,
-logged at `error` like one no filter caught. Either way the tick's transaction
-rolls back. A job attached by hand as a
-`CronJobMeta` binds no layer of its own; the app's run around it all the same.
 
 ## Wire it in
 
@@ -262,26 +223,6 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
 pub struct ApiModule;
 ```
 
-```rust title="apps/api/src/main.rs (from the demo, abridged)"
-use anyhow::Result;
-// …
-use nest_rs::core::App;
-// …
-use api::ApiModule;
-
-#[nest_rs::main]
-async fn main() -> Result<()> {
-    // …
-    App::builder()
-        // …
-        .module::<ApiModule>()
-        .build()
-        .await?
-        .run()
-        .await
-}
-```
-
 `main` carries no transport at all — every transport (`HttpModule` and
 `ScheduleModule` here, `QueueModule` in the worker) comes with the host that
 serves on it and attaches itself at boot.
@@ -315,21 +256,6 @@ files once per unit of work, so `nest_rs::operation=off` in the log filter
 silences it with the others. A failed run adds one `scheduled job failed` line
 at `error`; the schedule keeps ticking.
 
-**A tick still running at shutdown gets five seconds.** No tick starts once
-the app is asked to stop; one already running is developer code on the way
-down, as a shutdown hook is, so it gets what a hook gets —
-`Scheduler::SHUTDOWN_TIMEOUT`, the hooks' five-second budget, spent *before*
-the hooks so no tick runs through the cleanup it may depend on. Still running
-then, it is stopped where it waits, files its `schedule.tick` line with
-`outcome="cancelled"`, and is named in one `warn`; what it had not done stays
-undone. A task that needs longer pushes a [queue](/queue/) job, which a worker
-drains within a window of its own. See [the way down](/fundamentals/shutdown/#the-way-down).
-
-Every tick opens its own `schedule.tick` span, so the lines your task
-writes are already correlated: a **fresh** `trace_id` each time (a clock
-has nothing upstream to continue) and no `actor_id` (nobody is being
-served). See [Correlation](/fundamentals/correlation/).
-
 A bad cron **literal** never reaches boot — it fails `cargo build`:
 
 ```bash frame="terminal"
@@ -341,264 +267,8 @@ error: #[cron]: "every monday" is not a cron expression: Invalid pattern: Patter
    |            ^^^^^^^^^^^^^^
 ```
 
-## Firing once across replicas
-
-A scheduled method fires on **every** replica by default — `replicas = "each"`,
-which is right for work that is per-process: a cache warm-up, a local sweep.
-Work that is the deployment's — purge what has expired, close the hour's
-invoices, send the digest — declares `replicas = "one"` on `#[every]` or
-`#[cron]`, and then **each occurrence fires on one replica**: the one whose
-claim on it succeeds. The demo's worker purges expired notifications that way:
-
-```rust title="crates/features/src/notifications/schedule/tasks.rs (from the demo, abridged)"
-#[scheduled]
-impl NotificationsTasks {
-    #[every("1h", replicas = "one")]
-    async fn purge_expired(&self) -> Result<()> {
-        self.svc.purge_expired().await?;
-        Ok(())
-    }
-}
-```
-
-The worker is the app the demo's chart scales on queue depth, to as many as ten
-replicas once KEDA is on. Left at the default, every replica would run the purge
-each hour — ten purges for one hour's expired rows, contending for the same rows.
-Declared `"one"`, each hour's occurrence runs once, on whichever replica claims
-it.
-
-**Once per occurrence, not one run at a time.** A claim holds the occurrence and
-nothing else, so a run that outlasts its period does not hold the job: the next
-occurrence is claimed and fired by another replica while the first run goes on,
-and the two overlap. One replica never overlaps its own runs — its loop fires one
-occurrence at a time — so with a single replica the occurrences a long run
-overran are reported skipped and the latest fires late, once. A job whose runs
-must not overlap keeps its work shorter than its period, or guards it where the
-work is, with a lock its service takes on the rows it changes: nothing a
-scheduler holds can outlive a replica that stalls mid-run.
-
-The replicas agree through Redis. Enable `redis-schedule` (see
-[Install](#install)), then import the binding at the root of every app that
-runs such a job:
-
-```rust title="apps/worker/src/module.rs (from the demo, abridged)"
-use nest_rs::core::module;
-// …
-use nest_rs::redis::{RedisQueueModule, RedisScheduleModule};
-// …
-
-use features::notifications::{NotificationsQueueModule, NotificationsScheduleModule};
-
-#[module(
-    imports = [
-        // …
-        RedisQueueModule,
-        RedisScheduleModule,
-        // …
-        NotificationsQueueModule,
-        NotificationsScheduleModule,
-    ],
-)]
-pub struct WorkerModule;
-```
-
-`RedisScheduleModule` is a bare import: it owns no configuration, and runs over
-the connection the `RedisModule` it imports opens — the worker's queue bindings
-share that one `RedisConnection`. The boot holds you to it both ways: a
-reachable job declaring `replicas = "one"` with no lock bound fails the boot
-naming the job, and a second lock binding beside this one fails it too, naming
-the contested lock and the same remedy.
-`#[after]` refuses the key — a one-shot fires on the replica that booted, and
-there is no shared occurrence to claim. Another store claims through the same
-port, `OccurrenceLock`, bound the same way — see
-[Writing an occurrence lock](/schedule/writing-a-lock/).
-
-### How an occurrence is claimed
-
-Every replica reaches **the same instants**: an `#[every]` declared so ticks on
-multiples of its period counted from the Unix epoch rather than from its own
-boot, and a `#[cron]` on the instants its expression names. At each one, every
-replica sends Redis one `SET … NX` on the occurrence's key: the replica whose
-command creates the key has claimed it and fires the method; the others log
-`occurrence claimed by another replica` at `debug` and wait for the next one.
-
-The claim is held for twice the job's period — for a cron job, twice the gap to
-its next occurrence — and never less than a minute, then Redis forgets it, so
-claims never accumulate.
-
-### A job is its crate, its type and its method
-
-The key an occurrence is claimed under opens with the job's **identity**: the
-crate that declared it, its host struct and its method. The boot line of a job
-firing once names it:
-
-```text frame="terminal"
- INFO nest_rs::schedule: mounted host="NotificationsTasks" method="purge_expired" trigger="every" interval_ms=3600000 replicas="one" key="features::NotificationsTasks::purge_expired"
-```
-
-So a job declared in a crate every app links — `features`, in the demo — is one
-job wherever it runs, while an API and a worker that each declare their own
-`MaintenanceTasks::sweep` in their own crates have two, and never claim each
-other's occurrences through the Redis they share. Moving the job's module inside
-its crate keeps it, so a refactor ships without a second job. Two jobs under one
-`Host::method` in one app fail its boot, naming where each was declared,
-because the lines a job files carry its host and method and could not tell the
-two apart.
-
-**Renaming the type, the method or the crate starts a new job.** Through the
-rolling deploy that ships the rename, the replicas still running the old build
-and those running the new one claim under different keys, and both fire every
-occurrence. Pin the identity the job had, by copying the `key` its boot line
-names, and the two builds claim the same keys:
-
-```rust title="crates/features/src/notifications/schedule/tasks.rs"
-#[every("1h", replicas = "one", key = "features::NotificationsTasks::purge_expired")]
-async fn purge(&self) -> Result<()> {
-    // …
-}
-```
-
-A `key` is one or more levels joined by `::`, none empty and none carrying a
-`:`, whitespace or a control character, so a free name such as
-`key = "notifications::purge"` is one too. It is checked at compile time, and it
-is refused beside a job firing on every replica, which claims nothing. Two jobs
-firing once under one identity in one app fail its boot, naming both: each would
-fire the occurrences it won and miss the rest.
-
-### At most once, not exactly once
-
-The rule is **fail closed**. An occurrence is fired only when this replica is
-known to have claimed it, because firing unclaimed would fire it on every
-replica — the thing the declaration exists to prevent. So:
-
-- **A claim Redis cannot answer skips the occurrence.** A Redis outage, a
-  refused command, a claim that fails at the connection's budget
-  (`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`) — each one is a `warn` on
-  `nest_rs::schedule`, `occurrence skipped: its lock could not be claimed`,
-  carrying the job's `host` and `method`, the `occurrence` and Redis's
-  `error`. Every occurrence of the outage is said, and when Redis answers again
-  the next one is claimed and fired — no restart, nothing to replay. A claim
-  Redis ran whose answer was lost costs that occurrence, which nobody fires, and
-  nothing more.
-- **A lock that panics skips the occurrence too**, as one that failed: the
-  panic is filed once at `error`, `occurrence skipped: its lock panicked while
-  claiming it`, and the next occurrence is claimed as usual.
-- **The scheduler never waits on a claim past the point it could still act on
-  it.** An occurrence goes stale ten seconds before its claim's hold ends — the
-  margin two replicas' clocks may disagree by — and a claim not answered by then
-  is abandoned and the occurrence skipped with a `warn`, `occurrence skipped: its
-  lock did not answer the claim before the occurrence went stale`. At the
-  shortest hold, a minute, that is fifty seconds after the occurrence, so the
-  boot refuses a `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS` of fifty or more: the
-  scheduler would abandon a claim Redis was still answering. A replica that
-  reaches an occurrence that late, stalled by its platform or starved of CPU,
-  skips it too: a peer's claim may already be forgotten, and firing could be the
-  second time.
-- **Shutdown never waits on a claim.** A claim still unanswered when the app is
-  asked to stop is abandoned at once and its occurrence skipped with a `warn`,
-  `occurrence skipped: shutdown was asked for before its lock answered the
-  claim`, so a Redis that stopped answering cannot hold the scheduler's shutdown
-  until the claim goes stale — most of two days, for a daily cron. Redis may have
-  taken the claim already, and then nobody fires that occurrence. A claim
-  answered before that is acted on, and a run already started gets the five
-  seconds every running tick gets at shutdown, then is stopped.
-- **A replica that stops after claiming loses that occurrence**, and only that
-  one: nobody else will fire it, and the next occurrence is claimed as usual.
-
-Work that must not be lost belongs in a [queue](/queue/) job the tick pushes —
-a queue delivers at least once, with retries — and the tick itself stays the
-thin *when* of the first section.
-
-When a claim or a long run holds a replica past later occurrences, the replica
-asks Redis which of them a peer claimed: those are fine and say so at `debug`,
-and the rest are reported skipped at `warn`, counted. A claim outlives the
-occurrence after it, so an overrun of one occurrence is always answered; a
-longer one reports its earliest occurrences unclaimed, since their claims have
-lapsed by then.
-
-### The keys
-
-```text
-nestrs:schedule:claims:<crate>:<host>:<method>:<instant_ms>
-```
-
-The identity is a level per `::` — a pinned `key`'s levels in its place — and a
-**claim** is one key per occurrence claimed, the instant in milliseconds since
-the Unix epoch:
-`nestrs:schedule:claims:features:NotificationsTasks:purge_expired:1789002000000`.
-Its value names the replica that wrote it — its `HOSTNAME` and process id — and
-the `trace_id` of the run it fired, for an operator reading it during an
-incident; the lock decides on the key's existence alone.
-`SCAN 0 MATCH nestrs:schedule:claims:features:*` lists one crate's claims still
-held. The prefix is fixed rather than the deployment's: two deployments sharing
-a Redis are separated by the logical database in `<PREFIX>_REDIS__URL`.
-
-A claim is one `SET … NX PX` and an overrun question one `EXISTS`; with the
-connection's `PING`, which proves it at boot, and the `SELECT` of the database
-its URL names, that is every command a scheduler sends. A Redis user for it is
-this rule and nothing more:
-
-```text title="Redis ACL — schedule"
-ACL SETUSER <user> reset on ><password> ~nestrs:schedule:* +ping +select +set +exists
-```
-
-Under Sentinel and on a Cluster, the rule is created on every node and takes
-what its topology's connection adds — see
-[ACL on Sentinel and Cluster](/queue/topologies/#acl-on-sentinel-and-cluster).
-
-An app that also queues or rate-limits gives the same user the rules of
-[the queue](/queue/delivery/#where-a-queue-lives) and
-[the rate limiter](/rate-limiting/#redis-shipped) as well.
-
-**The server runs `maxmemory-policy noeviction`.** A claim carries an expiry, so
-a `volatile-*` or `allkeys-*` policy may evict one before its hold ends once the
-server reaches its `maxmemory`, and a replica reaching that occurrence later
-claims it again and fires it a second time. The boot cannot read the policy, so
-it is the deployment's to set, for every binding the server holds — see
-[Eviction](/queue/topologies/#eviction).
-
-## The ambient data context
-
-A scheduled method has **no caller** — system work, intentionally. So **no
-ability** is installed and `Repo` reads are unscoped, which is correct for
-work with no principal to scope to.
-
-The executor is a **transaction per attempt**: it opens on the job's first
-`Repo` call, commits when the method returns `Ok` and rolls back otherwise,
-so a tick that failed halfway leaves nothing behind for the next one. Add
-`transactional = false` to the trigger — `#[every("30s", transactional =
-false)]`, and the same word on `#[cron]`, `#[after]` and `#[process]` — to
-run on the pool instead, which is right for a tick that brackets long work
-that is not the database's. See
-[Repo and the executor](/database/repo-and-executor/).
-
-The demo's purge is that shape. Its tick only calls the service, and the service
-reaches the rows through `Repo` as any request would:
-
-```rust title="crates/features/src/notifications/service.rs (from the demo, abridged)"
-pub async fn purge_expired(&self) -> Result<u64, ServiceError> {
-    let cutoff = chrono::Utc::now().fixed_offset() - RETENTION;
-    let expired = Repo::<Notifications>::scoped(Action::Delete)
-        .filter(entity::Column::CreatedAt.lt(cutoff))
-        .limit(PURGE_BATCH)
-        .all()
-        .await?;
-    let mut purged = 0;
-    for model in expired {
-        purged += Repo::<Notifications>::delete(model).await?.rows_affected;
-    }
-    // …
-    Ok(purged)
-}
-```
-
-On the tick, `scoped(Action::Delete)` adds no filter of its own, because a job
-has no principal to scope to, so the query takes the first thousand expired
-rows; called from a request that carries no ability, the same method selects
-nothing, and each `Repo::delete` is filtered again. The deletes share the tick's
-transaction, so a batch lands whole or not at all, and what a batch leaves waits
-for the next hour.
-Just importing `SeaOrmDatabaseModule` is enough — no manual connection plumbing.
+What bounds and surrounds a run — its deadline, the layers around it, its
+transaction, its trace and its turn at shutdown — is [Running a tick](/schedule/ticks/).
 
 ## Reference
 

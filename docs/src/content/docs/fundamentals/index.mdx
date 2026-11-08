@@ -205,8 +205,10 @@ processors, MCP tools) are transport-specific and live in their own categories:
   the port + adapters layout.
 - [Providers](/fundamentals/providers/) — injectables, scopes, and the
   boot-time access graph.
-- [Guards](/fundamentals/guards/) — pre-handler gates, the three scopes,
-  and declaring on the provider.
+- [Guards](/fundamentals/guards/) — pre-handler gates: write one, read an
+  earlier guard's principal, document what it refuses.
+- [Guard scopes](/fundamentals/guard-scopes/) — a controller, a route or the
+  app's pool, composed outermost first, declared on the provider.
 - [Pipes](/fundamentals/pipes/) — parse, normalize and validate at the
   request boundary.
 - [Interceptors](/fundamentals/interceptors/) — wrap a unit on every edge,
@@ -226,6 +228,8 @@ processors, MCP tools) are transport-specific and live in their own categories:
   every unit runs, and one pool per layer family, run exactly once.
 - [Execution context](/fundamentals/execution-context/) — what every layer
   reads about the unit it runs around, on every edge.
+- [Guard context](/fundamentals/guard-context/) — what a guard attaches, the
+  route metadata and posture it reads, the body it may read.
 - [Guards beyond HTTP](/fundamentals/guards-beyond-http/) — one guard on
   GraphQL fields, WebSocket messages and MCP operations.
 - [Pipes beyond HTTP](/fundamentals/pipes-beyond-http/) — the same pipes on

@@ -1,0 +1,242 @@
+---
+title: Guard context
+description: "What a guard hands the handler — an ambient value, route metadata, the posture it reads — and how a guard reads the request body."
+sidebar:
+  order: 6.2
+---
+
+A [guard](/fundamentals/guards/) does more than admit or refuse. It attaches what
+it established — a tenant, a principal — for the handler to read, reads what the
+route declared about itself, and, where its decision depends on it, reads the
+request body and sets it back for the handler.
+
+## Attach context and route metadata
+
+Guards often do more than gate — they produce values the handler needs.
+Attach on the way in; read with `Ambient<T>`:
+
+```rust title="the guard attaches, the handler reads"
+#[derive(Clone)]
+pub struct Tenant(pub String);
+
+impl AmbientValue for Tenant {}
+
+#[async_trait]
+impl Guard for TenantGuard {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let tenant = HttpView::of(cx)?
+            .request()
+            .header("x-tenant")
+            .ok_or_else(|| Denial::unauthorized("a tenant is required"))?
+            .to_owned();
+        cx.attach(Tenant(tenant));
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for TenantGuard {}
+
+#[get("/me")]
+async fn me(&self, tenant: Ambient<Tenant>) -> Result<Json<Post>> {
+    Ok(Json(self.svc.find_by_tenant(&tenant.0).await?))
+}
+```
+
+What a guard attaches is ambient for the rest of the unit once every guard of
+its stage passed: a handler reads it with an `Ambient<T>` parameter
+(`nest_rs::core::Ambient`) — a route, a GraphQL operation, a WebSocket message or
+an MCP tool alike, the request's guards' value in every unit the request
+carries — a guard after it with `cx.ambient::<T>()`, and code the handler
+calls with `nest_rs::core::ambient::<T>()`. Its type implements
+`AmbientValue` — a principal type too, since `AuthnGuard` attaches it, and a
+claims type
+[derives it](/security/authentication/jwt/#claims--your-shape-your-business-rules)
+with its `PrincipalIdentity` — and `Clone` for `Ambient<T>`. The request is
+borrowed through `HttpView::of(cx)` until you let it go, so take what you need
+into an owned value before `cx.attach`, as above.
+
+`Ambient<T>` refuses the unit if the value is absent — a `500` on a route, the
+opaque internal error elsewhere, the type filed at `error` — since a missing
+context means the guard that should have set it never ran. A large value goes in a
+newtype holding an `Arc` (`struct Catalog(Arc<Entries>)`), which clones for
+the price of a count; the newtype is what implements `AmbientValue`.
+
+`AuthzGuard` reads `Claims` left by `AuthnGuard` to build the ambient
+`Ability`. That is why order matters:
+`#[use_guards(AuthnGuard, AuthzGuard)]`, not the reverse.
+
+For per-route policy — required roles, rate-limit quotas — `#[meta(...)]`
+declares a typed value; `cx.reflector()` reads it inside the guard. Declare it on
+the method, or on the controller for every route it serves; the method's
+value of a type wins over the controller's:
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[controller(path = "/admin")]
+#[use_guards(AuthnGuard, RolesGuard)]
+#[meta(Roles(&["admin"]))]
+pub struct AdminController;
+
+#[routes]
+impl AdminController {
+    #[get("/audit")]
+    #[meta(Roles(&["admin", "auditor"]))]
+    async fn audit(&self) -> &'static str { "ok" }
+}
+```
+
+The value is built once — when the route mounts, or the first time a layer
+reads it — and every request reads that one copy, so it is
+`Send + Sync + 'static`, never cloned, and a guard attaching a value of the
+same type does not shadow it. A method holds one value of a type, and so does
+its controller: a second would be read by nothing, so the compiler refuses it
+when each expression names its type (`Roles(..)`), and the boot when one hides
+it (`Roles::new(..)`), naming the type and where. Because the global pool runs post-routing in the route's guard stage (above), a
+global guard reads `#[meta(...)]` too — the route's declaration is carried
+before the chain runs, and it holds `#[public]` below as well.
+
+`#[public]` is declared the same way. Marking a route public does not strip its
+guards; it tells them a caller with no credential is admitted, and each decides
+what that means for it (`AuthnGuard` authenticates a token that is present and
+rejects no anonymous caller; `AuthzGuard` builds the visitor's rules). What the
+framework itself decides is the unit's reads: a bare `#[public]` reads nothing a
+grant guards, and `#[public(Read, post::Entity)]` names what it reads
+([Public reads](/security/authorization/public-reads/)).
+
+A guard reads it as a posture. `/graphql` is `Posture::InBand` — each
+operation declares its own — so a guard that lets anonymous callers through
+admits both:
+
+```rust title="crates/features/src/posts/guard.rs"
+use nest_rs::core::{Posture, UnitContext, async_trait};
+use nest_rs::guards::{Denial, Guard};
+use nest_rs::guards::GuardPhase;
+
+#[async_trait]
+impl Guard for ApiKeyGuard {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        if matches!(cx.reflector().posture(), Posture::Public | Posture::InBand) {
+            return Ok(());
+        }
+        // ...standard policy...
+    }
+
+    // … and `check`, its decision on each operation the request carries
+}
+```
+
+## Read the body in a guard
+
+A guard may read the request body when its decision depends on it — a webhook
+whose signature *is* its credential. Nothing has read the body before the
+guards run, so a guard that refuses has taken none of it; one that reads it
+reads under the transport's cap and its gap bound like any extractor
+([Request-body size limit](/http/limits/#request-body-size-limit)), and
+sets the bytes back for the handler. This one checks a
+[Standard Webhooks](https://www.standardwebhooks.com/) signature with a
+constant-time compare and a five-minute replay window:
+
+```rust title="crates/features/src/upstream/guard.rs"
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use aws_lc_rs::hmac;
+use base64::{Engine, engine::general_purpose::STANDARD};
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
+use nest_rs::http::{HttpView, current_body_limit};
+
+use crate::upstream::UpstreamConfig;
+
+#[injectable]
+#[derive(Layer)]
+pub struct WebhookSignature {
+    #[inject]
+    config: Arc<UpstreamConfig>,
+}
+
+#[async_trait]
+impl Guard for WebhookSignature {
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        if self.config.webhook_secret.is_empty() {
+            return Err(Denial::internal("no webhook secret is configured"));
+        }
+        let req = HttpView::of(cx)?.request_mut();
+        let (Some(id), Some(sent_at), Some(signatures)) = (
+            req.header("webhook-id"),
+            req.header("webhook-timestamp").and_then(|t| t.parse::<u64>().ok()),
+            req.header("webhook-signature"),
+        ) else {
+            return Err(Denial::unauthorized("an unsigned webhook"));
+        };
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        if now.abs_diff(sent_at) > 5 * 60 {
+            return Err(Denial::unauthorized("a webhook outside the replay window"));
+        }
+        let id = id.to_owned();
+        let tags: Vec<Vec<u8>> = signatures
+            .split(' ')
+            .filter_map(|s| s.strip_prefix("v1,"))
+            .filter_map(|s| STANDARD.decode(s).ok())
+            .collect();
+
+        let limit = current_body_limit();
+        let body = req
+            .take_body()
+            .into_bytes_limit(limit)
+            .await
+            .map_err(|error| {
+                Denial::unauthorized(format!("an unreadable webhook body: {error}"))
+            })?;
+        let key = hmac::Key::new(hmac::HMAC_SHA256, self.config.webhook_secret.as_bytes());
+        let signed = [id.as_bytes(), b".", sent_at.to_string().as_bytes(), b".", &body].concat();
+        if !tags.iter().any(|tag| hmac::verify(&key, &signed, tag).is_ok()) {
+            return Err(Denial::unauthorized("a webhook signature that does not verify"));
+        }
+        req.set_body(body);
+        Ok(())
+    }
+
+    fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+        &[401]
+    }
+}
+
+impl GuardFor<HttpView> for WebhookSignature {}
+```
+
+`hmac::verify` compares in constant time, and the guard fails closed without a
+secret: anyone can sign with an empty key. The route binds the guard and
+declares itself public to the authentication guard, since the signature stands
+in for a token:
+
+```rust title="crates/features/src/upstream/http/controller.rs"
+#[post("/webhooks")]
+#[use_guards(WebhookSignature)]
+#[public]
+async fn receive(&self, body: RawBody) -> Result<()> {
+    self.svc.receive(&body).await
+}
+```
+
+A body past the cap answers `413` and one that stops arriving `408`, or
+[the request budget's `503`](/http/limits/#request-timeout) when it stops
+within that budget's last gap, whatever the guard made of the failed read; a
+refusal is the guard's own `401`, logged at `warn` like any denial, and declared,
+so the route's document lists it beside its `#[public]` opening.
+
+## Going further
+
+- [Guards](/fundamentals/guards/) — writing a guard, its two entries and what
+  its document lists.
+- [Execution context](/fundamentals/execution-context/) — everything a guard's
+  `cx` answers, on every edge.
+- [Public reads](/security/authorization/public-reads/) — what a `#[public]`
+  unit may read.

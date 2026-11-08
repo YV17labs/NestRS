@@ -1,0 +1,196 @@
+---
+title: CORS and security headers
+description: "Which origins a browser page may call the API, a socket or MCP from, and the security headers every response carries unless a route sets its own."
+sidebar:
+  order: 2.1
+---
+
+Two policies decide what a browser does with what this server answers: the
+CORS policy, which origins a page may call from, and the security headers,
+which every response carries. Both are fields of `HttpConfig`, set through
+`<PREFIX>_HTTP__*` or [pinned in code](/http/configuration/).
+
+## CORS
+
+The transport answers the CORS policy **outermost**, so a preflight
+(`OPTIONS`) is answered before any guard or interceptor runs, and every answer
+under the policy, a refusal included, carries `Vary: Origin`: a shared cache
+keeps one origin's answer from another. A preflight is an `OPTIONS` naming
+`Access-Control-Request-Method`, as the Fetch standard defines one; an `OPTIONS`
+naming none is a request like any other, and reaches what answers it.
+
+CORS activates only when `cors.origins` is non-empty, whatever else the
+policy sets — the default is no CORS layer. Set the origins (and any other
+knob you need) via either path — a file's, below, reaches an app that pins
+no `HttpConfig`:
+
+```bash title=".env.production" frame="terminal"
+NESTRS_HTTP__CORS_ORIGINS=https://app.example.com,https://admin.example.com
+NESTRS_HTTP__CORS_METHODS=GET,POST,PUT,DELETE
+NESTRS_HTTP__CORS_HEADERS=Content-Type,Authorization
+NESTRS_HTTP__CORS_CREDENTIALS=true
+NESTRS_HTTP__CORS_MAX_AGE_SECS=3600
+```
+
+```rust title="apps/api/src/module.rs"
+use std::time::Duration;
+
+use nest_rs::core::module;
+use nest_rs::http::{HttpCors, HttpConfig, HttpModule};
+
+#[module(imports = [
+    HttpModule::for_root(HttpConfig {
+        cors: Some(HttpCors {
+            origins: vec!["https://app.example.com".into()],
+            methods: vec!["GET".into(), "POST".into()],
+            headers: vec!["Content-Type".into(), "Authorization".into()],
+            credentials: true,
+            max_age: Some(Duration::from_secs(3600)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }),
+])]
+pub struct ApiModule;
+```
+
+Each origin is written as a browser sends it in `Origin`,
+`scheme://host[:port]`: no path, not even a trailing `/`, no query, fragment
+or `user@`, and an internationalized host in its ASCII form
+(`https://xn--9ca.example`, never `https://é.example`). The list is read once,
+at boot, and compared origin to origin (RFC 6454): `https://App.example:443`
+admits a page on `https://app.example`, since scheme and host compare without
+case and the default port is implied. The answer echoes the page's own
+`Origin` back, the bytes the browser checks. Only the URL standard's special
+schemes (`http`, `https`, `ws`, `wss`, `ftp`, `file`) have their host read that
+way: an extension's or an embedded webview's scheme (`chrome-extension://`,
+`tauri://`) keeps its host's bytes, so `tauri://Localhost` lists itself alone.
+
+`origins: vec!["*".into()]` opens a fully public API to every origin, and a
+`*` in `methods` or `headers` admits every method or header. With
+`credentials`, a `*` in any list fails the boot: a browser reads it as a
+literal on a credentialed request, so it would open nothing. `null` fails the
+boot too: every sandboxed iframe, `data:` document and redirect across origins
+sends it, whatever site it runs on, so listing it would admit every site that
+asks. Write `*` when that is what you mean; it says so, and `credentials`
+refuses it.
+
+An entry a list cannot take, in any of the four, fails the boot with a
+sentence naming the list, the entry's place and what is wrong with it
+(`entry 2 of origins … carries a path`), never the entry itself: your
+configuration is your data, and the sentence lands in your logs.
+
+With no `methods`, the policy admits the methods your routes serve, beside the
+CORS-safelisted `GET`, `HEAD` and `POST` — every method a page may send when a
+mount answers any method itself, as `/mcp` does. A method the Fetch standard
+forbids a page to send — `CONNECT`, `TRACE`, `TRACK` — fails the boot when
+`methods` lists it. A request the policy refuses — an unlisted origin, or a
+method or header its preflight asks for that the policy does not admit —
+answers `403` and files one `warn` on `nest_rs::http`, `cross-origin request
+refused by the CORS policy`, whose `reason` names the check it failed and
+nothing the request sent.
+
+The same origins, the one list read once, decide who opens a socket or calls
+MCP: an entry admits a page's socket exactly when it admits its `fetch`. A
+browser consults CORS neither before a WebSocket upgrade nor before a request
+simple enough to need no preflight, so the WebSocket gateways, the GraphQL
+subscription socket and `/mcp` check `Origin` themselves, CORS on or off; a
+client that sends no `Origin` — anything but a browser — passes.
+
+- **With no `cors`**, a browser page on the server's own origin is admitted
+  and any other is answered `403`, with a `warn` that says why by kind. The
+  `Origin` and the `Host` it is compared to are both the client's to write,
+  so neither reaches the line: `reason` is the first check that failed
+  (`scheme_differs`, `host_differs`, `port_differs`, `host_missing`,
+  `origin_null`, `origin_repeated`, `origin_not_serialized` or
+  `origin_not_visible_ascii`), `scheme` is the sent origin's (`http`,
+  `https` or `other`), `trusted_proxy` says whether the request came through
+  a proxy you listed, and `hint` names the settings that would admit it —
+  `<PREFIX>_HTTP__CORS_ORIGINS`, and `<PREFIX>_HTTP__TRUSTED_PROXIES` while
+  the peer is not a listed proxy. Behind a proxy that terminates TLS or
+  rewrites `Host`, the server sees a scheme or a host the browser did not:
+  list the proxy in `trusted_proxies` so its `Forwarded` or
+  `X-Forwarded-Proto` and `X-Forwarded-Host` say which origin the browser was
+  on.
+- **Once `cors.origins` is set**, the CORS layer answers first, on every
+  route, and admits only the origins it lists: a page the server serves
+  itself that opens a socket or calls MCP has its own origin listed too. The
+  CORS layer's `403` files the one `warn` [above](#cors), naming the check it
+  failed. Leaving the server's own origin to the list keeps a DNS-rebinding
+  page, whose `Host` names the attacker's domain, from passing for it.
+
+
+## Default security headers
+
+On by default — a freshly-scaffolded app ships safe headers without having
+to remember them:
+
+- `X-Content-Type-Options: nosniff` — defeats MIME sniffing.
+- `X-Frame-Options: DENY` — no framing (clickjacking).
+- `Referrer-Policy: strict-origin-when-cross-origin` — a cross-origin
+  request carries the origin, never the path or the query. It matters here
+  and not only in theory: `nest-rs-social` redirects through URLs carrying
+  `state`, and the Swagger UI at `GET /api` is a real page whose outbound
+  links would otherwise name the API paths a reader was browsing.
+- `Cross-Origin-Opener-Policy: same-origin` — a document this server serves
+  keeps no `window` reference back to a cross-origin opener.
+- `Cross-Origin-Resource-Policy: same-origin` — a *no-cors* cross-origin
+  load of a response from this server is blocked. It does not touch CORS
+  requests, which is why an API can carry it; set `cross-origin` on a server
+  whose images or downloads are meant to be embedded elsewhere.
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` —
+  emitted **only when TLS is active** (HSTS over plain HTTP is
+  meaningless and a footgun on localhost).
+
+Each one is a default: the edge writes it only on a response that sets none, so
+a route's own value wins. A post's cover image meant to be embedded elsewhere
+carries `#[response_header("cross-origin-resource-policy", "cross-origin")]` on
+its route, and every other response keeps the deployment's `same-origin`. The
+same holds for every header below, and for `Server:`. A route that sets a weaker
+value than the deployment's keeps it: that line is the opening, in the route
+where a reviewer reads it.
+
+Three more are **settable and off by default**, each because a default would
+be the framework guessing about a document it does not serve:
+
+| Header | Field / env | Why it ships off |
+|---|---|---|
+| `Content-Security-Policy` | `content_security_policy` / `__SECURITY_HEADERS_CONTENT_SECURITY_POLICY` | A policy strict enough to be worth having (`default-src 'none'`) breaks every page an app serves, a single-page app included; one loose enough to ship safely states nothing. The sources are the app's. The Swagger UI keeps its own, stricter one under any you set. |
+| `Cross-Origin-Embedder-Policy` | `cross_origin_embedder_policy` / `__SECURITY_HEADERS_CROSS_ORIGIN_EMBEDDER_POLICY` | `require-corp` is how a *page* opts into cross-origin isolation, and it breaks every cross-origin subresource that does not carry CORP. |
+| `Permissions-Policy` | `permissions_policy` / `__SECURITY_HEADERS_PERMISSIONS_POLICY` | It governs camera / geolocation / payment in a document; a restrictive guess silently disables a feature the app's own front end asked for. |
+
+Every value is tunable through the dual path, each variable its field's name
+under `SECURITY_HEADERS_`. Disable the whole set with the switch,
+`SECURITY_HEADERS_ENABLED`, or drop one header by setting its variable to `off` — in
+code, by setting its field to `None`, or `content_type_options` to `false`. A
+blank value is refused at boot, and an empty one counts as unset, as it does for
+every variable, so that header keeps its default. In a file, as here, they reach
+an app that pins no `HttpConfig`:
+
+```bash title=".env" frame="terminal"
+NESTRS_HTTP__SECURITY_HEADERS_ENABLED=false
+NESTRS_HTTP__SECURITY_HEADERS_FRAME_OPTIONS=SAMEORIGIN
+NESTRS_HTTP__SECURITY_HEADERS_HSTS=off
+NESTRS_HTTP__SECURITY_HEADERS_CONTENT_SECURITY_POLICY="default-src 'self'"
+```
+
+```rust title="apps/api/src/module.rs"
+use nest_rs::http::{HttpConfig, HttpModule, HttpSecurityHeaders};
+
+HttpModule::for_root(HttpConfig {
+    security_headers: HttpSecurityHeaders {
+        frame_options: Some("SAMEORIGIN".into()),
+        ..Default::default()
+    },
+    ..Default::default()
+});
+```
+
+## Going further
+
+- [HTTP configuration](/http/configuration/) — every `HttpConfig` field, its
+  variable and its pinned form.
+- [`ClientIp`](/http/extractors/#clientip--best-effort-observation-grade) — what
+  `trusted_proxies` admits, and how a forwarded chain is read.
+- [Threat model](/security/threat-model/) — what these headers defend against,
+  and what they leave to the app.

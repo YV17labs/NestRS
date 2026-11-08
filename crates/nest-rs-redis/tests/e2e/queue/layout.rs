@@ -495,7 +495,7 @@ async fn every_pages_rule_replaces_what_the_user_held_before() {
         (PAGE, "KEDA"),
         (PAGE, "operator"),
         ("rate-limiting/index.mdx", "rate limiter"),
-        ("schedule/index.mdx", "schedule"),
+        ("schedule/once.mdx", "schedule"),
     ] {
         let user = crate::acl_user("nestrs-e2e-replaced");
         let _forgetting_user = crate::forgetting_user(&user);

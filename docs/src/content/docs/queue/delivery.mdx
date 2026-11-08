@@ -88,7 +88,7 @@ as users created from these lines through every path the binding has, and fails
 when a role sends a command its rule lacks, or its rule allows one the role never
 sends. An app that also rate-limits or fires scheduled jobs once gives the same
 user [the rate limiter's](/rate-limiting/#redis-shipped) and
-[the schedule's](/schedule/#the-keys) rules as well.
+[the schedule's](/schedule/once/#the-keys) rules as well.
 
 A record is as trusted as whoever can write the queue's keys. The worker
 restores its `actor_id`, `tenant_id` and `baggage` as they were filed, so a user

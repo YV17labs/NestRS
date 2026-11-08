@@ -16,7 +16,7 @@ on:
       - 'crates/**/src/**'
       - 'docs/src/content/docs/queue/delivery.mdx'
       - 'docs/src/content/docs/rate-limiting/index.mdx'
-      - 'docs/src/content/docs/schedule/index.mdx'
+      - 'docs/src/content/docs/schedule/once.mdx'
       - 'docs/src/content/docs/tutorial/scaffold.mdx'
       - 'docs/src/content/docs/tutorial/entity.mdx'
       - 'docs/src/content/docs/tutorial/http.mdx'

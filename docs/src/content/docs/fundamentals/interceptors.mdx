@@ -36,7 +36,7 @@ not compile. `next.run(cx)` consumes `next`, so the rest of the unit runs once.
 [WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes),
 [MCP operations](/mcp/#layers-around-an-operation),
 [jobs](/queue/#layers-around-a-job),
-[ticks](/schedule/#layers-around-a-tick) and
+[ticks](/schedule/ticks/#layers-around-a-tick) and
 [listener calls](/events/dispatch/#layers-around-a-listener-call).** A
 WebSocket `#[on_connect]` / `#[on_disconnect]` hook runs none yet:
 `#[use_interceptors]` on one is a compile error, and the app's global
@@ -123,7 +123,7 @@ global list runs outside the controller's, which runs outside the handler's.
 Like every other [`Layer`](/fundamentals/request-lifecycle/), an `Interceptor`
 declared globally and redeclared on the controller or method runs **exactly
 once** per unit, at the broadest scope that declares it. See
-[Guards / Declare on the provider](/fundamentals/guards/#declare-on-the-provider)
+[Guards / Declare on the provider](/fundamentals/guard-scopes/#declare-on-the-provider)
 for the worked example and the defense-in-depth argument.
 
 ## The app's list: `GlobalInterceptors`

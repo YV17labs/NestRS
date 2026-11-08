@@ -179,7 +179,7 @@ impl Module for HygieneStatusModule {
 
 **The posture decides who calls it.** `Posture::Public` runs no guard.
 `Posture::Gated`, the posture of a surface that must authenticate, runs the
-app's [global guard pool](/fundamentals/guards/#the-three-scopes) in front of
+app's [global guard pool](/fundamentals/guard-scopes/#the-three-scopes) in front of
 every entry, before your endpoint sees the request — and an app that lists
 no global guard identifying a caller fails its boot naming the surface, since one no
 such guard covers would serve every caller. So a gated surface's docs name the guard

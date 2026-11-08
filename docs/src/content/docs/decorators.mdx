@@ -56,7 +56,7 @@ host or a worker's impl block, and a method one of its handlers.
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[use_guards]` | host or method | Binds container-resolved guards, first listed outermost | [Guards](/fundamentals/guards/) |
-| `#[force_guards]` | method | Binds a guard and re-runs it though a broader scope already ran it — the opt-out from dedup | [Guards](/fundamentals/guards/#re-running-one-on-purpose-force_guards) |
+| `#[force_guards]` | method | Binds a guard and re-runs it though a broader scope already ran it — the opt-out from dedup | [Guards](/fundamentals/guard-scopes/#re-running-one-on-purpose-force_guards) |
 | `#[use_pipes]` | host or method | Binds global pipes to an HTTP or WebSocket site, beside the app's pool | [Global pipes](/fundamentals/global-pipes/) |
 | `#[use_interceptors]` | host or method | Binds interceptors at the handler stage, after the guards | [Interceptors](/fundamentals/interceptors/) |
 | `#[use_exception_filters]` | host or method | Binds exception filters — a typed catch, or every error with `dyn Error + Send + Sync`; the method's tried first | [Error handling](/fundamentals/exception-filters/#exception-filters) |

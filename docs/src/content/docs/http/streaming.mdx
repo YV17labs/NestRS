@@ -144,7 +144,7 @@ has taken nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s by default), its
 connection is dropped — on HTTP/2 its stream is reset, and the connection serves
 its other streams on — and the task and buffers the stream held go with it. The
 deadline runs only while a write waits, so a slow reader that keeps taking bytes
-is never cut. See [Connection deadlines](/http/configuration/#connection-deadlines).
+is never cut. See [Connection deadlines](/http/limits/#connection-deadlines).
 
 **At shutdown a stream ends at the signal.** A stream never finishes on its
 own, so holding it open would only spend the whole shutdown window
@@ -155,7 +155,7 @@ reconnects, to a replica still in the load balancer. Its `http.request` line
 carries the head's `status`, the `bytes` written, and `outcome="cancelled"`: the
 transport ended it, not the stream. A peer that stopped reading parks the write,
 so its stream ends at the send deadline or with the window, whichever comes
-first. See [Shutdown](/http/configuration/#shutdown).
+first. See [Shutdown](/http/limits/#shutdown).
 
 `#[sse]` marks its response as having no end of its own. A handler that streams
 events some other way marks its own, so it ends at the signal too:

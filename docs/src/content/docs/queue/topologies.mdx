@@ -166,7 +166,7 @@ their state in exactly such keys, so a server holding either runs `noeviction`:
 | Binding | Keys with an expiry | What an eviction costs |
 |---|---|---|
 | [The rate limiter](/rate-limiting/#redis-shipped) | every window | a full window gone, so the client it denied is let through: the limit fails open |
-| [The schedule](/schedule/#the-keys) | every claim | a claim gone before its hold ends, so another replica claims the same occurrence and fires it twice |
+| [The schedule](/schedule/once/#the-keys) | every claim | a claim gone before its hold ends, so another replica claims the same occurrence and fires it twice |
 | [The queue](/queue/delivery/#limits) | its throttle window alone | a throttle window that starts early; an `allkeys-*` policy evicts jobs |
 
 A server holding the queue alone tolerates a `volatile-*` policy; one the rate
@@ -221,7 +221,7 @@ of the bindings it carries. Its readiness is its own too: in an app importing
 
 A Valkey user is kept per server, so the rule each binding's page prescribes
 for its role — [the queue's](/queue/delivery/#where-a-queue-lives), [the rate
-limiter's](/rate-limiting/#redis-shipped), [the schedule's](/schedule/#firing-once-across-replicas) — is created
+limiter's](/rate-limiting/#redis-shipped), [the schedule's](/schedule/once/) — is created
 on every node: the primary and each replica under Sentinel, every node of a
 Cluster. Each topology adds the commands its connection sends to every one of
 those rules.

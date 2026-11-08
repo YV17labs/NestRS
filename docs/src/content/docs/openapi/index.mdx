@@ -168,11 +168,11 @@ The document composes from the route table, so everything in it is derived:
   or a [header or media type strategy](/http/versioning/) refuses a malformed
   version on every route once one is versioned,
   `404` where a path parameter or a version selects, `408` where a body can stall
-  under the [body-read deadline](/http/configuration/#connection-deadlines),
+  under the [body-read deadline](/http/limits/#connection-deadlines),
   `409` where a write can conflict, `413` everywhere, since the transport refuses a
   declared length past its cap before routing, and `415` where a body can be refused,
   `500` everywhere, `503` with its `Retry-After` under a
-  [request timeout](/http/configuration/#request-timeout), `403` where a mask's
+  [request timeout](/http/limits/#request-timeout), `403` where a mask's
   ability can be refused or a CORS policy lists its origins — and every status the
   route's guards [declare](/fundamentals/guards/#what-a-routes-document-lists), the
   app's pool included: `401` with its `WWW-Authenticate` challenge, `429` and `503`

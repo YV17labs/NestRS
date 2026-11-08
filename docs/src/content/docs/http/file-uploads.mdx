@@ -121,7 +121,7 @@ states the parts.
 
 ## Limits
 
-- The [`max_body_bytes` cap](/http/configuration/#request-body-size-limit)
+- The [`max_body_bytes` cap](/http/limits/#request-body-size-limit)
   gates **every** body, `Multipart` included. An upload declaring a length past
   the cap — a browser's form does — is answered `413 Content Too Large` unread;
   one that declares none is cut at the cap as it is read, and answered `413`
@@ -135,7 +135,7 @@ states the parts.
   what lets a large file through; streaming is what keeps the process from
   holding it. For very large media the presigned PUT still wins — it avoids
   proxying the bytes through the server at all.
-- A long upload runs against the [request timeout](/http/configuration/#request-timeout),
+- A long upload runs against the [request timeout](/http/limits/#request-timeout),
   `20` seconds by default and counted from the request's arrival, its body's
   reading included: an upload slower than that is answered `503` part-way. A
   transport taking large files over slow links turns the budget off

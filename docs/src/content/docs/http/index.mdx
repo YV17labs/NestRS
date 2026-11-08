@@ -51,7 +51,11 @@ you name.
 ### All options
 
 - [Configuration](/http/configuration/) — `HttpConfig`, env vars vs
-  pinned struct, TLS, CORS, the framework `Server:` header.
+  pinned struct, TLS, the mount prefix, the framework `Server:` header.
+- [CORS and security headers](/http/cors/) — the origins a browser page may
+  call from, and the headers every response carries.
+- [Limits and deadlines](/http/limits/) — the body cap, the request budget,
+  the connection cap and deadlines, the shutdown window.
 - [Versioning](/http/versioning/) — `#[controller(version = "1")]` and
   multi-version controllers.
 - [Compression](/http/compression/) — zstd, brotli, gzip or deflate negotiated from

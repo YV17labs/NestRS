@@ -40,7 +40,7 @@ pub trait ExceptionFilter: Layer {
 [WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes), the
 app's around one no handler reads,
 [MCP tool calls and prompt fetches](/mcp/#layers-around-an-operation),
-[jobs](/queue/#layers-around-a-job), [ticks](/schedule/#layers-around-a-tick)
+[jobs](/queue/#layers-around-a-job), [ticks](/schedule/ticks/#layers-around-a-tick)
 and [listener calls](/events/dispatch/#layers-around-a-listener-call). A
 WebSocket `#[on_connect]` / `#[on_disconnect]` hook runs none yet:
 `#[use_exception_filters]` on one is a compile error.
@@ -273,7 +273,7 @@ filter: it is answered by the guard stage, before the filters run.
 
 An exception filter declared globally and redeclared on a controller or a
 method runs once, at the broadest scope that declares it — the same
-[defense-in-depth rationale as guards](/fundamentals/guards/#declare-on-the-provider):
+[defense-in-depth rationale as guards](/fundamentals/guard-scopes/#declare-on-the-provider):
 a portable controller that needs a domain filter redeclares it, and the dedup
 keeps the cost at zero.
 

@@ -131,7 +131,7 @@ pub type AuthzGuard = AbilityGuard<AuthzAbility>;
 ```
 
 `AbilityGuard` lives at `nest_rs::authz`, at the crate root — not under
-`http` — because it answers every transport. [`nestrs g auth`](/cli/#generate-features-and-adapters)
+`http` — because it answers every transport. [`nestrs g auth`](/cli/generators/)
 writes both files, their modules, and the `Claims` they name.
 
 Then protecting a controller is one attribute — `AuthnGuard` turns the

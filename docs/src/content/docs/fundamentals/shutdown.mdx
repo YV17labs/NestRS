@@ -37,7 +37,7 @@ by default they sum under the kill:
 29.5 seconds, half a second under the kill. Each transport's window is its
 own:
 
-- the HTTP transport's [shutdown window](/http/configuration/#shutdown),
+- the HTTP transport's [shutdown window](/http/limits/#shutdown),
   `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s, then the half second, which
   the HTTP/2 streams it cut and the work its self-mounts ran off their
   connections share;
@@ -204,5 +204,5 @@ whole budgets still meet the kill.
 - [Lifecycle](/fundamentals/lifecycle/) — the shutdown hooks and their budget.
 - [App state](/fundamentals/app-state/) — `stopping()`, for a loop that must
   stop at the signal.
-- [HTTP configuration](/http/configuration/#shutdown) — the HTTP transport's
+- [HTTP configuration](/http/limits/#shutdown) — the HTTP transport's
   window.

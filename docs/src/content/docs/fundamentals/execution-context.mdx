@@ -133,7 +133,7 @@ impl Guard for RolesGuard {
 yields every one, the method's first, for a layer that merges them.
 `posture()` says what `#[public]` and `#[authorize]` compiled to — `Public`,
 `Gated`, `InBand` for `/graphql`, `System` for a unit no caller sends — and
-`is_public()` is its shortcut. [Guards](/fundamentals/guards/#attach-context-and-route-metadata)
+`is_public()` is its shortcut. [Guards](/fundamentals/guard-context/#attach-context-and-route-metadata)
 shows the declaring side.
 
 ## What a unit carries

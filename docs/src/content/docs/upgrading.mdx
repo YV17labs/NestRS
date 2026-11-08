@@ -1073,7 +1073,7 @@ lists what the boot, a log or the wire shows when one is missed.
     and its method, so renaming one of them starts a new job — two, for the
     rolling deploy that ships the rename — unless `key = "…"` pins the identity
     its boot line names. See
-    [Firing once across replicas](/schedule/#firing-once-across-replicas).
+    [Firing once across replicas](/schedule/once/).
 
     **An event emitted inside a transaction waits for it.** `EventBus::emit` in a
     mutating request, a GraphQL mutation, a WebSocket message, an MCP operation, a
@@ -1289,7 +1289,7 @@ lists what the boot, a log or the wire shows when one is missed.
       inside its Lua scripts included, since Redis checks them against the
       caller's ACL as well: [the queue](/queue/delivery/#where-a-queue-lives)
       under `~nestrs:queue:*`, [the rate limiter](/rate-limiting/#redis-shipped)
-      under `~nestrs:throttler:*` and [a schedule's claims](/schedule/#the-keys)
+      under `~nestrs:throttler:*` and [a schedule's claims](/schedule/once/#the-keys)
       under `~nestrs:schedule:*`; an app running several gives one user each rule.
       A dashboard or an ACL written for the rate limiter's 6.x keys
       follows it to `nestrs:throttler:buckets:*`.

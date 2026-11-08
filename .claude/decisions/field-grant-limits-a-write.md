@@ -101,3 +101,31 @@ keeps "no extra round trip": sea-orm's read was there already, and a write that 
 Refused: sending the no-op anyway (`SET id = id`), which answers correctly but writes a row
 version and fires a trigger for a write that changes nothing; and `Repo::update` refusing an
 empty write, since a `PUT` changing nothing is a success.
+
+## 2026-11-08 — a write's reply reads what its caller may read
+
+The first limit above moved with the judged row (`mask-provenance.md`, 2026-11-08): a
+write's reply is a wire row like any other, judged at `Read` where it is built, so it
+shows what the caller may read whatever the write's list. Under `.fields([Id, Title])` on
+`Update` and a `Read` grant with no list, a `PUT`'s reply answers every exposed column,
+and a mutation selecting one the write's list leaves out answers it, the write landing.
+
+Decided by security, against restoring the cut by the write's list, which the seaorm
+e2e's `service.rs` pinned and the first e2e round of the judged row asked back: that cut
+answered every exposed column under a write grant naming no list, those `Read`
+withholds included, and the row whole to a caller holding no `Read` at all. Judged at
+`Read`, a reply never holds what the caller could not read by a `GET`. Restoring the
+write's list on the judged row's always-written keys would also take
+`#[expose(nullable)]` on every column a write list leaves out, read-side schemas
+included, or refuse every narrowed `PUT`, the developer cost the judged row's decision
+refused.
+
+**Refused:**
+
+- **The reply cut by the write's list**, as the reply mask did: the openings above.
+- **The intersection of the write's list and `Read`'s**: never wider than either, but a
+  narrowed write list then withholds non-nullable columns, so the row cannot be built and
+  every such `PUT` answers `403` and rolls back.
+
+Held by `nest-rs-authz`'s `judged` suite (a route's and a mutation's reply to a caller
+updating every column and reading three) and the seaorm e2e's `service.rs`.

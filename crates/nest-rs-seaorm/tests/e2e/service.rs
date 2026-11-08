@@ -228,8 +228,13 @@ async fn a_put_carrying_back_what_it_read_writes_what_its_grant_permits() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         body,
-        json!({ "id": row.id, "title": "second" }),
-        "a write's reply shows that write's grant",
+        json!({
+            "id": row.id,
+            "title": "second",
+            "work_status": "draft",
+            "long_bio": "as it stands",
+        }),
+        "a write's reply shows what its caller may read, never what its write grant names",
     );
     let after = stored(&conn, row.id).await;
     assert_eq!(after.title, "second");
@@ -318,10 +323,10 @@ async fn a_mutation_changing_what_its_grant_withholds_names_each_field_and_the_r
     assert_eq!(stored(&conn, row.id).await, row);
 }
 
-/// A write's reply shows that write's grant, so a selection past it refuses the field,
-/// and the mutation's savepoint takes back the write it had made.
+/// A write's reply shows what its caller may read: a column its write grant leaves
+/// out, which its read grant names, answers, and the write it carried back lands.
 #[tokio::test]
-async fn a_mutation_selecting_what_its_grant_withholds_rolls_the_write_back() {
+async fn a_mutation_selecting_what_its_write_grant_leaves_out_answers_what_its_caller_reads() {
     let conn = db().await;
     let app = boot().await;
     let row = seed(&conn, Uuid::now_v7()).await;
@@ -334,17 +339,12 @@ async fn a_mutation_selecting_what_its_grant_withholds_rolls_the_write_back() {
     )
     .await;
 
+    assert!(body.get("errors").is_none(), "{body}");
     assert_eq!(
-        body["errors"][0]["extensions"]["code"],
-        code::FORBIDDEN.as_str(),
-        "{body}",
+        body["data"]["updateArticle"]["workStatus"], "draft",
+        "{body}"
     );
-    assert_eq!(
-        body["errors"][0]["extensions"]["fields"],
-        json!(["workStatus"]),
-        "{body}",
-    );
-    assert_eq!(stored(&conn, row.id).await, row);
+    assert_eq!(stored(&conn, row.id).await.title, "second");
 }
 
 /// `work`, in a request unit on the pool under `ability`.

@@ -66,7 +66,8 @@ const WITHHELD: [&str; 3] = ["member1@example.test", "m1", "$argon2id$secret"];
 
 /// The caller's ability, read off `x-role`: `admin` reads every column; `member`
 /// reads ids and names, and its own row whole; `peer` reads org 1's ids and names;
-/// `writer` updates members and reads none; anyone else reads nothing.
+/// `writer` updates members and reads none; `editor` updates every column and reads
+/// ids and names; anyone else reads nothing.
 fn ability_of(role: &str) -> nest_rs_authz::Ability {
     let mut ab = AbilityBuilder::new();
     match role {
@@ -93,6 +94,14 @@ fn ability_of(role: &str) -> nest_rs_authz::Ability {
         }
         "writer" => {
             ab.can(Action::Update, member::Entity);
+        }
+        "editor" => {
+            ab.can(Action::Update, member::Entity);
+            ab.can(Action::Read, member::Entity).fields([
+                member::Column::Id,
+                member::Column::OrgId,
+                member::Column::Name,
+            ]);
         }
         _ => {}
     }
@@ -289,6 +298,30 @@ async fn a_reply_the_caller_may_not_read_is_refused() {
     ] {
         assert_eq!(filed[0].field(field).as_deref(), Some(named), "{field}");
     }
+}
+
+/// A write's reply reads the caller's read grant, never the write's: a write grant
+/// naming no column opens none its read grant withholds.
+#[tokio::test]
+async fn a_writes_reply_holds_what_its_caller_may_read_and_never_what_its_write_grant_names() {
+    let app = TestApp::for_module::<MembersHttpModule>()
+        .await
+        .expect("boots");
+    let resp = app
+        .http()
+        .post("/members/1")
+        .header("x-role", "editor")
+        .send()
+        .await;
+    assert_eq!(resp.0.status(), StatusCode::OK);
+    let body = resp.0.into_body().into_string().await.unwrap_or_default();
+    let row: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+    assert_eq!(
+        row,
+        serde_json::json!({
+            "id": 1, "org_id": 1, "name": "member 1", "email": null, "nickname": null,
+        }),
+    );
 }
 
 /// A row judged for another caller is a defect of the body that carried it: its
@@ -732,6 +765,27 @@ async fn a_field_resolver_under_a_row_judged_for_another_caller_answers_nothing(
     assert_eq!(
         read["data"]["members"][0]["emailDomain"], "example.test",
         "a parent judged for its caller hands its resolver what it holds: {read}"
+    );
+}
+
+/// A mutation's reply reads its caller's read grant, as a route's does: a column
+/// the write grant opens and the read grant withholds reads `null`.
+#[tokio::test]
+async fn a_mutations_reply_holds_what_its_caller_may_read_and_never_what_its_write_grant_names() {
+    let app = TestApp::for_module::<MembersGraphqlModule>()
+        .await
+        .expect("boots");
+    let read = graphql_as(
+        &app,
+        "editor",
+        "mutation { writeMember { id name email nickname } }",
+    )
+    .await;
+    assert_eq!(
+        read,
+        serde_json::json!({ "data": { "writeMember": {
+            "id": 1, "name": "member 1", "email": null, "nickname": null,
+        } } }),
     );
 }
 

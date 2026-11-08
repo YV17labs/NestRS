@@ -707,6 +707,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | a wire type built by struct literal (`User { id, name, .. }`) or read back with serde (`serde_json::from_*::<User>`) | `User::from(&row)`: a wire row carries a private proof of its judgement and has no `Deserialize`. A test reading a reply decodes `serde_json::Value`, or a type of its own |
    | a wire row handed to `WsServer::broadcast`, `emit_to` or `emit` from a request | a DTO every recipient may read, or a row a job built: a row judged for the caller pushing it refuses on a push to other connections |
    | a route under `#[authorize(Update, E)]` answering the row it wrote to a caller whose `Read` grants refuse that row | `403`, the write rolled back, where the reply was masked at `Update`'s fields; on GraphQL the row answers its key alone. A write-only client answers `204` or the key |
+   | a client reading a write's reply as `Update`'s `.fields` cut it (`{ "id", "title" }` under `.fields([Id, Title])`) | the reply holds what the caller may read, every column its `Read` grants permit, whatever the write's own list: `.fields` on a write names what it may set. A column `Read` withholds reads `null` there as on any reply, where a write grant with no list answered every exposed column |
 
    A project scaffolded by an earlier `nestrs g auth` keeps
    `sub: Option<Uuid>` in its claims, which cannot hold a client's own id; the

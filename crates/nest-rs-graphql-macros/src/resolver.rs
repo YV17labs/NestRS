@@ -630,23 +630,15 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         ambient,
     } = site;
     let class_gated = gate.is_some();
-    let class_gate = match gate {
-        Some(gate) => quote!(::core::option::Option::Some(#gate)),
-        None => quote!(::core::option::Option::None),
-    };
-    let (host, global) = match kind {
+    let (host_interceptors, host_exception_filters, global) = match kind {
         ChainSite::Field => (
-            [
-                quote!(::std::vec::Vec::new()),
-                quote!(::std::vec::Vec::new()),
-            ],
+            quote!(::std::vec::Vec::new()),
+            quote!(::std::vec::Vec::new()),
             quote!(::nest_rs_core::__private::GlobalLayers::NONE),
         ),
         ChainSite::Operation | ChainSite::Entity => (
-            [
-                quote!(<#self_ty>::__nestrs_resolver_interceptor_specs()),
-                quote!(<#self_ty>::__nestrs_resolver_exception_filter_specs()),
-            ],
+            quote!(<#self_ty>::__nestrs_resolver_interceptor_specs()),
+            quote!(<#self_ty>::__nestrs_resolver_exception_filter_specs()),
             quote!(::nest_rs_graphql::__private::ROOT_FIELD),
         ),
     };
@@ -658,7 +650,8 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         self_ty,
         method,
         cfgs,
-        host,
+        host_interceptors,
+        host_exception_filters,
         interceptors,
         exception_filters,
         global,
@@ -677,7 +670,7 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
                 }
             },
         }),
-        class_gate,
+        class_gate: gate.clone(),
     })
 }
 

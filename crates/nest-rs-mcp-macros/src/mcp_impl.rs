@@ -902,16 +902,13 @@ fn spelled_result(sig: &Signature) -> Option<&Type> {
 
 /// Step 2 — the class gate `#[authorize(Action, Entity)]` desugars to, every
 /// edge's one, run on the operation its guards checked.
-fn class_gate(posture: &Posture) -> TokenStream2 {
-    match posture.gate() {
-        Some(PostureGate { action, entity, .. }) => quote! {
-            ::core::option::Option::Some(
-                ::nest_rs_authz::class_gate::<#action, #entity>
-                    as ::nest_rs_core::__private::ClassGate,
-            )
-        },
-        None => quote!(::core::option::Option::None),
-    }
+fn class_gate(posture: &Posture) -> Option<TokenStream2> {
+    posture.gate().map(|PostureGate { action, entity, .. }| {
+        quote! {
+            ::nest_rs_authz::class_gate::<#action, #entity>
+                as ::nest_rs_core::__private::ClassGate
+        }
+    })
 }
 
 /// Step 3 — run one argument's pipe over its wire value and rebind the parameter
@@ -1328,10 +1325,10 @@ fn operation_sites(self_ty: &Type, base: &syn::Ident, operations: &Operations) -
             self_ty,
             method,
             cfgs,
-            host: [
-                quote!(<#self_ty>::__nestrs_mcp_host_interceptor_specs()),
-                quote!(<#self_ty>::__nestrs_mcp_host_exception_filter_specs()),
-            ],
+            host_interceptors: quote!(<#self_ty>::__nestrs_mcp_host_interceptor_specs()),
+            host_exception_filters: quote!(
+                <#self_ty>::__nestrs_mcp_host_exception_filter_specs()
+            ),
             interceptors: &op.interceptors,
             exception_filters: &op.exception_filters,
             global: quote!(::nest_rs_mcp::__private::OPERATION_LAYERS),

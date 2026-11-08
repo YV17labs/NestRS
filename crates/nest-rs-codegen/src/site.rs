@@ -18,9 +18,12 @@ pub struct SiteItems<'a> {
     pub method: &'a syn::Ident,
     /// The method's `#[cfg]` conditions, on every item.
     pub cfgs: &'a [TokenStream],
-    /// What the host binds around each of its units: two `Vec` expressions,
-    /// its interceptors' and its exception filters'.
-    pub host: [TokenStream; 2],
+    /// The interceptors the host binds around each of its units, a `Vec`
+    /// expression.
+    pub host_interceptors: TokenStream,
+    /// The exception filters the host binds around each of its units, a `Vec`
+    /// expression.
+    pub host_exception_filters: TokenStream,
     /// The interceptors the method binds.
     pub interceptors: &'a [Path],
     /// The exception filters the method binds.
@@ -29,8 +32,9 @@ pub struct SiteItems<'a> {
     pub global: TokenStream,
     /// The guard stage, for an edge whose units run one.
     pub guards: Option<SiteGuards>,
-    /// The posture's class gate, an `Option<ClassGate>` expression.
-    pub class_gate: TokenStream,
+    /// The posture's class gate, a `ClassGate` expression, where it declares
+    /// one.
+    pub class_gate: Option<TokenStream>,
 }
 
 /// The call building a site's guard stage:
@@ -49,7 +53,8 @@ pub fn site_items(site: &SiteItems<'_>) -> TokenStream {
         self_ty,
         method,
         cfgs,
-        host: [host_interceptors, host_exception_filters],
+        host_interceptors,
+        host_exception_filters,
         interceptors,
         exception_filters,
         global,
@@ -87,6 +92,10 @@ pub fn site_items(site: &SiteItems<'_>) -> TokenStream {
             )
         }
         None => (TokenStream::new(), quote!(::core::option::Option::None)),
+    };
+    let class_gate = match class_gate {
+        Some(gate) => quote!(::core::option::Option::Some(#gate)),
+        None => quote!(::core::option::Option::None),
     };
     quote! {
         #(#cfgs)*
@@ -142,12 +151,13 @@ mod tests {
             self_ty,
             method,
             cfgs: &[],
-            host: [quote!(Host::interceptors()), quote!(Host::filters())],
+            host_interceptors: quote!(Host::interceptors()),
+            host_exception_filters: quote!(Host::filters()),
             interceptors,
             exception_filters: &[],
             global: quote!(GLOBAL),
             guards,
-            class_gate: quote!(::core::option::Option::None),
+            class_gate: None,
         }
     }
 

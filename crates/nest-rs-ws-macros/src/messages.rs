@@ -730,10 +730,8 @@ fn message_site(site: &MessageSite<'_>) -> TokenStream2 {
         self_ty,
         method,
         cfgs,
-        host: [
-            quote!(<#self_ty>::__nestrs_gateway_interceptor_specs()),
-            quote!(<#self_ty>::__nestrs_gateway_exception_filter_specs()),
-        ],
+        host_interceptors: quote!(<#self_ty>::__nestrs_gateway_interceptor_specs()),
+        host_exception_filters: quote!(<#self_ty>::__nestrs_gateway_exception_filter_specs()),
         interceptors,
         exception_filters,
         global: quote!(::nest_rs_core::__private::GlobalLayers::ALL),
@@ -750,7 +748,7 @@ fn message_site(site: &MessageSite<'_>) -> TokenStream2 {
                 }
             },
         }),
-        class_gate: quote!(::core::option::Option::None),
+        class_gate: None,
     })
 }
 

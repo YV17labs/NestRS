@@ -48,15 +48,13 @@ pub fn site_const(site: &ProviderSite<'_>) -> TokenStream {
         self_ty,
         method,
         cfgs,
-        host: [
-            interceptor_specs(&host.interceptors),
-            exception_filter_specs(&host.exception_filters),
-        ],
+        host_interceptors: interceptor_specs(&host.interceptors),
+        host_exception_filters: exception_filter_specs(&host.exception_filters),
         interceptors: &method_layers.interceptors,
         exception_filters: &method_layers.exception_filters,
         global: quote!(::nest_rs_core::__private::GlobalLayers::ALL),
         guards: None,
-        class_gate: quote!(::core::option::Option::None),
+        class_gate: None,
     })
 }
 

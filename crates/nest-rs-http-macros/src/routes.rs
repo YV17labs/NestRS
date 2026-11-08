@@ -1426,10 +1426,8 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
         self_ty,
         method: method_name,
         cfgs,
-        host: [
-            quote!(<#self_ty>::__nestrs_controller_interceptor_specs()),
-            quote!(<#self_ty>::__nestrs_controller_exception_filter_specs()),
-        ],
+        host_interceptors: quote!(<#self_ty>::__nestrs_controller_interceptor_specs()),
+        host_exception_filters: quote!(<#self_ty>::__nestrs_controller_exception_filter_specs()),
         interceptors,
         exception_filters: method_exception_filters,
         global: quote!(::nest_rs_core::__private::GlobalLayers::ALL),
@@ -1448,7 +1446,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
                 }
             },
         }),
-        class_gate: quote!(::core::option::Option::None),
+        class_gate: None,
     });
     let site = site_ref(self_ty, method_name);
 

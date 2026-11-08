@@ -1,6 +1,6 @@
 //! `bind = Service` loads the service's own entity, while the class gate and the
-//! mask read the entity `#[authorize]` writes: a written entity other than the
-//! service's would gate and mask one entity and load another.
+//! reads read the entity `#[authorize]` writes: a written entity other than the
+//! service's would gate and read one entity and load another.
 
 use nest_rs::authz::Read;
 use nest_rs::mcp::{McpError, mcp, tools};

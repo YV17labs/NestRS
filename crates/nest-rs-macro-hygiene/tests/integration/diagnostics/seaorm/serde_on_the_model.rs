@@ -1,5 +1,5 @@
-//! A row deriving serde writes every column, hidden ones included, onto a wire
-//! no mask shapes, and reads every column off a body no input validates: each
+//! A row deriving serde writes every column, hidden ones included, onto a wire,
+//! and reads every column off a body no input validates: each
 //! derive is refused where it is written — `#[derive(…)]`, and sea-orm's
 //! `model_attrs(…)` and `model_ex_attrs(…)` — naming what answers instead.
 

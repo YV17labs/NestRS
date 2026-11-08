@@ -189,9 +189,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 return syn::Error::new_spanned(
                     posture,
                     format!(
-                        "`#[{hook}]` takes no posture: no mask shapes what a connection hook \
-                         sends, so it reads nothing a grant guards. Read what the client should \
-                         see in a `#[subscribe_message]` whose posture names it"
+                        "`#[{hook}]` takes no posture: no gate stands before a connection hook, \
+                         so it reads nothing a grant guards. Read what the client should see in \
+                         a `#[subscribe_message]` whose posture names it"
                     ),
                 )
                 .to_compile_error()

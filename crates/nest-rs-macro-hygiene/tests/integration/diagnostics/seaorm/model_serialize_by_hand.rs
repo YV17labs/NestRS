@@ -1,5 +1,5 @@
 //! A `Serialize` written by hand on a row `#[expose]` decorates writes what it
-//! likes onto a wire no mask shapes, and `#[expose]` cannot read it: the bounded
+//! likes onto a wire, and `#[expose]` cannot judge it: the bounded
 //! impl the decorator emits overlaps it, so it does not compile.
 
 mod post {

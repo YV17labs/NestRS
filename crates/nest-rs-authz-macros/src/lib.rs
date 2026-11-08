@@ -7,11 +7,11 @@ mod subject;
 
 /// Declares a unit struct an authorization subject no table holds: a
 /// capability a rule grants whole and `#[authorize(Action, Subject)]` gates on
-/// every edge, arming no mask.
+/// every edge, opening no read.
 ///
 /// Takes no argument; refuses a struct with fields or generics, and any other
 /// item. Emits the struct unchanged, its `Subject` impl, and the hidden impl
-/// that tells each edge's posture the subject has no rows to mask.
+/// that tells each edge's posture the subject has no rows to read.
 #[proc_macro_attribute]
 pub fn subject(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(subject::subject(args.into(), item.into())).into()

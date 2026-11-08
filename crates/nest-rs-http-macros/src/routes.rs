@@ -1254,8 +1254,8 @@ fn gate_of(attr: &Attribute, word: &'static str, inputs: &[FnArg]) -> syn::Resul
 
 /// What an `#[sse]` route whose posture names an entity is told.
 const SSE_NAMES_AN_ENTITY: &str = "an `#[sse]` route's posture names a subject no table holds: an \
-     entity's posture masks the reply against its rows, and an event stream is no wire model to \
-     reconcile. Declare the capability with `#[subject]` on a unit struct and gate the stream with \
+     entity's posture opens reads whose rows the stream writes after the route's unit ended, \
+     where no ability is left to judge them. Declare the capability with `#[subject]` on a unit struct and gate the stream with \
      `#[authorize(Action, ThatSubject)]` or `#[public(Action, ThatSubject)]`, then load what it \
      needs inside the handler";
 

@@ -1,5 +1,5 @@
 //! A GraphQL object is a wire of its own: an async-graphql derive on the row writes
-//! every column no mask shapes and reads each one off a body no input validates, and
+//! every column and reads each one off a body no input validates, and
 //! each is refused where it is written, as serde's is, naming what answers instead.
 
 mod post {

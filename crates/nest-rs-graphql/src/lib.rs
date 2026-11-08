@@ -150,8 +150,9 @@ pub use nest_rs_graphql_macros::dataloader;
 
 /// Declare a [`resolver`](macro@resolver)'s operations on its impl block. Each operation
 /// declares its posture, `#[public]`, `#[public(Action, Subject)]` or
-/// `#[authorize(Action, Subject)]`; the gate and the reply mask `#[authorize]`
-/// emits run in `nest_rs_authz::graphql`.
+/// `#[authorize(Action, Subject)]`; the gate `#[authorize]` emits runs in
+/// `nest_rs_authz::graphql`, and each wire row an operation answers was judged for
+/// its caller where it was built.
 ///
 /// ```
 /// use nest_rs_core::Discoverable;

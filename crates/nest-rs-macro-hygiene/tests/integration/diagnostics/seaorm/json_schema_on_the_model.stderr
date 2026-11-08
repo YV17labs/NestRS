@@ -1,4 +1,4 @@
-error: #[expose]: `Model` derives `JsonSchema`, which publishes every column, hidden ones included, in a document no mask shapes — a reply's schema is `Post`'s: drop the derive
+error: #[expose]: `Model` derives `JsonSchema`, which publishes every column, hidden ones included, in the document — a reply's schema is `Post`'s: drop the derive
   --> tests/integration/diagnostics/seaorm/json_schema_on_the_model.rs:11:58
    |
 11 |     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, JsonSchema)]

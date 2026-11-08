@@ -49,7 +49,8 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `#[authorize(Action, Entity)]` — the route's authz posture: the class
 ///   gate `nest_rs_authz::http::Authorize<A, E>` declares
 ///   (`nest_rs_authz::class_gate`), run right after the guards and before any
-///   interceptor or filter the route declares, and its response masking.
+///   interceptor or filter the route declares, and its reads under the caller's
+///   ability, each wire row the handler answers judged for that caller.
 ///   Mutually exclusive with `#[public]`. `#[authorize(Action, bind = Service)]`
 ///   also loads the subject its path's one parameter names — the
 ///   controller's path included — into an `Authorized<Action, E>` parameter;
@@ -57,7 +58,7 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `#[public]` — the route is reachable anonymously; global guards still run
 ///   and read the marker, and it reads nothing a grant guards.
 /// - `#[public(Action, Subject)]` — the same opening with `#[authorize]`'s
-///   arguments, `bind` included: the class gate and the mask, on the ability the
+///   arguments, `bind` included: the class gate and the reads, on the ability the
 ///   caller has (`define_visitor`'s for a visitor, `define`'s for a valid token).
 /// - `#[use_guards(...)]` — container-resolved guards, first listed outermost.
 /// - `#[use_exception_filters(...)]` — container-resolved
@@ -129,7 +130,7 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// refused naming the trait to implement or the op to drop.
 ///
 /// The generated list is **keyset-paginated by default** (`?first=&after=`,
-/// the next page linked by `Link: <…>; rel="next"`, body a plain maskable array);
+/// the next page linked by `Link: <…>; rel="next"`, body a plain array of wire rows);
 /// `paginate = none` opts out into the full collection, backstopped by
 /// `CrudService::list`'s hard cap.
 ///

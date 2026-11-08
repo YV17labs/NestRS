@@ -73,7 +73,7 @@ fn refuse_wire_derives(
     model: &ResourceModel,
 ) {
     let exposed = &model.output_ident;
-    let writes = "writes every column, hidden ones included, onto a wire no mask shapes";
+    let writes = "writes every column, hidden ones included, onto a wire";
     for path in paths {
         let derive = last_segment_ident(path);
         let what = match derive.to_string().as_str() {
@@ -91,8 +91,8 @@ fn refuse_wire_derives(
                 update = model.update_ident,
             ),
             "JsonSchema" => format!(
-                "publishes every column, hidden ones included, in a document no mask shapes — a \
-                 reply's schema is `{exposed}`'s"
+                "publishes every column, hidden ones included, in the document — a reply's \
+                 schema is `{exposed}`'s"
             ),
             _ => continue,
         };

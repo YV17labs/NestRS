@@ -1,5 +1,5 @@
-//! An entity's posture masks the reply against its rows, and an event stream is
-//! no wire model to reconcile, so `#[public(Action, Subject)]` on an `#[sse]`
+//! An entity's posture opens reads whose rows a stream writes after its unit
+//! ended, where no ability judges them, so `#[public(Action, Subject)]` on an `#[sse]`
 //! route names a subject no table holds, as `#[authorize]` there does.
 
 use nest_rs::authz::Read;

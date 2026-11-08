@@ -1,5 +1,5 @@
 //! A GraphQL object is a wire of its own: an async-graphql derive above `#[expose]`,
-//! or `#[Object]` on the row, writes columns no mask shapes, and the bounded impl
+//! or `#[Object]` on the row, writes every column, and the bounded impl
 //! overlaps it as it overlaps serde's, whether or not the entity declares `graphql`.
 
 mod post {

@@ -1,4 +1,4 @@
-//! No mask shapes what a connection hook sends, so it takes no posture: a read under
+//! No gate stands before a connection hook, so it takes no posture: a read under
 //! the caller's rules belongs in a message whose posture names it.
 
 use nest_rs::ws::{gateway, messages};

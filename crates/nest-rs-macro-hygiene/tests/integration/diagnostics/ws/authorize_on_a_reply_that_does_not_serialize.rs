@@ -1,6 +1,6 @@
-//! A masked reply is the JSON the handler's value serializes to, whatever its
-//! return type spells: a value that cannot, behind a `Result` or not, is refused
-//! at the mask's bound.
+//! A reply is the JSON the handler's value serializes to, whatever its return
+//! type spells: a value that cannot, behind a `Result` or not, is refused at the
+//! serializer's bound.
 
 use nest_rs::authz::Read;
 use nest_rs::ws::{gateway, messages};

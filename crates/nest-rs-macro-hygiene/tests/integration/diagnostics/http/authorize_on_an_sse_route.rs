@@ -1,5 +1,5 @@
-//! An entity's posture masks the reply against its rows, and an event stream is
-//! no wire model to reconcile, so `#[authorize]` on an `#[sse]` route names a
+//! An entity's posture opens reads whose rows a stream writes after its unit
+//! ended, where no ability judges them, so `#[authorize]` on an `#[sse]` route names a
 //! subject no table holds — decided by the posture's type, after name
 //! resolution — and the refusal names that remedy.
 

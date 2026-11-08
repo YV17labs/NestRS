@@ -144,7 +144,7 @@ pub struct {{resolver}} {
 }
 
 // Every operation declares #[authorize(Action, Entity)], so each is
-// authenticated, ability-filtered, transactional and field-masked — generated
+// authenticated, ability-filtered, transactional and judged per caller — generated
 // by #[crud], the same way the HTTP controller is. Each answers FORBIDDEN until
 // AuthzAbility grants its action on `crate::{{snake}}::Entity`.
 #[crud(service = {{service}})]
@@ -177,7 +177,7 @@ impl {{gateway}} {
     // Covered by the two guards on the struct, which ran at the upgrade, so it
     // needs no posture of its own; the boot refuses a message no guard covers.
     // A message answering with entity rows declares
-    // `#[authorize(Read, Entity)]`, and the mask comes with it.
+    // `#[authorize(Read, Entity)]`, its rows judged for the caller.
     #[subscribe_message("{{kebab}}.{{op}}")]
     async fn {{op}}(&self, client: &WsClient) {
 {{op_body}}
@@ -315,18 +315,18 @@ pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //! An operation those guards cover needs no posture of its own, as an HTTP route
 //! under a guard needs none. Where it gates more, it says so:
 //!
-//! * `#[authorize(Action, Entity)]` — the class-level gate plus automatic
-//!   field-level masking of the value you return. Reach for it whenever the
-//!   answer is entity data, and return the `#[expose]`d wire type (`Json<T>`)
-//!   so the mask has a shape to work on.
+//! * `#[authorize(Action, Entity)]` — the class-level gate, and reads under the
+//!   caller's ability. Reach for it whenever the answer is entity data, and
+//!   return the `#[expose]`d wire type (`Json<T>`), each row judged for the
+//!   caller where it is built.
 //! * `#[authorize(Action, Subject)]` on a `#[subject]` — the same gate on a
-//!   capability no table holds, and no mask: the answer is no row.
+//!   capability no table holds, and no read: the answer is no row.
 //!
 //! `#[public]` admits a caller with no credential, so it belongs on an endpoint
 //! `McpAccess::Public` opens, where every operation states its posture; behind
 //! guards that authenticate it can open nothing, and the boot refuses it. Bare, it
 //! reads nothing a grant guards: `#[public(Action, Entity)]` names what a visitor
-//! reads, with the same gate and mask.
+//! reads, with the same gate and reads.
 //!
 //! Arguments are held to the rules their type declares, as on every other
 //! transport: `Parameters<T>` runs `validator` before the body and answers a

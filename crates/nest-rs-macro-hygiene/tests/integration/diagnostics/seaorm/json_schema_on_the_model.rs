@@ -1,5 +1,5 @@
 //! A schema derived on a row publishes every column's name and type, hidden ones
-//! included, in a document no mask shapes: refused at the derive `#[expose]` reads,
+//! included, in the document: refused at the derive `#[expose]` reads,
 //! and above it, where the bounded impl overlaps what it wrote.
 
 mod post {

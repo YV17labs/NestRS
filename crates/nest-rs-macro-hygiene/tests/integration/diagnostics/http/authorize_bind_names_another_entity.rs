@@ -1,6 +1,6 @@
 //! `bind = Service` loads and authorizes the service's own entity, while the
-//! class gate and the response mask read the entity `#[authorize]` writes: a
-//! written entity other than the service's would gate and mask one entity and
+//! class gate and the reads read the entity `#[authorize]` writes: a
+//! written entity other than the service's would gate and read one entity and
 //! load another, so it does not compile.
 
 use nest_rs::authz::Read;

@@ -363,6 +363,15 @@ key of its own before validation, which judges nothing new by it, and that key
 leaves the answer before you read it: a document holding no fragment, no directive
 and no object selected twice pays nothing for it.
 
+A list of lists is the one shape no key joins. async-graphql 7.2.1 joins a later
+copy's list items into the first's only where those items are objects, so with
+`grid: [[Cell!]!]!`, `{ grid { a } grid { b } }`, or two fragments that each select
+`grid` otherwise, would answer one copy's cells and lose the other's. Such a
+document is refused before anything runs, with an `INVALID_ARGUMENT` error naming
+the key, at that place or below two copies of its parent: select it once, its
+copies' fields together, `{ grid { a b } }`. Copies selecting alike, as two
+fragments asking for the same fields do, are answered.
+
 One type condition still reads otherwise: async-graphql 7.2.1 applies a condition
 on a union only where that union is resolved. With `SearchResult` a union of `User`
 and `Org`, `{ search { ... on SearchResult { ... on User { name } } } }` answers each

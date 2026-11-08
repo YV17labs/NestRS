@@ -193,6 +193,16 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   copies of one name, arguments and directives into the first before
   validation, as `own_key.rs` hands a set its key, through fragments, held
   by a test that one write ran. *seen*
+- A list of lists selected twice at one place with different selections,
+  `{ grid { fine } grid { inner { fine } } }` with `grid: [[Shape!]!]!`, which
+  GraphQL §6.3.2 merges into one field, is refused before anything runs,
+  since async-graphql 7.2.1's `insert_value` joins a later copy's list items
+  into the first's only where they are objects, and answered one copy's
+  cells. Close: the same merge as the mutation root's, for any key whose
+  declared type nests a list in a list, or the upstream fix (§7); the
+  refusal's test,
+  `null_propagation::a_list_of_lists_selected_twice_otherwise_is_refused`,
+  then asserts the merged answer. *seen*
 - A type condition on a union applies only where that union is resolved:
   `{ shape { ... on Either { ... on Shape { fine } } } }`, `Shape` a member
   of `Either`, answers `{"shape": {}}` where GraphQL §6.3.2 answers `fine`,
@@ -324,7 +334,9 @@ an interface field's error with no `path`; a field selected twice runs its
 writes twice; an argument copied at each row of a list, `Context::var_value`
 and `get_param_value` cloning, which the framework bounds meanwhile with
 `max_list_argument_bytes`; a type condition on a union applied only where
-that union is resolved, `Fields::add_set`); redis-rs (`PipelineSink` loses a
+that union is resolved, `Fields::add_set`; a later copy of a list of lists
+dropped, `insert_value` joining list items only where they are objects, which
+the framework refuses meanwhile); redis-rs (`PipelineSink` loses a
 read error with nothing in flight); sse-stream 0.2.6 (keep-alive on std's
 clock).
 

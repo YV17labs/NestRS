@@ -310,6 +310,11 @@ pub(crate) fn selected_operation<'d>(
 pub(crate) struct OperationRefusal(ServerError);
 
 impl OperationRefusal {
+    /// The operation answering `refusal` in place of running.
+    pub(crate) fn new(refusal: ServerError) -> Self {
+        Self(refusal)
+    }
+
     /// What it answers.
     pub(crate) fn said(&self) -> ServerError {
         self.0.clone()

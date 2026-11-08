@@ -34,12 +34,17 @@ impl Shape {
     async fn sure_inner(&self) -> Shape {
         Shape
     }
+
+    async fn grid(&self) -> Vec<Vec<Shape>> {
+        vec![vec![Shape]]
+    }
 }
 
 /// The other member of [`Either`].
 #[derive(SimpleObject)]
 struct Other {
     other: i32,
+    grid: Vec<Vec<Other>>,
 }
 
 /// What a type condition reads: a `Shape` or an `Other`.
@@ -111,7 +116,19 @@ impl ShapeResolver {
     #[query]
     #[public]
     async fn eithers(&self) -> Vec<Either> {
-        vec![Either::Shape(Shape), Either::Other(Other { other: 2 })]
+        vec![
+            Either::Shape(Shape),
+            Either::Other(Other {
+                other: 2,
+                grid: Vec::new(),
+            }),
+        ]
+    }
+
+    #[query]
+    #[public]
+    async fn grid(&self) -> Vec<Vec<Shape>> {
+        vec![vec![Shape, Shape], vec![Shape]]
     }
 
     #[query]
@@ -507,6 +524,129 @@ async fn no_copy_hides_another_selections_answer() {
         let answer = post(&app, &body).await;
         assert_eq!(answer["data"], data, "{body}: {answer}");
         assert!(!answer.to_string().contains("__nestrs"), "{answer}");
+    }
+}
+
+/// What [`a_list_of_lists_selected_twice_otherwise_is_refused`] answers in place of
+/// `key`'s copies.
+fn unjoined(key: &str) -> String {
+    format!(
+        r#"the operation selects "{key}", a list of lists, more than once at one place with different selections"#
+    )
+}
+
+/// async-graphql 7.2.1 joins a later copy of one response key into the first only
+/// where the first's list items are objects (`insert_value`), so a list of lists
+/// selected twice at one place answered one copy's items whole and lost the other's,
+/// with no error. Such a document is refused before anything runs, naming the key,
+/// a copy below another copy's list included, on `POST`, in a batch and over the
+/// socket.
+#[tokio::test]
+async fn a_list_of_lists_selected_twice_otherwise_is_refused() {
+    let app = boot().await;
+    for (document, key) in [
+        ("{ grid { fine } grid { inner { fine } } }", "grid"),
+        ("{ grid { inner { fine } } grid { fine } }", "grid"),
+        ("{ g: grid { fine } g: grid { broken } }", "g"),
+        ("{ grid { fine } ... { grid { inner { fine } } } }", "grid"),
+        (
+            "{ ...A ...B } fragment A on Query { grid { fine } } \
+             fragment B on Query { grid { inner { fine } } }",
+            "grid",
+        ),
+        (
+            "{ sureShapes { grid { fine } } sureShapes { grid { inner { fine } } } }",
+            "grid",
+        ),
+        (
+            "{ shape { inner { grid { fine } } } shape { inner { grid { broken } } } }",
+            "grid",
+        ),
+        (
+            "{ either { ... on Shape { grid { fine } } } \
+               either { ... on Shape { grid { inner { fine } } } } }",
+            "grid",
+        ),
+    ] {
+        let answer = post(&app, &json!({ "query": document })).await;
+        assert_eq!(answer["data"], Value::Null, "{document}: {answer}");
+        assert_eq!(
+            answer["errors"][0]["message"],
+            unjoined(key),
+            "{document}: {answer}"
+        );
+        assert_eq!(
+            answer["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
+            "{document}: {answer}"
+        );
+    }
+    let refused = "{ grid { fine } grid { inner { fine } } }";
+    let answer = post(
+        &app,
+        &json!([{ "query": refused }, { "query": "{ grid { fine } }" }]),
+    )
+    .await;
+    assert_eq!(
+        answer[0]["errors"][0]["message"],
+        unjoined("grid"),
+        "{answer}"
+    );
+    assert_eq!(
+        answer[1],
+        json!({ "data": { "grid": [[{ "fine": 1 }, { "fine": 1 }], [{ "fine": 1 }]] } }),
+        "{answer}"
+    );
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    socket.subscribe("grid", refused);
+    let item = socket.next_item("grid").await.expect("the answer");
+    assert_eq!(item["errors"][0]["message"], unjoined("grid"), "{item}");
+}
+
+/// What no copy loses answers as GraphQL §6.3.2 merges it: copies alike, one a
+/// directive leaves out, copies under conditions no one value meets, a list of
+/// lists selected once beside another copy of its parent, and a list of objects.
+#[tokio::test]
+async fn a_list_of_lists_no_copy_loses_answers_its_copies() {
+    let app = boot().await;
+    let grid = json!([[{ "fine": 1 }, { "fine": 1 }], [{ "fine": 1 }]]);
+    for (document, data) in [
+        ("{ grid { fine } }", json!({ "grid": grid })),
+        ("{ grid { fine } grid { fine } }", json!({ "grid": grid })),
+        (
+            "{ ...A ...A } fragment A on Query { grid { fine } }",
+            json!({ "grid": grid }),
+        ),
+        (
+            "{ ...A ...B } fragment A on Query { grid { fine } } \
+             fragment B on Query { grid { fine } }",
+            json!({ "grid": grid }),
+        ),
+        (
+            "{ grid { fine } grid @skip(if: true) { inner { fine } } }",
+            json!({ "grid": grid }),
+        ),
+        (
+            "{ eithers { ... on Shape { grid { fine } } ... on Other { grid { other } } } }",
+            json!({ "eithers": [{ "grid": [[{ "fine": 1 }]] }, { "grid": [] }] }),
+        ),
+        (
+            "{ sureShapes { fine } sureShapes { grid { fine } } }",
+            json!({ "sureShapes": [
+                { "fine": 1, "grid": [[{ "fine": 1 }]] },
+                { "fine": 1, "grid": [[{ "fine": 1 }]] },
+            ] }),
+        ),
+        (
+            "{ sureShapes { fine } sureShapes { inner { fine } } }",
+            json!({ "sureShapes": [
+                { "fine": 1, "inner": { "fine": 1 } },
+                { "fine": 1, "inner": { "fine": 1 } },
+            ] }),
+        ),
+    ] {
+        let answer = post(&app, &json!({ "query": document })).await;
+        assert_eq!(answer, json!({ "data": data }), "{document}");
     }
 }
 

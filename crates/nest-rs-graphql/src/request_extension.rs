@@ -4,8 +4,8 @@
 //! one that does would cost ([`document_cost`]), gives each object that could answer
 //! no key one of its own ([`OwnKey`]), seeds the request's loaders and what it files
 //! once ([`FiledOnce`]), and once validation passed answers the refusal the
-//! operation's read left ([`OperationRefusal`]). No other hook sits between
-//! validation and execution.
+//! operation's read or that key's left ([`OperationRefusal`]). No other hook sits
+//! between validation and execution.
 
 use std::sync::Arc;
 
@@ -79,7 +79,9 @@ impl Extension for RequestExtension {
         let registry = &ctx.schema_env.registry;
         // The operation's read cached a parse that passed; one that failed runs again
         // here, and the refusal says only what this one left. Its objects are given
-        // their keys once its cost is counted, which bounds what that read expands.
+        // their keys once its cost is counted, which bounds what that read expands,
+        // and copies no key joins are refused once validation passed.
+        let mut unjoined = None;
         let read = match request.parsed_query() {
             Ok(document) => match document_cost::refusal(
                 document,
@@ -92,7 +94,12 @@ impl Extension for RequestExtension {
                 None => Ok(own_key
                     .zip(selected_operation(document, operation.as_deref()))
                     .and_then(|(own_key, (_, selected))| {
-                        own_key.give(document, &selected.node, registry, &variables)
+                        own_key
+                            .give(document, &selected.node, registry, &variables)
+                            .unwrap_or_else(|refusal| {
+                                unjoined = Some(refusal);
+                                None
+                            })
                     })),
             },
             Err(refused) => Err(unparsed(refused)),
@@ -101,6 +108,11 @@ impl Extension for RequestExtension {
         request.operation_name = operation;
         if let Some(given) = read? {
             request.set_parsed_query(given);
+        }
+        if let Some(refusal) = unjoined
+            && held_by::<OperationRefusal>(&request.data).is_none()
+        {
+            request.data.insert(OperationRefusal::new(refusal));
         }
         next.run(ctx, self.seeds.seed(request).data(FiledOnce::default()))
             .await

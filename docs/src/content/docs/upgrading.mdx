@@ -1407,6 +1407,11 @@ lists what the boot, a log or the wire shows when one is missed.
   every field failed, reads what each copy selects, where whichever finished first hid
   the other. A client reading that `null` as "no object" reads the value's `None`
   alone now.
+- **A GraphQL document selecting a list of lists twice at one place with different
+  selections**, `{ grid { a } grid { b } }` with `grid: [[Cell!]!]!`, or two fragments
+  each selecting `grid` otherwise, reads an `INVALID_ARGUMENT` refusal naming `grid` and
+  runs nothing, where it answered one copy's cells and lost the other's. Select it once,
+  the copies' fields together: `{ grid { a b } }`.
 - **A GraphQL document spreading its fragments again past `max_complexity`** reads `Query
   is too complex.` before anything walks it, a `__typename` at the end of them included,
   which was answered; so does one whose arguments copy or scan more than twice what the

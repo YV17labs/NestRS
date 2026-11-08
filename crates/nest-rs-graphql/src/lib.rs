@@ -17,7 +17,9 @@
 //!   field's selections to finish kept, a request's cached parse executed, and a
 //!   mutation root field reading the errors filed so far off its context;
 //! - `src/own_key.rs`: `null` for an object with no key, what finishes after a
-//!   `null` dropped (`insert_value`), `__typename` answered under its response key
+//!   `null` dropped, a later copy's list items joined only where they are objects
+//!   (`insert_value`, so a list of lists selected twice with different selections
+//!   is refused), `__typename` answered under its response key
 //!   by `Fields::add_set` and scored nothing, a type condition applied to the
 //!   concrete type, an interface it implements or the type its position resolves
 //!   (so one on a union only where that union is resolved, never to a member

@@ -2179,6 +2179,11 @@ lists what the boot, a log or the wire shows when one is missed.
   caller behind it read as the proxy, one throttler bucket for all, and files
   `forwarding header unreadable — no client is believed` naming the header.
   Write each hop as RFC 7239 §6 spells a node (`for="[2001:db8::1]:4711"`).
+- **A listed proxy whose headers name two clients** — `X-Real-IP` written from
+  its peer beside an `X-Forwarded-For` a hop off the list wrote before it — has
+  every caller behind it read as the proxy, and files `forwarding headers
+  disagree about the client — neither is believed`. List that hop, or have the
+  proxy append to `X-Forwarded-For` (nginx's `$proxy_add_x_forwarded_for`).
 - **A cap or a deadline of `0`** — `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`,
   `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS`, an idle or send timeout — fails the
   boot naming the variable. A replica at its connection cap files

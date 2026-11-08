@@ -205,21 +205,23 @@ forwarding header when that peer is a proxy you listed:
 3. The peer **is** a trusted proxy ⇒ the client is the **rightmost** hop that
    is not itself a trusted proxy, read from `Forwarded` (RFC 7239) and
    `X-Forwarded-For`, then `X-Real-IP`; `forwarded = true`. If every hop is a trusted
-   proxy, the outermost answers. If the two chains name different clients neither is
+   proxy, the outermost answers. If two headers name different clients none is
    believed, and if no header names a usable hop the proxy's own address answers, both
    with `forwarded = false`. Hops parse as a bare
    IP, `IP:port`, or a bracketed IPv6 (`[ip]`, `[ip]:port`); `unknown` or an
    obfuscated `_id` names no address, so where it stands for the client, the
    proxy withheld it and no client is named.
 
-A chain is read whole or not at all. One the parser cannot read — a quote no
+A header is read whole or not at all. One the parser cannot read — a quote no
 quote closes, a pair with no `=`, a hop that is no address — names no client,
 whatever the other headers say: the proxy's own address answers, and one `warn`
 on `nest_rs::http`, filed inside the request, names the header, never what it
 held. A quote left open is the reason: a proxy appending a quoted value to a
 caller's line would close the caller's quote, and the caller's own hop would
-read as the rightmost. `X-Real-IP`, one hop in no order, is read only where
-neither chain names a client, and refused the same way there.
+read as the rightmost. `X-Real-IP`, one hop in no order, answers alone only
+where neither chain names a client; beside a chain, it names that chain's client
+or neither is believed. A proxy writing `X-Real-IP` and passing the caller's own
+`X-Forwarded-For` through would otherwise let the caller choose.
 
 With no trusted proxy configured — the default — step 2 always wins, so
 `forwarded` stays `false` and a header a caller sets changes nothing.

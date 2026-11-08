@@ -118,8 +118,8 @@ async fn a_composition_root_pins_an_address_and_a_range() {
 }
 
 /// Resolved before the request's trace exists, a refusal is filed inside it: an
-/// operator joins it to its request, for a chain read two ways and for two chains
-/// naming different clients alike.
+/// operator joins it to its request, for a chain read two ways and for two
+/// headers naming different clients alike.
 #[tokio::test]
 async fn a_refusal_is_filed_inside_the_request_it_refused_a_client_for() {
     let app = TestApp::builder()
@@ -139,6 +139,13 @@ async fn a_refusal_is_filed_inside_the_request_it_refused_a_client_for() {
             &[
                 ("forwarded", "for=198.51.100.99"),
                 ("x-forwarded-for", "203.0.113.7"),
+            ],
+            "forwarding headers disagree about the client — neither is believed",
+        ),
+        (
+            &[
+                ("x-forwarded-for", "198.51.100.99"),
+                ("x-real-ip", "203.0.113.7"),
             ],
             "forwarding headers disagree about the client — neither is believed",
         ),
@@ -209,6 +216,10 @@ async fn a_request_whose_headers_name_no_client_is_said_so_once() {
         &[
             ("forwarded", "for=198.51.100.99"),
             ("x-forwarded-for", "203.0.113.7"),
+        ],
+        &[
+            ("x-forwarded-for", "198.51.100.99"),
+            ("x-real-ip", "203.0.113.7"),
         ],
     ] {
         assert_eq!(refusals_filed(headers).await, 1, "{headers:?}");

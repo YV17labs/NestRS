@@ -13,11 +13,14 @@
 //!    itself a trusted proxy ([`ClientOrigin::Forwarded`]): a proxy appends, a
 //!    caller can only prepend, on one field line or over several.
 //!
-//! A chain is read whole or not at all: one the parser cannot read, or a client
-//! position holding a node the proxy withheld (`unknown`, an obfuscated `_id`),
-//! names no client whatever the other headers say, and the trusted proxy stands
-//! ([`ClientOrigin::TrustedProxy`]). `X-Real-IP`, one hop in no order, is read
-//! only where neither chain names a client, and refused the same way there.
+//! A header is read whole or not at all, and the headers agree or none is
+//! believed: one the parser cannot read, a client position holding a node the
+//! proxy withheld (`unknown`, an obfuscated `_id`), or two headers naming
+//! different clients name no client whatever the others say, and the trusted
+//! proxy stands ([`ClientOrigin::TrustedProxy`]). `X-Real-IP`, one hop in no
+//! order, answers alone only where neither chain names a client: behind a proxy
+//! writing one header and passing the others through, the one a caller wrote
+//! would otherwise choose.
 //!
 //! An IPv4-mapped address, what a dual-stack listener reports an IPv4 peer as,
 //! is the IPv4 address it carries, in the peer, in a hop and in the answer.
@@ -53,7 +56,7 @@ pub enum ClientOrigin {
     /// because the direct peer is a configured trusted proxy.
     Forwarded(IpAddr),
     /// The peer is a trusted proxy but forwarded no usable client address: none,
-    /// one it withheld, two chains naming different ones, or a header the
+    /// one it withheld, two headers naming different ones, or a header the
     /// parser cannot read whole. Every caller behind it is indistinguishable.
     TrustedProxy(IpAddr),
     /// No peer address at all — a unix socket, or a proxy that hides it.
@@ -182,8 +185,8 @@ impl ClientOrigin {
         if !lists(trusted_proxies, peer) {
             return (Self::Peer(peer), None);
         }
-        // A chain read two ways is no chain, and decides for every header:
-        // ignored alone, it would leave the answer to the one a caller wrote.
+        // A header read two ways names no client, and decides for every
+        // header: ignored alone, it would leave the answer to one a caller wrote.
         let refused = |reason| (Self::TrustedProxy(peer), Some(Refusal { peer, reason }));
 
         let Ok(standard) = Chain::of(
@@ -206,38 +209,44 @@ impl ClientOrigin {
         ) else {
             return refused(Reason::Unreadable(X_FORWARDED_FOR));
         };
-        match (standard.client, de_facto.client) {
-            // Two chains that disagree are both refused (RFC 7239 §8.1): behind
-            // a proxy that appends `X-Forwarded-For` and passes `Forwarded`
-            // through (nginx's default), a caller's own `Forwarded` would
-            // outrank the real hop.
-            (Some(Hop::Address(standard)), Some(Hop::Address(de_facto)))
-                if standard != de_facto =>
-            {
-                return refused(Reason::Disagreement);
-            }
-            // The hop facing the client withheld it: what sits left of it, or
-            // in the other header, is the caller's own to write.
-            (Some(Hop::Withheld), _) | (_, Some(Hop::Withheld)) => {
-                return (Self::TrustedProxy(peer), None);
-            }
-            (Some(Hop::Address(client)), _) | (None, Some(Hop::Address(client))) => {
-                return (Self::Forwarded(client), None);
-            }
-            (None, None) => {}
-        }
-        // nginx's single-hop form, after the chains: it carries no ordering.
-        match real_ip
+        // nginx's single-hop form: one hop in no order, read whole like the
+        // chains. A hop of ours names no client.
+        let single = match real_ip
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .map(Hop::parse)
         {
             Some(Err(Unreadable)) => return refused(Reason::Unreadable(X_REAL_IP)),
-            Some(Ok(Hop::Withheld)) => return (Self::TrustedProxy(peer), None),
-            Some(Ok(Hop::Address(ip))) if !lists(trusted_proxies, ip) => {
-                return (Self::Forwarded(ip), None);
+            Some(Ok(Hop::Address(ip))) if lists(trusted_proxies, ip) => None,
+            Some(Ok(hop)) => Some(hop),
+            None => None,
+        };
+        let mut client = None;
+        let mut withheld = false;
+        for hop in [standard.client, de_facto.client, single]
+            .into_iter()
+            .flatten()
+        {
+            match hop {
+                // Headers naming different clients are all refused (RFC 7239
+                // §8.1): behind a proxy writing one and passing the others
+                // through (nginx appending `X-Forwarded-For` beside a caller's
+                // `Forwarded`, or writing `X-Real-IP` beside a caller's
+                // `X-Forwarded-For`), the one a caller wrote would decide.
+                Hop::Address(ip) if client.is_some_and(|named| named != ip) => {
+                    return refused(Reason::Disagreement);
+                }
+                Hop::Address(ip) => client = Some(ip),
+                Hop::Withheld => withheld = true,
             }
-            Some(Ok(Hop::Address(_))) | None => {}
+        }
+        // The hop facing the client withheld it: what sits left of it, or in
+        // another header, is the caller's own to write.
+        if withheld {
+            return (Self::TrustedProxy(peer), None);
+        }
+        if let Some(client) = client {
+            return (Self::Forwarded(client), None);
         }
         // Degenerate: every recorded hop is itself a trusted proxy. The
         // outermost recorded address is still more specific than the peer.
@@ -261,7 +270,7 @@ pub(crate) struct Refusal {
 enum Reason {
     /// The header the parser could not read whole.
     Unreadable(&'static str),
-    /// Two chains naming different clients.
+    /// Two headers naming different clients.
     Disagreement,
 }
 
@@ -582,10 +591,7 @@ mod tests {
             ClientOrigin::TrustedProxy(proxy),
             "a disagreement names no client, so neither header decides",
         );
-        let reported = logs.expect_one(
-            crate::target::HTTP,
-            "forwarding headers disagree about the client — neither is believed",
-        );
+        let reported = logs.expect_one(crate::target::HTTP, DISAGREEMENT);
         assert_eq!(reported.level, "warn");
         assert_eq!(reported.field("peer").as_deref(), Some("10.0.0.1"));
         for claimed in ["198.51.100.9", "203.0.113.7"] {
@@ -746,12 +752,16 @@ mod tests {
 
         let origin = ClientOrigin::resolve(
             None,
-            Some("203.0.113.50"),
+            Some("10.0.0.1"),
             Some("198.51.100.20"),
             Some(proxy),
             &listed(&[proxy]),
         );
-        assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
+        assert_eq!(
+            origin,
+            ClientOrigin::Forwarded(ip("198.51.100.20")),
+            "a chain of the proxies' own names no client",
+        );
 
         let origin = ClientOrigin::resolve(
             None,
@@ -1196,6 +1206,7 @@ mod tests {
     }
 
     const UNREADABLE: &str = "forwarding header unreadable — no client is believed";
+    const DISAGREEMENT: &str = "forwarding headers disagree about the client — neither is believed";
 
     /// A listed peer's head that names no client, the peer standing, and the one
     /// `warn` it filed naming `header`, which quotes none of the head's hops.
@@ -1320,16 +1331,29 @@ mod tests {
         }
     }
 
-    /// `X-Real-IP`, one hop in no order, is read only where neither chain names
-    /// a client: beside a chain the proxy appended to, one that is no node, one
-    /// the proxy withheld or a hop of its own changes nothing and files nothing.
+    /// `X-Real-IP` beside a chain naming the client is read whole and must name
+    /// that client too: behind a proxy that writes `X-Real-IP` and passes the
+    /// caller's chain through, the chain is the caller's, so another client there
+    /// is a disagreement, refused as two chains are. A hop of the proxies' own
+    /// names no client, and changes nothing.
     #[test]
-    fn a_real_ip_beside_a_chain_naming_the_client_is_never_read() {
+    fn a_real_ip_beside_a_chain_names_its_client_or_none_is_believed() {
         let proxy = ip("10.0.0.1");
+        let client = ClientOrigin::Forwarded(ip("203.0.113.7"));
+        let refused = ClientOrigin::TrustedProxy(proxy);
         for (forwarded, forwarded_for) in
             [(Some("for=203.0.113.7"), None), (None, Some("203.0.113.7"))]
         {
-            for real_ip in ["garbage", "\u{FFFD}", "unknown", "198.51.100.99"] {
+            for (real_ip, answer, filed) in [
+                ("203.0.113.7", client, None),
+                ("::ffff:203.0.113.7", client, None),
+                ("10.0.0.1", client, None),
+                ("unknown", refused, None),
+                ("198.51.100.99", refused, Some(DISAGREEMENT)),
+                ("garbage", refused, Some(UNREADABLE)),
+                ("\u{FFFD}", refused, Some(UNREADABLE)),
+            ] {
+                let case = format!("{forwarded:?} {forwarded_for:?} {real_ip:?}");
                 let logs = nest_rs_testing::LogCapture::install();
                 assert_eq!(
                     ClientOrigin::resolve(
@@ -1339,13 +1363,22 @@ mod tests {
                         Some(proxy),
                         &listed(&[proxy]),
                     ),
-                    ClientOrigin::Forwarded(ip("203.0.113.7")),
-                    "{forwarded:?} {forwarded_for:?} {real_ip:?}",
+                    answer,
+                    "{case}",
                 );
-                assert!(
-                    logs.events_at(tracing::Level::WARN).is_empty(),
-                    "{real_ip:?} was read beside a chain naming the client",
-                );
+                let Some(message) = filed else {
+                    let warned = logs.events_at(tracing::Level::WARN);
+                    assert!(warned.is_empty(), "{case}: {warned:?}");
+                    continue;
+                };
+                let line = logs.expect_one(crate::target::HTTP, message);
+                assert_eq!(line.field("peer").as_deref(), Some("10.0.0.1"), "{case}");
+                if message == UNREADABLE {
+                    assert_eq!(line.field("header").as_deref(), Some(X_REAL_IP), "{case}");
+                }
+                for hop in ["198.51.100.99", "203.0.113.7", "garbage"] {
+                    assert!(!logs.quotes(hop), "{case}: {:?}", line.fields);
+                }
             }
         }
     }

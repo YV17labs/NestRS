@@ -178,7 +178,7 @@ The client key is the **direct peer IP** by default — every request
 coming from the same IP shares the same window. If the request arrives
 through a reverse proxy you have listed in
 `<PREFIX>_HTTP__TRUSTED_PROXIES`, the throttler reads the **rightmost** hop that
-is not itself a trusted proxy — from `Forwarded` (RFC 7239), else
+is not itself a trusted proxy — from `Forwarded` (RFC 7239) and
 `X-Forwarded-For`, else `X-Real-IP` — and counts that as the client.
 
 **Rightmost, not leftmost** — and the difference is the whole defence. A proxy
@@ -197,12 +197,14 @@ The rest of the rule:
 - A chain over several field lines is one list, in order: a proxy may add its
   own line after the caller's (RFC 7239 §4), and that line stays the rightmost.
   `X-Real-IP` names one hop, so its last line is the one read.
-- A chain is read whole or not at all. A hop that is no address, bytes no text
-  holds or a quote no quote closes make the header unreadable, and a node the
-  proxy withheld (`unknown`) where the client stands names nobody: either way the
-  request counts against the proxy's own bucket, whatever the other headers say,
-  so no hop a caller wrote becomes its key. `X-Real-IP`, one hop in no order, is
-  read only where neither chain names a client, and refused the same way there.
+- A header is read whole or not at all, and the headers agree or none is
+  believed. A hop that is no address, bytes no text holds or a quote no quote
+  closes make the header unreadable, a node the proxy withheld (`unknown`) where
+  the client stands names nobody, and two headers naming different clients —
+  `X-Real-IP` beside a chain among them — are both refused: each way the request
+  counts against the proxy's own bucket, whatever the other headers say, so no
+  hop a caller wrote becomes its key. Behind a proxy writing `X-Real-IP` alone, a
+  caller rotating its own `X-Forwarded-For` mints no bucket.
 - An entry of `TRUSTED_PROXIES` that is no address or CIDR range, a `/0`, or a
   range with address bits set past its prefix (`10.0.0.1/8`), **aborts the boot**
   naming the variable and the entry's place in the list, never its value — never

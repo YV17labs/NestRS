@@ -141,3 +141,30 @@ whole family too, and the refusal still states a fact, now of what a caller can 
 Refused: **a list holding every globally routable address** (all of the public space, short of a
 private range): it reads IANA's special-purpose registry, which moves, and such a list is written
 range by range, never by accident; it stays the deployment's statement.
+
+## 2026-11-08: `X-Real-IP` names the chain's client, or none is believed
+
+Review of the 2026-11-07 header entry, run through the throttler: behind a listed proxy writing
+`X-Real-IP` (nginx's `proxy_set_header X-Real-IP $remote_addr`, with no `X-Forwarded-For` line) and
+passing the caller's own `X-Forwarded-For` through, five requests rotating that line answered `200`
+five times where the route allows two. The chain named a client, so `X-Real-IP` was never read, and
+the caller chose its bucket. It is the disagreement two chains are already refused on (RFC 7239
+§8.1), for the same reason, with the third header left out. Security decided, revising that entry:
+
+- **The headers a listed peer relays agree, or none is believed.** Beside a chain naming a client, a
+  readable `X-Real-IP` naming another address off the list is a disagreement: the proxy stands, with
+  the one `warn` two chains file. One naming the same client, in any spelling, or a hop of the list
+  changes nothing.
+- **`X-Real-IP` is read whole wherever it is sent**, as the chains are: an unreadable one beside a
+  chain is refused with its `warn`, and `unknown` or an `_id` is a client the proxy withheld. The
+  entry above read it only where no chain named a client, since an unreadable one there can only be a
+  caller's; so can a readable one, and one rule for the three headers is the one a reader keeps.
+
+The cost is the chains' own: a caller sending an `X-Real-IP` of its own through a proxy that passes it
+on counts in that proxy's bucket, which a malformed `X-Forwarded-For` already earned it. A proxy
+writing `X-Real-IP` beside an `X-Forwarded-For` a hop off the list wrote before it reads every caller
+as the proxy, said by that `warn`: the deployment lists that hop, or has the proxy append.
+
+Refused: **preferring `X-Real-IP` over a chain**, which would answer right behind the nginx above and
+let the caller choose behind a proxy appending to `X-Forwarded-For` and passing `X-Real-IP` on: no
+header says which one the proxy wrote.

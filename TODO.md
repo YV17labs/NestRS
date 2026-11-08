@@ -239,8 +239,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   every framework error holding one says it by its SQLSTATE, and `?` into a
   `ServiceError` never meets it. Close: `Repo` answering an error of the
   framework's, a break of every service's `?`. *seen*
-- The CLI reads a `CrudService` only in `service.rs` and `services/`;
-  `nestrs lint` skips a file that does not parse. *read*
 - Generated processors, scheduled tasks and listeners are neither compiled
   nor booted by the CLI's replay; the scaffold's `compose.yml` runs nowhere.
   *read*

@@ -25,7 +25,7 @@ pub(crate) fn run(opts: LintOptions) -> CliResult<()> {
             source,
         });
     }
-    if scan.findings.is_empty() {
+    if scan.findings.is_empty() && scan.unparsable.is_empty() {
         println!(
             "  every one of the {} files checked is named for what it declares",
             scan.checked,
@@ -37,10 +37,38 @@ pub(crate) fn run(opts: LintOptions) -> CliResult<()> {
         println!("  {finding}");
         println!();
     }
+    for (path, refused) in &scan.unparsable {
+        // The parser counts columns from zero; a location reads from one, as
+        // rustc writes it.
+        let at = refused.span().start();
+        println!(
+            "  {}:{}:{}\n    does not parse: {refused}\n    \
+             a file the parser refuses is a file this rule could not judge",
+            path.display(),
+            at.line,
+            at.column + 1,
+        );
+        println!();
+    }
+    let mut failed = Vec::new();
     let n = scan.findings.len();
-    Err(CliError::Anyhow(anyhow::anyhow!(
-        "{n} of {} files {} named for a slot rather than a subject",
-        scan.checked,
-        if n == 1 { "is" } else { "are" },
-    )))
+    if n > 0 {
+        failed.push(format!(
+            "{n} of {} files {} named for a slot rather than a subject",
+            scan.checked,
+            if n == 1 { "is" } else { "are" },
+        ));
+    }
+    let unparsable = scan.unparsable.len();
+    if unparsable > 0 {
+        failed.push(format!(
+            "{unparsable} {} not parse",
+            if unparsable == 1 {
+                "file does"
+            } else {
+                "files do"
+            },
+        ));
+    }
+    Err(CliError::Anyhow(anyhow::anyhow!("{}", failed.join("; "))))
 }

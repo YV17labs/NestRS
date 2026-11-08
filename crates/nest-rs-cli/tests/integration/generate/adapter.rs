@@ -1395,17 +1395,25 @@ fn generate_graphql_tells_an_entity_with_no_expose_from_one_already_flagged() {
 
 /// A port file that does not parse says nothing of what the port holds, so no
 /// adapter is written over a guess: the run names the file and its line, and leaves
-/// the tree as it found it.
+/// the tree as it found it — at any depth the port's module tree declares it.
 #[test]
 fn an_adapter_refuses_a_port_file_that_does_not_parse() {
-    for broken in ["service.rs", "mod.rs", "services/articles.rs"] {
+    for broken in [
+        "service.rs",
+        "mod.rs",
+        "services/articles.rs",
+        "services/mod.rs",
+    ] {
         let dir = tempfile::tempdir().unwrap();
         write_fake_workspace(dir.path());
         let path = dir.path().to_str().unwrap();
         run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
-        let file = dir.path().join("crates/features/src/posts").join(broken);
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let source = fs::read_to_string(&file).unwrap_or_default();
+        let port = dir.path().join("crates/features/src/posts");
+        if broken.starts_with("services/") {
+            move_service_into_a_folder(&port);
+        }
+        let file = port.join(broken);
+        let source = fs::read_to_string(&file).unwrap();
         let line = source.lines().count() + 1;
         fs::write(&file, format!("{source}fn half(\n")).unwrap();
         let before = files_under(dir.path());
@@ -1445,4 +1453,60 @@ fn an_adapter_reads_a_crud_service_in_the_services_folder() {
     assert!(entity.contains("graphql,"), "{entity}");
     let tool = fs::read_to_string(port.join("mcp/tool.rs")).unwrap();
     assert!(tool.contains("ArticlesService"), "{tool}");
+}
+
+/// A `CrudService` is read wherever the port's module tree declares it: in a
+/// custom provider's file beside the port's own, as the demo's posts hold one,
+/// the port takes the `#[crud]` template under the service's name.
+#[test]
+fn an_adapter_reads_a_crud_service_wherever_the_port_declares_it() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    let port = dir.path().join("crates/features/src/posts");
+    fs::rename(port.join("service.rs"), port.join("store.rs")).unwrap();
+    for file in ["mod.rs", "entity.rs"] {
+        let moved = fs::read_to_string(port.join(file))
+            .unwrap()
+            .replace("mod service;", "mod store;")
+            .replace("service::PostsService", "store::PostsService");
+        fs::write(port.join(file), moved).unwrap();
+    }
+
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    let resolver = fs::read_to_string(port.join("graphql/resolver.rs")).unwrap();
+    assert!(
+        resolver.contains("#[crud(service = PostsService)]"),
+        "{resolver}"
+    );
+    assert!(!port.join("subject.rs").exists());
+    let entity = fs::read_to_string(port.join("entity.rs")).unwrap();
+    assert!(entity.contains("graphql,"), "{entity}");
+}
+
+/// A file no `mod` declares is no part of the crate, as the compiler reads it:
+/// its `CrudService` is not the port's, and its parse is not the run's.
+#[test]
+fn an_adapter_reads_no_file_the_port_does_not_declare() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    let port = dir.path().join("crates/features/src/posts");
+    fs::create_dir_all(port.join("services")).unwrap();
+    fs::write(
+        port.join("services/stale.rs"),
+        "impl CrudService for StaleService { type Entity = super::super::entity::Entity; }
+fn half(
+",
+    )
+    .unwrap();
+
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    let resolver = fs::read_to_string(port.join("graphql/resolver.rs")).unwrap();
+    assert!(!resolver.contains("StaleService"), "{resolver}");
+    assert!(!resolver.contains("#[crud("), "{resolver}");
 }

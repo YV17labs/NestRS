@@ -1,13 +1,14 @@
 //! What a port's source says an adapter over it may name: its `CrudService`, the
 //! entity that service reads, and whether `crate::<port>::Entity` resolves. Read
-//! with `syn`, since a `use` tree names a file by more spellings than a text
+//! with `syn` over every file the port's module tree declares, as the compiler
+//! reads it, since a `use` tree names a file by more spellings than a text
 //! search follows.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use syn::{ImplItem, Item, Type, UseTree, Visibility};
+use syn::{Expr, ImplItem, Item, Lit, Meta, Type, UseTree, Visibility};
 
-use super::support::list_dir;
 use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::Names;
 
@@ -30,29 +31,36 @@ pub(super) struct Port {
 }
 
 impl Port {
-    /// Read the port `names` at `root`; of several services, the one named for
-    /// it, else the first by file name.
+    /// Read the port `names` at `root`, every module its `mod.rs` declares at any
+    /// depth; of several services, the one named for it, else the first by
+    /// module path.
     pub(super) fn read(root: &Path, names: &Names) -> CliResult<Self> {
-        let flat = parse(&root.join("mod.rs"))?.and_then(|index| flat_entity(&index, &names.snake));
-        let mut files = vec![root.join("service.rs")];
-        files.extend(
-            list_dir(&root.join("services"))?
-                .into_iter()
-                .filter(|file| file.extension().is_some_and(|e| e == "rs")),
-        );
+        let index_file = root.join("mod.rs");
+        let Some(index) = parse(&index_file)? else {
+            return Ok(Self {
+                crud: None,
+                has_entity: root.join("entity.rs").is_file(),
+            });
+        };
+        let flat = flat_entity(&index, &names.snake);
         let mut found = Vec::new();
-        for file in files {
-            let Some(source) = parse(&file)? else {
-                continue;
-            };
-            for implemented in crud_impls(&source) {
+        for module in tree(&index_file, root, index)? {
+            for implemented in crud_impls(&module.items) {
                 found.push(CrudPort {
                     service: implemented.service,
-                    file: file.clone(),
+                    file: module.file.clone(),
                     entity: implemented
                         .entity
                         .and_then(|named| {
-                            entity_file(&source, &named, &names.snake, flat.as_deref())
+                            entity_file(
+                                &module.items,
+                                &named,
+                                At {
+                                    module: &module.path,
+                                    port: &names.snake,
+                                },
+                                flat.as_deref(),
+                            )
                         })
                         .map(|relative| root.join(relative)),
                 });
@@ -74,15 +82,130 @@ pub(super) fn parse(path: &Path) -> CliResult<Option<syn::File>> {
         .transpose()
 }
 
+/// One module of a port's tree: the file holding it, its path below the port and
+/// its items, an inline module's apart from its parent's.
+struct Module {
+    file: PathBuf,
+    path: Vec<String>,
+    items: Vec<Item>,
+}
+
+/// The modules of the port whose `mod.rs` is `index_file`, parsed as `index`,
+/// its children in `root`: each module it declares, inline or in a file of its
+/// own at any depth, a `#[path]` followed, a file reached twice read once.
+/// A file no `mod` declares is no part of the crate and is not read.
+fn tree(index_file: &Path, root: &Path, index: syn::File) -> CliResult<Vec<Module>> {
+    let mut modules = Vec::new();
+    let mut seen = HashSet::new();
+    seen.insert(canonical(index_file));
+    let mut pending = vec![(
+        Module {
+            file: index_file.to_path_buf(),
+            path: Vec::new(),
+            items: index.items,
+        },
+        root.to_path_buf(),
+        true,
+    )];
+    while let Some((module, children, at_file_root)) = pending.pop() {
+        for item in &module.items {
+            let Item::Mod(declared) = item else {
+                continue;
+            };
+            let name = declared.ident.to_string();
+            let mut path = module.path.clone();
+            path.push(name.clone());
+            if let Some((_, items)) = &declared.content {
+                pending.push((
+                    Module {
+                        file: module.file.clone(),
+                        path,
+                        items: items.clone(),
+                    },
+                    children.join(&name),
+                    false,
+                ));
+                continue;
+            }
+            let file = match path_attribute(&declared.attrs) {
+                Some(relative) if at_file_root => {
+                    module.file.parent().unwrap_or(&children).join(relative)
+                }
+                Some(relative) => children.join(relative),
+                None => {
+                    let flat = children.join(format!("{name}.rs"));
+                    if flat.is_file() {
+                        flat
+                    } else {
+                        children.join(&name).join("mod.rs")
+                    }
+                }
+            };
+            if !seen.insert(canonical(&file)) {
+                continue;
+            }
+            let Some(source) = parse(&file)? else {
+                continue;
+            };
+            // A `#[path]` file owns its directory, as a `mod.rs` does.
+            let below = if declared.attrs.iter().any(is_path_attribute)
+                || file.file_name().is_some_and(|n| n == "mod.rs")
+            {
+                file.parent()
+                    .map_or_else(|| children.join(&name), Path::to_path_buf)
+            } else {
+                children.join(&name)
+            };
+            pending.push((
+                Module {
+                    file,
+                    path,
+                    items: source.items,
+                },
+                below,
+                true,
+            ));
+        }
+        modules.push(module);
+    }
+    modules.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(modules)
+}
+
+/// `path`, resolved where it exists, so two spellings of one file are one.
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn is_path_attribute(attribute: &syn::Attribute) -> bool {
+    attribute.path().is_ident("path")
+}
+
+/// The file a `#[path = "…"]` names, relative to where it is resolved.
+fn path_attribute(attributes: &[syn::Attribute]) -> Option<PathBuf> {
+    attributes
+        .iter()
+        .filter(|attribute| is_path_attribute(attribute))
+        .find_map(|attribute| match &attribute.meta {
+            Meta::NameValue(named) => match &named.value {
+                Expr::Lit(literal) => match &literal.lit {
+                    Lit::Str(path) => Some(PathBuf::from(path.value())),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        })
+}
+
 /// One `impl CrudService for <service>`, and the path its `type Entity` spells.
 struct CrudImpl {
     service: String,
     entity: Option<Vec<String>>,
 }
 
-fn crud_impls(source: &syn::File) -> Vec<CrudImpl> {
-    source
-        .items
+fn crud_impls(items: &[Item]) -> Vec<CrudImpl> {
+    items
         .iter()
         .filter_map(|item| {
             let Item::Impl(implemented) = item else {
@@ -126,7 +249,7 @@ struct Leaf {
     public: bool,
 }
 
-fn leaves(source: &syn::File) -> Vec<Leaf> {
+fn leaves(items: &[Item]) -> Vec<Leaf> {
     fn walk(tree: &UseTree, path: &mut Vec<String>, public: bool, out: &mut Vec<Leaf>) {
         let mut leaf = |item: Option<String>, binds: Option<String>| {
             out.push(Leaf {
@@ -160,7 +283,7 @@ fn leaves(source: &syn::File) -> Vec<Leaf> {
         }
     }
     let mut out = Vec::new();
-    for item in &source.items {
+    for item in items {
         if let Item::Use(item) = item {
             let public = matches!(item.vis, Visibility::Public(_));
             walk(&item.tree, &mut Vec::new(), public, &mut out);
@@ -169,51 +292,71 @@ fn leaves(source: &syn::File) -> Vec<Leaf> {
     out
 }
 
-/// The file the entity `named` in `source` lands in, relative to the port `snake`:
-/// `flat` when its path reaches the port's own `Entity`, which `mod.rs` re-exports,
-/// and none when its path leads out of the port, whose files an adapter alone edits.
+/// Where a path is spelled: the module below the port, and the port's name.
+#[derive(Clone, Copy)]
+struct At<'a> {
+    module: &'a [String],
+    port: &'a str,
+}
+
+/// The file the entity `named` in a module's `items` lands in, relative to the
+/// port: `flat` when its path reaches the port's own `Entity`, which `mod.rs`
+/// re-exports, and none when its path leads out of the port, whose files an
+/// adapter alone edits.
 fn entity_file(
-    source: &syn::File,
+    items: &[Item],
     named: &[String],
-    snake: &str,
+    at: At<'_>,
     flat: Option<&Path>,
 ) -> Option<PathBuf> {
-    let (path, item) = origin(source, named, snake)?;
-    let inside = inside_port(&path, snake)?;
-    module_file(inside).or_else(|| {
+    let (path, item) = origin(items, named, at)?;
+    let inside = inside_port(&path, at)?;
+    module_file(&inside).or_else(|| {
         flat.filter(|_| item == "Entity" && inside.is_empty())
             .map(Path::to_path_buf)
     })
 }
 
-/// The module path `source` reads the entity `named` from, and the item's name
+/// The module path `items` read the entity `named` from, and the item's name
 /// there: `named`'s own path, or the `use` binding its one word, or else a glob,
 /// which names no word.
-fn origin(source: &syn::File, named: &[String], snake: &str) -> Option<(Vec<String>, String)> {
+fn origin(items: &[Item], named: &[String], at: At<'_>) -> Option<(Vec<String>, String)> {
     let (item, path) = named.split_last()?;
     if !path.is_empty() {
         return Some((path.to_vec(), item.clone()));
     }
-    let leaves = leaves(source);
+    let leaves = leaves(items);
     if let Some(leaf) = leaves.iter().find(|leaf| leaf.binds.as_ref() == Some(item)) {
         return Some((leaf.path.clone(), leaf.item.clone()?));
     }
     let globs = || leaves.iter().filter(|leaf| leaf.binds.is_none());
     globs()
-        .find(|leaf| {
-            inside_port(&leaf.path, snake).is_some_and(|in_it| module_file(in_it).is_some())
-        })
+        .find(|leaf| inside_port(&leaf.path, at).is_some_and(|in_it| module_file(&in_it).is_some()))
         .or_else(|| globs().next())
         .map(|leaf| (leaf.path.clone(), item.clone()))
 }
 
-/// What `path`, spelled in a file below the port `snake`, names inside it: what
-/// follows `super…` or `crate::<port>`, and `None` for a path leading out of it.
-fn inside_port<'a>(path: &'a [String], snake: &str) -> Option<&'a [String]> {
+/// What `path`, spelled in the module `at`, names inside the port, from its
+/// root: `crate::<port>…`, or `self` and each `super` resolved from where it is
+/// spelled; `None` for a path leading out of the port.
+fn inside_port(path: &[String], at: At<'_>) -> Option<Vec<String>> {
     match path {
-        [root, port, inside @ ..] if root == "crate" && port == snake => Some(inside),
-        [first, ..] if first == "super" => {
-            Some(&path[path.iter().take_while(|word| *word == "super").count()..])
+        [root, port, inside @ ..] if root == "crate" && port == at.port => Some(inside.to_vec()),
+        [first, ..] if first == "super" || first == "self" => {
+            let mut resolved = at.module.to_vec();
+            let mut rest = path;
+            while let [word, tail @ ..] = rest {
+                match word.as_str() {
+                    "super" => {
+                        resolved.pop()?;
+                    }
+                    "self" => {}
+                    _ => break,
+                }
+                rest = tail;
+            }
+            resolved.extend(rest.iter().cloned());
+            Some(resolved)
         }
         _ => None,
     }
@@ -235,7 +378,7 @@ fn module_file(inside: &[String]) -> Option<PathBuf> {
 /// named bare, behind `self` or behind `crate::<port>`: what `crate::<port>::Entity`
 /// names, and `None` when it names nothing.
 fn flat_entity(index: &syn::File, snake: &str) -> Option<PathBuf> {
-    leaves(index)
+    leaves(&index.items)
         .into_iter()
         .filter(|leaf| leaf.public && leaf.binds.as_deref().is_none_or(|word| word == "Entity"))
         .find_map(|leaf| {
@@ -256,13 +399,27 @@ mod tests {
     }
 
     /// The service of `source`'s `CrudService`, and the file its entity lands in,
-    /// on a port named `posts` whose flat `Entity` comes from `entity.rs`.
+    /// spelled in `service.rs` of a port named `posts` whose flat `Entity` comes
+    /// from `entity.rs`.
     fn crud(source: &str) -> (String, Option<PathBuf>) {
+        crud_in(&["service"], source)
+    }
+
+    /// [`crud`], spelled in the module `module` below the port.
+    fn crud_in(module: &[&str], source: &str) -> (String, Option<PathBuf>) {
         let source = file(source);
-        let implemented = crud_impls(&source).into_iter().next().expect("an impl");
+        let module: Vec<String> = module.iter().map(|word| (*word).to_owned()).collect();
+        let at = At {
+            module: &module,
+            port: "posts",
+        };
+        let implemented = crud_impls(&source.items)
+            .into_iter()
+            .next()
+            .expect("an impl");
         let entity = implemented
             .entity
-            .and_then(|named| entity_file(&source, &named, "posts", Some(Path::new("entity.rs"))));
+            .and_then(|named| entity_file(&source.items, &named, at, Some(Path::new("entity.rs"))));
         (implemented.service, entity)
     }
 
@@ -288,11 +445,42 @@ mod tests {
 
     #[test]
     fn a_service_in_a_folder_reads_a_level_further_up() {
-        let (_, entity) = crud(
+        let (_, entity) = crud_in(
+            &["services", "articles"],
             "use super::super::entities::post::Entity;\n\
              impl CrudService for ArticlesService { type Entity = Entity; }\n",
         );
         assert_eq!(entity, Some(PathBuf::from("entities/post.rs")));
+    }
+
+    /// A `super` climbs from where it is spelled: from `services/articles.rs`
+    /// one level up is the folder, whose `entity` is no file of the port's.
+    #[test]
+    fn a_super_climbs_from_the_module_it_is_spelled_in() {
+        for (module, source, expected) in [
+            (
+                &["services", "articles"][..],
+                "use super::entity::Entity;\nimpl CrudService for S { type Entity = Entity; }\n",
+                None,
+            ),
+            (
+                &["store"][..],
+                "use self::super::entity::Entity;\nimpl CrudService for S { type Entity = Entity; }\n",
+                Some(PathBuf::from("entity.rs")),
+            ),
+            (
+                &[][..],
+                "use super::entity::Entity;\nimpl CrudService for S { type Entity = Entity; }\n",
+                None,
+            ),
+            (
+                &[][..],
+                "impl CrudService for S { type Entity = self::entity::Entity; }\n",
+                Some(PathBuf::from("entity.rs")),
+            ),
+        ] {
+            assert_eq!(crud_in(module, source).1, expected, "{module:?}: {source}");
+        }
     }
 
     #[test]
@@ -341,10 +529,86 @@ mod tests {
         }
     }
 
+    /// Every module the port's tree declares, by the path the compiler gives it:
+    /// a file beside `mod.rs`, a folder's `mod.rs`, a file owning a folder, an
+    /// inline module, a `#[path]`; a file no `mod` names is none of them.
+    #[test]
+    fn the_tree_is_every_module_the_port_declares_and_nothing_else() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let root = dir.path();
+        let write = |relative: &str, source: &str| {
+            let file = root.join(relative);
+            std::fs::create_dir_all(file.parent().expect("a parent")).expect("its folder");
+            std::fs::write(file, source).expect("written");
+        };
+        write(
+            "mod.rs",
+            "mod store;\nmod services;\nmod nested;\n#[path = \"legacy/writer.rs\"]\nmod writer;\n\
+             mod inline {\n    mod deeper;\n}\n",
+        );
+        write("store.rs", "");
+        write("services.rs", "mod articles;\n");
+        write("services/articles.rs", "");
+        write("nested/mod.rs", "mod inner;\n");
+        write("nested/inner.rs", "");
+        write("legacy/writer.rs", "mod part;\n");
+        write("legacy/part.rs", "");
+        write("inline/deeper.rs", "");
+        write("stray.rs", "fn half(\n");
+
+        let index = parse(&root.join("mod.rs"))
+            .expect("parses")
+            .expect("present");
+        let modules = tree(&root.join("mod.rs"), root, index).expect("the tree reads");
+        let read: Vec<(String, PathBuf)> = modules
+            .iter()
+            .map(|module| {
+                (
+                    module.path.join("::"),
+                    module.file.strip_prefix(root).expect("below").to_path_buf(),
+                )
+            })
+            .collect();
+        let expected: Vec<(String, PathBuf)> = [
+            ("", "mod.rs"),
+            ("inline", "mod.rs"),
+            ("inline::deeper", "inline/deeper.rs"),
+            ("nested", "nested/mod.rs"),
+            ("nested::inner", "nested/inner.rs"),
+            ("services", "services.rs"),
+            ("services::articles", "services/articles.rs"),
+            ("store", "store.rs"),
+            ("writer", "legacy/writer.rs"),
+            ("writer::part", "legacy/part.rs"),
+        ]
+        .into_iter()
+        .map(|(path, file)| (path.to_owned(), PathBuf::from(file)))
+        .collect();
+        assert_eq!(read, expected);
+    }
+
+    #[test]
+    fn a_crud_service_in_an_inline_module_is_read_where_it_is_spelled() {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        std::fs::write(
+            dir.path().join("mod.rs"),
+            "mod entity;\npub use entity::*;\nmod write {\n    \
+             impl CrudService for PostsService { type Entity = super::entity::Entity; }\n}\n",
+        )
+        .expect("written");
+        std::fs::write(dir.path().join("entity.rs"), "").expect("written");
+
+        let port = Port::read(dir.path(), &Names::parse("posts")).expect("the port reads");
+
+        let crud = port.crud.expect("the inline module's service");
+        assert_eq!(crud.service, "PostsService");
+        assert_eq!(crud.entity, Some(dir.path().join("entity.rs")));
+    }
+
     #[test]
     fn an_impl_of_another_trait_is_no_crud_service() {
         let source = file("impl Creatable for S { type Entity = Entity; }\n");
-        assert!(crud_impls(&source).is_empty());
+        assert!(crud_impls(&source.items).is_empty());
     }
 
     #[test]

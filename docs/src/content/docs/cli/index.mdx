@@ -417,7 +417,9 @@ controller together.
 An adapter generated afterwards reads the same shape. `g mcp` and `g graphql` gate
 on `crate::posts::Entity`, the first entity, and write no `#[subject]` beside it;
 `g graphql` adds the `graphql` flag to the entity your `CrudService` names, wherever
-it moved to. When the service's source leads to no file of the port, or that file
+it moved to. The service is read wherever the port's module tree declares it —
+`service.rs`, `services/`, a provider's file beside them — and a file no `mod`
+declares is not read, as the compiler reads none. When the service's source leads to no file of the port, or that file
 holds no `#[expose(...)]`, the run says so in its next steps, and the flag is yours
 to add. A port file that does not parse refuses the run, naming its line, with
 nothing written.
@@ -530,8 +532,9 @@ namespace that owes no pairing at all: `queue/consume.rs` exporting
 Files a table already names — `service.rs`, `controller.rs`, `registry.rs` —
 are named by that table and are not this rule's business.
 
-It exits non-zero on a finding, so it belongs in CI: the scaffolded `lint`
-recipe already runs it, and `nestrs run lint` is the front door.
+It exits non-zero on a finding, and on a file it cannot parse, named by its line
+and column — a file left unparsed is one left unjudged — so it belongs in CI: the
+scaffolded `lint` recipe already runs it, and `nestrs run lint` is the front door.
 
 The demo holds itself to it through the same code: its `lint` recipe runs the tree's
 `nestrs lint` in CI.

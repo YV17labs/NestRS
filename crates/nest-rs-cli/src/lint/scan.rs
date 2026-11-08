@@ -40,6 +40,10 @@ pub struct Scan {
     /// Every file or directory the walk could not read, with the system's
     /// answer: a file left unread is a file left unjudged.
     pub unreadable: Vec<(PathBuf, std::io::Error)>,
+    /// Every file the rule would judge that Rust's parser refuses, relative to
+    /// the root the scan was given, with where it stopped: a file left unparsed
+    /// is a file left unjudged.
+    pub unparsable: Vec<(PathBuf, syn::Error)>,
 }
 
 /// Walk every `src/` file under `root` and pair each stem against what its file
@@ -48,6 +52,7 @@ pub fn scan(root: &Path) -> Scan {
     let mut out = Scan::default();
     walk(root, root, false, &mut out);
     out.findings.sort_by(|a, b| a.path.cmp(&b.path));
+    out.unparsable.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
 
@@ -110,8 +115,13 @@ fn inspect(path: &Path, root: &Path, out: &mut Scan) {
     };
     // Rust's own parser, not a scan: this crate ships a `pub struct` inside a
     // template string.
-    let Ok(file) = syn::parse_file(&source) else {
-        return;
+    let file = match syn::parse_file(&source) {
+        Ok(file) => file,
+        Err(refused) => {
+            let relative = path.strip_prefix(root).unwrap_or(path).to_path_buf();
+            out.unparsable.push((relative, refused));
+            return;
+        }
     };
 
     let declared: Vec<String> = file
@@ -296,6 +306,23 @@ mod tests {
         );
         assert_eq!(scan.findings.len(), 1);
         assert_eq!(scan.findings[0].path, Path::new("src/audio/subject.rs"));
+    }
+
+    #[test]
+    fn a_file_the_parser_refuses_is_kept_with_where_it_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let scan = scan_one(
+            dir.path(),
+            "connection.rs",
+            "pub struct RedisConnection;\nfn half(\n",
+        );
+        assert_eq!(scan.checked, 0);
+        assert!(scan.findings.is_empty());
+        let [(path, refused)] = scan.unparsable.as_slice() else {
+            panic!("one file refused: {:?}", scan.unparsable);
+        };
+        assert_eq!(path, Path::new("src/connection.rs"));
+        assert_eq!(refused.span().start().line, 2, "the delimiter left open");
     }
 
     #[test]

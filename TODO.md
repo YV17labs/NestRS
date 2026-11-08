@@ -58,8 +58,11 @@ mutual TLS, are dev container environments of their own (`CLAUDE.md`, *Testing*)
   against the base twice, within the larger noise plus 5 % rps or 10 % p99.
   Figures are relative, never for publication.
 - **The first CI run after the push** is the only proof of a fresh
-  `create-bucket.sh`, the dev-services action's `/etc/hosts` mapping, and the
-  default stacks on x86_64.
+  `create-bucket.sh`, the dev-services action's `/etc/hosts` mapping, the
+  default stacks on x86_64, and of three jobs no run has started yet:
+  `Demo`'s `chart` (the render cases, seen green on the host) and `image`
+  (the demo's image), and `Bench`'s `image` for each contestant, whose two
+  NestJS images were never built anywhere.
 - **Postgres mutual TLS never ran live**: `nest-rs-seaorm`'s two `mutual_tls`
   tests. Close: open the `postgres-mutual-tls` dev container environment, set
   `postgres := "mutual-tls"` in `test.just`, `just test e2e`.
@@ -282,8 +285,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 - Five docs pages exceed the 300-line budget (`guards.mdx`,
   `http/configuration.mdx`, `cli/index.mdx`, `testing/e2e.mdx`,
   `schedule/index.mdx`). Close: split each.
-- No CI job builds the demo image, so nothing holds its Dockerfile between
-  runs. Close: a job on `release/**`, at the CI minutes it costs.
 - No run has started the scaffold's `compose.yml`: a unit test reads it as
   YAML against every URL and credential its two profiles boot on, and
   `docker compose config` accepted it by hand (2026-11-08), but its images,

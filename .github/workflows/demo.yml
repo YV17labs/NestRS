@@ -2,13 +2,16 @@
 # Valkey and S3, its chart's render cases — on every change to what its build or
 # its services read: its tree, the framework it builds on by path, the dev
 # container files the services start from. The demo is its own workspace with
-# its own commands; this runs them.
+# its own commands; this runs them. Its image, which the chart deploys, is
+# built on a release branch and a tag alone.
 
 name: Demo
 
 on:
   push:
     branches: [main, 'release/**']
+    # A tag's push reads no `paths`: the image builds whatever the release changed.
+    tags: ['v*.*.*']
     paths: &tree
       - 'demo/**'
       - 'crates/**'
@@ -17,6 +20,7 @@ on:
       - 'rust-toolchain.toml'
       - 'clippy.toml'
       - '.cargo/**'
+      - '.dockerignore'
       - '.github/actions/**'
       - '.github/workflows/demo.yml'
       - '.devcontainer/compose/**'
@@ -42,6 +46,8 @@ env:
 jobs:
   lint:
     name: lint
+    # A tag's commit was checked on its way to the tag; only the image is new there.
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -69,6 +75,7 @@ jobs:
 
   test:
     name: test (unit, integration, doctests, e2e)
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -106,6 +113,7 @@ jobs:
   # each install it refuses because an app could not run on it.
   chart:
     name: chart
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -131,3 +139,19 @@ jobs:
           tool: just@1
       - run: just chart
         working-directory: demo
+
+  # The image the chart deploys, built from `demo/Dockerfile` and never pushed:
+  # no other check holds that file. A cold release build of every app, so it runs
+  # where a release is cut alone.
+  image:
+    name: image
+    if: startsWith(github.ref, 'refs/heads/release/') || github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build --file demo/Dockerfile --tag nestrs-demo:ci .

@@ -112,3 +112,27 @@ until a bump or an `ignore` with its reason settles it.
 **Refused:** `workflow_dispatch` kept for a whole check by hand. `just audit`
 runs it on any checkout, and the pull request's job reads a merge commit's
 first parent, which a dispatched run does not have.
+
+## 2026-11-08 — an image builds where a release is cut, and the bench's on its own change
+
+`demo/Dockerfile` had failed for three months before a release check built it, on
+2026-11-05, and the bench's Rust contestant's as long: nothing builds a Dockerfile
+between two runs. The owner's word of 2026-11-07 asked for what `TODO.md` lists closed, this
+among it; each image is now built, never pushed.
+
+- `demo.yml`'s `image` job builds the demo's image on a release branch's push and a
+  tag's, a tag reading no `paths`; its other jobs skip a tag, whose commit was checked
+  on its way there. A cold release build of five binaries, about 25 runner minutes,
+  so a pull request and `main` do not pay it.
+- `bench.yml` builds each contestant's image on a release branch's push touching
+  `bench/sut/` (or `.dockerignore`), and on nothing else.
+
+**Refused:**
+
+- **The bench's images on a framework change or a tag**: the 2026-10-08 refusal
+  stands — a bench lagging the framework is met at its next change, never as a red
+  release. A bench change answers for its own Dockerfile.
+- **The images on every pull request**: a cold release build per push, for a file
+  that changes a few times a release.
+- **A layer cache in the Actions cache**: it needs an action exposing the runtime
+  token to the build, for minutes a release branch spends a few times a release.

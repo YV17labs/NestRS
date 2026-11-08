@@ -1,0 +1,49 @@
+# The benchmark's contestants, each image built from its Dockerfile and never
+# pushed, on a release branch's change to the bench's own tree. A framework
+# change never runs it: a bench lagging the framework is met at its next change
+# or run, never as a red product build (decisions: ci-on-change).
+
+name: Bench
+
+on:
+  push:
+    branches: ['release/**']
+    paths:
+      - 'bench/sut/**'
+      - '.dockerignore'
+      - '.github/workflows/bench.yml'
+      - '!**.md'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: image (${{ matrix.sut }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The Rust contestant reaches the framework by path, so its context is the root.
+          - sut: nestrs
+            context: .
+          - sut: nestjs-express
+            context: bench/sut/nestjs-express
+          - sut: nestjs-fastify
+            context: bench/sut/nestjs-fastify
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          SUT: ${{ matrix.sut }}
+          CONTEXT: ${{ matrix.context }}
+        run: docker build --file "bench/sut/$SUT/Dockerfile" --tag "nestrs-bench-$SUT:ci" "$CONTEXT"

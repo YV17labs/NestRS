@@ -179,16 +179,20 @@ pub fn operation_guard_stage(
         &label,
     );
     log_effective_chain(&label, "guards", &chain);
-    let request_chain = || match crate::module::posture(container) {
-        // No guard runs at an opened endpoint's request.
-        Posture::Public => Ok(Vec::new()),
-        _ => carried_request_chain::<McpView>(container, &label)
-            .map_err(|unresolved| unresolved.to_string()),
+    // No guard runs at an opened endpoint's request.
+    let opened = crate::module::posture(container) == Posture::Public;
+    let request_chain = || {
+        if opened {
+            return Ok(Vec::new());
+        }
+        carried_request_chain::<McpView>(container, &label)
+            .map_err(|unresolved| unresolved.to_string())
     };
     validate_carried_unit(
         &label,
         handler.posture(),
         declared.class_gated,
+        opened,
         &chain,
         request_chain,
     )

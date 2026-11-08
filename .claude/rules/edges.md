@@ -125,7 +125,9 @@ guard, filter or interceptor loop of its own.
    tool of an opened endpoint under the pool serves; a gated unit reads the one its
    request attached, so a gated unit — `#[authorize]`, no posture stated, a field
    resolver — reaching it at the unit alone, with nothing attaching one ahead of it or
-   at its request, refuses the boot rather than answering `401` to every call.
+   at its request, refuses the boot rather than answering `401` to every call, naming
+   where to bind the guard, or, at an opened endpoint whose request runs none, the
+   posture that lifts it.
    The grammar is one `PostureRules` in `nest-rs-codegen` where it is the same
    grammar, for `#[authorize]` and `#[public(...)]` alike: `#[tools]` and
    `#[messages]` take it verbatim, and `bind = Service`

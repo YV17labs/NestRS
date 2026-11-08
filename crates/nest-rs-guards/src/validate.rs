@@ -160,16 +160,23 @@ fn unattached(label: &str, guard: &str, expected: crate::PrincipalClaim) -> Stri
 /// ahead of its `unit` chain: the principals its guards require
 /// (`validate_carried_chain`), then the ability what reads one finds attached
 /// (`validate_carried_ability_reached`), `class_gated` when its posture declares a
-/// class gate.
+/// class gate, `opened` when its endpoint was opened, its request running no guard.
 pub fn validate_carried_unit(
     label: &str,
     posture: Posture,
     class_gated: bool,
+    opened: bool,
     unit: &[ResolvedLayer<dyn Guard>],
     request: impl Fn() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
 ) -> Result<(), String> {
     validate_carried_chain(label, unit, &request)?;
-    validate_carried_ability_reached(label, posture, class_gated, unit, request)
+    let site = CarriedUnit {
+        label,
+        posture,
+        class_gated,
+        opened,
+    };
+    validate_carried_ability_reached(&site, unit, request)
 }
 
 /// [`validate_guard_chain`] on a unit an in-band edge carries, whose `request`
@@ -223,27 +230,36 @@ pub fn validate_gate_reached(
     Err(unreached(label))
 }
 
-/// Refuse a unit an in-band edge carries, declaring `posture`, where what reads the
-/// ability would find none attached, class gate or not: a guard of its `unit` chain
-/// reading the one its request attached, which it builds for another posture alone (an
-/// ability guard at a gated unit), with no guard ahead of it or at its `request`
-/// attaching one, for every call would answer `401`; or a class gate (`class_gated`) no
-/// guard attaches it for, at the unit or its request, for every call would answer
-/// `500`. The closure composes the request only where the unit's chain answers neither.
-fn validate_carried_ability_reached(
-    label: &str,
+/// A unit an in-band edge carries, as a refusal names it: its `label`, its `posture`,
+/// whether that posture is `class_gated`, and whether its endpoint is `opened`, its
+/// request running no guard.
+struct CarriedUnit<'a> {
+    label: &'a str,
     posture: Posture,
     class_gated: bool,
+    opened: bool,
+}
+
+/// Refuse the unit `site` names, where what reads the ability would find none
+/// attached, class gate or not: a guard of its `unit` chain reading the one its
+/// request attached, which it builds for another posture alone (an ability guard at a
+/// gated unit), with no guard ahead of it or at its `request` attaching one, for every
+/// call would answer `401`; or a class gate no guard attaches it for, at the unit or
+/// its request, for every call would answer `500`. The closure composes the request
+/// only where the unit's chain answers neither.
+fn validate_carried_ability_reached(
+    site: &CarriedUnit<'_>,
     unit: &[ResolvedLayer<dyn Guard>],
     request: impl FnOnce() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
 ) -> Result<(), String> {
-    let attaches = |entry: &ResolvedLayer<dyn Guard>| entry.layer.__attaches_ability_to(posture);
+    let attaches =
+        |entry: &ResolvedLayer<dyn Guard>| entry.layer.__attaches_ability_to(site.posture);
     let reader = unit
         .iter()
         .position(|entry| entry.layer.__attaches_ability() && !attaches(entry));
     let answered = match reader {
         Some(at) => unit[..at].iter().any(attaches),
-        None => !class_gated || unit.iter().any(attaches),
+        None => !site.class_gated || unit.iter().any(attaches),
     };
     if answered
         || request()?
@@ -253,30 +269,74 @@ fn validate_carried_ability_reached(
         return Ok(());
     }
     Err(match reader {
-        Some(at) => read_unattached(label, class_gated, unit[at].name),
-        None => unreached(label),
+        Some(at) => site.read_unattached(unit[at].name),
+        None => site.unreached(),
     })
 }
 
-/// The refusal of a guard at a carried unit reading the ability its request attached,
-/// where nothing attaches one ahead of it: every call would answer `401`.
-fn read_unattached(label: &str, class_gated: bool, guard: &str) -> String {
-    let (posture, or_public) = if class_gated {
-        (
-            "declares `#[authorize]`",
-            ", or declare the unit `#[public(Action, Subject)]`",
+impl CarriedUnit<'_> {
+    /// The refusal of `guard` at the unit reading the ability its request attached,
+    /// where nothing attaches one ahead of it: every call would answer `401`.
+    fn read_unattached(&self, guard: &str) -> String {
+        let posture = if self.class_gated {
+            "declares `#[authorize]`"
+        } else {
+            "is gated by its guards alone"
+        };
+        let remedy = if self.opened {
+            let public = if self.class_gated {
+                "declare it `#[public(Action, Subject)]`, which keeps its gate"
+            } else {
+                "declare it `#[public]`, or `#[public(Action, Subject)]` to gate it on a subject"
+            };
+            format!(
+                "its endpoint is opened, so no guard runs at its request, and every call would \
+                 answer `401` — {public}, or stop opening the endpoint and bind `AbilityGuard` \
+                 over your `AbilityFactory` at its request, in `GlobalGuards<(...)>` or \
+                 `EndpointGuards<View, (...)>`"
+            )
+        } else {
+            let or_public = if self.class_gated {
+                ", or declare the unit `#[public(Action, Subject)]`"
+            } else {
+                ""
+            };
+            format!(
+                "no guard ahead of it or at its request attaches it, so every call would answer \
+                 `401` — bind `AbilityGuard` over your `AbilityFactory` at its request, in \
+                 `EndpointGuards<View, (...)>`, `GlobalGuards<(...)>` or a gateway's \
+                 `#[use_guards]`{or_public}"
+            )
+        };
+        format!(
+            "{} {posture}, and `{}` at the unit reads the ability its request attached, \
+             building one on a `#[public]` unit alone: {remedy}",
+            self.label,
+            shorten(guard),
         )
-    } else {
-        ("is gated by its guards alone", "")
-    };
-    format!(
-        "{label} {posture}, and `{}` at the unit reads the ability its request attached, \
-         building one on a `#[public]` unit alone: no guard ahead of it or at its request \
-         attaches it, so every call would answer `401` — bind `AbilityGuard` over your \
-         `AbilityFactory` at its request, in `EndpointGuards<View, (...)>`, \
-         `GlobalGuards<(...)>` or a gateway's `#[use_guards]`{or_public}",
-        shorten(guard),
-    )
+    }
+
+    /// The refusal of its class gate, no guard reaching the unit attaching the ability
+    /// the gate reads: every call would answer `500`.
+    fn unreached(&self) -> String {
+        if !self.opened {
+            return unreached(self.label);
+        }
+        let public = if self.posture == Posture::Public {
+            ""
+        } else {
+            ", and declare the unit `#[public(Action, Subject)]`"
+        };
+        format!(
+            "{} declares a class gate (`#[authorize]` or `#[public(Action, Subject)]`), and no \
+             guard in its chain attaches the ability the gate reads, its endpoint opened so that \
+             no guard runs at its request: every call would answer `500` — bind `AbilityGuard` \
+             over your `AbilityFactory` at the unit, with `#[use_guards]` or \
+             `GlobalGuards<(...)>`{public}, or stop opening the endpoint and bind it at its \
+             request, in `GlobalGuards<(...)>` or `EndpointGuards<View, (...)>`",
+            self.label,
+        )
+    }
 }
 
 /// The refusal of a class gate no guard reaching its unit attaches the ability for.
@@ -582,6 +642,34 @@ mod tests {
         }
     }
 
+    /// [`validate_carried_ability_reached`] on a unit `field` its endpoint's request
+    /// guards, or runs no guard for when `opened`.
+    fn reached_at(
+        posture: Posture,
+        class_gated: bool,
+        opened: bool,
+        unit: &[ResolvedLayer<dyn Guard>],
+        request: impl FnOnce() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
+    ) -> Result<(), String> {
+        let site = CarriedUnit {
+            label: "field",
+            posture,
+            class_gated,
+            opened,
+        };
+        validate_carried_ability_reached(&site, unit, request)
+    }
+
+    /// [`reached_at`] a guarded endpoint.
+    fn ability_reached(
+        posture: Posture,
+        class_gated: bool,
+        unit: &[ResolvedLayer<dyn Guard>],
+        request: impl FnOnce() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
+    ) -> Result<(), String> {
+        reached_at(posture, class_gated, false, unit, request)
+    }
+
     #[test]
     fn a_routes_class_gate_finds_its_ability_guard_in_its_chain() {
         let refused = validate_gate_reached("GET /", &[entry(Authn, "Authn")])
@@ -603,7 +691,7 @@ mod tests {
             unit: &[ResolvedLayer<dyn Guard>],
             request: impl FnOnce() -> Result<Vec<ResolvedLayer<dyn Guard>>, String>,
         ) -> Result<(), String> {
-            validate_carried_ability_reached("field", Posture::Gated, true, unit, request)
+            ability_reached(Posture::Gated, true, unit, request)
         }
         let refused = reached(&[entry(Authn, "Authn")], || Ok(vec![entry(Authz, "Authz")]))
             .expect_err("neither attaches the ability");
@@ -625,21 +713,13 @@ mod tests {
     fn a_guard_attaching_at_a_public_unit_alone_reaches_no_gated_one() {
         let at_the_unit = || [entry(Arc::new(PublicAbility), "PublicAbility")];
         for class_gated in [true, false] {
-            validate_carried_ability_reached(
-                "field",
-                Posture::Public,
-                class_gated,
-                &at_the_unit(),
-                || panic!("the unit's own chain already answers"),
-            )
+            ability_reached(Posture::Public, class_gated, &at_the_unit(), || {
+                panic!("the unit's own chain already answers")
+            })
             .expect("a public unit's guard builds the ability");
-            let refused = validate_carried_ability_reached(
-                "field",
-                Posture::Gated,
-                class_gated,
-                &at_the_unit(),
-                || Ok(vec![entry(Authn, "Authn")]),
-            )
+            let refused = ability_reached(Posture::Gated, class_gated, &at_the_unit(), || {
+                Ok(vec![entry(Authn, "Authn")])
+            })
             .expect_err("a gated unit reads what its request attached");
             assert!(
                 refused.contains("`PublicAbility`") && refused.contains("`401`"),
@@ -650,25 +730,65 @@ mod tests {
                 class_gated,
                 "names the posture it reads: {refused}",
             );
-            validate_carried_ability_reached(
-                "field",
-                Posture::Gated,
-                class_gated,
-                &at_the_unit(),
-                || Ok(vec![entry(PublicAbility, "PublicAbility")]),
-            )
+            ability_reached(Posture::Gated, class_gated, &at_the_unit(), || {
+                Ok(vec![entry(PublicAbility, "PublicAbility")])
+            })
             .expect("its request attaches it");
+        }
+    }
+
+    /// An opened endpoint's request runs no guard, so binding one there lifts nothing:
+    /// the refusal names the posture that does, or not opening the endpoint.
+    #[test]
+    fn a_unit_of_an_opened_endpoint_is_told_the_posture_that_lifts_its_refusal() {
+        let opened = |posture, class_gated, unit: &[ResolvedLayer<dyn Guard>]| {
+            reached_at(posture, class_gated, true, unit, || Ok(Vec::new()))
+                .expect_err("nothing attaches the ability")
+        };
+        let reading = [entry(PublicAbility, "PublicAbility")];
+        for (class_gated, public) in [
+            (
+                false,
+                "declare it `#[public]`, or `#[public(Action, Subject)]`",
+            ),
+            (
+                true,
+                "declare it `#[public(Action, Subject)]`, which keeps its gate",
+            ),
+        ] {
+            let refused = opened(Posture::Gated, class_gated, &reading);
+            assert!(
+                refused.contains("`401`")
+                    && refused.contains("its endpoint is opened, so no guard runs at its request")
+                    && refused.contains(public)
+                    && refused.contains("stop opening the endpoint"),
+                "{refused}",
+            );
+            assert!(!refused.contains("a gateway's"), "{refused}");
+        }
+        for (posture, public) in [(Posture::Gated, true), (Posture::Public, false)] {
+            let refused = opened(posture, true, &[entry(Authn, "Authn")]);
+            assert!(
+                refused.contains("`500`")
+                    && refused.contains("its endpoint opened")
+                    && refused
+                        .contains("at the unit, with `#[use_guards]` or `GlobalGuards<(...)>`")
+                    && refused.contains("stop opening the endpoint"),
+                "{refused}",
+            );
+            assert_eq!(
+                refused.contains("declare the unit `#[public(Action, Subject)]`"),
+                public,
+                "an `#[authorize]` unit is told to say `#[public(Action, Subject)]`: {refused}",
+            );
         }
     }
 
     #[test]
     fn a_guard_reading_the_ability_at_the_unit_finds_it_attached_ahead_of_it() {
-        let reached =
-            |unit: &[ResolvedLayer<dyn Guard>]| {
-                validate_carried_ability_reached("field", Posture::Gated, false, unit, || {
-                    Ok(Vec::new())
-                })
-            };
+        let reached = |unit: &[ResolvedLayer<dyn Guard>]| {
+            ability_reached(Posture::Gated, false, unit, || Ok(Vec::new()))
+        };
         reached(&[
             entry(Ability, "Ability"),
             entry(PublicAbility, "PublicAbility"),
@@ -685,7 +805,7 @@ mod tests {
     #[test]
     fn a_unit_no_class_gate_and_no_reading_guard_holds_never_composes_its_request() {
         for unit in [vec![], vec![entry(Authn, "Authn"), entry(Authz, "Authz")]] {
-            validate_carried_ability_reached("field", Posture::Gated, false, &unit, || {
+            ability_reached(Posture::Gated, false, &unit, || {
                 panic!("nothing at the unit reads an ability")
             })
             .expect("nothing reads one");

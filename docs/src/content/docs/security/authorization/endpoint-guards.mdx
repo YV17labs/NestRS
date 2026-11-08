@@ -305,8 +305,10 @@ A public `/mcp` runs no guard at its request, the global pool's included. A
 module declaring `EndpointGuards<McpView, _>` beside that opening fails the
 boot, naming the declaration — an opening never drops guards silently.
 An `AuthzGuard` in the per-operation chain still runs: a `#[public(Read, Entity)]`
-tool reads the visitor's rules there, as such a route does, and an `#[authorize]`
-one answers `UNAUTHENTICATED`.
+tool reads the visitor's rules there, as such a route does. A tool it gates
+otherwise, `#[authorize]` or stating no posture, would read an ability the request
+never attaches, so it fails the boot, and the refusal names what lifts it:
+`#[public]`, `#[public(Action, Subject)]`, or not opening the endpoint.
 
 What the endpoint runs is `check_http` — it holds a request, not an operation.
 A pooled guard's `check` runs in the **per-operation chain**, which folds the

@@ -1826,7 +1826,9 @@ lists what the boot, a log or the wire shows when one is missed.
   AuthzGuard)>` or `EndpointGuards<McpView, (…)>`, `GlobalGuards<(…)>`, or the gateway's
   `#[use_guards]` for a WebSocket message; or say `#[public(Action, Subject)]` where an
   `#[authorize]` unit serves a visitor. A field resolver reads what the `/graphql` request
-  attached, never what its root field built.
+  attached, never what its root field built. At an endpoint `McpAccess::Public` opens, whose
+  request runs no guard, the refusal says so: declare the tool `#[public]`, or
+  `#[public(Action, Subject)]` to keep a gate, or stop opening the endpoint.
 - **An in-band chain listing authentication after authorization** stops the boot, on a
   GraphQL field, a WS message and an MCP operation, reading its request's chain ahead of
   its own. List the authentication guard first, or declare the phase of a guard of your

@@ -278,7 +278,12 @@ still never depend on where the guard is listed. A route keeps one chain,
 `validate_carried_unit` with its handler's posture and whether a class gate
 reads the ability, and a guard at the unit attaching for another posture alone, with
 nothing ahead of it or at the request attaching one, is refused with its name, the `401`
-every call would answer, and where to bind it, class gate or not. A field resolver reads
+every call would answer, and where to bind it, class gate or not. At an endpoint
+`McpAccess::Public` opens, whose request runs no guard, no binding there lifts it: the
+caller says the endpoint is opened (`opened`), and the refusal names the posture that
+does, `#[public]` or `#[public(Action, Subject)]`, or not opening the endpoint; a class
+gate nothing reaches there is told to bind the guard at the unit, on a
+`#[public(Action, Subject)]` unit. A field resolver reads
 what the `/graphql` request attached, never what its root field built: a visitor's ability
 built at a `#[public]` root reaches no nested read (the *Public reads* page's limits), so the boot refuses it
 rather than widening what a nested field reads.

@@ -139,13 +139,36 @@ struct UnscopedGatedModule;
 ])]
 struct ScopedModule;
 
+/// A unit of an opened endpoint whose ability nothing attaches names its site, the
+/// code every call would answer and the posture lifting it, its request running no
+/// guard a binding there could add.
+fn assert_refused_at_the_opened_endpoint(
+    boot: nest_rs_core::anyhow::Result<impl Sized>,
+    site: &str,
+    lifted_by: &str,
+) {
+    let Err(refused) = boot else {
+        panic!("{site}: every call would answer `401`, so the boot refuses it");
+    };
+    let refused = format!("{refused:#}");
+    assert!(refused.contains(site), "{refused}");
+    assert!(refused.contains("`401`"), "{refused}");
+    assert!(
+        refused.contains("its endpoint is opened, so no guard runs at its request"),
+        "{refused}"
+    );
+    assert!(refused.contains(lifted_by), "{refused}");
+    assert!(refused.contains("stop opening the endpoint"), "{refused}");
+}
+
 /// Its posture needs a caller, and nothing at the opened endpoint's request decides
 /// what one may do: every call would fail closed, so the boot refuses it.
 #[tokio::test]
 async fn a_gated_operation_no_ability_reaches_refuses_the_boot() {
-    assert_refused_at_the_request(
+    assert_refused_at_the_opened_endpoint(
         TestApp::for_module::<UnscopedGatedModule>().await,
         "UnscopedGatedTool::ping",
+        "declare it `#[public(Action, Subject)]`, which keeps its gate",
     );
 }
 
@@ -220,9 +243,47 @@ struct OpenedGatedUnderThePool;
 /// none of it: the ability guard there builds one for a `#[public]` operation alone.
 #[tokio::test]
 async fn a_gated_operation_of_an_opened_endpoint_refuses_the_boot_under_the_pool() {
-    assert_refused_at_the_request(
+    assert_refused_at_the_opened_endpoint(
         TestApp::for_module::<OpenedGatedUnderThePool>().await,
         "OpenedGatedTool::gated",
+        "declare it `#[public(Action, Subject)]`, which keeps its gate",
+    );
+}
+
+#[mcp(path = "/mcp/guard/opened")]
+#[derive(Clone, Default)]
+struct OpenedUndeclaredTool;
+
+#[tools]
+impl OpenedUndeclaredTool {
+    /// No posture: gated by its guards alone, the pool's ability guard among them.
+    #[tool]
+    async fn listed(&self) -> Result<String, McpError> {
+        Ok("reached".to_owned())
+    }
+}
+
+#[module(
+    imports = [McpModule::for_root(McpAccess::Public)],
+    providers = [
+        Rules,
+        ActorGuard,
+        AuthzGuard,
+        GlobalGuards<(ActorGuard, AuthzGuard)>,
+        OpenedUndeclaredTool,
+    ],
+)]
+struct OpenedUndeclaredUnderThePool;
+
+/// Stating no posture, it is gated by its guards, and the pool's ability guard reads
+/// what an opened endpoint's request never attaches: `#[public]` lifts it, a guard at
+/// that request cannot.
+#[tokio::test]
+async fn an_operation_of_an_opened_endpoint_stating_no_posture_is_told_to_say_public() {
+    assert_refused_at_the_opened_endpoint(
+        TestApp::for_module::<OpenedUndeclaredUnderThePool>().await,
+        "OpenedUndeclaredTool::listed",
+        "declare it `#[public]`, or `#[public(Action, Subject)]`",
     );
 }
 

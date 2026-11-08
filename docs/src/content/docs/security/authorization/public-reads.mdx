@@ -174,8 +174,10 @@ call is denied before the factory is consulted. `define_visitor` does not open i
 `McpModule::for_root(McpAccess::Public)` does, and there an `AuthzGuard` the
 operation's chain runs — the pool's included — gives a `#[public(Read, Entity)]`
 tool these grants, as it does such a WebSocket message under an upgrade no guard
-identifying a caller runs; an `#[authorize]` unit stays refused, no principal
-backing it.
+identifying a caller runs. An `#[authorize]` tool there would read an ability no guard
+at the request attaches, so it fails the boot, and the refusal names what lifts it:
+`#[public(Read, Entity)]`, which keeps the gate on these grants, or not opening the
+endpoint.
 
 **A socket and an opened `/mcp` serve no token.** A gateway whose upgrade
 authenticates admits no visitor, and an opened `/mcp` reads no bearer at its

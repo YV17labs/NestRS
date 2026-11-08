@@ -147,8 +147,15 @@ pub fn field_guard_stage(
         carried_request_chain::<GraphqlView>(container, label)
             .map_err(|unresolved| unresolved.to_string())
     };
-    validate_carried_unit(label, handler.posture(), class_gated, &chain, request_chain)
-        .map_err(anyhow::Error::msg)?;
+    validate_carried_unit(
+        label,
+        handler.posture(),
+        class_gated,
+        false,
+        &chain,
+        request_chain,
+    )
+    .map_err(anyhow::Error::msg)?;
     let public = handler.posture() == Posture::Public || site == GraphqlSite::Field;
     let needed = NeededPrincipal::carried(public, &ambient, &chain, request_chain)
         .map_err(anyhow::Error::msg)?;

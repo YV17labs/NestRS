@@ -74,6 +74,7 @@ pub fn message_guard_stage(
         &site,
         handler.posture(),
         class_gated,
+        false,
         &guards,
         upgrade_chain,
     )

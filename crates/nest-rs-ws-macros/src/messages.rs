@@ -14,12 +14,12 @@ use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     Conditional, DispatchKeys, HandlerDeclaration, HandlerSite, HostBorrow, HostMeta, HostMount,
-    PostureGate, PostureRules, SitePosture, TailParam, ambient_type_ids, await_if_async, cfg_attrs,
-    concrete_signature, declared_handler, exception_filter_specs, force_guard_typeids,
+    PostureGate, PostureRules, SiteGuards, SiteItems, SitePosture, TailParam, ambient_type_ids,
+    await_if_async, cfg_attrs, concrete_signature, declared_handler, force_guard_typeids,
     guard_capability_bounds, handler_const, handler_ref, host_runtime_entry, impl_self_ident,
-    injected_methods_with_layers, injected_per_request_method, interceptor_specs, layer_deps,
-    one_role_per_method, piped_input, reject_meta_on_operations, returns_unit, scoped_specs,
-    shared_receiver, tail_param, takes_value, ungrouped_expr, validate_argument,
+    injected_methods_with_layers, injected_per_request_method, layer_deps, one_role_per_method,
+    piped_input, reject_meta_on_operations, returns_unit, scoped_specs, shared_receiver,
+    site_items, site_ref, tail_param, takes_value, ungrouped_expr, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -129,7 +129,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     // Every hook override is emitted under its method's `#[cfg]`; two compiled in
     // are two definitions of one trait method, which rustc refuses.
     let mut hooks: Vec<TokenStream2> = Vec::new();
-    let mut site_items: Vec<TokenStream2> = Vec::new();
+    let mut sites: Vec<TokenStream2> = Vec::new();
     // A second declaration is refused by the macro without `#[cfg]`, and under
     // both `#[cfg]`s when either has one.
     let mut declared = DispatchKeys::new(
@@ -242,7 +242,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(posture) => posture,
             Err(err) => return err.to_compile_error().into(),
         };
-        site_items.push(handler_const(&HandlerSite {
+        sites.push(handler_const(&HandlerSite {
             unit: quote!(::nest_rs_ws::unit::MESSAGE),
             self_ty: &self_ty,
             host_name: &host,
@@ -292,8 +292,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             })),
             cfgs: &cfgs,
         });
-        site_items.push(site.items);
-        let site_ref = site.reference;
+        sites.push(site);
+        let site_ref = site_ref(&self_ty, &method_name);
         let method_pipe_specs =
             scoped_specs(&pipes, quote!(dyn ::nest_rs_ws::__private::GlobalPipe));
         message_mounts.push(quote! {
@@ -550,7 +550,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         #item
 
         impl #self_ty {
-            #(#site_items)*
+            #(#sites)*
 
             /// The upgrade's metadata: the gateway's own, read by its guards.
             #[doc(hidden)]
@@ -706,18 +706,12 @@ struct MessageSite<'a> {
     cfgs: &'a [TokenStream2],
 }
 
-/// The items declaring one message's site — its layers, its guard stage and
-/// the `static Site` — and the path reading it back.
-struct EmittedSite {
-    items: TokenStream2,
-    reference: TokenStream2,
-}
-
 /// The hidden associated items declaring `site` in the gateway's inherent
-/// `impl`: the function building its layers, the one building its guard
-/// stage, and the const holding its `&'static Site`. Every app-wide layer
-/// runs around a message: it is accepted on its own, nested in none.
-fn message_site(site: &MessageSite<'_>) -> EmittedSite {
+/// `impl`, as `site_items` writes every site's, its guard stage included. The
+/// class gate rides the guard stage's declaration, so the site declares none;
+/// every app-wide layer runs around a message: it is accepted on its own,
+/// nested in none.
+fn message_site(site: &MessageSite<'_>) -> TokenStream2 {
     let MessageSite {
         self_ty,
         method,
@@ -730,41 +724,22 @@ fn message_site(site: &MessageSite<'_>) -> EmittedSite {
         ambient,
         cfgs,
     } = site;
-    let method_name = method.unraw().to_string();
-    let lower = method_name.to_lowercase();
-    let layers_fn = format_ident!("__nestrs_layers_{}", lower);
-    let guards_fn = format_ident!("__nestrs_guards_{}", lower);
-    let name = format_ident!("__NESTRS_SITE_{}", method_name.to_uppercase());
-    let handler = handler_ref(self_ty, method);
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
-    let method_interceptor_specs = interceptor_specs(interceptors);
-    let method_exception_filter_specs = exception_filter_specs(exception_filters);
     let force_typeids = force_guard_typeids(force_guards);
-    let items = quote! {
-        #(#cfgs)*
-        #[doc(hidden)]
-        fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
-            ::nest_rs_core::__private::SiteLayers {
-                host_interceptors: <#self_ty>::__nestrs_gateway_interceptor_specs(),
-                method_interceptors: #method_interceptor_specs,
-                host_exception_filters: <#self_ty>::__nestrs_gateway_exception_filter_specs(),
-                method_exception_filters: #method_exception_filter_specs,
-            }
-        }
-
-        #(#cfgs)*
-        #[doc(hidden)]
-        fn #guards_fn(
-            __nestrs_container: &::nest_rs_core::Container,
-            __nestrs_handler: &::nest_rs_core::Handler,
-        ) -> ::nest_rs_core::anyhow::Result<
-            ::core::option::Option<
-                ::std::sync::Arc<dyn ::nest_rs_core::__private::GuardStage>,
-            >,
-        > {
-            ::nest_rs_ws::__private::message_guard_stage(
-                __nestrs_container,
-                __nestrs_handler,
+    site_items(&SiteItems {
+        self_ty,
+        method,
+        cfgs,
+        host: [
+            quote!(<#self_ty>::__nestrs_gateway_interceptor_specs()),
+            quote!(<#self_ty>::__nestrs_gateway_exception_filter_specs()),
+        ],
+        interceptors,
+        exception_filters,
+        global: quote!(::nest_rs_core::__private::GlobalLayers::ALL),
+        guards: Some(SiteGuards {
+            build: quote!(::nest_rs_ws::__private::message_guard_stage),
+            declaration: quote! {
                 ::nest_rs_ws::__private::MessageGuards {
                     upgrade: <#self_ty>::__nestrs_edge_guard_specs(),
                     method: #method_guard_specs,
@@ -772,33 +747,11 @@ fn message_site(site: &MessageSite<'_>) -> EmittedSite {
                     gate: #gate,
                     withheld: #withheld,
                     ambient: #ambient,
-                },
-            )
-        }
-
-        #(#cfgs)*
-        #[doc(hidden)]
-        pub const #name: &'static ::nest_rs_core::__private::Site = {
-            static __NESTRS_SITE: ::nest_rs_core::__private::Site =
-                ::nest_rs_core::__private::declare_site(
-                    #handler,
-                    ::nest_rs_core::__private::SiteDeclaration {
-                        layers: <#self_ty>::#layers_fn,
-                        global: ::nest_rs_core::__private::GlobalLayers::ALL,
-                        guard_stage: ::core::option::Option::Some(
-                            <#self_ty>::#guards_fn
-                                as ::nest_rs_core::__private::GuardStageFactory,
-                        ),
-                        class_gate: ::core::option::Option::None,
-                    },
-                );
-            &__NESTRS_SITE
-        };
-    };
-    EmittedSite {
-        items,
-        reference: quote! { <#self_ty>::#name },
-    }
+                }
+            },
+        }),
+        class_gate: quote!(::core::option::Option::None),
+    })
 }
 
 /// Each item collected across the methods, under the `#[cfg]`s of the method

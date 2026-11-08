@@ -16,13 +16,13 @@ use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
     HandlerSite, HostBorrow, HostMeta, HostMount, ID_ARG_UNSUPPORTED_BECAUSE, RoutePath,
-    SitePosture, ambient_type_ids, authorized_entity, await_if_async, cfg_attrs,
-    concrete_signature, deprecation_header, exception_filter_specs, force_guard_typeids,
-    guard_capability_bounds, handler_const, handler_ref, host_runtime_entry, impl_self_ident,
-    injected_methods_with_layers, injected_per_request_method, interceptor_specs, layer_deps,
-    mixed_site_ident, normalize_forwarded_args, nth_generic_type, one_role_per_method,
-    posture_key_unsupported, refuse_rust_deprecated, reject_meta_on_operations, scoped_specs,
-    shared_receiver, site, spelled, take_posture, takes_value, ungrouped_expr,
+    SiteGuards, SiteItems, SitePosture, ambient_type_ids, authorized_entity, await_if_async,
+    cfg_attrs, concrete_signature, deprecation_header, force_guard_typeids,
+    guard_capability_bounds, handler_const, host_runtime_entry, impl_self_ident,
+    injected_methods_with_layers, injected_per_request_method, layer_deps, mixed_site_ident,
+    normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
+    refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
+    site_items, site_ref, spelled, take_posture, takes_value, ungrouped_expr,
     unit_of_work_required, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
@@ -56,8 +56,6 @@ struct RouteHandler {
     stream_posture: TokenStream2,
     /// Whether the handler declares any extractor; without one, no mask probe is emitted.
     has_extractors: bool,
-    /// The route's declaration, read through `Reflector`.
-    handler: TokenStream2,
     no_pipes: bool,
     /// `#[force_guards]` paths on the method.
     force_guards: Vec<Path>,
@@ -229,7 +227,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // Qualified by the controller: each wrapper is a module-level type, and two
         // controllers in one file (`V1Controller::list`, `V2Controller::list`) share it.
         let wrapper_name = format_ident!("__nestrs_route_{}_{}", ctrl_name, method_name);
-        let site_name = site_ident(&ctrl_name, &method_name);
+        let site_name = site_ref(&self_ty, &method_name);
 
         // `#[crud]`'s own parameters declare neither a gate nor a shaper, so
         // no probe asks their types again.
@@ -595,7 +593,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             posture_type: authorize_ty,
             stream_posture,
             has_extractors: !inputs.is_empty(),
-            handler: handler_ref(&self_ty, &method_name),
             no_pipes,
             force_guards,
             pipes: method_pipes,
@@ -866,7 +863,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 public: #is_public,
                 deprecation: #deprecation_meta,
                 versions: #route_versions,
-                site: &#site_name,
+                site: #site_name,
             })
             }
         });
@@ -933,12 +930,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     // Registered inside the per-version loop, one entry per verb that serves the
     // version: the table owns the method dispatch, `Allow` and `HEAD`.
     let mut route_entries: Vec<TokenStream2> = Vec::new();
+    let mut sites: Vec<TokenStream2> = Vec::new();
     for group in &routes_by_path {
         let path = &group.mount;
         let mut arms: Vec<TokenStream2> = Vec::new();
         for handler in &group.handlers {
-            let EmittedRoute { items, mount } = emitted_route(handler, &self_ty, &ctrl_name);
-            wrappers.push(items);
+            let EmittedRoute { items, mount } = emitted_route(handler, &self_ty);
+            sites.push(items);
             let versions = &handler.versions;
             let cfgs = &handler.cfgs;
             let serves = if versions.is_empty() {
@@ -984,6 +982,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl #self_ty {
             #(#handler_consts)*
+
+            #(#sites)*
         }
 
         #crossings
@@ -1362,25 +1362,19 @@ fn shaper_selection(param_types: &[Type]) -> TokenStream2 {
 }
 
 /// One routed handler, as its route's site declares it and its mount mounts
-/// it: the `static` site (its interceptors and exception filters, its guard
-/// stage and class gates), and the call registering the handler — its
-/// response shaper (the mask) innermost, its global pipes before it — on the
-/// pipeline. `site` names the `static`.
+/// it: the site (its interceptors and exception filters, its guard stage and
+/// class gates), and the call registering the handler — its response shaper
+/// (the mask) innermost, its global pipes before it — on the pipeline.
 struct EmittedRoute {
-    /// Item-level: the site, its layers and its guard stage.
+    /// The controller's hidden associated items: the site, its layers and its
+    /// guard stage.
     items: TokenStream2,
     /// Inside the controller's mount closure, where `container`, `__routes`,
     /// `__path`, `__ctrl` and `__sse` are in scope.
     mount: TokenStream2,
 }
 
-/// The `static` site a route dispatches through, named as its record points
-/// at it.
-fn site_ident(ctrl_name: &syn::Ident, method_name: &syn::Ident) -> syn::Ident {
-    format_ident!("__nestrs_site_{}_{}", ctrl_name, method_name)
-}
-
-fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident) -> EmittedRoute {
+fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
     let RouteHandler {
         method,
         param_types,
@@ -1395,7 +1389,6 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         posture_type,
         stream_posture,
         has_extractors,
-        handler,
         no_pipes,
         force_guards,
         pipes: method_pipes,
@@ -1405,9 +1398,6 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
         method_name,
     } = handler;
     let route_label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
-    let site = site_ident(ctrl_name, method_name);
-    let layers_fn = format_ident!("__nestrs_layers_{}_{}", ctrl_name, method_name);
-    let guards_fn = format_ident!("__nestrs_guards_{}_{}", ctrl_name, method_name);
 
     // The run-time probe catches a masking extractor reached indirectly (nested,
     // or a hand-rolled `FromRequest`), which no scan of the signature can see.
@@ -1425,8 +1415,6 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
     // Read off its spelling, as `Piped` is: what each `Ambient<T>` reads.
     let ambient = ambient_type_ids(param_types);
-    let method_interceptor_specs = interceptor_specs(interceptors);
-    let method_exception_filter_specs = exception_filter_specs(method_exception_filters);
     let force_guard_typeids = force_guard_typeids(force_guards);
     let method_pipe_specs = scoped_specs(method_pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
     let no_pipes_flag = if *no_pipes {
@@ -1434,31 +1422,20 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
     } else {
         quote!(false)
     };
-    let items = quote! {
-        #(#cfgs)*
-        #[allow(non_snake_case)]
-        fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
-            ::nest_rs_core::__private::SiteLayers {
-                host_interceptors: <#self_ty>::__nestrs_controller_interceptor_specs(),
-                method_interceptors: #method_interceptor_specs,
-                host_exception_filters: <#self_ty>::__nestrs_controller_exception_filter_specs(),
-                method_exception_filters: #method_exception_filter_specs,
-            }
-        }
-
-        #(#cfgs)*
-        #[allow(non_snake_case)]
-        fn #guards_fn(
-            __nestrs_container: &::nest_rs_core::Container,
-            __nestrs_handler: &::nest_rs_core::Handler,
-        ) -> ::nest_rs_core::anyhow::Result<
-            ::core::option::Option<
-                ::std::sync::Arc<dyn ::nest_rs_core::__private::GuardStage>,
-            >,
-        > {
-            ::nest_rs_http::__private::route_guard_stage(
-                __nestrs_container,
-                __nestrs_handler,
+    let items = site_items(&SiteItems {
+        self_ty,
+        method: method_name,
+        cfgs,
+        host: [
+            quote!(<#self_ty>::__nestrs_controller_interceptor_specs()),
+            quote!(<#self_ty>::__nestrs_controller_exception_filter_specs()),
+        ],
+        interceptors,
+        exception_filters: method_exception_filters,
+        global: quote!(::nest_rs_core::__private::GlobalLayers::ALL),
+        guards: Some(SiteGuards {
+            build: quote!(::nest_rs_http::__private::route_guard_stage),
+            declaration: quote! {
                 ::nest_rs_http::__private::RouteGuards {
                     host: <#self_ty>::__nestrs_controller_guard_specs(),
                     method: #method_guard_specs,
@@ -1468,24 +1445,12 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
                     masked: ::core::option::Option::is_some(&#shaper_selection),
                     stream: #is_sse,
                     ambient: #ambient,
-                },
-            )
-        }
-
-        #(#cfgs)*
-        #[allow(non_upper_case_globals)]
-        static #site: ::nest_rs_core::__private::Site = ::nest_rs_core::__private::declare_site(
-            #handler,
-            ::nest_rs_core::__private::SiteDeclaration {
-                layers: #layers_fn,
-                global: ::nest_rs_core::__private::GlobalLayers::ALL,
-                guard_stage: ::core::option::Option::Some(
-                    #guards_fn as ::nest_rs_core::__private::GuardStageFactory,
-                ),
-                class_gate: ::core::option::Option::None,
+                }
             },
-        );
-    };
+        }),
+        class_gate: quote!(::core::option::Option::None),
+    });
+    let site = site_ref(self_ty, method_name);
 
     // Expanded inside the mount closure, where `__ctrl` and `__sse` are in scope.
     let wrapper_expr = if *is_sse {
@@ -1508,7 +1473,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type, ctrl_name: &syn::Ident)
             __routes,
             ::nest_rs_http::Method::#method,
             &__path,
-            &#site,
+            #site,
             ::nest_rs_http::__private::RoutePipes {
                 host: <#self_ty>::__nestrs_controller_pipe_specs(),
                 method: #method_pipe_specs,

@@ -16,17 +16,17 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, HostMount, InjectableBody, SitePosture, TailParam,
-    VersionedEdge, ambient_type_ids, answer_span, authorized_entity, await_if_async,
-    build_injectable_body, camel_case, cfg_attrs, concrete_signature, delegated_attrs,
-    exception_filter_specs, force_guard_typeids, forwarded_arg_idents, forwarded_idents,
-    from_container_method, guard_capability_bounds, handler_const, handler_ref, host_meta_fn,
+    HandlerSite, HostBorrow, HostMeta, HostMount, InjectableBody, SiteGuards, SiteItems,
+    SitePosture, TailParam, VersionedEdge, ambient_type_ids, answer_span, authorized_entity,
+    await_if_async, build_injectable_body, camel_case, cfg_attrs, concrete_signature,
+    delegated_attrs, exception_filter_specs, force_guard_typeids, forwarded_arg_idents,
+    forwarded_idents, from_container_method, guard_capability_bounds, handler_const, host_meta_fn,
     host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, injected_per_request_method, injects_impls,
     interceptor_specs, key_as_written, layer_deps, normalize_forwarded_args, nth_generic_type,
     one_role_per_method, piped_input, reject_meta_on_operations, scoped_specs, shared_receiver,
-    site_const_ident, site_fn_ident, site_ref, spelled, tail_param, take_posture, takes_value,
-    type_label, unit_of_work_required, unknown_argument, validate_argument, withheld,
+    site_items, site_ref, spelled, tail_param, take_posture, takes_value, type_label,
+    unit_of_work_required, unknown_argument, validate_argument, withheld,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -610,11 +610,10 @@ struct FieldSite<'a> {
     ambient: TokenStream2,
 }
 
-/// The hidden items declaring a field's site beside its handler: the function
-/// building its interceptors and exception filters, the one building its guard
-/// stage, and the const holding its `&'static Site`. A root field folds its
-/// resolver's interceptors and exception filters and the app's; a field
-/// resolver, no unit, only those declared on it.
+/// The hidden items declaring a field's site beside its handler, as
+/// `site_items` writes every site's, its guard stage included. A root field
+/// folds its resolver's interceptors and exception filters and the app's; a
+/// field resolver, no unit, only those declared on it.
 fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
     let FieldSite {
         self_ty,
@@ -631,57 +630,41 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
         ambient,
     } = site;
     let class_gated = gate.is_some();
-    let gate = match gate {
+    let class_gate = match gate {
         Some(gate) => quote!(::core::option::Option::Some(#gate)),
         None => quote!(::core::option::Option::None),
     };
-    let name = site_const_ident("site", method);
-    let layers_fn = site_fn_ident("layers", method);
-    let guards_fn = site_fn_ident("guards", method);
-    let handler = handler_ref(self_ty, method);
-    let (host_interceptors, host_exception_filters, global) = match kind {
+    let (host, global) = match kind {
         ChainSite::Field => (
-            quote!(::std::vec::Vec::new()),
-            quote!(::std::vec::Vec::new()),
+            [
+                quote!(::std::vec::Vec::new()),
+                quote!(::std::vec::Vec::new()),
+            ],
             quote!(::nest_rs_core::__private::GlobalLayers::NONE),
         ),
         ChainSite::Operation | ChainSite::Entity => (
-            quote!(<#self_ty>::__nestrs_resolver_interceptor_specs()),
-            quote!(<#self_ty>::__nestrs_resolver_exception_filter_specs()),
+            [
+                quote!(<#self_ty>::__nestrs_resolver_interceptor_specs()),
+                quote!(<#self_ty>::__nestrs_resolver_exception_filter_specs()),
+            ],
             quote!(::nest_rs_graphql::__private::ROOT_FIELD),
         ),
     };
     let method_guards = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
-    let method_interceptors = interceptor_specs(interceptors);
-    let method_exception_filters = exception_filter_specs(exception_filters);
     let force = force_guard_typeids(force_guards);
     let site_kind = kind.path();
     let label = LitStr::new(label, proc_macro2::Span::call_site());
-    quote! {
-        #(#cfgs)*
-        #[doc(hidden)]
-        fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
-            ::nest_rs_core::__private::SiteLayers {
-                host_interceptors: #host_interceptors,
-                method_interceptors: #method_interceptors,
-                host_exception_filters: #host_exception_filters,
-                method_exception_filters: #method_exception_filters,
-            }
-        }
-
-        #(#cfgs)*
-        #[doc(hidden)]
-        fn #guards_fn(
-            __nestrs_container: &::nest_rs_core::Container,
-            __nestrs_handler: &::nest_rs_core::Handler,
-        ) -> ::nest_rs_core::anyhow::Result<
-            ::core::option::Option<
-                ::std::sync::Arc<dyn ::nest_rs_core::__private::GuardStage>,
-            >,
-        > {
-            ::nest_rs_graphql::__private::field_guard_stage(
-                __nestrs_container,
-                __nestrs_handler,
+    site_items(&SiteItems {
+        self_ty,
+        method,
+        cfgs,
+        host,
+        interceptors,
+        exception_filters,
+        global,
+        guards: Some(SiteGuards {
+            build: quote!(::nest_rs_graphql::__private::field_guard_stage),
+            declaration: quote! {
                 ::nest_rs_graphql::__private::FieldGuards {
                     host: <#self_ty>::__nestrs_resolver_guard_specs(),
                     method: #method_guards,
@@ -691,28 +674,11 @@ fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
                     withheld: #withheld,
                     class_gated: #class_gated,
                     ambient: #ambient,
-                },
-            )
-        }
-
-        #(#cfgs)*
-        #[doc(hidden)]
-        pub const #name: &'static ::nest_rs_core::__private::Site = {
-            static __NESTRS_SITE: ::nest_rs_core::__private::Site =
-                ::nest_rs_core::__private::declare_site(
-                    #handler,
-                    ::nest_rs_core::__private::SiteDeclaration {
-                        layers: <#self_ty>::#layers_fn,
-                        global: #global,
-                        guard_stage: ::core::option::Option::Some(
-                            <#self_ty>::#guards_fn as ::nest_rs_core::__private::GuardStageFactory,
-                        ),
-                        class_gate: #gate,
-                    },
-                );
-            &__NESTRS_SITE
-        };
-    }
+                }
+            },
+        }),
+        class_gate,
+    })
 }
 
 /// The return type of the method the expansion emits: always
@@ -926,7 +892,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // One per bound operation: the unit of work its subject loads in.
     let mut unit_requirements: Vec<TokenStream2> = Vec::new();
     // Each field's handler and site, and the sites the boot composes.
-    let mut site_items: Vec<TokenStream2> = Vec::new();
+    let mut sites: Vec<TokenStream2> = Vec::new();
     let mut site_refs: Vec<(Vec<TokenStream2>, TokenStream2)> = Vec::new();
     // async-graphql allows one `#[ComplexObject]` per parent type.
     let mut field_groups: Vec<(Type, Vec<TokenStream2>)> = Vec::new();
@@ -1066,7 +1032,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 ));
             }
             let field_label = format!("{}.{}", type_label(&self_ty), method_name);
-            site_items.push(handler_const(&HandlerSite {
+            sites.push(handler_const(&HandlerSite {
                 unit: quote!(::nest_rs_graphql::unit::FIELD),
                 self_ty: &self_ty,
                 host_name: &base,
@@ -1077,7 +1043,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 method_meta: &[],
                 cfgs: &cfgs,
             }));
-            site_items.push(field_site(&FieldSite {
+            sites.push(field_site(&FieldSite {
                 self_ty: &self_ty,
                 method: &method_name,
                 cfgs: &cfgs,
@@ -1142,7 +1108,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             } else {
                 RootKind::Subscription
             };
-            site_items.push(handler_const(&HandlerSite {
+            sites.push(handler_const(&HandlerSite {
                 unit: match root_kind {
                     RootKind::Subscription => quote!(::nest_rs_graphql::unit::SUBSCRIPTION),
                     RootKind::Query | RootKind::Mutation => {
@@ -1344,7 +1310,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             } else {
                 ChainSite::Operation
             };
-            site_items.push(field_site(&FieldSite {
+            sites.push(field_site(&FieldSite {
                 self_ty: &self_ty,
                 method: &method_name,
                 cfgs: &cfgs,
@@ -1597,7 +1563,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         #item
 
         impl #self_ty {
-            #(#site_items)*
+            #(#sites)*
 
             #[doc(hidden)]
             fn __nestrs_sites() -> ::std::vec::Vec<&'static ::nest_rs_core::__private::Site> {

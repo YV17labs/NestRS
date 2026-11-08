@@ -86,6 +86,7 @@ mod refusals;
 mod replicas;
 mod root;
 mod route_path;
+mod site;
 mod specs;
 mod time_zone;
 mod trusted_proxy;
@@ -161,11 +162,12 @@ pub mod __private {
         Posture, PostureGate, PostureRules, authorized_entity, posture_key_unsupported,
         take_posture, withheld,
     };
-    pub use crate::provider_site::{ProviderSite, host_layers_entry, site_const, site_ref};
+    pub use crate::provider_site::{ProviderSite, host_layers_entry, site_const};
     pub use crate::queue_name::{invalid_queue_name, is_valid_queue_name};
     pub use crate::replicas::{REPLICAS, Replicas, replicas_value};
     pub use crate::root::{CHECKED_BY_CRUD, refused_without, reroot_as, reroot_impl_half};
     pub use crate::route_path::RoutePath;
+    pub use crate::site::{SiteGuards, SiteItems, site_items, site_ref};
     pub use crate::specs::{
         exception_filter_specs, force_guard_typeids, interceptor_specs, scoped_specs,
     };

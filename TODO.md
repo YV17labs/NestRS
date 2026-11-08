@@ -326,9 +326,8 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   reaches no docker. Close: a by-hand `docker compose up` on a machine whose
   ports 5432, 6379 and 9000 are free, or a CI job running it, at the minutes it
   costs. *read*
-- Copies left: the site emitter five times; `impl Layer for X {}` beside
-  `#[derive(Layer)]` in about 300 fixtures. (The spec vectors have had one
-  home since `b6a955784`.)
+- Copies left: `impl Layer for X {}` beside `#[derive(Layer)]` in about 300
+  fixtures. (The spec vectors have had one home since `b6a955784`.)
 
 ## 5. Additive features for 7.x (no caller yet)
 

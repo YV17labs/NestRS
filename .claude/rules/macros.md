@@ -222,10 +222,14 @@ scopes (the host, a method, a gateway's connection hook): built, pending or
 refused with the fact that makes it meaningless (`a hook has no caller and no
 site`), read by `take_layers`, with a trybuild snapshot per refused cell and a
 hygiene use site per built one. An attribute a site does not take never runs
-as a silent no-op, nor reaches rustc as `cannot find attribute`. A
+as a silent no-op, nor reaches rustc as `cannot find attribute`. **A site's
+items are written once**, by `nest_rs_codegen::__private::site_items`, in its
+host's inherent `impl` — its layers, its guard stage where its edge runs one,
+its `&'static Site` — and read back through `site_ref`. A
 provider-hosted pair (`#[processor]`, `#[scheduled]`, `#[listeners]`)
-declares each method's site through `nest_rs_codegen::__private::site_const`
+declares each method's site through `site_const`
 and reports what it binds to the access graph through `host_layers_entry`;
+`#[routes]` declares one per route and `#[messages]` one per message;
 `#[operations]` declares one per field beside its handler, its guard stage
 included, and submits them for the boot to compose; `#[tools]` declares one
 per operation alike and lists them for the boot to compose — so it refuses a

@@ -27,12 +27,12 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     Conditional, DispatchKeys, HandlerSite, HostBorrow, HostMeta, Posture, PostureGate,
-    PostureRules, TailParam, ambient_type_ids, answer_span, await_if_async, cfg_attrs,
-    concrete_signature, exception_filter_specs, force_guard_typeids, forwarded_arg_idents,
-    generic_args, guard_capability_bounds, handler_const, handler_ref, impl_self_ident,
-    interceptor_specs, layer_deps, normalize_forwarded_args, nth_generic_type, one_role_per_method,
-    piped_input, reject_meta_on_operations, scoped_specs, shared_receiver, site_const_ident,
-    site_fn_ident, tail_param, ungrouped_expr, unit_of_work_required, validate_argument,
+    PostureRules, SiteGuards, SiteItems, TailParam, ambient_type_ids, answer_span, await_if_async,
+    cfg_attrs, concrete_signature, force_guard_typeids, forwarded_arg_idents, generic_args,
+    guard_capability_bounds, handler_const, impl_self_ident, layer_deps, normalize_forwarded_args,
+    nth_generic_type, one_role_per_method, piped_input, reject_meta_on_operations, scoped_specs,
+    shared_receiver, site_const_ident, site_items, site_ref, tail_param, ungrouped_expr,
+    unit_of_work_required, validate_argument,
 };
 use nest_rs_codegen::snake_case;
 
@@ -399,7 +399,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     });
     let layer_keys = &layers.keys;
     let layer_labels = &layers.labels;
-    let sites = site_items(&self_ty, &base, &operations);
+    let sites = operation_sites(&self_ty, &base, &operations);
     let templates = template_items(&operations);
 
     let (impl_generics, ty_generics, where_clause) = &generics;
@@ -900,12 +900,6 @@ fn spelled_result(sig: &Signature) -> Option<&Type> {
     (ident == "Result" && args.len() == 2).then(|| args[0])
 }
 
-/// The `&'static Site` `method`'s operation runs through on `self_ty`.
-fn site_ref(self_ty: &Type, method: &syn::Ident) -> TokenStream2 {
-    let name = site_const_ident("site", method);
-    quote! { <#self_ty>::#name }
-}
-
 /// Step 2 — the class gate `#[authorize(Action, Entity)]` desugars to, every
 /// edge's one, run on the operation its guards checked.
 fn class_gate(posture: &Posture) -> TokenStream2 {
@@ -1308,7 +1302,7 @@ fn tail_args(sig: &Signature) -> Vec<TailArg> {
 /// its host and its method bind, its guard stage and its posture's class
 /// gate — plus the list of sites the boot composes and the providers its
 /// `Scoped<T>` parameters resolve, which the access graph checks.
-fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> TokenStream2 {
+fn operation_sites(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> TokenStream2 {
     let items = operations.all().map(|op| {
         let wire_name = &op.wire_name;
         let method = op.name();
@@ -1324,47 +1318,26 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
             method_meta: &op.metas,
             cfgs,
         });
-        let handler_ref = handler_ref(self_ty, method);
-        let layers_fn = site_fn_ident("layers", method);
-        let guards_fn = site_fn_ident("guards", method);
-        let site = site_const_ident("site", method);
-        let method_interceptors = interceptor_specs(&op.interceptors);
-        let method_exception_filters = exception_filter_specs(&op.exception_filters);
         let method_guards = scoped_specs(&op.guards, quote!(dyn ::nest_rs_guards::Guard));
         let force = force_guard_typeids(&op.force_guards);
         let kind = op.role.kind();
-        let gate = class_gate(&op.posture);
         let class_gated = op.posture.gate().is_some();
         let withheld = op.posture.withheld();
         let ambient = ambient_type_ids(op.tail.iter().map(|arg| &arg.ty));
-        quote! {
-            #handler
-
-            #(#cfgs)*
-            #[doc(hidden)]
-            fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
-                ::nest_rs_core::__private::SiteLayers {
-                    host_interceptors: <#self_ty>::__nestrs_mcp_host_interceptor_specs(),
-                    method_interceptors: #method_interceptors,
-                    host_exception_filters:
-                        <#self_ty>::__nestrs_mcp_host_exception_filter_specs(),
-                    method_exception_filters: #method_exception_filters,
-                }
-            }
-
-            #(#cfgs)*
-            #[doc(hidden)]
-            fn #guards_fn(
-                __nestrs_container: &::nest_rs_core::Container,
-                __nestrs_handler: &::nest_rs_core::Handler,
-            ) -> ::nest_rs_core::anyhow::Result<
-                ::core::option::Option<
-                    ::std::sync::Arc<dyn ::nest_rs_core::__private::GuardStage>,
-                >,
-            > {
-                ::nest_rs_mcp::__private::operation_guard_stage(
-                    __nestrs_container,
-                    __nestrs_handler,
+        let site = site_items(&SiteItems {
+            self_ty,
+            method,
+            cfgs,
+            host: [
+                quote!(<#self_ty>::__nestrs_mcp_host_interceptor_specs()),
+                quote!(<#self_ty>::__nestrs_mcp_host_exception_filter_specs()),
+            ],
+            interceptors: &op.interceptors,
+            exception_filters: &op.exception_filters,
+            global: quote!(::nest_rs_mcp::__private::OPERATION_LAYERS),
+            guards: Some(SiteGuards {
+                build: quote!(::nest_rs_mcp::__private::operation_guard_stage),
+                declaration: quote! {
                     ::nest_rs_mcp::__private::OperationGuards {
                         host: <#self_ty>::__nestrs_mcp_host_guard_specs(),
                         method: #method_guards,
@@ -1373,28 +1346,15 @@ fn site_items(self_ty: &Type, base: &syn::Ident, operations: &Operations) -> Tok
                         withheld: #withheld,
                         class_gated: #class_gated,
                         ambient: #ambient,
-                    },
-                )
-            }
+                    }
+                },
+            }),
+            class_gate: class_gate(&op.posture),
+        });
+        quote! {
+            #handler
 
-            #(#cfgs)*
-            #[doc(hidden)]
-            pub const #site: &'static ::nest_rs_core::__private::Site = {
-                static __NESTRS_SITE: ::nest_rs_core::__private::Site =
-                    ::nest_rs_core::__private::declare_site(
-                        #handler_ref,
-                        ::nest_rs_core::__private::SiteDeclaration {
-                            layers: <#self_ty>::#layers_fn,
-                            global: ::nest_rs_mcp::__private::OPERATION_LAYERS,
-                            guard_stage: ::core::option::Option::Some(
-                                <#self_ty>::#guards_fn
-                                    as ::nest_rs_core::__private::GuardStageFactory,
-                            ),
-                            class_gate: #gate,
-                        },
-                    );
-                &__NESTRS_SITE
-            };
+            #site
         }
     });
     let site_pushes = operations.all().map(|op| {

@@ -13,7 +13,7 @@ use syn::Type;
 
 use crate::inject::{LayerDeps, layer_deps};
 use crate::layers::Layers;
-use crate::meta::{handler_ref, site_const_ident, site_fn_ident};
+use crate::site::{SiteItems, site_items};
 use crate::specs::{exception_filter_specs, interceptor_specs};
 
 /// One dispatch site of a provider-hosted impl half, with the layers its block
@@ -33,10 +33,9 @@ pub struct ProviderSite<'a> {
 
 /// The hidden associated items declaring `site`, placed in the inherent `impl`
 /// of the host that holds its handler const
-/// ([`handler_const`](crate::meta::handler_const)): the function building its
-/// layers, and the const holding its `&'static Site`, which
-/// [`site_ref`] reads. Every app-wide layer runs around such a unit: it is
-/// accepted on its own, nested in none.
+/// ([`handler_const`](crate::meta::handler_const)), as
+/// [`site_items`] writes every site's. Every app-wide layer runs around such a
+/// unit: it is accepted on its own, nested in none, and no guard runs.
 pub fn site_const(site: &ProviderSite<'_>) -> TokenStream {
     let ProviderSite {
         self_ty,
@@ -45,47 +44,20 @@ pub fn site_const(site: &ProviderSite<'_>) -> TokenStream {
         method_layers,
         cfgs,
     } = site;
-    let name = site_const_ident("site", method);
-    let layers_fn = site_fn_ident("layers", method);
-    let handler = handler_ref(self_ty, method);
-    let host_interceptors = interceptor_specs(&host.interceptors);
-    let method_interceptors = interceptor_specs(&method_layers.interceptors);
-    let host_exception_filters = exception_filter_specs(&host.exception_filters);
-    let method_exception_filters = exception_filter_specs(&method_layers.exception_filters);
-    quote! {
-        #(#cfgs)*
-        #[doc(hidden)]
-        fn #layers_fn() -> ::nest_rs_core::__private::SiteLayers {
-            ::nest_rs_core::__private::SiteLayers {
-                host_interceptors: #host_interceptors,
-                method_interceptors: #method_interceptors,
-                host_exception_filters: #host_exception_filters,
-                method_exception_filters: #method_exception_filters,
-            }
-        }
-
-        #(#cfgs)*
-        #[doc(hidden)]
-        pub const #name: &'static ::nest_rs_core::__private::Site = {
-            static __NESTRS_SITE: ::nest_rs_core::__private::Site =
-                ::nest_rs_core::__private::declare_site(
-                    #handler,
-                    ::nest_rs_core::__private::SiteDeclaration {
-                        layers: <#self_ty>::#layers_fn,
-                        global: ::nest_rs_core::__private::GlobalLayers::ALL,
-                        guard_stage: ::core::option::Option::None,
-                        class_gate: ::core::option::Option::None,
-                    },
-                );
-            &__NESTRS_SITE
-        };
-    }
-}
-
-/// The `&'static Site` of `method`'s site on `self_ty`.
-pub fn site_ref(self_ty: &Type, method: &syn::Ident) -> TokenStream {
-    let name = site_const_ident("site", method);
-    quote! { <#self_ty>::#name }
+    site_items(&SiteItems {
+        self_ty,
+        method,
+        cfgs,
+        host: [
+            interceptor_specs(&host.interceptors),
+            exception_filter_specs(&host.exception_filters),
+        ],
+        interceptors: &method_layers.interceptors,
+        exception_filters: &method_layers.exception_filters,
+        global: quote!(::nest_rs_core::__private::GlobalLayers::ALL),
+        guards: None,
+        class_gate: quote!(::core::option::Option::None),
+    })
 }
 
 /// The access-graph entry for the layers `site` binds, under its method's
@@ -128,16 +100,6 @@ mod tests {
             exception_filters,
             ..Layers::default()
         }
-    }
-
-    #[test]
-    fn a_site_const_is_named_for_its_method() {
-        let ty: Type = parse_quote!(AudioProcessor);
-        let method: syn::Ident = parse_quote!(r#type);
-        assert_eq!(
-            site_ref(&ty, &method).to_string(),
-            "< AudioProcessor > :: __NESTRS_SITE_TYPE",
-        );
     }
 
     #[test]

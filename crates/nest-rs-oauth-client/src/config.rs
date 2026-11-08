@@ -57,7 +57,7 @@ pub struct OAuthClientConfig {
     /// §3.3 `scope-token`, so the request's space-joined list names the scopes
     /// listed: one holding a space, a `"`, a `\` or anything but printable
     /// ASCII fails the boot.
-    #[validate(custom(function = "scope_tokens"))]
+    #[validate(custom(function = "OAuthClientConfig::validate_scopes"))]
     pub scopes: Vec<String>,
     /// What the authorization request carries beside the client's own
     /// parameters (key `AUTHORIZATION_PARAMETERS`, a JSON object of strings) —
@@ -65,7 +65,7 @@ pub struct OAuthClientConfig {
     /// Google; none by default. A parameter the client sends itself fails the
     /// boot ([`AuthorizationParameters`]).
     #[config(json)]
-    #[validate(custom(function = "sendable"))]
+    #[validate(custom(function = "OAuthClientConfig::validate_authorization_parameters"))]
     pub authorization_parameters: AuthorizationParameters,
     /// What the provider's certificate must chain to — the system's authorities
     /// unless `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` names others, which replace
@@ -109,29 +109,61 @@ fn not_blank(value: &str) -> Result<(), validator::ValidationError> {
     Ok(())
 }
 
-/// RFC 6749 §3.3: every scope a `scope-token`.
-fn scope_tokens(scopes: &[String]) -> Result<(), validator::ValidationError> {
-    if scopes.iter().all(|scope| is_scope_token(scope)) {
-        Ok(())
-    } else {
-        Err(validator::ValidationError::new("not_a_scope_token"))
-    }
-}
-
-/// [`AuthorizationParameters::refusal`] as a validation error.
-fn sendable(parameters: &AuthorizationParameters) -> Result<(), validator::ValidationError> {
-    match parameters.refusal() {
-        Some(code) => Err(validator::ValidationError::new(code)),
-        None => Ok(()),
-    }
-}
-
 /// [`not_blank`] for a credential held as a [`Secret`].
 fn not_blank_secret(value: &Secret<String>) -> Result<(), validator::ValidationError> {
     not_blank(value.expose_secret())
 }
 
 impl OAuthClientConfig {
+    /// The rule [`scopes`](Self::scopes) is held to, for a provider's config
+    /// holding scopes of its own, so its boot names its own variable:
+    /// `not_a_scope_token` unless every scope is an RFC 6749 §3.3 `scope-token`.
+    ///
+    /// ```
+    /// use nest_rs_config::{Config, ConfigService, config, var_name};
+    /// use nest_rs_oauth_client::{AuthorizationParameters, OAuthClientConfig};
+    ///
+    /// #[config(namespace = "social__acme")]
+    /// #[derive(Clone, Debug, Default)]
+    /// pub struct AcmeSocialConfig {
+    ///     #[validate(custom(function = "OAuthClientConfig::validate_scopes"))]
+    ///     pub scopes: Vec<String>,
+    ///     #[config(json)]
+    ///     #[validate(custom(function = "OAuthClientConfig::validate_authorization_parameters"))]
+    ///     pub authorization_parameters: AuthorizationParameters,
+    /// }
+    ///
+    /// let env = ConfigService::with_vars("social__acme", [("SCOPES", "openid email")]);
+    /// let refused = AcmeSocialConfig::from_env(&env, AcmeSocialConfig::default())?
+    ///     .check()
+    ///     .expect_err("two scopes in one entry");
+    /// let said = refused.to_string();
+    /// assert!(said.contains(&var_name("social__acme", "SCOPES")), "{said}");
+    /// assert!(said.contains("not_a_scope_token"), "{said}");
+    /// # Ok::<(), nest_rs_config::ConfigError>(())
+    /// ```
+    pub fn validate_scopes(scopes: &[String]) -> Result<(), validator::ValidationError> {
+        if scopes.iter().all(|scope| is_scope_token(scope)) {
+            Ok(())
+        } else {
+            Err(validator::ValidationError::new("not_a_scope_token"))
+        }
+    }
+
+    /// The rule [`authorization_parameters`](Self::authorization_parameters) is
+    /// held to, for a provider's config holding parameters of its own, as
+    /// [`validate_scopes`](Self::validate_scopes) shows: the first fault
+    /// [`AuthorizationParameters`] names, `sent_by_the_client`,
+    /// `not_a_parameter_name`, `no_value` or `named_twice`.
+    pub fn validate_authorization_parameters(
+        parameters: &AuthorizationParameters,
+    ) -> Result<(), validator::ValidationError> {
+        match parameters.refusal() {
+            Some(code) => Err(validator::ValidationError::new(code)),
+            None => Ok(()),
+        }
+    }
+
     /// Refuse a URL that does not parse, a provider endpoint that is not
     /// `https`, and a redirect that is neither `https` nor, in a profile that
     /// is no deployment, `http` on a loopback address — naming the setting,
@@ -692,6 +724,23 @@ mod tests {
             );
             assert!(!rendered.contains("never"), "{rendered}");
         }
+    }
+
+    /// A provider's config holds the fields it hands this client by the client's
+    /// own rules, so its boot names its own variable.
+    #[test]
+    fn a_provider_s_config_holds_its_fields_by_the_client_s_rules() {
+        assert!(OAuthClientConfig::validate_scopes(&["openid".into(), "email".into()]).is_ok());
+        let refused = OAuthClientConfig::validate_scopes(&["openid email".into()])
+            .expect_err("two scopes in one");
+        assert_eq!(refused.code, "not_a_scope_token");
+
+        let consent = AuthorizationParameters::from([("prompt", "consent")]);
+        assert!(OAuthClientConfig::validate_authorization_parameters(&consent).is_ok());
+        let credential = AuthorizationParameters::from([("client_secret", "never-shown")]);
+        let refused = OAuthClientConfig::validate_authorization_parameters(&credential)
+            .expect_err("a credential");
+        assert_eq!(refused.code, "sent_by_the_client");
     }
 
     #[test]

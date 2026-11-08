@@ -42,7 +42,9 @@ use serde::{Deserialize, Serialize};
 /// authorization URL reaches every browser's history and the provider's access
 /// log, which RFC 6749 §2.3.1 forbids. It refuses a name outside RFC 6749 §8.2's
 /// grammar, a parameter with no value, which §3.1 treats as omitted, and one
-/// named twice in any case, which §3.1 forbids.
+/// named twice in any case, which §3.1 forbids
+/// ([`OAuthClientConfig::validate_authorization_parameters`](crate::OAuthClientConfig::validate_authorization_parameters),
+/// which a provider's config holding its own validates them with).
 ///
 /// `Debug` prints the names alone: a value is the deployment's, and a provider may
 /// read a key in one.
@@ -82,9 +84,8 @@ impl AuthorizationParameters {
 
     /// The validation code the boot refuses these parameters with, the first
     /// fault found — `sent_by_the_client`, `not_a_parameter_name`, `no_value` or
-    /// `named_twice` — or `None`: what a provider's config holding its own
-    /// validates them with, under its own variable.
-    pub fn refusal(&self) -> Option<&'static str> {
+    /// `named_twice` — or `None`.
+    pub(crate) fn refusal(&self) -> Option<&'static str> {
         for (at, (name, value)) in self.0.iter().enumerate() {
             if Self::SENT_BY_THE_CLIENT
                 .iter()

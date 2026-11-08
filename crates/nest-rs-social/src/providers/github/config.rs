@@ -26,14 +26,14 @@ pub struct GithubSocialConfig {
     pub redirect_url: String,
     /// Defaults to `read:user user:email` when unset; each an RFC 6749 §3.3
     /// `scope-token`, so one holding a space or a `"` fails the boot.
-    #[validate(custom(function = "crate::providers::scope_tokens"))]
+    #[validate(custom(function = "OAuthClientConfig::validate_scopes"))]
     pub scopes: Vec<String>,
     /// What the authorization request carries beside the client's own
     /// parameters (key `AUTHORIZATION_PARAMETERS`, a JSON object of strings);
     /// none by default. A parameter the client sends itself fails the boot
     /// ([`AuthorizationParameters`]).
     #[config(json)]
-    #[validate(custom(function = "crate::providers::sendable"))]
+    #[validate(custom(function = "OAuthClientConfig::validate_authorization_parameters"))]
     pub authorization_parameters: AuthorizationParameters,
 }
 

@@ -52,3 +52,19 @@ parameter sent twice on this entry's own premise that a provider reads a name lo
 - **The list is the type's own, private**: public, a fixed-size array would put its length in its
   type, and the next member — DPoP's `dpop_jkt` (RFC 9449 §10), once the client binds its tokens —
   would break it. The type's documentation and the docs name the members.
+
+## 2026-11-08 — a provider's config holds its scopes and parameters by the client's rules
+
+Found by this branch's review: a third-party provider had no public way to hold its `scopes` to
+RFC 6749 §3.3 (the predicate is the guards' `__private`, each shipped copy private). Seen run: a
+composed `OAuthClientConfig` holding `"openid email"` was refused by `OAuthClient::new` as
+"configuration validation failed for `OAuthClientConfig`", a name the provider's deployment never
+set — the trap the redirect's refusal already avoided.
+
+- **`OAuthClientConfig::validate_scopes` and
+  `OAuthClientConfig::validate_authorization_parameters`**, public: the rule each field of the
+  client is held to, which a provider's config names in `#[validate(custom(function = …))]` on
+  the field it hands the client. The GitHub and Google configs hold theirs by them, in place of
+  `nest-rs-social`'s own copies.
+- **Refused: a public `AuthorizationParameters::refusal()`** returning a code each config wraps
+  into a `ValidationError` itself — a second way to the same check, and no answer for the scopes.

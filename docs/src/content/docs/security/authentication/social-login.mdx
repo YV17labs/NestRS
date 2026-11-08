@@ -292,6 +292,22 @@ it answers with `TokenSet::new(access_token)`, then `with_id_token` and
 registry asks before it separates *inert* from *misconfigured*:
 
 ```rust title="crates/features/src/social/config.rs"
+#[config(namespace = "social__acme")]
+#[derive(Clone, Default)]
+pub struct AcmeSocialConfig {
+    #[validate(length(min = 1))]
+    pub client_id: String,
+    #[validate(length(min = 1))]
+    pub client_secret: Secret<String>,
+    #[validate(length(min = 1))]
+    pub redirect_url: String,
+    #[validate(custom(function = "OAuthClientConfig::validate_scopes"))]
+    pub scopes: Vec<String>,
+    #[config(json)]
+    #[validate(custom(function = "OAuthClientConfig::validate_authorization_parameters"))]
+    pub authorization_parameters: AuthorizationParameters,
+}
+
 impl SocialProviderConfig for AcmeSocialConfig {
     fn is_unconfigured(&self) -> bool {
         self.client_id.is_empty()
@@ -309,13 +325,13 @@ credential, so the GitHub and Google configs write their `Debug` and show it
 through `nest_rs::config::endpoint_shown`; yours does the same.
 
 The config also composes the `OAuthClientConfig` the shared client takes:
-your provider's endpoints, the deployment's credentials and its redirect, and the
-`AuthorizationParameters` a field of yours reads under `#[config(json)]`, whose
-`refusal()` is the validation code a custom validator of yours refuses it with, as the
-GitHub and Google configs do.
-Refuse the redirect there, under your own variable — the client refuses a
-plaintext one too, but by `<PREFIX>_OAUTH__CLIENT__REDIRECT_URL`, a name
-your deployment never set:
+your provider's endpoints, the deployment's credentials, its redirect, its scopes
+and its `AuthorizationParameters`. The client checks them again, but under
+`<PREFIX>_OAUTH__CLIENT__*`, names your deployment never set — which is why the
+struct above holds its scopes and parameters by the client's own rules,
+`OAuthClientConfig::validate_scopes` and
+`OAuthClientConfig::validate_authorization_parameters`. Refuse the redirect here
+for the same reason, under your own variable:
 
 ```rust title="crates/features/src/social/config.rs"
 impl AcmeSocialConfig {

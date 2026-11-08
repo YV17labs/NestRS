@@ -296,3 +296,13 @@ hidden trait item builds too, and overriding one is outside the API
 (`visibility-tiers.md`). No guard reaching the API can claim it, since `AmbientAbility`
 is built by authz alone, so it is kept as a limit, the gate's fail-closed `500` naming
 the remedy.
+
+## 2026-11-08 — the posture gates, and no shaper reads the body
+
+A route's posture keeps its class gate, run with its guards, and the reads it opens; the
+response shaper that read the body back into the entity's rows is gone with every edge's
+reply mask (`mask-provenance.md`, 2026-11-08): each wire row the route answers was judged
+for its caller where it was built, and `Json` answers one its grants refuse `403`. A DTO a
+body fills from a row's columns is the body's visible line, as it is on every edge; the
+document's `masked` flag stays what it reads, an entity's posture, and says that a nullable
+property reads `null` where the caller's grants withhold it.

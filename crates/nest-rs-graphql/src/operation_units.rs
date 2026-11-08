@@ -241,7 +241,9 @@ impl<E: Executor> Executor for OperationUnits<E> {
 }
 
 /// A subscription's stream, each poll of it in the request scope the
-/// subscription opened with, nested in the socket's unit, which polls it.
+/// subscription opened with, nested in the socket's unit, which polls it. What a
+/// poll builds is a push, which no read under the subscriber's ability filtered:
+/// a wire row built there is judged as one.
 struct InScope {
     /// Taken into [`unit`](Self::unit) at the first poll.
     scope: Option<Arc<RequestScope>>,
@@ -257,7 +259,7 @@ impl Stream for InScope {
         let unit = this.unit.get_or_insert_with(|| {
             nested_continuation(this.scope.take(), nest_rs_core::Correlation::inherited())
         });
-        unit.enter(|| this.stream.poll_next_unpin(cx))
+        unit.enter(|| nest_rs_core::__private::as_pushed(|| this.stream.poll_next_unpin(cx)))
     }
 }
 

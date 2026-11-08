@@ -70,20 +70,20 @@ pub(crate) const GATED_ON_ENTITY: &str =
     "    // Gated on the port's entity: it answers FORBIDDEN until AuthzAbility grants
     // `ab.can(nest_rs::authz::Action::Read, crate::{{snake}}::Entity)`.";
 
-/// The MCP tool's addition over an entity: rmcp needs the typed value back, so
-/// the mask works on the wire type the tool returns.
-pub(crate) const ROWS_MASKED_AS_JSON: &str =
+/// The MCP tool's addition over an entity: rmcp reads the tool's output schema
+/// off the wire type it returns.
+pub(crate) const ROWS_AS_JSON: &str =
     "    // An answer made of its rows returns the `#[expose]`d wire type wrapped in
-    // `Json<...>`, which is what arms the field-level mask.";
+    // `Json<...>`, each row judged for the caller where it is built.";
 
 /// The note above a single operation gated on the port's `#[subject]`, which
-/// masks nothing: rows wait for the posture on their entity.
+/// opens no read: rows wait for the posture on their entity.
 pub(crate) const GATED_ON_SUBJECT: &str =
     "    // Gated on {{entity}}, this port's #[subject]: a capability no table holds, so
-    // the posture masks nothing. It answers FORBIDDEN until AuthzAbility grants
+    // the posture opens no read. It answers FORBIDDEN until AuthzAbility grants
     // `ab.can(nest_rs::authz::Action::Read, crate::{{snake}}::{{entity}})`. Before it
     // answers with an entity's rows, it is re-gated on that entity,
-    // `#[authorize(Read, {{entity}}Entity)]`, the posture that masks them.";
+    // `#[authorize(Read, {{entity}}Entity)]`, the posture that opens their read.";
 
 /// The GraphQL adapter for a port with no `CrudService`: guarded like its
 /// `#[crud]` twin, its operation gated on `{{subject}}` — the port's entity, or

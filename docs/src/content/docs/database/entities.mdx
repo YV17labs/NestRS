@@ -179,16 +179,12 @@ The service that verifies the hash reads it with `expose_secret()`, and
 the wire.
 
 <Aside type="caution">
-Response masking rebuilds the full row from the wire body to judge it,
-which needs a placeholder for every unexposed column. The macro provides
-one for the trivial scalar types (`String`, `Option`, `bool`, numbers),
-and a `Secret` column takes its value's. A hidden column of a type it
-can't default — `Uuid`, a timestamp, `Decimal`, a custom enum, a
-`Secret<Vec<u8>>` — takes `#[wire_default]` (its type's `Default`) or
-`#[wire_default(expr)]`; without one, `#[expose]` refuses the column at
-compile time. A rule reading a hidden column is decided by the `Repo`
-read on a reply, and decides no pushed row.
-See [Response masking](/security/authorization/response-masking/#what-the-mask-cannot-see).
+A wire row is judged on its whole row where `From<&Model>` builds it, hidden
+columns included, so a rule reading one decides it. A column a grant may
+withhold is declared `#[expose(nullable)]`, or is an `Option` already: its wire
+field reads `null` for a caller the grant withholds it from. A grant on `Read`
+leaving out any other column fails when the ability builds, naming it.
+See [Response masking](/security/authorization/response-masking/#what-a-grant-may-withhold--exposenullable).
 </Aside>
 
 ### Enum columns
@@ -230,9 +226,8 @@ decision, not the wire's. Your own `#[serde(rename_all = …)]` and
 that only crosses HTTP.
 
 An enum a **hidden** column holds never crosses a wire, so it takes no
-`#[wire_enum]`: SeaORM's derives are its own, and the column names the
-placeholder a masked reply rebuilds it with —
-`#[wire_default(UserRole::User)]`, as the `users` exemplar's `role` does.
+`#[wire_enum]`: SeaORM's derives are its own, as the `users` exemplar's `role`
+shows.
 
 ## Write side — inputs and validation
 
@@ -417,7 +412,7 @@ See [Migrations](/database/migrations/) for writing and running them
 | `#[expose(validate(…))]` | input column | Attaches a `validator` rule to the input field. |
 | `#[expose(complexity = …)]` | exposed field / relation | Overrides the GraphQL complexity cost (literal or expression string). |
 | `#[expose(default = …)]` | a column the create input does not carry | The value every insert through `Repo` leaving the column unset stores. |
-| `#[wire_default]` / `#[wire_default(expr)]` | a hidden column | The placeholder a masked reply rebuilds it with: its type's `Default`, or `expr`. |
+| `#[expose(nullable)]` | an exposed column of a type with no null | A grant on `Read` may withhold it: its wire field is an `Option`, nullable in every edge's schema, its key always written. |
 | `#[expose]` on `HasOne`/`HasMany` | relation | Auto-resolved GraphQL field (needs header `graphql` + `service`). |
 | `#[expose(via = "…")]` | `HasMany` | Names which of the child's foreign keys the relation follows — required when it has two to this parent. |
 | `#[wire_enum]` / `#[wire_enum(graphql)]` | a column's enum type | Emits the wire derives (serde, schemars, async-graphql `Enum`) routed through the framework. |

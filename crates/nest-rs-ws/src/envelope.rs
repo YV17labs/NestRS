@@ -317,7 +317,17 @@ impl WsReply {
     /// Serializes a handler's return; a failure degrades to an [`Opaque`]
     /// [`WsReply::Error`], since serde's `Display` can carry the value.
     pub fn reply<T: Serialize>(value: &T) -> WsReply {
-        match serde_json::to_value(value).opaque() {
+        use nest_rs_core::__private::{AnswerRefusal, take_refused_answer};
+        let _ = take_refused_answer();
+        let written = serde_json::to_value(value);
+        // A wire row the caller may not read refused itself, and said so: a denial.
+        if written.is_err() && take_refused_answer() == Some(AnswerRefusal::Withheld) {
+            return WsReply::Error(WsError::from_problem(&nest_rs_core::Problem::new(
+                403,
+                nest_rs_core::code::FORBIDDEN,
+            )));
+        }
+        match written.opaque() {
             Ok(data) => WsReply::Reply(data),
             Err(err) => WsReply::Error(err),
         }

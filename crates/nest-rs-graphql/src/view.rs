@@ -1,8 +1,12 @@
 //! [`GraphqlView`], the GraphQL edge's view of the field it dispatches.
 
+use std::sync::Arc;
+
 use async_graphql::parser::types::OperationType;
 use nest_rs_core::{ServedAddress, UnitView};
 use nest_rs_http::CarriedView;
+
+use crate::filed_facts::FiledFacts;
 
 /// The GraphQL edge's view of one field a guard checks: which field, under
 /// which kind of operation, in which role.
@@ -27,6 +31,8 @@ pub struct GraphqlView {
     field: &'static str,
     operation: OperationType,
     role: FieldRole,
+    /// What the operation already filed, for a unit run once per parent.
+    filed: Option<Arc<FiledFacts>>,
 }
 
 impl UnitView for GraphqlView {
@@ -48,7 +54,20 @@ impl GraphqlView {
             field,
             operation,
             role,
+            filed: None,
         }
+    }
+
+    /// The same view, filing what its operation already filed once.
+    pub(crate) fn filing_into(mut self, filed: Option<Arc<FiledFacts>>) -> Self {
+        self.filed = filed;
+        self
+    }
+
+    /// Whether the operation has yet to file `fact`; a view no operation record
+    /// reaches files each.
+    pub(crate) fn first_filed(&self, fact: String) -> bool {
+        self.filed.as_ref().is_none_or(|filed| filed.first(fact))
     }
 
     /// The field, as its site declares it (`listUsers`).

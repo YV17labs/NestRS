@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_authz::{AbilityBuilder, Action, Manage};
 use nest_rs_core::{Layer, Module, UnitContext, async_trait, injectable, module};
-use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
+use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_http::{HttpView, Json, controller, routes};
@@ -23,26 +23,25 @@ const FORBIDDEN: &str = r#""code":"FORBIDDEN""#;
 /// The bodies a refused caller must not reach.
 static BODIES: AtomicUsize = AtomicUsize::new(0);
 
-/// A widget as every edge answers it; `name` is what a mask may take off.
-#[derive(SimpleObject, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-struct ManagedWidget {
-    id: i32,
-    name: Option<String>,
-}
+use widget::Widget as ManagedWidget;
 
-/// What every site answers: two rows, told apart by their names.
+/// What every site answers: the rows a read under the caller's ability admits of
+/// two, told apart by their names, each judged as it is built.
 fn managed_widgets() -> Vec<ManagedWidget> {
     BODIES.fetch_add(1, Ordering::SeqCst);
-    vec![
-        ManagedWidget {
-            id: 1,
-            name: Some("first".to_owned()),
-        },
-        ManagedWidget {
-            id: 2,
-            name: Some("second".to_owned()),
-        },
-    ]
+    [(1, "first"), (2, "second")]
+        .into_iter()
+        .map(|(id, name)| widget::Model {
+            id,
+            name: name.to_owned(),
+            secret: "kept".to_owned(),
+        })
+        .filter(|row| {
+            nest_rs_authz::current_ability()
+                .is_some_and(|ability| ability.can::<widget::Entity>(Action::Read, row))
+        })
+        .map(|row| ManagedWidget::from(&row))
+        .collect()
 }
 
 /// The rules a role names, built for a caller or for a visitor.

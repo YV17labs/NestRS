@@ -478,6 +478,27 @@ async fn the_app_wide_pool_runs_once_per_root_field_not_per_parent() {
     );
 }
 
+/// A field resolver runs once per parent, and its guard's refusal is one fact: one
+/// line per operation however many parents repeat it, each keeping its error.
+#[tokio::test]
+async fn a_field_resolvers_refusal_under_every_parent_files_one_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = chain_app::<ChainModule>().await;
+    let body = query(&app, "{ vaults { id sealedNote } }").await;
+    let errors = body["errors"].as_array().cloned().unwrap_or_default();
+    assert_eq!(errors.len(), 3, "each parent keeps its refusal: {body}");
+    let filed = logs.find(nest_rs_core::target::LAYERS, "guard denied the operation");
+    assert_eq!(filed.len(), 1, "one line for the operation: {filed:#?}");
+
+    let _ = query(&app, "{ vaults { id sealedNote } }").await;
+    let filed = logs.find(nest_rs_core::target::LAYERS, "guard denied the operation");
+    assert_eq!(
+        filed.len(),
+        2,
+        "the next operation files its own: {filed:#?}"
+    );
+}
+
 /// A site that composes on its first dispatch: a guard no module provides is
 /// never dropped from the chain — the operation is refused, opaquely.
 mod unresolvable {

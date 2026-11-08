@@ -36,16 +36,12 @@ pub(crate) mod reason {
     /// A principal whose token is too narrow — RFC 6750 §3.1.
     pub(crate) const INSUFFICIENT_SCOPE: &str = "insufficient_scope";
     /// Nothing installed an ability: a wiring failure, reported by every
-    /// fail-closed exit, masking included (via [`mask_reason`](crate::ability::mask_reason)).
+    /// fail-closed exit (via [`mask_reason`](crate::ability::mask_reason)).
     pub(crate) const NO_AMBIENT_ABILITY: &str = crate::ability::mask_reason::NO_AMBIENT_ABILITY;
     /// The ability guard's rules would not build — the request is refused
     /// rather than given an ability whose denial evaporates.
     #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
     pub(crate) const RULES_MISCONFIGURED: &str = "rules_misconfigured";
-    /// A field grant stripped a key the answer cannot be delivered without.
-    /// Only the edges handing a typed value back reach it; HTTP and WS drop the key.
-    #[cfg(any(feature = "graphql", feature = "mcp"))]
-    pub(crate) const FIELD_NOT_GRANTED: &str = "field_not_granted";
 }
 
 /// Everything the one `authorization denied` event can carry, and the only
@@ -94,16 +90,6 @@ impl<'a> Refusal<'a> {
             served: cx.served_address().unwrap_or_default(),
             site: Some((handler.host_name(), handler.method())),
             ..Self::on(cx.edge().map_or("unit", Edge::as_str))
-        }
-    }
-
-    /// A refusal a mask makes on `unit`, whose edge states the transport.
-    #[cfg(any(feature = "graphql", feature = "mcp"))]
-    pub(crate) fn of_mask(unit: crate::wire_mask::MaskedUnit<'a>) -> Self {
-        Self {
-            served: unit.served,
-            site: unit.site,
-            ..Self::on(unit.transport.unwrap_or("unit"))
         }
     }
 

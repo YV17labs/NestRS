@@ -1,6 +1,6 @@
-use super::entities::post::Post;
+use super::entities::post::Model;
 
 #[derive(Clone)]
 pub struct PostPublishedEvent {
-    pub post: Post,
+    pub post: Model,
 }

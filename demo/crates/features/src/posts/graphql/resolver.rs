@@ -34,6 +34,6 @@ impl PostsResolver {
     async fn post_published(&self) -> impl Stream<Item = Post> {
         self.bus
             .stream::<PostPublishedEvent>()
-            .map(|event| event.post)
+            .map(|event| Post::from(&event.post))
     }
 }

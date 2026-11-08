@@ -69,7 +69,6 @@ mod subscription;
 mod testing;
 pub mod unit;
 mod view;
-mod wire_answer;
 
 pub use config::GraphqlConfig;
 pub use context::BoxFuture;
@@ -106,11 +105,7 @@ pub mod __private {
         GraphqlSubscriptionObject, ResolverDescriptor,
     };
     pub use crate::scope::{scoped_parameter, unprovided};
-    pub use crate::subscription::{compose_schema, keep_masked_item};
-    pub use crate::wire_answer::{
-        FieldAnswer, FieldAnswerFallback, FieldMask, GraphqlWireType, UnmaskedObjects, WireAnswer,
-        WireRow,
-    };
+    pub use crate::subscription::compose_schema;
 
     pub use inventory;
     // Every operation's tail validates its arguments, with no dependency of the

@@ -99,3 +99,16 @@ stage to read, and it runs once per connection, where the marker is nothing besi
 any unit no mask shapes, and `masked_reply` there answers `NoAmbientAbility`. A hook's system
 write is `Repo::insert_unscoped`, a visible line; a hook wanting to read under the caller's rules
 is a key to add later, with no break, once a caller asks.
+
+## 2026-11-08 — no reply mask is left, and the marker names a unit no posture opens
+
+The wire row is judged where it is built (`mask-provenance.md`, 2026-11-08), so no edge
+reads a reply back and nothing is left for `unmasked` to switch off: the key is refused
+on every edge, naming why, and `masked_reply` is gone. What this decision withholds does
+not move: a unit whose posture names no entity's read — a bare `#[public]`, a covered unit
+stating none, a `#[subject]`'s, a stream, a connection hook — still reads under no ability,
+since nothing named its read, and the marker keeps its name, `UnmaskedReply`, an internal
+seam no app writes. What changes is only why a posture on an entity opens its unit's reads:
+each row the unit answers is judged for its caller where it is built, whatever shape
+carries it. A hook writing through `Repo` stays barred, and a hand-written `ServerHandler`
+answers wire rows its body builds, judged as every other.

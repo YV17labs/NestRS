@@ -129,12 +129,11 @@ deep on each.
 - **[Wire model](/security/authorization/response-masking/)** — the
   `#[expose]` output struct (`User`) the wire produces; distinct from
   the SeaORM `Model` the database returns.
-- **[Wire default](/security/authorization/response-masking/)**
-  — `#[wire_default]` or `#[wire_default(expr)]` on an unexposed column:
-  the placeholder the masker rebuilds the row with, since the wire body
-  never carries it. A `String`, `Option`, `bool`, number or `Secret` of
-  one takes its own; any other hidden column without one is refused by
-  `#[expose]` at compile time.
+- **[Nullable column](/security/authorization/response-masking/#what-a-grant-may-withhold--exposenullable)**
+  — `#[expose(nullable)]` on a column of a type with no null: a grant on
+  `Read` may withhold it, and its wire field then reads `null`. An `Option`
+  column is one already; a grant withholding any other column fails when the
+  ability builds.
 
 ## Security
 

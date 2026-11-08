@@ -174,6 +174,25 @@ pub fn problem_error<E: ToProblem>(error: &E) -> McpError {
     problem_reply(error).filed()
 }
 
+/// A tool's answer as rmcp sends it, written where the operation runs, so a wire
+/// row it carries is written for the caller its site answers: a row that caller
+/// may not read refuses as a denial, `FORBIDDEN`.
+pub fn answered_tool<T: rmcp::handler::server::tool::IntoCallToolResult>(
+    value: T,
+) -> Result<rmcp::model::CallToolResponse, OperationFailure> {
+    use nest_rs_core::__private::{AnswerRefusal, take_refused_answer};
+    let _ = take_refused_answer();
+    value.into_call_tool_result().map_err(|refused| {
+        let refused = match take_refused_answer() {
+            Some(AnswerRefusal::Withheld) => {
+                rendered(&Problem::new(403, nest_rs_core::code::FORBIDDEN))
+            }
+            _ => refused,
+        };
+        OperationFailure::from(refused)
+    })
+}
+
 /// A problem as the JSON-RPC error an MCP operation answers with.
 fn rendered(problem: &Problem) -> McpError {
     let data = ClassData {

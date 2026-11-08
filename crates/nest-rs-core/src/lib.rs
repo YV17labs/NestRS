@@ -108,6 +108,7 @@ mod app;
 mod app_dir;
 mod app_identity;
 mod app_lifecycle;
+mod audience;
 mod backoff;
 mod budget;
 mod close;
@@ -250,6 +251,10 @@ pub mod __private {
     };
     pub use crate::app_dir::{app_dir, in_app_dir};
     pub use crate::app_identity::{capture_app_identity, package_identity};
+    pub use crate::audience::{
+        AnswerRefusal, Audience, as_pushed, audience, for_others, is_pushed, refuse_answer,
+        take_refused_answer,
+    };
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,
         declaring_site, enter_import, leave_import, overrides_any, reading, record_absent_optional,

@@ -124,9 +124,7 @@ pub mod __private {
     #[cfg(feature = "graphql")]
     pub use crate::graphql::bind::graphql_bind;
     #[cfg(feature = "graphql")]
-    pub use crate::graphql::relations::__private::{
-        masked_relation_page, relation_key, relation_page,
-    };
+    pub use crate::graphql::relations::__private::{relation_key, relation_page};
     #[cfg(feature = "http")]
     pub use crate::http::http_bind;
     #[cfg(feature = "graphql")]
@@ -136,7 +134,7 @@ pub mod __private {
     pub use crate::service::{SameEntity, bound_entity, created_key};
 
     pub use crate::column_default::ColumnDefaultRegistration;
-    pub use crate::exposed::ExposeDeclared;
+    pub use crate::exposed::{ExposeDeclared, nullable_schema};
     pub use crate::hidden_columns::{AModelCrossesNoWire, HiddenColumns};
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
     pub use crate::unique_key::UniqueKeyRegistration;
@@ -147,11 +145,8 @@ pub mod __private {
     pub use async_trait::async_trait;
     pub use chrono;
     #[cfg(feature = "graphql")]
-    pub use nest_rs_core::__private::Site;
-    #[cfg(feature = "graphql")]
     pub use nest_rs_graphql::__private::{
-        FieldFailure, GraphqlRelationRegistration, GraphqlWireType, LoaderOwner, WireAnswer,
-        WireRow, seeded_loader,
+        FieldFailure, GraphqlRelationRegistration, LoaderOwner, seeded_loader,
     };
     #[cfg(feature = "graphql")]
     pub use nest_rs_graphql::{async_graphql, dataloader};
@@ -164,9 +159,9 @@ pub mod __private {
 }
 
 /// Expose a SeaORM entity to REST/OpenAPI (and optionally GraphQL) from one
-/// declaration: its wire DTO (`Serialize` + `JsonSchema`), its `Create`/`Update`
-/// inputs, and the round trip response masking reads a row through, each
-/// column by its own serde impls. A `Model` crosses no wire but as that type: a
+/// declaration: its wire DTO (`Serialize` + `JsonSchema`), built from a row and
+/// judged there for the caller the running unit answers, and its `Create`/`Update`
+/// inputs. A `Model` crosses no wire but as that type: a
 /// wire derive written on it is refused, and one above the decorator or an impl
 /// written by hand does not compile beside what the decorator emits on it, so it
 /// serializes nowhere and, with the `graphql` feature, answers no GraphQL field.
@@ -197,16 +192,23 @@ pub mod __private {
 ///     pub org_id: Uuid,
 ///     #[expose(input(create, update), validate(length(min = 1)))] // read + write
 ///     pub name: String,
-///     #[expose(input(create), validate(email))]                  // read + create-only
-///     pub email: String,
+///     #[expose(input(create), validate(email), nullable)]        // read + create-only,
+///     pub email: String,                                         //   a grant may withhold it
 ///     pub password_hash: Option<Secret<String>>,                 // no #[expose] ⇒ hidden
 /// }
 /// # impl ActiveModelBehavior for ActiveModel {}
 /// # }
-/// # fn main() -> Result<(), serde_json::Error> {
+/// # #[nest_rs_core::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # use nest_rs_authz::{AbilityBuilder, Action};
 /// # use sea_orm::prelude::Uuid;
 /// # use user::{CreateUser, Model, UpdateUser, User};
 /// # let id = Uuid::nil();
+/// let mut ab = AbilityBuilder::new();
+/// ab.can(Action::Read, user::Entity)
+///     .fields([user::Column::Id, user::Column::OrgId, user::Column::Name]);
+/// # let ability = std::sync::Arc::new(ab.build()?);
+/// # nest_rs_authz::__private::install_ability(ability, async {
 ///
 /// let model = Model {
 ///     id,
@@ -217,16 +219,18 @@ pub mod __private {
 /// };
 /// assert_eq!(
 ///     serde_json::to_value(User::from(&model))?,
-///     serde_json::json!({ "id": id, "org_id": id, "name": "Ada", "email": "ada@example.com" }),
+///     serde_json::json!({ "id": id, "org_id": id, "name": "Ada", "email": null }),
 /// );
 /// let _ = CreateUser { name: "Ada".into(), email: "ada@example.com".into() };
 /// let _ = UpdateUser { name: "Ada L.".into() };
+/// # Ok::<_, serde_json::Error>(())
+/// # }).await?;
 /// # Ok(())
 /// # }
 /// ```
 ///
 /// The `Model` is no wire type: a handler answers its exposed type, so a
-/// hidden column never crosses a route no mask shapes.
+/// hidden column never crosses a wire.
 ///
 /// ```compile_fail,E0277
 /// # use nest_rs_seaorm::expose;
@@ -251,11 +255,10 @@ pub mod __private {
 /// # Ok::<(), serde_json::Error>(())
 /// ```
 ///
-/// A masked reply rebuilds every hidden column, so each takes a placeholder:
-/// a `String`, `Option`, `bool` or number its `Default`, a `Secret` its
-/// value's, and any other `#[wire_default]` (its type's `Default`) or
-/// `#[wire_default(expr)]`. A hidden column with none, and a hidden primary
-/// key, are refused at the field.
+/// A grant on `Read` may withhold only a column the wire type answers `null`:
+/// an `Option` column, or one `#[expose(nullable)]` declares, whose field is an
+/// `Option` and whose schema is nullable on every edge. The primary key names its
+/// row and takes no `nullable`.
 ///
 /// Add the `graphql` flag, with this crate's `graphql` feature, and the DTO is
 /// also a GraphQL object, its `#[expose]`d relations resolved through

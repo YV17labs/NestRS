@@ -1,4 +1,4 @@
-error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`; append `unmasked` to keep the class gate but mask the response yourself. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[public(Update, bind = ArtworksService)]`
+error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[public(Update, bind = ArtworksService)]`
   --> tests/integration/diagnostics/graphql/argument_on_public.rs:14:5
    |
 14 |     #[public(read_only)]

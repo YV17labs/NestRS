@@ -4,12 +4,12 @@
 //! An [`AbilityFactory`] builds an [`Ability`] for the app's actor, which
 //! answers three questions backed by one shared [`Predicate`]: `can` (gate an
 //! action), `condition_for` (lower rules to a `sea_orm::Condition` for
-//! row-level filtering), and `mask` (strip disallowed instances + fields from a
-//! response).
+//! row-level filtering), and which rows and columns of an entity a caller may
+//! read, which `#[expose]`'s conversion asks where it builds a wire row.
 //!
 //! A rule names a [`Subject`]: an entity, or a capability no table holds that
 //! [`#[subject]`](macro@subject) declares, which a rule grants whole and a posture
-//! gates without masking.
+//! gates, opening no read.
 //!
 //! `AbilityGuard` is the one guard, answering all four edges; each binding's
 //! feature turns it on.
@@ -29,11 +29,9 @@ mod factory;
 mod gate;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod guard;
+mod judged;
 mod predicate;
 mod subject;
-#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-mod wire_mask;
-mod wire_model;
 
 /// This crate's span target.
 pub const TARGET: &str = "nest_rs::authz";
@@ -42,7 +40,7 @@ pub use ability::{Ability, FieldSet};
 pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};
 pub use builder::{AbilityBuilder, Can, Cannot, RuleSpec};
 pub use context::{current_ability, with_ability};
-pub use error::{ColumnsRefused, MalformedRuleError, MaskReplyError};
+pub use error::{ColumnsRefused, MalformedRuleError};
 pub use factory::AbilityFactory;
 pub use gate::class_gate;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
@@ -51,8 +49,8 @@ pub use predicate::{Predicate, PredicateBuilder};
 pub use subject::{RowSubject, Subject};
 
 /// Declares a unit struct a [`Subject`] no table holds — a capability a rule
-/// grants whole and `#[authorize(Action, Subject)]` gates on every edge,
-/// arming no mask since the subject has no rows.
+/// grants whole and `#[authorize(Action, Subject)]` gates on every edge, opening
+/// no read since the subject has no rows.
 ///
 /// ```
 /// use nest_rs_authz::{AbilityBuilder, Action, subject};
@@ -76,20 +74,18 @@ pub use subject::{RowSubject, Subject};
 ///
 /// # Expands to
 ///
-/// The struct unchanged, plus its `Subject` impl and the hidden impl that tells
-/// every edge's posture it has no rows to mask.
+/// The struct unchanged, plus its `Subject` impl, which tells every edge's posture
+/// it has no rows to read.
 pub use nest_rs_authz_macros::subject;
-#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-pub use wire_mask::masked_reply;
 
 #[cfg(feature = "graphql")]
 pub mod graphql;
 #[cfg(feature = "http")]
 pub mod http;
 #[cfg(feature = "mcp")]
-pub(crate) mod mcp;
+mod mcp;
 #[cfg(feature = "ws")]
-pub(crate) mod ws;
+mod ws;
 
 #[doc(hidden)]
 pub mod __private {
@@ -99,16 +95,9 @@ pub mod __private {
     pub use crate::contained::{Uncontained, contained_text, contained_value};
     pub use crate::context::{AmbientAbility, install_ability, visitors_read_unnamed};
     #[cfg(feature = "graphql")]
-    pub use crate::graphql::mask::{
-        GraphqlMask, graphql_masked_answer, graphql_masked_answer_nodes, graphql_masked_item,
-        graphql_masked_nodes, graphql_masked_row, graphql_masked_value,
+    pub use crate::judged::judged_field;
+    pub use crate::judged::{
+        Judged, JudgedRow, Judgement, PushedItem, PushedItemFallback, Refused, WireColumns, judge,
     };
-    #[cfg(feature = "http")]
-    pub use crate::http::mask::RouteMask;
-    #[cfg(feature = "mcp")]
-    pub use crate::mcp::mask::{McpMask, mcp_masked_value};
-    pub use crate::subject::{NoRows, Rows, SubjectMask};
-    pub use crate::wire_model::{WireModel, wire_column};
-    #[cfg(feature = "ws")]
-    pub use crate::ws::mask::{WsMask, ws_masked_reply};
+    pub use inventory;
 }

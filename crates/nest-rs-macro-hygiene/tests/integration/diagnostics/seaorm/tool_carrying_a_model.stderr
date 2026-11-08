@@ -25,6 +25,24 @@ note: required by a bound in `schema_for_output`
    |                             ^^^^^^^^^^ required by this bound in `schema_for_output`
    = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
 
+error[E0277]: the trait bound `nest_rs::mcp::Json<post::Model>: IntoCallToolResult` is not satisfied
+  --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:31:1
+   |
+31 | #[tools]
+   | ^^^^^^^^ the trait `IntoCallToolResult` is not implemented for `nest_rs::mcp::Json<post::Model>`
+   |
+help: the trait `IntoCallToolResult` is implemented for `nest_rs::mcp::Json<T>`
+  --> $CARGO/rmcp-$VERSION/src/handler/server/wrapper/json.rs
+   |
+   | impl<T: Serialize + JsonSchema + 'static> IntoCallToolResult for Json<T> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `nest_rs::mcp::__private::answered_tool`
+  --> $WORKSPACE/crates/nest-rs-mcp/src/error.rs
+   |
+   | pub fn answered_tool<T: rmcp::handler::server::tool::IntoCallToolResult>(
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `answered_tool`
+   = note: this error originates in the attribute macro `tools` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
   --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:41:38
    |
@@ -54,39 +72,13 @@ note: required by a bound in `schema_for_input`
    |                            ^^^^^^^^^^ required by this bound in `schema_for_input`
    = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `(nest_rs::mcp::model::Tool, for<'a> fn(&'a PostsTools) -> Pin<Box<(dyn std::future::Future<Output = Result<nest_rs::mcp::Json<post::Model>, ErrorData>> + std::marker::Send + 'a)>> {__nest_rs_mcp_posts_tools::<impl PostsTools>::__nestrs_mcp_posts_tools_answered}): IntoToolRoute<PostsTools, _>` is not satisfied
+error[E0277]: the trait bound `(nest_rs::mcp::model::Tool, for<'a> fn(&'a PostsTools, nest_rs::mcp::Parameters<post::Model>) -> Pin<Box<(dyn std::future::Future<Output = Result<CallToolResponse, ErrorData>> + std::marker::Send + 'a)>> {__nest_rs_mcp_posts_tools::<impl PostsTools>::__nestrs_mcp_posts_tools_read}): IntoToolRoute<PostsTools, _>` is not satisfied
   --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:31:1
    |
 31 | #[tools]
    | ^^^^^^^^ unsatisfied trait bound
    |
-   = help: the trait `IntoToolRoute<PostsTools, _>` is not implemented for `(nest_rs::mcp::model::Tool, for<'a> fn(&'a PostsTools) -> Pin<Box<(dyn std::future::Future<Output = Result<nest_rs::mcp::Json<post::Model>, ErrorData>> + std::marker::Send + 'a)>> {__nest_rs_mcp_posts_tools::<impl PostsTools>::__nestrs_mcp_posts_tools_answered})`
-help: the trait `IntoToolRoute<S, A>` is implemented for `(T, C)`
-  --> $CARGO/rmcp-$VERSION/src/handler/server/router/tool.rs
-   |
-   | / impl<S, C, A, T> IntoToolRoute<S, A> for (T, C)
-   | | where
-   | |     S: MaybeSend + 'static,
-   | |     C: CallToolHandler<S, A> + MaybeSend + Clone + 'static,
-   | |     T: Into<Tool>,
-   | |__________________^
-note: required by a bound in `ToolRouter::<S>::with_route`
-  --> $CARGO/rmcp-$VERSION/src/handler/server/router/tool.rs
-   |
-   |     pub fn with_route<R, A>(mut self, route: R) -> Self
-   |            ---------- required by a bound in this associated function
-   |     where
-   |         R: IntoToolRoute<S, A>,
-   |            ^^^^^^^^^^^^^^^^^^^ required by this bound in `ToolRouter::<S>::with_route`
-   = note: this error originates in the attribute macro `tool_router` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: the trait bound `(nest_rs::mcp::model::Tool, for<'a> fn(&'a PostsTools, nest_rs::mcp::Parameters<post::Model>) -> Pin<Box<(dyn std::future::Future<Output = Result<std::string::String, ErrorData>> + std::marker::Send + 'a)>> {__nest_rs_mcp_posts_tools::<impl PostsTools>::__nestrs_mcp_posts_tools_read}): IntoToolRoute<PostsTools, _>` is not satisfied
-  --> tests/integration/diagnostics/seaorm/tool_carrying_a_model.rs:31:1
-   |
-31 | #[tools]
-   | ^^^^^^^^ unsatisfied trait bound
-   |
-   = help: the trait `IntoToolRoute<PostsTools, _>` is not implemented for `(nest_rs::mcp::model::Tool, for<'a> fn(&'a PostsTools, nest_rs::mcp::Parameters<post::Model>) -> Pin<Box<(dyn std::future::Future<Output = Result<std::string::String, ErrorData>> + std::marker::Send + 'a)>> {__nest_rs_mcp_posts_tools::<impl PostsTools>::__nestrs_mcp_posts_tools_read})`
+   = help: the trait `IntoToolRoute<PostsTools, _>` is not implemented for `(nest_rs::mcp::model::Tool, for<'a> fn(&'a PostsTools, nest_rs::mcp::Parameters<post::Model>) -> Pin<Box<(dyn std::future::Future<Output = Result<CallToolResponse, ErrorData>> + std::marker::Send + 'a)>> {__nest_rs_mcp_posts_tools::<impl PostsTools>::__nestrs_mcp_posts_tools_read})`
 help: the trait `IntoToolRoute<S, A>` is implemented for `(T, C)`
   --> $CARGO/rmcp-$VERSION/src/handler/server/router/tool.rs
    |

@@ -3,7 +3,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Item, ItemStruct};
 
-use crate::{active, attr, dto, input, lifecycle, refused_wires, relations, wire};
+use crate::{active, attr, dto, input, lifecycle, refused_wires, relations};
 
 pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut item = match parse_struct(item.into()) {
@@ -61,7 +61,6 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     let output = dto::emit(&model);
     let inputs = input::emit(&model);
     let active = active::emit(&model);
-    let wire_defaults = wire::emit(&model);
     let lifecycle = lifecycle::emit(&model);
     let relations = if model.graphql {
         match relations::emit(&model) {
@@ -78,7 +77,6 @@ pub(crate) fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
         #output
         #inputs
         #active
-        #wire_defaults
         #wires_refused
         #lifecycle
         #relations

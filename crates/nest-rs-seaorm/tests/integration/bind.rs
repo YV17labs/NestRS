@@ -147,9 +147,12 @@ impl BoundTools {
     /// A note, loaded and authorized.
     #[resource(template = "note://{id}")]
     #[authorize(Read, bind = NotesService)]
-    async fn note(&self, note: Authorized<Read, note::Entity>) -> Result<Json<NoteDto>, McpError> {
+    async fn note(
+        &self,
+        note: Authorized<Read, note::Entity>,
+    ) -> Result<Json<note::Note>, McpError> {
         BODIES.fetch_add(1, Ordering::SeqCst);
-        Ok(Json(NoteDto::from(note.into_inner())))
+        Ok(Json(note::Note::from(&note.into_inner())))
     }
 
     /// The same load, its entity written and its answer's `Option` kept.
@@ -158,60 +161,9 @@ impl BoundTools {
     async fn written(
         &self,
         note: Authorized<Read, note::Entity>,
-    ) -> Result<Option<Json<NoteDto>>, McpError> {
+    ) -> Result<Option<Json<note::Note>>, McpError> {
         BODIES.fetch_add(1, Ordering::SeqCst);
-        Ok(Some(Json(NoteDto::from(note.into_inner()))))
-    }
-
-    /// A reply leaving out a column its entity requires, which a mask cannot read
-    /// back.
-    #[resource(template = "narrow://{id}")]
-    #[authorize(Read, bind = NotesService)]
-    async fn narrow(
-        &self,
-        note: Authorized<Read, note::Entity>,
-    ) -> Result<Json<TitleDto>, McpError> {
-        BODIES.fetch_add(1, Ordering::SeqCst);
-        Ok(Json(TitleDto::from(note.into_inner())))
-    }
-
-    /// The same reply, the projection declared as the field restriction.
-    #[resource(template = "projected://{id}")]
-    #[authorize(Read, bind = NotesService, unmasked)]
-    async fn projected(
-        &self,
-        note: Authorized<Read, note::Entity>,
-    ) -> Result<Json<TitleDto>, McpError> {
-        BODIES.fetch_add(1, Ordering::SeqCst);
-        Ok(Json(TitleDto::from(note.into_inner())))
-    }
-}
-
-#[nest_rs_core::input]
-struct NoteDto {
-    id: Uuid,
-    title: Option<String>,
-    body: Option<String>,
-}
-
-#[nest_rs_core::input]
-struct TitleDto {
-    title: Option<String>,
-}
-
-impl From<note::Model> for TitleDto {
-    fn from(note: note::Model) -> Self {
-        Self { title: note.title }
-    }
-}
-
-impl From<note::Model> for NoteDto {
-    fn from(note: note::Model) -> Self {
-        Self {
-            id: note.id,
-            title: note.title,
-            body: note.body,
-        }
+        Ok(Some(Json(note::Note::from(&note.into_inner()))))
     }
 }
 
@@ -378,31 +330,6 @@ async fn a_statement_cancelled_at_its_bound_answers_unavailable_filed_at_warn() 
     );
 }
 
-/// As on every edge, a body a mask cannot read back ships nothing, its reason
-/// filed; `unmasked` is how a resource says the projection is deliberate.
-#[tokio::test]
-async fn a_reply_narrower_than_its_entity_fails_closed_unless_it_declares_unmasked() {
-    let _serial = SERIAL.lock().await;
-    let app = app().await;
-    let logs = LogCapture::install();
-    let (answer, loads, bodies) = read(&app, "reader", &format!("narrow://{FOUND}")).await;
-    assert_eq!(answer["error"]["data"]["code"], "INTERNAL", "{answer}");
-    assert!(!answer.to_string().contains("seen"), "{answer}");
-    assert_eq!((loads, bodies), (1, 1), "{answer}");
-    let filed = logs.expect_one("nest_rs::authz", "response masking failed");
-    assert_eq!(
-        filed.field("reason").as_deref(),
-        Some("irreconcilable_wire_value"),
-    );
-
-    let (answer, loads, bodies) = read(&app, "reader", &format!("projected://{FOUND}")).await;
-    assert_eq!((loads, bodies), (1, 1), "{answer}");
-    let text = answer["result"]["contents"][0]["text"]
-        .as_str()
-        .unwrap_or_else(|| panic!("a text body: {answer}"));
-    assert_eq!(text, r#"{"title":"seen"}"#, "{answer}");
-}
-
 #[module(providers = [RoleGrants, BoundTools, EndpointGuards<McpView, (RoleGrants,)>])]
 struct UnimportedServiceModule;
 
@@ -461,9 +388,12 @@ impl VisitedTools {
     #[resource(template = "note://{id}")]
     #[public(Read, bind = NotesService)]
     #[use_guards(VisitorGuard)]
-    async fn note(&self, note: Authorized<Read, note::Entity>) -> Result<Json<NoteDto>, McpError> {
+    async fn note(
+        &self,
+        note: Authorized<Read, note::Entity>,
+    ) -> Result<Json<note::Note>, McpError> {
         BODIES.fetch_add(1, Ordering::SeqCst);
-        Ok(Json(NoteDto::from(note.into_inner())))
+        Ok(Json(note::Note::from(&note.into_inner())))
     }
 }
 

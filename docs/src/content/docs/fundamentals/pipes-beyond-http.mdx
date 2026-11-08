@@ -47,7 +47,7 @@ async fn trim_handler(&self, Piped(name): Piped<Trim>) -> String {
 ```rust title="crates/features/src/posts/mcp/tool.rs"
 // MCP — the tool's schema is `SearchPostsDto`, held to its rules before the body.
 #[tool(description = "Search posts by title")]
-#[public(Read, post::Entity, unmasked)]
+#[public(Read, post::Entity)]
 async fn search_posts(
     &self,
     Parameters(search): Parameters<SearchPostsDto>,

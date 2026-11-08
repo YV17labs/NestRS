@@ -9,4 +9,3 @@ mod input;
 mod lifecycle;
 #[cfg(feature = "graphql")]
 mod relations;
-mod wire;

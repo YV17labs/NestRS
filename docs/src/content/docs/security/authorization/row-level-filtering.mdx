@@ -71,7 +71,7 @@ The same `Predicate` AST also drives the in-memory check
 comparison with `NULL` matches under neither the rule nor its `NOT`. What
 the row cannot show, a relation above all, stays SQL's: the response mask
 trusts the read for it on a reply and refuses it on a push
-([What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see)),
+([What the mask cannot see](/security/authorization/response-masking/#each-row-is-judged-on-its-whole-row)),
 and `can` grants nothing on it while a denial it cannot decide refuses:
 `Repo::can` asks SQL instead
 ([Reading the ambient ability](/security/authorization/#reading-the-ambient-ability)).
@@ -105,15 +105,15 @@ depths cooperate:
   the request carries runs under it: the dataloader batches a resolver
   triggers, and a tool across rmcp's own task.
 - **WebSockets** — the gateway's upgrade guards attach it, and the
-  connection carries it into every message. No mask shapes what a connection
-  hook sends, so it stays off a hook's reads.
+  connection carries it into every message. A connection hook names no read,
+  so it stays off a hook's reads.
 
 A handler's reads see it where its posture names what it reads:
-`#[authorize(Action, Entity)]` or `#[public(Action, Entity)]`, whose mask shapes
-the answer, or, on an edge taking it, either with `unmasked`, which leaves that to
-the body. **Anywhere else it is withheld**, a bare `#[public]`, a unit stating no posture, a
-`#[subject]`'s, a stream: `current_ability()` answers `None` and the reads fail
-closed, since no mask would shape what they answer. A visitor's ability is read
+`#[authorize(Action, Entity)]` or `#[public(Action, Entity)]`, each row the
+answer carries judged for the caller as it is built. **Anywhere else it is
+withheld**, a bare `#[public]`, a unit stating no posture, a `#[subject]`'s, a
+stream: `current_ability()` answers `None` and the reads fail closed, since no
+posture named them. A visitor's ability is read
 only inside a unit naming its read, so a nested GraphQL field and a relation's
 batch read nothing for one.
 

@@ -20,7 +20,7 @@ pushed afterwards.
 async fn post_published(&self) -> impl Stream<Item = Post> {
     self.bus
         .stream::<PostPublishedEvent>()
-        .map(|event| event.post)
+        .map(|event| Post::from(&event.post))
 }
 ```
 
@@ -53,10 +53,11 @@ The **gate** runs once, at subscribe. A caller whose ability carries no
 matching rule is refused before the stream opens, exactly as a query is
 refused before its body runs.
 
-The **mask** runs on every item. Each value the stream yields is evaluated
-against the ability captured at subscribe — the one the gate checked, a guard
-bound on the field included — the row rules first, then the field grants. An item the subscriber may not read is **dropped**, not
-delivered with its fields nulled, as a row refused leaves an item that is a list:
+Each **item** is judged as the socket polls the stream. The row the stream
+builds (`Post::from(&event.post)`) is judged for the subscriber whose ability
+the socket carries — the row rules first, then the field grants. An item the
+subscriber may not read is **dropped**, not delivered with its fields nulled, as a
+refused row leaves an item that is a list:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
 // two subscribers, one stream
@@ -65,7 +66,7 @@ delivered with its fields nulled, as a row refused leaves an item that is a list
 async fn post_published(&self) -> impl Stream<Item = Post> {
     self.bus
         .stream::<PostPublishedEvent>()
-        .map(|event| event.post)
+        .map(|event| Post::from(&event.post))
 }
 ```
 
@@ -75,14 +76,12 @@ published in org A reaches the first and never reaches the second. The
 resolver body writes no filter — the posture attribute is the whole
 mechanism, the same one `#[authorize]` arms on a query.
 
-That policy reads `org_id`, a column the item carries. An item is pushed,
-not read through `Repo`, so a rule that reads what the item does not carry
-— a relation, an unexposed column, a column the item's type leaves out —
-cannot be decided on it: such a grant admits no item, and such a denial
-refuses every one
-([What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see)).
-Expose the column the rule reads, read-only, carry it on the item, and the
-item is decided like a row.
+That policy reads `org_id`, a column of the row the event carries, whole. An
+item is pushed, not read through `Repo`, so a rule only a read could decide — a
+relation, two value types only the database compares — admits no item, and such
+a denial refuses every one. And carry the row, never its wire type: a wire row
+the publisher built was judged for the publisher, and answers no subscriber
+([A row answers the caller who judged it](/security/authorization/response-masking/#a-row-answers-the-caller-who-judged-it)).
 
 ## Feeding a subscription
 
@@ -107,11 +106,11 @@ Forgetting the bus is a boot error naming it, not a silent subscription.
 The stream reaches this process, and a reader far behind loses the oldest events:
 [Read events as a stream](/events/#read-events-as-a-stream) has what it promises.
 A source of your own — a broker's consumer, a channel — is any
-`impl Stream<Item = T>`, gated and masked the same way.
+`impl Stream<Item = T>`, gated and judged the same way.
 
-Note what the event carries: the **published post**, not its id. An item is
-pushed, not read through `Repo`, and the mask decides on what it carries. A
-published fact carries the fact.
+Note what the event carries: the **published row**, not its id and not its wire
+type. An item is pushed, not read through `Repo`, and its judgement decides on the
+whole row. A published fact carries the fact.
 
 ## On the wire
 
@@ -193,7 +192,7 @@ reads the principal the upgrade carried, at the opening.
 
 A subscription's guards, class gate, exception filters and interceptors run at
 its **opening** — the call answering the stream — never per item: each item
-is masked, and that is all it runs.
+is judged, and that is all it runs.
 
 ## Configuration
 
@@ -263,17 +262,20 @@ Everything else is the GraphQL module's own configuration — see
   is a compile error naming the rule, at the return type. A query or a mutation
   answers such a `Result` by its type; a subscription cannot. The method may be
   `fn` or `async fn`.
-- **An item that cannot be masked is dropped, not raised.** A stream
-  field's type is the item's, not a `Result`, so there is no error channel
-  per item: failing closed means the item does not ship. The drop is
-  logged at `warn` on `nest_rs::graphql` with the operation name.
+- **An item a refusal makes is dropped, not raised.** A stream field's type is
+  the item's, not a `Result`, so there is no error channel per item: failing
+  closed means the item does not ship. A refusal the subscriber's grants make is
+  said at `debug`, a row judged for another caller at `error`, each on
+  `nest_rs::authz` naming the subscription by `host`, `method`, `kind` and
+  `field`.
 - **A relational rule decides no item.** The subscriber sees nothing, and
   `nest_rs::authz` logs one `warn` (`reason = "undecidable_on_push"`) per
   entity and action, not one per item.
 - **A stream's own reads.** A visitor's read nothing; a caller a token backs reads
-  under the ability its request carried, and the mask covers only the item yielded,
-  so a scalar built from those rows ships as it is. An ability a field's own guards
-  attach reaches the mask of its items, never the stream's reads.
+  under the ability its request carried, and what a scalar built from those rows
+  says is the body's own line. An ability a field's own guards attach, with none
+  at the socket's request, judges the rows its opening builds and leaves with that
+  unit: no item answers the socket. Attach the ability at `/graphql`'s request.
 - **`bind = Service` binds at subscribe, not per item** — it names one
   subject for the subscription, the way it names one for a mutation.
 - **A subscription's request scope lasts as long as the subscription.** A
@@ -289,7 +291,7 @@ Everything else is the GraphQL module's own configuration — see
 - [Queries and mutations](/graphql/queries-mutations/) — the operation
   shape a subscription follows.
 - [Authorization](/security/authorization/) — what `#[authorize]` gates
-  and masks.
+  and what a judged row holds.
 - [Events](/events/) — the bus a subscription reads domain events from.
 - [WebSockets](/websockets/) — the other realtime surface, for
   message-shaped protocols rather than schema-shaped ones.

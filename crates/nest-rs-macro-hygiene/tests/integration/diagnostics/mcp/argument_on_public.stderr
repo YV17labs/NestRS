@@ -1,4 +1,4 @@
-error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`, optionally followed by `unmasked`
+error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`
   --> tests/integration/diagnostics/mcp/argument_on_public.rs:14:5
    |
 14 |     #[public(read_only)]

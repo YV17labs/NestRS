@@ -12,9 +12,9 @@ use nest_rs_authz::{
     Ability, AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read, current_ability,
 };
 use nest_rs_core::{AmbientValue, Discovery, Layer, UnitContext, async_trait, injectable, module};
+use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::async_graphql::dataloader::DataLoader;
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
-use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, GraphqlView, dataloader, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
 use nest_rs_http::__private::route_denials;
@@ -26,7 +26,6 @@ use nest_rs_mcp::{McpAccess, McpError, McpModule, mcp, tools};
 use nest_rs_testing::mcp::{call_method, call_tool, open_session};
 use nest_rs_testing::{LogCapture, TestApp};
 use nest_rs_ws::{WsError, WsModule, gateway, messages};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::graphql::query;
@@ -36,7 +35,7 @@ mod article {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[expose(name = "Article")]
+    #[expose(name = "Article", graphql, complex)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "articles")]
     pub(super) struct Model {
@@ -45,7 +44,7 @@ mod article {
         pub id: i32,
         #[expose]
         pub title: String,
-        #[expose]
+        #[expose(nullable)]
         pub published: bool,
         #[expose]
         pub body: Option<String>,
@@ -81,37 +80,33 @@ mod sealed {
 #[nest_rs_authz::subject]
 struct Browsing;
 
-/// An article as every edge answers it: each member optional, so a field grant
-/// has a representation in a typed answer.
-#[derive(Clone, Debug, Serialize, Deserialize, SimpleObject, schemars::JsonSchema)]
-#[graphql(complex)]
-struct ArticleDto {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    published: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    body: Option<String>,
-}
+use article::Article;
 
-/// The rows a read answers: two published, one draft.
-fn rows() -> Vec<ArticleDto> {
+/// The rows a `Repo` read under the running unit's ability answers, of two
+/// published articles and a draft, each judged as it is built.
+fn rows() -> Vec<Article> {
     [(1, true), (2, true), (3, false)]
         .into_iter()
-        .map(|(id, published)| ArticleDto {
-            id: Some(id),
-            title: Some(format!("article {id}")),
-            published: Some(published),
+        .map(|(id, published)| article::Model {
+            id,
+            title: format!("article {id}"),
+            published,
             body: Some(format!("body {id}")),
         })
+        .filter(|row| {
+            current_ability()
+                .is_some_and(|ability| ability.can::<article::Entity>(Action::Read, row))
+        })
+        .map(|row| Article::from(&row))
         .collect()
 }
 
 /// The visitor's answer on an edge dropping what its grant strips.
 fn titles() -> Value {
-    json!([{ "title": "article 1" }, { "title": "article 2" }])
+    json!([
+        { "id": 1, "title": "article 1", "published": null, "body": null },
+        { "id": 2, "title": "article 2", "published": null, "body": null },
+    ])
 }
 
 /// A caller a token backs.
@@ -165,7 +160,7 @@ impl AbilityFactory for Rules {
         ability
             .can(Action::Read, article::Entity)
             .when(|p| p.eq(article::Column::Published, true))
-            .fields([article::Column::Title]);
+            .fields([article::Column::Id, article::Column::Title]);
         ability.can(Action::Read, Browsing);
     }
 }
@@ -186,7 +181,7 @@ struct ArticlesController;
 impl ArticlesController {
     #[get("/")]
     #[public(Read, article::Entity)]
-    async fn feed(&self) -> Json<Vec<ArticleDto>> {
+    async fn feed(&self) -> Json<Vec<Article>> {
         Json(rows())
     }
 
@@ -230,12 +225,12 @@ struct ArticlesResolver;
 impl ArticlesResolver {
     #[query]
     #[public(Read, article::Entity)]
-    async fn feed(&self) -> GqlResult<Vec<ArticleDto>> {
+    async fn feed(&self) -> GqlResult<Vec<Article>> {
         Ok(rows())
     }
 
     #[query]
-    #[public(Read, article::Entity, unmasked)]
+    #[public(Read, article::Entity)]
     async fn feed_by_hand(&self) -> GqlResult<bool> {
         Ok(reads_under_an_ability())
     }
@@ -259,7 +254,7 @@ impl ArticlesResolver {
     }
 
     #[query]
-    #[public(Read, article::Entity, unmasked)]
+    #[public(Read, article::Entity)]
     async fn batched(&self, reads: &DataLoader<ReadsUnderAnAbility>) -> GqlResult<Option<bool>> {
         let Ok(read) = reads.load_one(1).await;
         Ok(read)
@@ -269,7 +264,7 @@ impl ArticlesResolver {
     #[subscription]
     #[public(Read, article::Entity)]
     #[use_guards(AuthzGuard)]
-    async fn feed_stream(&self) -> impl Stream<Item = ArticleDto> {
+    async fn feed_stream(&self) -> impl Stream<Item = Article> {
         stream::iter(rows())
     }
 
@@ -283,7 +278,7 @@ impl ArticlesResolver {
 
     /// A field no mask reaches, below an operation naming its read.
     #[field_resolver]
-    async fn nested_read(&self, parent: &ArticleDto) -> GqlResult<bool> {
+    async fn nested_read(&self, parent: &Article) -> GqlResult<bool> {
         let _ = parent;
         Ok(reads_under_an_ability())
     }
@@ -527,10 +522,15 @@ async fn a_batch_below_an_operation_naming_a_visitors_read_reads_nothing() {
     );
 }
 
+/// Each item is judged for the visitor its socket carries: a draft never arrives,
+/// a published article its title alone.
 #[tokio::test]
-async fn a_subscription_naming_its_read_masks_each_item_by_the_visitors_grant() {
+async fn a_subscription_naming_its_read_judges_each_item_by_the_visitors_grant() {
     let app = app().await;
-    let mut socket = app.graphql_socket().open();
+    let mut visitor = AbilityBuilder::new();
+    Rules.define_visitor(&mut visitor);
+    let visitor = Arc::new(visitor.build_visitor().expect("the visitor's rules build"));
+    let mut socket = app.graphql_socket().ability(visitor).open();
     socket.connect().await;
     socket.subscribe("1", "subscription { feedStream { title body } }");
     for title in ["article 1", "article 2"] {
@@ -542,7 +542,22 @@ async fn a_subscription_naming_its_read_masks_each_item_by_the_visitors_grant() 
         );
     }
     let done = socket.next_item("1").await.expect("the stream ends");
-    assert_eq!(done["type"], "complete", "the draft was dropped: {done}");
+    assert_eq!(done["type"], "complete", "the draft never arrived: {done}");
+}
+
+/// An ability the field's own guard attaches judges the rows its opening builds,
+/// and leaves with that unit: no item answers the socket, which holds none.
+#[tokio::test]
+async fn a_subscription_whose_own_guard_attaches_its_ability_streams_no_row() {
+    let app = app().await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    socket.subscribe("1", "subscription { feedStream { title } }");
+    let done = socket.next_item("1").await.expect("the stream ends");
+    assert_eq!(
+        done["type"], "complete",
+        "no row answered the socket: {done}"
+    );
 }
 
 /// What `ability`, carried by the socket's request, leaves a stream's own body to read.
@@ -600,7 +615,7 @@ impl ArticlesGateway {
     #[subscribe_message("feed")]
     #[public(Read, article::Entity)]
     #[use_guards(AuthzGuard)]
-    async fn feed(&self) -> Result<Vec<ArticleDto>, WsError> {
+    async fn feed(&self) -> Result<Vec<Article>, WsError> {
         Ok(rows())
     }
 
@@ -662,7 +677,7 @@ async fn a_message_dispatched_on_its_own_masks_by_the_visitors_grant_too() {
     visitor
         .can(Action::Read, article::Entity)
         .when(|p| p.eq(article::Column::Published, true))
-        .fields([article::Column::Title]);
+        .fields([article::Column::Id, article::Column::Title]);
     let visitor = visitor.build_visitor().expect("one grant builds");
     let reply = crate::ws::dispatch_with(&ArticlesGateway, visitor.into(), "feed").await;
     assert_eq!(
@@ -705,7 +720,7 @@ impl ArticlesTool {
     /// The articles a visitor may read.
     #[tool]
     #[public(Read, article::Entity)]
-    async fn feed(&self) -> Result<nest_rs_mcp::Json<Vec<ArticleDto>>, McpError> {
+    async fn feed(&self) -> Result<nest_rs_mcp::Json<Vec<Article>>, McpError> {
         Ok(nest_rs_mcp::Json(rows()))
     }
 
@@ -733,10 +748,10 @@ impl ArticlesTool {
     /// One article, read through its template.
     #[resource(template = "article://{id}")]
     #[public(Read, article::Entity)]
-    async fn article(&self, id: i32) -> Result<Option<nest_rs_mcp::Json<ArticleDto>>, McpError> {
+    async fn article(&self, id: i32) -> Result<Option<nest_rs_mcp::Json<Article>>, McpError> {
         Ok(rows()
             .into_iter()
-            .find(|row| row.id == Some(id))
+            .find(|row| row.id == id)
             .map(nest_rs_mcp::Json))
     }
 
@@ -759,7 +774,7 @@ impl ArticlesTool {
 
     /// A prompt its body writes what the caller may read into.
     #[prompt]
-    #[public(Read, article::Entity, unmasked)]
+    #[public(Read, article::Entity)]
     async fn draft(&self) -> Result<GetPromptResult, McpError> {
         Ok(GetPromptResult::new(vec![PromptMessage::new_text(
             Role::User,
@@ -769,7 +784,7 @@ impl ArticlesTool {
 
     /// A listing its body writes what the caller may read into.
     #[resources]
-    #[public(Read, article::Entity, unmasked)]
+    #[public(Read, article::Entity)]
     async fn articles(&self) -> Result<Vec<Resource>, McpError> {
         Ok(vec![Resource::new(
             "article://1",

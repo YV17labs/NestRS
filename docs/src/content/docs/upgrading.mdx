@@ -689,18 +689,22 @@ lists what the boot, a log or the wire shows when one is missed.
    | `ab.can(Action::Update, E).fields([...])`, on `Create` or on `Manage`, written to narrow the write's reply | the list is both what the write sets and what its reply shows, so a reply narrower than the write cannot be declared. List each column the write chooses, and its reply shows them. Dropping the list answers every exposed column on that write, whose reply reads its own grant, never `Read`'s. A column a service sets by itself goes on the list or in `before_save` |
    | `FieldSet::Only(cols)` read against a wire key | the set holds `Column::as_str()`, the table's name: `fields.permits(column.as_str())`. Only a `column_name` tells the two apart |
    | `RuleSpec<'_, E>` naming what `cannot` returns, a helper's return type or a binding's | `RuleSpec<'_, E, Cannot>`, `Cannot` from `nest_rs::authz`; a grant's stays `RuleSpec<'_, E>` |
-   | `masked_item_for::<A, E, _>(ctx, item)` | `masked_item_for::<A, E, _>(ctx, &nest_rs::authz::graphql::ability()?, item)` |
-   | `model_attrs(derive(PartialEq, Serialize, Deserialize))` — or a `Serialize` or `Deserialize` in the entity's `#[derive]` — and `use serde::{Deserialize, Serialize}` on an `#[expose]`d entity | refused at the derive: delete both, and the features crate's `serde` line if nothing else names serde. `#[expose]` writes the round trip a mask reads a row through, so the `Model` derives no serde. Keep `model_attrs(derive(PartialEq))` only where your code compares rows |
+   | `masked_item_for::<A, E, _>(ctx, item)` on a subscription's item | nothing: build the wire row in the stream, `.map(\|event\| Post::from(&event.post))`, and the posture judges each item for its subscriber where the socket polls it, an item its grants refuse leaving the stream |
+   | `model_attrs(derive(PartialEq, Serialize, Deserialize))` — or a `Serialize` or `Deserialize` in the entity's `#[derive]` — and `use serde::{Deserialize, Serialize}` on an `#[expose]`d entity | refused at the derive: delete both, and the features crate's `serde` line if nothing else names serde. `#[expose]` writes the wire type's serde, so the `Model` derives none. Keep `model_attrs(derive(PartialEq))` only where your code compares rows |
    | `Json(model)`, `WsReply::reply(&model)` answering a row | its exposed type, `Json(User::from(&model))`: once the derive goes, a raw `Model` answers nowhere, and its hidden columns with it |
    | a `Serialize` or `Deserialize` written by hand on an `#[expose]`d `Model` or `ModelEx`, or derived above `#[expose]`; `#[output]` or `#[input]` on one; a `JsonSchema` on one; with the `graphql` feature, a `SimpleObject`, `InputObject` or `#[Object]` on one | refused, each writing or reading columns no mask shapes: answer the exposed type, `User::from(&model)`, and take the inputs `#[expose(input(..))]` declares. A row kept in a cache or a queue payload is its exposed type too, or a DTO of its own that lists what it holds |
    | a blanket of your own over one of those traits, `impl<T: Serialize> Audited for T`, beside a specific impl on an `#[expose]`d `Model` or `ModelEx`, `impl Audited for Model` | `E0119`, since rustc reads what `#[expose]` emits on the row as an impl upstream could make hold. Delete the row's impl: the exposed type already meets the blanket, `User::from(&model).audit()`, and an impl on it would overlap the same way. A row that keeps its own bounds the blanket on a trait of yours, implemented on the exposed types |
-   | a hidden column of a type with no placeholder — a `Uuid`, a timestamp, a `Decimal`, a custom enum, a `Secret<Vec<u8>>` — with no `#[wire_default]` | refused at the field, where a masked reply carrying its row answered `500`: `#[wire_default]` (its type's `Default`), `#[wire_default(expr)]`, or `#[expose]` it |
-   | a primary key with no `#[expose]` | `#[expose]` it: a masked reply reads a row's identity off the wire and never invents one |
-   | `#[derive(Default)]` and `#[wire_enum]` on an enum a hidden column alone holds, there for the mask | optional: drop both and write `#[wire_default(Role::User)]` on the column — a hidden column's type needs no serde |
-   | a hand-written `impl WireModelDefaults`, or `use nest_rs::authz::WireModelDefaults` | `#[expose(name = "…")]` on the entity: the trait is gone, and the round trip, the keys and the invented columns are the decorator's alone |
-   | `Ability::mask`, `mask_many`, `masked_reply` or an `#[authorize(Action, Entity)]` mask on an entity no `#[expose]` decorates | `#[expose]` it — the rustc error says so |
-   | a hidden column read off `Ability::mask`'s value | not a compile error: the value carries the exposed columns alone, whatever the grant |
-   | a subscription or a `masked_reply` push whose grant is a relation, or reads a column the pushed type leaves out | refused: expose the column the rule reads, read-only, and send it |
+   | `#[derive(Default)]` and `#[wire_enum]` on an enum a hidden column alone holds, there for the mask | optional: drop both — a hidden column's type needs no serde, and no reply rebuilds it |
+   | a hand-written `impl WireModelDefaults`, or `use nest_rs::authz::WireModelDefaults` | `#[expose(name = "…")]` on the entity: the trait is gone, and the wire type is the decorator's alone |
+   | `Ability::mask`, `mask_many` or `masked_reply` on a row or a value | gone: build the exposed type from the row, `User::from(&row)`, which judges it for the caller whose ability is installed there |
+   | a subscription pushing the wire row its publisher built (`PostPublishedEvent { post: Post }`) | carry the row, `post: Model`, and build the wire row in the stream: a wire row answers only the caller whose ability judged it, so the publisher's answers no subscriber and leaves the stream, one `error` line each |
+   | `ab.can(Action::Read, E).fields([...])`, or on `Manage`, leaving out a column the reply cannot answer `null` | `#[expose(nullable)]` on each column the grant may withhold, or an `Option` column: the grant fails `build()` otherwise, naming the column. The field reads `null` for that caller, nullable in every edge's schema, its key still required |
+   | a GraphQL client of a member selecting a column the member's grant withholds, which answered `FORBIDDEN` refusing the selection (or `data: null` over a list) | the column reads `null` on each row and nothing is refused, since the schema now says it is nullable |
+   | `#[authorize(Action, Entity, unmasked)]` or `#[public(Action, Entity, unmasked)]`, on any edge | `#[authorize(Action, Entity)]`: no reply mask is left to leave to the body, so the key is refused naming why |
+   | `#[wire_default]` or `#[wire_default(expr)]` on a hidden column | delete it: no reply rebuilds a row, so the attribute is refused naming why |
+   | a wire type built by struct literal (`User { id, name, .. }`) or read back with serde (`serde_json::from_*::<User>`) | `User::from(&row)`: a wire row carries a private proof of its judgement and has no `Deserialize`. A test reading a reply decodes `serde_json::Value`, or a type of its own |
+   | a wire row handed to `WsServer::broadcast`, `emit_to` or `emit` from a request | a DTO every recipient may read, or a row a job built: a row judged for the caller pushing it refuses on a push to other connections |
+   | a route under `#[authorize(Update, E)]` answering the row it wrote to a caller whose `Read` grants refuse that row | `403`, the write rolled back, where the reply was masked at `Update`'s fields; on GraphQL the row answers its key alone. A write-only client answers `204` or the key |
 
    A project scaffolded by an earlier `nestrs g auth` keeps
    `sub: Option<Uuid>` in its claims, which cannot hold a client's own id; the
@@ -955,7 +959,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::mcp::{tool, tool_router, tool_handler, prompt, prompt_router, prompt_handler, schemars, ToolRouter, PromptRouter}` in a host writing `ServerHandler` by hand, `nest_rs::mcp::{handler, transport, LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService}` | `nest_rs::mcp::rmcp::…`: `nest_rs::mcp` keeps rmcp whole there, and `#[tools]` needs none of them |
     | `nest_rs::mcp::{CallToolResult, ContentBlock, ServerCapabilities, ProtocolVersion}` | `nest_rs::mcp::model::…` |
     | `nest_rs::http::Scoped`, `nest_rs::ws::Scoped`, `nest_rs::graphql::Scoped`, `nest_rs::mcp::Scoped` | `nest_rs::core::Scoped`, which `nest_rs::prelude` names: one type on every edge |
-    | `nest_rs::authz::masked_output_ambient`, `nest_rs::authz::graphql::masked_value_for`, `nest_rs::authz::mcp::masked_value_for`, `nest_rs::authz::ws::masked_reply_for` in a body | `#[authorize(Action, Entity)]` arms the mask; under `unmasked`, `Ability::mask` for a row, `nest_rs::authz::masked_reply` for a value you built |
+    | `nest_rs::authz::masked_output_ambient`, `nest_rs::authz::graphql::masked_value_for`, `nest_rs::authz::mcp::masked_value_for`, `nest_rs::authz::ws::masked_reply_for` in a body | `#[authorize(Action, Entity)]`, and the exposed type built from the row, `User::from(&row)`, judged for the caller where it is built |
     | `nest_rs::http::RejectedCredential`, `nest_rs::http::RequestDeadline` | nothing: authn's guards write the first and the edge the second, and neither is a developer's to name |
     | `validator::ValidationError` in a `custom(function = …)` rule, on a `validator` line of your manifest | `nest_rs::pipes::validator::ValidationError`, and delete the line if nothing else names the crate |
     | `.map_err(\|e\| problem_error(&e))?` in an operation answering `McpError` | return the `ToProblem` error itself from an operation spelled `Result<T, E>` |
@@ -2508,17 +2512,16 @@ lists what the boot, a log or the wire shows when one is missed.
   write or read columns no mask shapes. Delete it and answer the exposed type
   (step 9). A blanket of your own over one of those traits reports the same beside
   a specific impl on the row: the row's impl goes (step 9).
-- **A hidden column of a type with no placeholder** — a tenant `Uuid`, a
-  timestamp, a custom enum — fails to compile at the field, where 6.x answered
-  every masked reply carrying its row `500`: ``#[expose]: `org_id: Uuid` is not
-  exposed, and a masked reply must rebuild it — write `#[wire_default]` (its
-  type's `Default`), `#[wire_default(expr)]`, or `#[expose]` it``. A hidden
-  primary key fails with ``#[expose]: `id: Uuid` is the primary key, which a
-  masked reply reads off the wire and never invents — `#[expose]` it``.
-- **Code reading a hidden column off `Ability::mask`'s value** finds no key —
-  not a compile error: the value carries the exposed columns alone, whatever
-  the grant, where 6.x handed every hidden column but a `Secret` to a grant
-  with no `.fields`.
+- **A grant on `Read` withholding a column no `null` answers** fails when the
+  ability builds, so every request of that principal answers `500` with the
+  ability guard's `rules_misconfigured` line: ``malformed authorization rule: the
+  grant for `Read` on `users::Entity` withholds `email` in `.fields`, which a reply
+  cannot answer null — declare the column `#[expose(nullable)]` on `email`, or name
+  it in `.fields` ``. A unit test building each role's ability sees it first.
+- **A wire row kept and answered elsewhere** — a cache, a row carried into another
+  request, a publisher's push — answers `500` on HTTP, `INTERNAL` on GraphQL, a
+  dropped item on a subscription, and files `a wire row answered a caller it was not
+  judged for` at `error` on `nest_rs::authz`. Build the row where it answers.
 
 **At boot, the refusals not named above**, each a sentence ending on its remedy:
 

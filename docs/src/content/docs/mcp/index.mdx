@@ -21,7 +21,7 @@ the caller's request scope, with the operation's transaction around it, and a
 handler writes no check on any of them. A declared operation's reads run under
 the caller's ability where its posture names what it reads, and read nothing a
 grant guards where it names nothing ([Authorization](/mcp/authorization/)); a
-host writing rmcp's handler by hand [reads under it unmasked](/mcp/resources-and-prompts/#what-stays-hand-written).
+host writing rmcp's handler by hand [reads under it too](/mcp/resources-and-prompts/#what-stays-hand-written).
 
 `nest-rs-mcp` builds on [rmcp](https://docs.rs/rmcp) 3.x — the framework wraps
 it so a server is an `#[injectable]` struct that self-mounts on the HTTP
@@ -217,7 +217,7 @@ pub struct PostsTool {
 #[tools]
 impl PostsTool {
     #[tool(description = "List the titles of the latest published posts.")]
-    #[public(Read, post::Entity, unmasked)]
+    #[public(Read, post::Entity)]
     async fn latest_titles(
         &self,
         Parameters(p): Parameters<LatestParams>,
@@ -227,7 +227,7 @@ impl PostsTool {
     }
 
     #[tool(description = "Return a published post's summary, found by its slug.")]
-    #[public(Read, post::Entity, unmasked)]
+    #[public(Read, post::Entity)]
     async fn post_summary(
         &self,
         Parameters(p): Parameters<SlugParams>,
@@ -242,8 +242,8 @@ The client now sees two tools — `latest_titles` and `post_summary` — both
 sharing the injected `PostsService`. The `description` is what the model
 reads to decide when to call each. Each names what it reads, which
 [`define_visitor`](/security/authorization/public-reads/) grants; a bare `#[public]`
-would read nothing. `unmasked` leaves the field grants to the body, since each
-answers a `String` it wrote rather than a row.
+would read nothing. Each answers a `String` it wrote rather than a row, so what
+it copies out of a row is its own line.
 
 ## A validated tool
 
@@ -287,7 +287,7 @@ describes:
 
 ```rust title="crates/features/src/posts/mcp/tool.rs (abridged)"
 #[tool(description = "Search the published posts' titles, most recent first.")]
-#[public(Read, post::Entity, unmasked)]
+#[public(Read, post::Entity)]
 async fn search_posts(
     &self,
     Parameters(params): Parameters<SearchPostsDto>,
@@ -335,7 +335,7 @@ pub struct PostsTool {
 #[tools]
 impl PostsTool {
     #[tool(description = "Publish the caller's open draft under its slug.")]
-    #[authorize(Create, post::Entity, unmasked)]
+    #[authorize(Create, post::Entity)]
     #[use_exception_filters(SlugTakenFilter)]
     async fn publish_draft(&self, draft: Scoped<Draft>) -> Result<String, PublishError> {
         self.svc.publish(&draft).await

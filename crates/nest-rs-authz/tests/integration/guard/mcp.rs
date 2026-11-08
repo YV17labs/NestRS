@@ -74,7 +74,7 @@ struct GuardedTool;
 impl GuardedTool {
     /// Admits a caller with no credential, the guard reading who that is.
     #[tool]
-    #[public(Delete, widget::Entity, unmasked)]
+    #[public(Delete, widget::Entity)]
     async fn open(&self) -> Result<String, McpError> {
         Ok(rules_read())
     }
@@ -114,7 +114,7 @@ impl UnscopedGatedTool {
     /// Gated, with no mask to arm, so its posture states a caller is needed and
     /// only the ability it reads stands in front of the body.
     #[tool]
-    #[authorize(Read, widget::Entity, unmasked)]
+    #[authorize(Read, widget::Entity)]
     async fn ping(&self) -> Result<String, McpError> {
         Ok("pong".to_owned())
     }
@@ -205,7 +205,7 @@ struct OpenedTool;
 impl OpenedTool {
     /// Admits a caller with no credential: what its posture says on every edge.
     #[tool]
-    #[public(Delete, widget::Entity, unmasked)]
+    #[public(Delete, widget::Entity)]
     async fn open(&self) -> Result<String, McpError> {
         Ok(rules_read())
     }
@@ -219,7 +219,7 @@ struct OpenedGatedTool;
 impl OpenedGatedTool {
     /// Needs a caller, whom an opened endpoint's request never identifies.
     #[tool]
-    #[authorize(Read, widget::Entity, unmasked)]
+    #[authorize(Read, widget::Entity)]
     async fn gated(&self) -> Result<String, McpError> {
         Ok("reached".to_owned())
     }
@@ -315,7 +315,7 @@ struct GatedAtTheUnitTool;
 impl GatedAtTheUnitTool {
     /// Needs a caller, and reads the ability its request attached.
     #[tool]
-    #[authorize(Read, widget::Entity, unmasked)]
+    #[authorize(Read, widget::Entity)]
     async fn gated_at_the_unit(&self) -> Result<String, McpError> {
         Ok("reached".to_owned())
     }

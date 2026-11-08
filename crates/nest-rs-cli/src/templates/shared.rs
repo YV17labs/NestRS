@@ -507,16 +507,17 @@ an operation of an MCP endpoint `McpAccess::Public` opens, whatever guards stand
 beside it. There are three declarations, and the answer picks between them — not
 the caller:
 
-- `#[authorize(Action, Entity)]` — the class-level gate **plus** automatic
-  field-level masking of the value returned. Reach for it whenever the answer is
-  entity data, and return the `#[expose]`d wire type (wrapped in `Json<T>` where
-  the transport needs it) so the mask has a shape to work on.
+- `#[authorize(Action, Entity)]` — the class-level gate, and reads under the
+  caller's ability. Reach for it whenever the answer is entity data, and return
+  the `#[expose]`d wire type built from the rows (`User::from(&row)`, wrapped in
+  `Json<T>` where the transport needs it): each row is judged for the caller where
+  it is built, a column its grant withholds reading `null`.
 - `#[authorize(Action, Subject)]` on a `#[subject]` — the same gate, with its
   scope challenge, on a capability no table holds (`#[subject] pub struct
-  Exporting;`, granted with `ab.can(Action::Manage, Exporting)`), and no mask:
+  Exporting;`, granted with `ab.can(Action::Manage, Exporting)`), and no read:
   the answer is no row.
-- `#[public(Action, Subject)]` — the same arguments, the same gate and the same
-  mask, on the ability a caller with no credential has: `define_visitor`'s, or
+- `#[public(Action, Subject)]` — the same arguments and the same gate, on the
+  ability a caller with no credential has: `define_visitor`'s, or
   `define`'s for a valid token. It is what a visitor's read says.
 - `#[public]` — a caller with no credential is admitted, and the unit reads
   nothing a grant guards. It is an opening, written on purpose; behind an upgrade
@@ -536,7 +537,7 @@ the `#[subject]` it writes beside the service, and an operation that declares a
 bare `#[public]` answers no entity data. Before an operation serves real rows, it
 declares `#[authorize]` on the entity they come from, or `#[public(Read, Entity)]`
 where a visitor reads them — one gated on the port's `#[subject]` re-points its
-posture to the entity, since a subject masks nothing — and its edge is wired: the
+posture to the entity, since a subject opens no read — and its edge is wired: the
 guards on the struct, and the edge's authz module imported in that adapter's
 `module.rs`:
 

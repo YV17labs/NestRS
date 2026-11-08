@@ -58,7 +58,7 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// (`#[authorize(Action, Subject)]`, `#[public(Action, Subject)]` or a bare `#[public]`,
 /// which the boot holds against who reaches the endpoint), `#[use_exception_filters]`,
 /// `#[use_interceptors]`, `Scoped<T>` and `Ambient<T>` parameters, per-argument pipes inside
-/// `Parameters<…>`, and response masking. The advertised capabilities are
+/// `Parameters<…>`. The advertised capabilities are
 /// **derived** from the roles present, so a host cannot route what it forgot to
 /// declare. `#[meta(EXPR)]` (repeatable) on an operation declares a value for
 /// it, read over the host's of the same type. The impl is concrete: each
@@ -94,12 +94,6 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   a `#[resource]` the template variable its name spells, or under `bind` the
 ///   subject when its type's last segment is `Authorized`, which names the
 ///   entity — each argument held to the rules its type declares;
-/// - a masked operation spells its return `Result<…>`, the mask reading
-///   `Json<T>` or `Option<Json<T>>` to unwrap and a tool's opaque answers
-///   (`CallToolResult`, `ContentBlock`, …) or a `ReadResourceResult`, bare or
-///   in its `Option`, to refuse off that spelling; a `#[prompt]`'s messages
-///   and a `#[resources]` listing's entries are never masked, so a gated one
-///   declares `unmasked`;
 /// - rmcp derives a tool's output schema from a return spelled
 ///   `Result<Json<T>, …>`, and from none behind an alias.
 ///
@@ -118,8 +112,9 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `get_info` and, for the resource roles, `list_resources`,
 /// `list_resource_templates` and `read_resource`. Each wrapper dispatches its
 /// site — the guards, the posture's gate, the exception filters, the
-/// interceptors — its tail running the pipes, the `Scoped<T>` and `Ambient<T>` parameters, the
-/// authored method and the response mask, in that order.
+/// interceptors — its tail running the pipes, the `Scoped<T>` and `Ambient<T>` parameters
+/// and the authored method, in that order; each wire row the answer carries was judged
+/// where it was built.
 #[proc_macro_attribute]
 pub fn tools(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(mcp::tools(args, input).into()).into()

@@ -4,7 +4,7 @@
 //! `static` site — its guards, its posture's class gate, its exception filters
 //! and interceptors — and gets a generated wrapper that dispatches it through
 //! that site, its tail running pipes → `Scoped<T>` and `Ambient<T>` parameters →
-//! call → mask.
+//! call.
 //! A tool's or a prompt's wrapper carries `#[tool(name = "…")]` /
 //! `#[prompt(name = "…")]` for rmcp's routers; a resource's is called by the
 //! `read_resource` and `list_resources` the expansion writes itself, rmcp
@@ -30,9 +30,9 @@ use nest_rs_codegen::__private::{
     PostureRules, SiteGuards, SiteItems, TailParam, ambient_type_ids, answer_span, await_if_async,
     cfg_attrs, concrete_signature, force_guard_typeids, forwarded_arg_idents, generic_args,
     guard_capability_bounds, handler_const, impl_self_ident, layer_deps, normalize_forwarded_args,
-    nth_generic_type, one_role_per_method, piped_input, reject_meta_on_operations, scoped_specs,
-    shared_receiver, site_const_ident, site_items, site_ref, tail_param, ungrouped_expr,
-    unit_of_work_required, validate_argument,
+    one_role_per_method, piped_input, reject_meta_on_operations, scoped_specs, shared_receiver,
+    site_const_ident, site_items, site_ref, tail_param, ungrouped_expr, unit_of_work_required,
+    validate_argument,
 };
 use nest_rs_codegen::snake_case;
 
@@ -144,47 +144,6 @@ impl Role {
     /// Whether rmcp routes this role, through the wrapper's own attribute.
     fn routed_by_rmcp(self) -> bool {
         matches!(self, Self::Tool | Self::Prompt)
-    }
-
-    /// Why `#[authorize(...)]` cannot mask this role's answer, whatever its
-    /// type; `None` for a role whose answer may be a row.
-    fn unmaskable(self) -> Option<&'static str> {
-        match self {
-            Self::Tool | Self::Resource => None,
-            Self::Prompt => Some(
-                "#[prompt] — its messages are prose, opaque to the entity round-trip. Keep the \
-                 gate and write into them only what the caller may read",
-            ),
-            Self::Resources => Some(
-                "#[resources] listing — its entries are URIs and names, opaque to the entity \
-                 round-trip. Keep the gate and list only what the caller may read",
-            ),
-        }
-    }
-
-    /// What the mask unwraps off a maskable role's return, as a diagnostic
-    /// offers it.
-    fn mask_unwraps(self) -> &'static str {
-        match self {
-            Self::Resource => "`Json<T>` or `Option<Json<T>>`",
-            Self::Tool | Self::Prompt | Self::Resources => "`Json<T>`",
-        }
-    }
-
-    /// The content types this role answers that the entity round-trip cannot
-    /// read, by their last segment: a masked return naming one is refused.
-    /// The first is the one a diagnostic names.
-    fn opaque_answers(self) -> &'static [&'static str] {
-        match self {
-            Self::Tool => &[
-                "CallToolResult",
-                "CallToolResponse",
-                "ContentBlock",
-                "InputRequiredResult",
-            ],
-            Self::Resource => &["ReadResourceResult"],
-            Self::Prompt | Self::Resources => &[],
-        }
     }
 }
 
@@ -695,14 +654,13 @@ fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2>
     // At the return type, so a value that is no resource's answer is refused there.
     let into = role.wire_answer();
     let (params, output, answered) = if *role == Role::Resource {
-        let masked = masked(self_ty, op)?;
         let read = quote_spanned! {answer_span(sig)=>
             #into::into_read(__nestrs_value, __nestrs_uri)
         };
         (
             quote!(__nestrs_uri: ::std::string::String, #(#variables),*),
             quote!(::nest_rs_mcp::model::ReadResourceResult),
-            quote!((#masked).and_then(|__nestrs_value| #read)),
+            quote!(#read),
         )
     } else {
         let listed = quote_spanned! {answer_span(sig)=> #into::into_listing(__nestrs_value)};
@@ -781,11 +739,16 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
     // `McpError`: spelled out where the method spells its `Result`, so rmcp
     // reads a `Json<T>` off it, and behind an opaque type where an alias or a
     // renamed `Result` hides the value's type from the expansion.
-    wire_sig.output = match spelled_result(sig) {
-        Some(ok) => syn::parse_quote!(
+    wire_sig.output = match (role, spelled_result(sig)) {
+        // A tool's answer is written inside its site, for the caller it answers;
+        // rmcp reads its output schema off the attribute instead.
+        (Role::Tool, _) => syn::parse_quote!(
+            -> ::core::result::Result<::nest_rs_mcp::__private::CallToolResponse, ::nest_rs_mcp::McpError>
+        ),
+        (_, Some(ok)) => syn::parse_quote!(
             -> ::core::result::Result<#ok, ::nest_rs_mcp::McpError>
         ),
-        None => {
+        (_, None) => {
             let answer = role.wire_answer();
             syn::parse_quote_spanned!(answer_span(sig)=> -> impl #answer + use<>)
         }
@@ -795,11 +758,17 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
     let validate_prelude = parameters_args(sig)
         .into_iter()
         .map(|ident| validate_statement(&quote!(&#ident.0)));
+    let answered = match role {
+        Role::Tool => quote!(::nest_rs_mcp::__private::answered_tool(__nestrs_value)),
+        Role::Prompt | Role::Resource | Role::Resources => {
+            quote!(::core::result::Result::Ok(__nestrs_value))
+        }
+    };
     let body = dispatch(
         self_ty,
         op,
         quote!(#(#validate_prelude)* #(#pipe_prelude)*),
-        masked(self_ty, op)?,
+        answered,
     )?;
     Ok(quote! {
         #role_attr
@@ -890,6 +859,16 @@ fn dispatch(
     })
 }
 
+/// The `T` of a return spelled `Json<T>` or `Result<Json<T>, E>`, where rmcp's own
+/// `#[tool]` reads a structured output schema.
+fn authored_json(sig: &Signature) -> Option<&Type> {
+    let syn::ReturnType::Type(_, ty) = &sig.output else {
+        return None;
+    };
+    let ok = nest_rs_codegen::__private::nth_generic_type(ty, "Result", 0).unwrap_or(ty);
+    nest_rs_codegen::__private::nth_generic_type(ok, "Json", 0)
+}
+
 /// The `T` of a return spelled `Result<T, E>`, two arguments written; `None`
 /// for an alias or a renamed `Result`, whose value's type only its type says.
 fn spelled_result(sig: &Signature) -> Option<&Type> {
@@ -951,113 +930,6 @@ fn parameters_args(sig: &Signature) -> Vec<&syn::Ident> {
             (ident == "Parameters").then_some(&pat_ident.ident)
         })
         .collect()
-}
-
-/// Step 4 — the answer's value, `__nestrs_value`, with response masking when
-/// the posture arms it.
-///
-/// `Json<T>` is unwrapped before masking and rewrapped after: rmcp's wrapper is
-/// neither `Serialize` nor `DeserializeOwned`. A resource's `Option<Json<T>>`
-/// is masked inside the `Option`, `None` passing through. `take_operation`
-/// already refused a masked role whose every answer is opaque.
-fn masked(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
-    let Operation {
-        role, posture, sig, ..
-    } = op;
-    let unmasked = quote!(::core::result::Result::Ok(__nestrs_value));
-    let Some(PostureGate {
-        action,
-        entity,
-        unmasked: false,
-        ..
-    }) = posture.gate()
-    else {
-        return Ok(unmasked);
-    };
-
-    // `take_operation` already refused a masked return not spelled `Result<…>`.
-    let Some(ok_ty) = result_ok_type(sig) else {
-        return Ok(unmasked);
-    };
-    // Opaque content: refused here, or it fails deep inside the expansion or,
-    // compiled, every call closed.
-    if let Some(opaque) = opaque_answer(*role, ok_ty) {
-        let remedy = match role {
-            Role::Resource => role.mask_unwraps(),
-            Role::Tool | Role::Prompt | Role::Resources => "`Json<T>` or `T`",
-        };
-        let word = posture.word();
-        return Err(syn::Error::new_spanned(
-            &sig.output,
-            format!(
-                "`#[{word}(...)]` cannot mask a `{opaque}` — its contents are opaque to \
-                 the entity round-trip. Return the wire type ({remedy}) and let the \
-                 mask run, or keep the gate and mask by hand with \
-                 `#[{word}(Action, Entity, unmasked)]` + `nest_rs::authz::masked_reply`",
-            ),
-        ));
-    }
-
-    let site = site_ref(self_ty, op.name());
-    let kind = role.kind();
-    if let Some(inner) = nth_generic_type(ok_ty, "Option", 0)
-        .and_then(|optional| nth_generic_type(optional, "Json", 0))
-    {
-        return Ok(quote! {
-            __nestrs_value
-                .map(|::nest_rs_mcp::Json(__nestrs_out)| {
-                    ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, #inner>(
-                        #site, #kind, __nestrs_out,
-                    )
-                        .map(::nest_rs_mcp::Json)
-                })
-                .transpose()
-                .map_err(::nest_rs_mcp::__private::OperationFailure::from)
-        });
-    }
-
-    if let Some(inner) = nth_generic_type(ok_ty, "Json", 0) {
-        return Ok(quote! {{
-            let ::nest_rs_mcp::Json(__nestrs_out) = __nestrs_value;
-            ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, #inner>(
-                #site, #kind, __nestrs_out,
-            )
-                .map(::nest_rs_mcp::Json)
-                .map_err(::nest_rs_mcp::__private::OperationFailure::from)
-        }});
-    }
-
-    Ok(quote! {
-        ::nest_rs_authz::__private::mcp_masked_value::<#action, #entity, _>(
-            #site, #kind, __nestrs_value,
-        )
-        .map_err(::nest_rs_mcp::__private::OperationFailure::from)
-    })
-}
-
-/// The opaque content type `role` answers in `ok_ty`, a resource's inside its
-/// `Option` too, which `None` passing through leaves to the mask.
-fn opaque_answer(role: Role, ok_ty: &Type) -> Option<&syn::Ident> {
-    let answered = match role {
-        Role::Resource => nth_generic_type(ok_ty, "Option", 0).unwrap_or(ok_ty),
-        Role::Tool | Role::Prompt | Role::Resources => ok_ty,
-    };
-    let Type::Path(path) = answered else {
-        return None;
-    };
-    let last = &path.path.segments.last()?.ident;
-    role.opaque_answers()
-        .iter()
-        .any(|opaque| last == opaque)
-        .then_some(last)
-}
-
-/// The `T` of a `-> Result<T, E>` return, or `None` for anything else.
-fn result_ok_type(sig: &Signature) -> Option<&Type> {
-    let syn::ReturnType::Type(_, ty) = &sig.output else {
-        return None;
-    };
-    nth_generic_type(ty, "Result", 0)
 }
 
 /// Partition the decorated methods by role, consuming each one's layer
@@ -1207,31 +1079,6 @@ fn take_operation(
         ..
     } = take_layers(&pair::MCP, LayerScope::Method, &mut method.attrs)?;
     let posture = posture_rules(role).take(method)?;
-    let word = posture.word();
-    if posture.masks()
-        && let Some(why) = role.unmaskable()
-    {
-        return Err(syn::Error::new_spanned(
-            &method.sig.ident,
-            format!("`#[{word}(...)]` cannot mask a {why}: `#[{word}(Action, Entity, unmasked)]`"),
-        ));
-    }
-    if posture.masks() && result_ok_type(&method.sig).is_none() {
-        return Err(syn::Error::new_spanned(
-            &method.sig.output,
-            format!(
-                "a masked {} spells its return `Result<…>`: the mask reads the \
-                 value's shape — {} to unwrap, `{}` to refuse — off \
-                 that spelling, and a `Result` renamed on import or behind an alias hides \
-                 it. Write `Result<…>`, or declare `#[{word}(Action, Entity, unmasked)]` \
-                 and mask in the body",
-                role.attr(),
-                role.mask_unwraps(),
-                role.opaque_answers().first().copied().unwrap_or_default(),
-            ),
-        ));
-    }
-
     let mut sig = method.sig.clone();
     normalize_forwarded_args(sig.inputs.iter_mut())?;
     let pipes = match role {
@@ -1478,6 +1325,16 @@ fn wrapper_role_attr(
         let name = method.sig.ident.to_string();
         extra.push(quote!(name = #name));
     }
+    // The wrapper answers what its site wrote, so rmcp reads the output schema here,
+    // off the authored `Json<T>`, as it would off the authored return.
+    if role == Role::Tool
+        && !stated.iter().any(|key| key == "output_schema")
+        && let Some(json) = authored_json(&method.sig)
+    {
+        extra.push(quote!(
+            output_schema = rmcp::handler::server::tool::schema_for_output::<#json>()
+        ));
+    }
 
     let rest = match &attr.meta {
         Meta::Path(_) => quote!(),
@@ -1702,59 +1559,4 @@ fn unsupported(entry: &ImplItem) -> syn::Error {
         "#[tools] serves only #[tool], #[prompt], #[resource] and #[resources] methods — \
          move anything else to a plain `impl` block beside it",
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn opaque(role: Role, ok: &str) -> Option<String> {
-        let ty: Type = syn::parse_str(ok).expect("a type");
-        opaque_answer(role, &ty).map(ToString::to_string)
-    }
-
-    #[test]
-    fn every_opaque_content_type_a_tool_answers_is_found_by_its_last_segment() {
-        for ok in [
-            "CallToolResult",
-            "rmcp::model::CallToolResponse",
-            "ContentBlock",
-            "nest_rs::mcp::model::InputRequiredResult",
-        ] {
-            assert!(opaque(Role::Tool, ok).is_some(), "{ok}");
-        }
-        for ok in ["Json<Post>", "String", "Vec<Post>", "ReadResourceResult"] {
-            assert_eq!(opaque(Role::Tool, ok), None, "{ok}");
-        }
-    }
-
-    #[test]
-    fn a_resource_s_read_result_is_opaque_inside_its_option_too() {
-        for ok in ["ReadResourceResult", "Option<model::ReadResourceResult>"] {
-            assert_eq!(
-                opaque(Role::Resource, ok).as_deref(),
-                Some("ReadResourceResult"),
-                "{ok}",
-            );
-        }
-        for ok in [
-            "Json<Post>",
-            "Option<Json<Post>>",
-            "String",
-            "CallToolResult",
-        ] {
-            assert_eq!(opaque(Role::Resource, ok), None, "{ok}");
-        }
-    }
-
-    #[test]
-    fn a_role_whose_every_answer_is_opaque_is_refused_whole_rather_than_by_type() {
-        for role in [Role::Prompt, Role::Resources] {
-            assert!(role.unmaskable().is_some(), "{}", role.attr());
-            assert!(role.opaque_answers().is_empty(), "{}", role.attr());
-        }
-        for role in [Role::Tool, Role::Resource] {
-            assert_eq!(role.unmaskable(), None, "{}", role.attr());
-        }
-    }
 }

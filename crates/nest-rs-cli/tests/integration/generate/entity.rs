@@ -58,7 +58,7 @@ fn generate_entity_writes_the_lone_entity_and_wires_the_port() {
     assert!(features_cargo.contains("sea-orm"), "{features_cargo}");
     assert!(
         !features_cargo.contains("serde") && !root_cargo.contains("serde"),
-        "`#[expose]` carries the round trip a mask needs, so an entity derives no serde: \
+        "`#[expose]` writes the wire type's serde, so an entity derives none: \
          {root_cargo}\n{features_cargo}",
     );
     assert!(

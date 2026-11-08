@@ -6,7 +6,7 @@
 
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read, Update};
 use nest_rs_core::{AccessGraphError, Layer, UnitContext, async_trait, injectable, module};
-use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
+use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::EndpointGuards;
@@ -20,7 +20,7 @@ mod note {
     use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[expose(name = "Note")]
+    #[expose(name = "Note", graphql)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "notes")]
     pub(super) struct Model {
@@ -344,14 +344,6 @@ impl AbilityFactory for VisitorGrants {
     }
 }
 
-#[derive(Clone, SimpleObject, serde::Serialize, serde::Deserialize)]
-#[graphql(crate = "::nest_rs_graphql::async_graphql")]
-struct VisitedNote {
-    id: String,
-    title: Option<String>,
-    body: Option<String>,
-}
-
 #[resolver]
 struct VisitedResolver;
 
@@ -359,13 +351,8 @@ struct VisitedResolver;
 impl VisitedResolver {
     #[query]
     #[public(Read, bind = VisitedService)]
-    async fn visited_note(&self, note: Authorized<Read, note::Entity>) -> GqlResult<VisitedNote> {
-        let note = note.into_inner();
-        Ok(VisitedNote {
-            id: note.id.to_string(),
-            title: note.title,
-            body: note.body,
-        })
+    async fn visited_note(&self, note: Authorized<Read, note::Entity>) -> GqlResult<note::Note> {
+        Ok(note::Note::from(&note.into_inner()))
     }
 }
 
@@ -408,6 +395,6 @@ async fn a_query_bound_for_a_visitor_loads_and_answers_by_its_grant() {
     assert_eq!(
         body["data"]["visitedNote"]["body"],
         serde_json::Value::Null,
-        "the mask strips what the visitor's grant does not read: {body}"
+        "the row holds nothing the visitor's grant does not read: {body}"
     );
 }

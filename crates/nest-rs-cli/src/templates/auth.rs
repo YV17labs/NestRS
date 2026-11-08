@@ -307,7 +307,7 @@ pub use module::AuthzMcpModule;
 
 /// The controllers' own chain (`AuthnGuard`, then `AuthzGuard`) at the MCP
 /// request, joining the app's global pool: the ambient `Ability` it attaches is
-/// what a tool returns masked rows through — so one policy answers on every
+/// what each row a tool returns is judged under — so one policy answers on every
 /// transport.
 pub(crate) const AUTHZ_MCP_MODULE: &str = r#"use nest_rs::core::module;
 use nest_rs::http::EndpointGuards;

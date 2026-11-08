@@ -1,0 +1,5 @@
+error: `#[wire_default]` is gone: a wire row is judged on the whole row where it is built, so a hidden column is never rebuilt — drop it
+  --> tests/integration/diagnostics/seaorm/wire_default_is_gone.rs:22:5
+   |
+22 |     #[wire_default]
+   |     ^^^^^^^^^^^^^^^

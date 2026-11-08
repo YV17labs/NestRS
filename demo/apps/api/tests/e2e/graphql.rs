@@ -422,20 +422,23 @@ async fn graphql_serves_a_member_the_columns_their_field_grant_allows() {
         .collect();
     assert_eq!(names, vec!["Gql Grace"], "{granted}");
 
-    let refused = graphql(&app, &member, "{ users { id name email } }").await;
+    let withheld = graphql(&app, &member, "{ users { id name email } }").await;
+    assert!(
+        withheld.get("errors").is_none(),
+        "a column a grant withholds reads null, it refuses nothing: {withheld}",
+    );
     assert_eq!(
-        refused["data"],
+        withheld["data"]["users"][0]["name"], "Gql Grace",
+        "{withheld}"
+    );
+    assert_eq!(
+        withheld["data"]["users"][0]["email"],
         serde_json::Value::Null,
-        "no row may ship with a column outside the field grant: {refused}",
+        "{withheld}",
     );
-    assert_eq!(
-        refused["errors"][0]["extensions"]["code"], "FORBIDDEN",
-        "{refused}",
-    );
-    assert_eq!(
-        refused["errors"][0]["extensions"]["fields"],
-        serde_json::json!(["email"]),
-        "the denial names the columns it refused, as a list: {refused}",
+    assert!(
+        !withheld.to_string().contains("gqlgrace@fields.test"),
+        "{withheld}"
     );
 
     let admin_view = graphql(&app, &admin_org, "{ users { id name email } }").await;
@@ -608,19 +611,16 @@ async fn a_members_relations_answer_what_its_grant_allows() {
         json!({ "id": author_id.to_string(), "name": "Author" }),
     );
 
-    let refused = graphql(&app, &member, "{ posts { author { email } } }").await;
+    let withheld = graphql(&app, &member, "{ posts { author { email } } }").await;
+    assert!(withheld.get("errors").is_none(), "{withheld}");
     assert_eq!(
-        refused["errors"][0]["extensions"]["code"], "FORBIDDEN",
-        "{refused}"
-    );
-    assert_eq!(
-        refused["errors"][0]["extensions"]["fields"],
-        json!(["email"]),
-        "{refused}"
+        withheld["data"]["posts"][0]["author"]["email"],
+        serde_json::Value::Null,
+        "{withheld}"
     );
     assert!(
-        !refused.to_string().contains("author@gqlmember.test"),
-        "{refused}"
+        !withheld.to_string().contains("author@gqlmember.test"),
+        "{withheld}"
     );
 
     let listed = graphql(
@@ -635,20 +635,21 @@ async fn a_members_relations_answer_what_its_grant_allows() {
         "{listed}"
     );
 
-    let refused = graphql(
+    let withheld = graphql(
         &app,
         &member,
         "{ orgs { users { edges { node { email } } } } }",
     )
     .await;
+    assert!(withheld.get("errors").is_none(), "{withheld}");
     assert_eq!(
-        refused["errors"][0]["extensions"]["fields"],
-        json!(["email"]),
-        "{refused}"
+        withheld["data"]["orgs"][0]["users"]["edges"][0]["node"]["email"],
+        serde_json::Value::Null,
+        "{withheld}"
     );
     assert!(
-        !refused.to_string().contains("author@gqlmember.test"),
-        "{refused}"
+        !withheld.to_string().contains("author@gqlmember.test"),
+        "{withheld}"
     );
 
     let whole = graphql(&app, &admin, "{ posts { author { email } } }").await;

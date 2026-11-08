@@ -114,8 +114,13 @@ impl Extension for RequestExtension {
         {
             request.data.insert(OperationRefusal::new(refusal));
         }
-        next.run(ctx, self.seeds.seed(request).data(FiledFacts::default()))
-            .await
+        next.run(
+            ctx,
+            self.seeds
+                .seed(request)
+                .data(std::sync::Arc::new(FiledFacts::default())),
+        )
+        .await
     }
 
     async fn validation(

@@ -84,24 +84,21 @@ fn posture_contradiction() -> &'static str {
 
 /// The sentence a site prints for an `#[authorize(...)]` key it cannot express.
 ///
-/// `key` is spelled **as the grammar spells it** — `unmasked`, `bind = Service`,
+/// `key` is spelled **as the grammar spells it** — `bind = Service`,
 /// `id_arg = argument` — so one sentence serves a bare flag and a `key = value`
 /// alike.
 pub fn posture_key_unsupported(key: &str, site: &str, because: &str) -> String {
     format!("`{key}` is not available on {site} — {because}")
 }
 
-/// What a posture naming a subject gates on: the class gate, and the response
-/// mask an entity arms unless `unmasked` opted the return shape out of it.
+/// What a posture naming a subject gates on: the class gate, and the reads an
+/// entity's opens to the unit.
 pub struct PostureGate {
     /// The action marker the gate demands (`Read`, `Update`, …).
     pub action: Path,
-    /// The subject the gate and the mask act on — under `bind` alone, the one
-    /// the `Authorized<Action, E>` parameter names.
+    /// The subject the gate acts on — under `bind` alone, the one the
+    /// `Authorized<Action, E>` parameter names.
     pub entity: Path,
-    /// `unmasked`: keep the gate, leave masking to the body. For a shape the
-    /// value-level round-trip cannot see through (a cursor connection).
-    pub unmasked: bool,
     /// `bind = Service`: the service that loads the subject into the
     /// operation's `Authorized<Action, E>` parameter.
     pub bind: Option<Path>,
@@ -144,11 +141,6 @@ impl Posture {
         }
     }
 
-    /// Whether this posture arms automatic response masking.
-    pub fn masks(&self) -> bool {
-        self.gate().is_some_and(|gate| !gate.unmasked)
-    }
-
     /// What a site's declaration says of this posture: `#[public]` is public,
     /// anything else gated.
     pub fn site_posture(&self) -> SitePosture {
@@ -164,23 +156,29 @@ impl Posture {
     }
 
     /// Whether what the unit's reads run under is withheld from them, as a
-    /// `bool` expression: true where no mask shapes its reply and the posture
-    /// leaves that to no body. An entity arms the mask, `unmasked` leaves it to
-    /// the body, and a `#[subject]` has no rows to mask, which only its type
-    /// says.
+    /// `bool` expression: true where the posture names no entity's read. An
+    /// entity opens the unit's reads, and a `#[subject]` has no rows to read,
+    /// which only its type says.
     pub fn withheld(&self) -> TokenStream {
-        withheld(self.gate().map(|gate| (&gate.entity, gate.unmasked)))
+        withheld(self.gate().map(|gate| &gate.entity))
     }
 }
 
 /// [`Posture::withheld`], for an edge parsing its own posture: `named` is the
-/// subject it names and whether it declares `unmasked`.
-pub fn withheld(named: Option<(impl quote::ToTokens, bool)>) -> TokenStream {
+/// subject it names.
+pub fn withheld(named: Option<impl quote::ToTokens>) -> TokenStream {
     match named {
         None => quote!(true),
-        Some((_, true)) => quote!(false),
-        Some((subject, false)) => quote!(!<#subject as ::nest_rs_authz::Subject>::__ROWS),
+        Some(subject) => quote!(!<#subject as ::nest_rs_authz::Subject>::__ROWS),
     }
+}
+
+/// The refusal of `unmasked`, which nothing reads any more: every wire row a
+/// reply carries was judged where it was built.
+pub fn unmasked_refused() -> &'static str {
+    "`unmasked` is gone: there is no reply mask to leave to the body, since every wire \
+     row a reply carries was judged for its caller where `#[expose]`'s conversion built \
+     it — drop it"
 }
 
 /// Take a method's posture attributes off `attrs`, every edge's one reading: what
@@ -240,8 +238,8 @@ impl PostureRules {
         })
     }
 
-    /// Read `#[word(Action, Subject)]` / `#[word(Action, Subject, unmasked)]`,
-    /// and `#[word(Action, bind = Service)]` where the operation reads an id.
+    /// Read `#[word(Action, Subject)]`, and `#[word(Action, bind = Service)]`
+    /// where the operation reads an id.
     #[expect(
         clippy::map_err_ignore,
         reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
@@ -251,13 +249,12 @@ impl PostureRules {
             let expected = match self.bind_unsupported_because {
                 Some(_) => format!(
                     "expected `#[{word}(Action, Subject)]` — e.g. `#[{word}(Read, \
-                     users::Entity)]`, optionally followed by `unmasked`"
+                     users::Entity)]`"
                 ),
                 None => format!(
                     "expected `#[{word}(Action, Subject)]` — e.g. `#[{word}(Read, \
                      users::Entity)]`, or `#[{word}(Action, bind = Service)]`, which loads the \
-                     row its one variable names and lets the entity be omitted — optionally \
-                     followed by `unmasked`"
+                     row its one variable names and lets the entity be omitted"
                 ),
             };
             syn::Error::new_spanned(attr, expected)
@@ -267,11 +264,12 @@ impl PostureRules {
             .map_err(|_| malformed())?;
 
         let mut positional: Vec<Path> = Vec::new();
-        let mut unmasked = false;
         let mut bind: Option<Path> = None;
         for meta in &args {
             match meta {
-                Meta::Path(path) if path.is_ident("unmasked") => unmasked = true,
+                Meta::Path(path) if path.is_ident("unmasked") => {
+                    return Err(syn::Error::new_spanned(path, unmasked_refused()));
+                }
                 Meta::Path(path) => positional.push(path.clone()),
                 Meta::NameValue(value) if value.path.is_ident("bind") => {
                     if let Some(because) = self.bind_unsupported_because {
@@ -323,7 +321,6 @@ impl PostureRules {
         Ok(PostureGate {
             action,
             entity,
-            unmasked,
             bind,
         })
     }
@@ -368,37 +365,32 @@ mod tests {
             .expect("no posture is the guards' to decide");
         assert!(matches!(posture, Posture::Undeclared));
         assert!(!posture.is_declared());
-        assert!(!posture.masks());
+        assert!(posture.gate().is_none());
         assert!(matches!(posture.site_posture(), SitePosture::Gated));
     }
 
     #[test]
-    fn authorize_carries_action_entity_and_arms_the_mask() {
+    fn authorize_carries_action_and_entity() {
         let posture = RULES
             .take(&mut method(quote!(
                 #[authorize(Read, users::Entity)]
                 async fn list(&self) {}
             )))
             .expect("a well-formed posture");
-        assert!(posture.masks());
-        let Posture::Authorize(PostureGate { unmasked, .. }) = posture else {
-            panic!("expected the authorize posture");
-        };
-        assert!(!unmasked);
+        let gate = posture.gate().expect("it names a subject");
+        let entity = &gate.entity;
+        assert_eq!(quote!(#entity).to_string(), "users :: Entity");
     }
 
     #[test]
-    fn unmasked_keeps_the_gate_and_drops_the_mask() {
-        let posture = RULES
-            .take(&mut method(quote!(
-                #[authorize(Read, users::Entity, unmasked)]
-                async fn list(&self) {}
-            )))
-            .expect("a well-formed posture");
-        assert!(
-            !posture.masks(),
-            "`unmasked` is the opt-out for a shape the round-trip cannot see through"
-        );
+    fn unmasked_is_refused_naming_why() {
+        let Err(err) = RULES.take(&mut method(quote!(
+            #[authorize(Read, users::Entity, unmasked)]
+            async fn list(&self) {}
+        ))) else {
+            panic!("`unmasked` has nothing left to open");
+        };
+        assert!(err.to_string().contains("`unmasked` is gone"), "{err}");
     }
 
     #[test]
@@ -410,19 +402,18 @@ mod tests {
             )))
             .expect("`#[public]` is a declared posture");
         assert!(matches!(posture, Posture::Public(None)));
-        assert!(!posture.masks());
+        assert!(posture.gate().is_none());
         assert!(matches!(posture.site_posture(), SitePosture::Public));
     }
 
     #[test]
-    fn public_naming_a_subject_gates_and_masks_as_authorize_does() {
+    fn public_naming_a_subject_gates_as_authorize_does() {
         let posture = RULES
             .take(&mut method(quote!(
                 #[public(Read, posts::Entity)]
                 async fn feed(&self) {}
             )))
             .expect("a well-formed opening");
-        assert!(posture.masks());
         assert!(posture.gate().is_some());
         assert!(matches!(posture.site_posture(), SitePosture::Public));
     }
@@ -438,14 +429,6 @@ mod tests {
         let gate = posture.gate().expect("it names a subject");
         let entity = &gate.entity;
         assert_eq!(quote!(#entity).to_string(), "posts :: Entity");
-
-        let unmasked = RULES
-            .take(&mut method(quote!(
-                #[public(Read, posts::Entity, unmasked)]
-                async fn feed(&self) {}
-            )))
-            .expect("the body masks");
-        assert!(!unmasked.masks());
     }
 
     // Spelled through the shared expression, so a posture and an edge parsing its
@@ -470,21 +453,13 @@ mod tests {
         ] {
             assert_eq!(withheld_by(silent), "true");
         }
-        assert_eq!(
-            withheld_by(quote!(
-                #[authorize(Read, posts::Entity, unmasked)]
-                async fn feed(&self) {}
-            )),
-            "false",
-            "`unmasked` leaves the mask to the body, which reads under the ability"
-        );
         assert!(
             withheld_by(quote!(
                 #[public(Read, posts::Entity)]
                 async fn feed(&self) {}
             ))
             .contains("__ROWS"),
-            "whether a named subject masks is its type's to say"
+            "whether a named subject opens the unit's reads is its type's to say"
         );
     }
 

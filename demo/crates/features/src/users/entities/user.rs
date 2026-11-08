@@ -25,18 +25,17 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
     pub id: Uuid,
-    #[expose]
+    #[expose(nullable)]
     pub org_id: Uuid,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub name: String,
-    #[expose(input(create, update), validate(email))]
+    #[expose(input(create, update), validate(email), nullable)]
     pub email: String,
-    #[wire_default(UserRole::User)]
     pub role: UserRole,
     pub password_hash: Option<Secret<String>>,
-    #[expose]
+    #[expose(nullable)]
     pub created_at: DateTimeWithTimeZone,
-    #[expose]
+    #[expose(nullable)]
     pub updated_at: DateTimeWithTimeZone,
     pub deleted_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(belongs_to, from = "org_id", to = "id")]

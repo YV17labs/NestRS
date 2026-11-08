@@ -64,7 +64,7 @@ struct UnitTools;
 #[tools]
 impl UnitTools {
     #[tool(description = "Says what the operation runs on.")]
-    #[public(Read, Inspection, unmasked)]
+    #[public(Read, Inspection)]
     async fn inspect(&self) -> Result<CallToolResult, McpError> {
         let seen = format!(
             "lazy={} request={} ability={}",

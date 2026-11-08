@@ -15,7 +15,6 @@ mod input;
 mod lifecycle;
 mod refused_wires;
 mod relations;
-mod wire;
 
 /// Emits a wire DTO (`Serialize` + `JsonSchema`) and `Create/Update` input
 /// types; add the `graphql` flag (and enable the `graphql` feature on the
@@ -39,18 +38,29 @@ mod wire;
 /// (HTTP, GraphQL, WS). `#[expose(input(...))]` opts the field into the write
 /// DTOs *and* implies read.
 ///
+/// **The wire row is judged where it is built.** `From<&Model> for User` reads
+/// the row under the ability installed there, at `Read`: a column the caller's
+/// grant withholds is not in the wire row at all, a row its grants refuse
+/// answers no one, and the row carries who judged it, so it serializes, and
+/// resolves on GraphQL, for that caller alone. A grant may withhold only a
+/// column its wire type answers `null`: an `Option` column, or one
+/// `#[expose(nullable)]` declares, whose wire field is an `Option` and whose
+/// schema is nullable on every edge, its key always written. A grant on `Read`
+/// withholding any other is refused when the ability builds.
+///
 /// Generates `User`, `CreateUser`, `UpdateUser`, `From<&Model> for User`.
 ///
 /// # Expands to
 ///
-/// The original entity unchanged, plus: the wire DTO (`Serialize` +
-/// `JsonSchema`, GraphQL `SimpleObject` under `graphql`), the `Create`/`Update`
-/// input types, active-model write glue, the round trip a masked reply runs on
-/// a row — each column through its own serde impls, never a `Serialize` on the
-/// `Model` — lifecycle glue (the column defaults' registration, `soft_delete`'s
-/// `SoftDeletable` and registration, `timestamps`' `ActiveModelBehavior`), and
-/// — under `graphql` — the relation loaders + `#[ComplexObject]` field
-/// resolvers for `#[expose]`d relations.
+/// The original entity unchanged, plus: the wire DTO (`Serialize`, written by
+/// hand around the judgement's proof, and `JsonSchema`, GraphQL `SimpleObject`
+/// under `graphql`, each column guarded by that proof), the judged conversion,
+/// the columns no grant may withhold, filed for the ability builder, the
+/// `Create`/`Update` input types, active-model write glue, lifecycle glue (the
+/// column defaults' registration, `soft_delete`'s `SoftDeletable` and
+/// registration, `timestamps`' `ActiveModelBehavior`), and — under `graphql` —
+/// the relation loaders + `#[ComplexObject]` field resolvers for `#[expose]`d
+/// relations, a `belongs_to` reading its link off the judged row.
 ///
 /// The row crosses a wire only as its exposed type, and a write only as its
 /// inputs. A `Serialize`, `Deserialize`, `JsonSchema`, `SimpleObject` or
@@ -59,12 +69,6 @@ mod wire;
 /// those traits, on the `Model` and on the `ModelEx` beside it (known by the name
 /// of `#[sea_orm::model]`, written under the decorator), overlap one written by
 /// hand or derived above the decorator and report what to answer where one is used.
-///
-/// A masked reply rebuilds every hidden column, so each one needs a
-/// placeholder: a `String`, `Option`, `bool` or number takes its `Default`, a
-/// `Secret` its value's, and any other takes `#[wire_default]` (its type's
-/// `Default`) or `#[wire_default(expr)]`. A hidden column with none, and a
-/// hidden primary key, are refused at the field.
 #[proc_macro_attribute]
 pub fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(expose::expose(args, item).into()).into()

@@ -305,7 +305,7 @@ pub(crate) fn adapter_renderer(
     }
     if port_entity {
         let note = if transport == Transport::Mcp {
-            [adapter::GATED_ON_ENTITY, adapter::ROWS_MASKED_AS_JSON].join("\n")
+            [adapter::GATED_ON_ENTITY, adapter::ROWS_AS_JSON].join("\n")
         } else {
             adapter::GATED_ON_ENTITY.to_owned()
         };

@@ -72,17 +72,14 @@ is gone or its outbox refused the frame). A serializer failure surfaces as
 
 ## A push is not masked
 
-`#[authorize]` masks a reply for the caller who sent the message. A push has
-no such caller: `WsServer` serializes `data` as given, and every connection it
-reaches receives the same frame, whoever is behind it. Push only what every
-recipient may read — a notice that something changed, an id the client then
-fetches through a gated message or route.
-
-`nest_rs::authz::masked_reply` does not change that. It masks for the
-ability that is ambient where it runs — inside a handler, the sender's — and
-judges the value as a push, so a rule it cannot decide on the value refuses
-it ([What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see)).
-The framework does not mask a push per recipient.
+A wire row is judged for the caller whose ability builds it. A push has no
+such caller: every connection `WsServer` reaches receives the same frame,
+whoever is behind it, so a row judged for the caller pushing it refuses there
+([A row answers the caller who judged it](/security/authorization/response-masking/#a-row-answers-the-caller-who-judged-it)).
+Push only what every recipient may read — a notice that something changed, an
+id the client then fetches through a gated message or route — or a row a job
+built, which holds every exposed column for no caller. The framework builds no
+row per recipient.
 
 ## A scheduled push
 

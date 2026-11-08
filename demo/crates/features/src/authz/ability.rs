@@ -236,16 +236,6 @@ mod tests {
     }
 
     #[test]
-    fn member_mask_strips_admin_only_fields() {
-        let org = Uuid::now_v7();
-        let json = member(org).mask::<user::Entity>(Action::Read, &user_model(Uuid::now_v7(), org));
-        let obj = json.as_object().expect("masked model is a JSON object");
-        assert!(obj.contains_key("id"));
-        assert!(obj.contains_key("name"));
-        assert!(!obj.contains_key("email"), "members must not see email");
-    }
-
-    #[test]
     fn a_user_authors_posts_in_their_own_org_alone() {
         let org = Uuid::now_v7();
         for ab in [admin(org), member(org)] {

@@ -2,8 +2,8 @@
 //! `#[subscription]` expands into.
 //!
 //! A subscription goes through the same gate as every operation, decided once at
-//! subscribe, so every item is filtered against the ability captured then
-//! ([`keep_masked_item`]). The socket is bounded as a gateway's is: a browser
+//! subscribe, and every item it builds is a push, judged for the subscriber whose
+//! ability the socket installs where it polls the stream. The socket is bounded as a gateway's is: a browser
 //! origin checked at the upgrade, a lifetime ceiling, a message cap, a Ping to
 //! a silent peer and a wait for its answer, a wait for `connection_init` and a
 //! count of operations running at once ([`GraphqlConfig`]).
@@ -22,7 +22,6 @@ use futures_util::future::Either;
 use futures_util::stream::SplitSink;
 use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 
-use nest_rs_core::__private::Site;
 use nest_rs_core::anyhow;
 use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::{Container, Continuation, Correlation, RequestContinuation};
@@ -55,45 +54,6 @@ pub fn compose_schema(
         binding,
         scopes,
     ))
-}
-
-/// Keep or drop one masked subscription item, called per item by the
-/// `#[subscription]` expansion: a refused row is dropped at `debug`; a mask
-/// failure is dropped at `warn`, since an item has no error channel.
-pub fn keep_masked_item<T>(
-    site: &'static Site,
-    masked: Result<Option<T>, async_graphql::Error>,
-) -> Option<T> {
-    let handler = site.handler();
-    let kind = crate::operation::operation_label(OperationType::Subscription);
-    match masked {
-        Ok(Some(item)) => Some(item),
-        Ok(None) => {
-            tracing::debug!(
-                target: crate::TARGET,
-                host = handler.host_name(),
-                method = handler.method(),
-                kind,
-                field = handler.address(),
-                reason = "not_granted",
-                "subscription item withheld",
-            );
-            None
-        }
-        Err(err) => {
-            tracing::warn!(
-                target: crate::TARGET,
-                host = handler.host_name(),
-                method = handler.method(),
-                kind,
-                field = handler.address(),
-                reason = "mask_failed",
-                error = %err.message,
-                "subscription item withheld",
-            );
-            None
-        }
-    }
 }
 
 /// The data handle a socket runs on when no unit-of-work binding is mounted,

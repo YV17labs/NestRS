@@ -6,8 +6,6 @@
 //! message's guard stage, so the gate's suites also send their messages over a
 //! real upgrade whose guard attached the ability ([`RoleUpgrade`]).
 
-mod mask;
-
 use std::sync::Arc;
 
 use nest_rs_authz::__private::install_ability;

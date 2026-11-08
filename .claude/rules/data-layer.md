@@ -178,11 +178,11 @@ run inside the unit, so a denied unit never touches the data layer and opens
 no transaction at all.
 
 **The ability** is what `AbilityGuard` attaches (`cx.attach`): ambient for the
-rest of the unit once its guard stage passed. A route no response mask shapes,
-an `#[sse]` stream and a route gated on a `#[subject]` among them, runs under
-the `UnmaskedReply` marker its guard stage attaches, as a WS connection hook does, and
-`current_ability` withholds the ability there, so a read the mask would have
-scoped fails closed, as a write does before its hook — and `nest-rs-http` knows
+rest of the unit once its guard stage passed. A route whose posture names no
+entity's read, an `#[sse]` stream and a route gated on a `#[subject]` among them,
+runs under the `UnmaskedReply` marker its guard stage attaches, as a WS connection
+hook does, and `current_ability` withholds the ability there, so a read no posture
+named fails closed, as a write does before its hook — and `nest-rs-http` knows
 nothing of authz or the ORM
 (`.claude/decisions/unmasked-reply-withholds-the-ability.md`). A job withholds
 nothing: `Repo` reads no ability there as system work, wider than the one it holds.
@@ -298,7 +298,7 @@ mutation on the wire (`.claude/decisions/crud-reads-the-service.md`). A method t
 writes takes its op over, and a key only that op reads (`api(<op>(…))`,
 `paginate`) is then refused, never dropped.
 
-## Response masking — one core, every transport
+## The wire row — judged where it is built
 
 Exposure is `#[expose]` (`CLAUDE.md`, hard "no"); a column a later migration
 adds never leaks by omission, and the entity *is* the wire contract, so a
@@ -307,95 +307,53 @@ handler returns the exposed type (`Json<User>`), never `Model`: **an `#[expose]`
 `ModelEx`, the impl of every trait that carries a row (serde's, `JsonSchema`, and
 under the `graphql` feature async-graphql's `OutputType` and `InputType`), bounded
 on what nothing answers, so using one reports what to answer instead and writing
-another overlaps it, and refuses at the derive what it can read there. It writes
-the round trip a mask reads a row through, column by column, in its own sealed
-seam. A struct a body fills from a row's columns, a GraphQL object on a row with
-the feature off and an entity no `#[expose]` decorates are read in review
-(`.claude/decisions/mask-provenance.md`, 2026-11-05).
+another overlaps it, and refuses at the derive what it can read there.
 
-The mask is `nest-rs-authz`'s `wire_mask`, value-level and **fail-closed**:
-each wire row is read back into a `Model`, judged by the ability, and cut to
-the exposed keys its verdict grants, so an unrestricted field grant cannot
-leak an unexposed column. An irreconcilable body or a missing ambient ability
-fails closed on every transport; a `null` in a list holds no row, and stays.
+**A wire row is judged once, on its whole `Model`, where `From<&Model>` builds
+it** (`nest-rs-authz`'s `judged.rs`): the ability installed there decides at
+`Read` which rows the caller may read and which columns, a rule the row cannot
+decide counting as the `Repo` read that admitted it counted it, and as nothing on
+a subscription's push. A column its grants withhold is no value in the row — an
+`Option` column, or one `#[expose(nullable)]` declares, reads `None` — so no shape
+a body puts the row in ships it; a grant on `Read` or `Manage` withholding any
+other column is a `MalformedRuleError` at `build()` naming it, and every edge's
+schema says exactly what a reply can hold (the key required, nullable where a grant
+may withhold it). A job holding no ability is system work and reads every exposed
+column; anywhere else with no ability the row answers no one. A reply reads
+`Read`'s grants whatever its posture's action: a write's `.fields` names writable
+columns.
 
-Rebuilding needs a value for every unexposed column. The macro defaults the
-safe scalars and a `Secret` of one (a secret column is never exposed, held by
-`#[expose]`'s refusal), any other hidden column takes `#[wire_default(…)]` (a
-placeholder that never ships), and a hidden column with none, or a hidden
-primary key, is refused at the field — held by rustc, never a `500`; the
-macro names every column it invents and the key of every column it exposes.
-**A rule
-the in-memory mask cannot decide — a relation, an unexposed column, one the
-value left out — is trusted to the `Repo` read on a decorated reply and refused
-on a pushed value** (a subscription item, `masked_reply`): only the read
-applied it. A decorated reply
-whose rows did not come through `Repo` under the same ability keeps that trust,
-which is the limit (`.claude/decisions/mask-provenance.md`).
+**The row carries who judged it, and answers no one else**: no public constructor
+(a private proof field), no `Deserialize`, and the id of the ability that judged
+it, which its `Serialize` and each of its GraphQL columns check against the one
+installed where it answers. So a row carried into another request, a cache and a
+publisher's push answer no one, a row judged for a caller refuses on a push to
+other connections (`WsServer`'s `broadcast`, `emit_to`, `emit`), and a system row
+answers no caller. A row its grants refuse answers its key alone on GraphQL and
+`FORBIDDEN` elsewhere, never `{}`; a list a body built holding one fails the whole
+reply closed, which a `Repo` read never hands it. Held by `nest-rs-authz`'s
+`judged` suites and `nest-rs-seaorm`'s `expose/dto.rs`.
 
 `#[authorize(Action, Entity)]` or `#[public(Action, Entity)]` beside the
-operation is the arming declaration on every edge; the decorator emits the gate
-and the mask, and that is what makes posture greppable. A unit declaring neither
-withholds the ability from its reads. A site gated on `Manage` holds a row to every
-concrete action where it reads (`condition_for`, `can`), and its reply shows what the
-caller may `Read`; a write reads the write's own action
-(`.claude/decisions/denial-holds-whatever-the-token.md`).
-**The gate is one function**, `class_gate`, on every
-edge; the mask is each edge's, chosen by its protocol, and only an entity's: a
-subject `#[subject]` declares has no rows, so its posture gates and arms no
-mask, decided by the subject's type:
+operation is the arming declaration on every edge: the decorator emits the gate,
+and the unit reads under the caller's ability; a unit declaring neither withholds
+the ability from its reads. A site gated on `Manage` holds a row to every concrete
+action where it reads (`condition_for`, `can`), and its reply shows what the
+caller may `Read` (`.claude/decisions/denial-holds-whatever-the-token.md`). **The
+gate is one function**, `class_gate`, on every edge; a subject `#[subject]`
+declares has no rows, so its posture gates and opens no read. A subscription's
+items are pushes: what its stream builds as the socket polls it is judged for the
+subscriber, and an item a refusal makes leaves the stream. A `belongs_to` reads its
+link off the judged row, so a key the grant withholds reads `null`; a `has_many`
+groups its children by their key in the batch, its `#[expose]` its visible
+opening. An MCP tool's answer is written inside its site. What a refused row or a
+row judged for another caller files is one line per operation and per fact, naming
+the unit as its `mounted` line does.
 
-- **HTTP** (`#[routes]`, which `#[crud]` emits under) — the class gate of the
-  `Authorize<A, E>` the posture declares, run with the guards, plus the response
-  shaper. A masked-out key is omitted.
-- **GraphQL** (`#[operations]`) — the class gate and a mask around the
-  returned value; `unmasked` keeps the gate and leaves masking to the body,
-  for a shape the round-trip cannot see through (a cursor connection). A
-  subscription masks each item as a row, a list item row by row: refused means
-  dropped. **A masked-out non-nullable field refuses the field selecting it**, `FORBIDDEN`
-  naming it as the schema spells it, since the schema cannot ship it, and is served where nothing selects
-  it, a key outside an object's selection never being serialized: a column a field
-  grant may mask and a client may still select is `Option` on the entity. A field
-  with no selection is a scalar (`Json<Wire>`), which serializes whole, so every
-  key the mask took refuses it. **A nested field masks by the same rule, with no
-  posture**, a read and the ability the request carries, the entity read off what
-  it answers: an exposed relation's field, a row of a list relation with its cursor,
-  whose text is the row's primary key and reads as that column, a refused row
-  reading `null` or leaving its page; and a `#[field_resolver]` whose answer holds a
-  wire type's rows, read off the hidden impl `#[expose(…, graphql)]` emits on the
-  type and a walk down what async-graphql serves around it (every list, `Option`,
-  `Box`, `Arc`, `Cow`, a tokio lock, `Json`, a map's values, a `Connection` and what its
-  nodes hold of those), which a DTO and a scalar a body derives do not have, so what
-  those ship is the body's. **A row the walk cannot read refuses**: a shape with no
-  place for the row it cuts is a compile error, and an answer holding one where only the
-  schema can say so, an object's column among them, what a `Connection` or its `Edge`
-  holds beside its nodes too, refuses the boot; a `#[graphql(skip)]` column and a
-  `#[field_resolver]` of that object serve it. What neither a type nor the schema tells
-  from a masked field passes, each named on the page and in the decision: a scalar a body
-  builds, a row flattened beside a masked field of its type, a column renamed onto its
-  resolver's name. Its rows are judged as a reply's for a caller a token backs, and as a
-  push's for a visitor, whose reads are withheld there; where no ability is attached it
-  fails closed. What the mask files repeating under every parent is one line per
-  operation and field it names, a socket's operations each their own, and one error per
-  path. **A relation's
-  batch filters rows and masks nothing**: it is shared by every alias asking, so a
-  selection-dependent value could not be cached in it, and each field masks by its
-  own. A caller whose grants narrow no column pays one rule lookup per field for a
-  relation, its row being the entity's own type read through `Repo`, which spares
-  the rebuild's check that a body is the entity's
-  (`.claude/decisions/mask-provenance.md`, 2026-11-05).
-- **MCP** (`#[tools]`) — GraphQL's caveat without a selection set to soften
-  it: rmcp needs the typed value back, so a mask stripping a required key
-  refuses the operation. A masked operation spells its return `Result<…>`.
-- **WS** (`#[messages]`) — masks like HTTP: the envelope promises no schema,
-  so a stripped key is omitted. It reads the reply as the frame does, by type
-  (`ReplyValue`), so a bare value and a `Result` behind an alias mask alike.
-
-`masked_reply` is for surfaces **no decorator reaches** — a hand-written MCP
-`ServerHandler`, a value built for the caller. It masks for the ambient
-principal, never per recipient: a `WsServer::emit` to other connections carries
-what the sender may read. Inside a decorated handler it bypasses the posture
-nobody can then `rg` for.
+**What no type tells stays the body's visible line**: a column a body reads off a
+whole `Model` and answers as its own value — `initials(row.name)`, `row.email` in a
+DTO — and an entity no `#[expose]` decorates, read in review
+(`.claude/decisions/mask-provenance.md`, 2026-11-08).
 
 ## Extractors and the carried ability
 
@@ -425,8 +383,8 @@ dependency cycle.** What they guarantee:
   naming its read.
 - **A dataloader batch** runs off-task under what its request carries into a
   batch — the request's values, never one field's, and the pool — captured
-  where a field asks the loader; nothing is bound for it. A row out of one holds
-  every exposed column, as a row out of `Repo` does; the field answering it masks.
+  where a field asks the loader; nothing is bound for it. A generated loader
+  answers wire rows, judged there for that request's caller.
 - **No edge has a data context of its own**: each runs its unit through the
   port, so commit and rollback cannot drift between edges.
 
@@ -499,7 +457,7 @@ A database error is never an empty batch.
 dataloader that `#[expose(name = "…", service = <Path>)]` emits on the owning
 service, reached from the inverse side without naming the other service. Every
 batch goes through `Repo::scoped(Action::Read)`, so row filtering applies, and
-the field masks the columns by its selection (*Response masking*).
+builds each wire row judged for the caller (*The wire row*).
 The serving adapter imports the target's module, and a schema serving a
 field whose loader's owner the app does not reach — a relation, a root field's
 or a `#[field_resolver]`'s `&DataLoader<L>` parameter — is refused at boot naming

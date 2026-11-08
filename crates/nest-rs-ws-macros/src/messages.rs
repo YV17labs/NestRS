@@ -420,25 +420,9 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             #invoke
         };
 
-        // The masked JSON ships, not a value round-tripped through the handler's
-        // type (see `nest-rs-authz/src/ws/mask.rs`). `__ret` is bound by the arms below,
-        // past what `ReplyValue` split by type, so an alias hides no `Result` from
-        // the mask; a mask's failure is an error frame, whatever the method returns.
-        let reply = match posture.gate() {
-            Some(PostureGate {
-                action,
-                entity,
-                unmasked: false,
-                ..
-            }) => quote! {
-                ::core::result::Result::Ok(
-                    ::nest_rs_authz::__private::ws_masked_reply::<#action, #entity, _>(
-                        #site_ref, &__ret,
-                    ),
-                )
-            },
-            _ => quote! { ::core::result::Result::Ok(::nest_rs_ws::WsReply::reply(&__ret)) },
-        };
+        // Each wire row the reply carries was judged where it was built, so the
+        // reply ships as it serializes.
+        let reply = quote! { ::core::result::Result::Ok(::nest_rs_ws::WsReply::reply(&__ret)) };
 
         // The report is built in library code, never by a call here: on an
         // `Infallible` error that call would be unreachable code. Its tiers

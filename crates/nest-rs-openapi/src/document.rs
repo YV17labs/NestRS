@@ -558,8 +558,8 @@ fn operation_object(
         "description".into(),
         json!(match (route.masked(), schema.is_some()) {
             (true, true) => format!(
-                "{succeeded} — field-level authorization applies: properties the caller's \
-                 ability does not grant are omitted from the response.",
+                "{succeeded} — field-level authorization applies: a nullable property reads \
+                 `null` where the caller's ability withholds it.",
             ),
             _ => succeeded.to_owned(),
         }),
@@ -827,8 +827,9 @@ fn edge_statuses(
     if body_refused_by_the_edge && !matches!(body, Some(RequestBodyMeta::Raw)) {
         out.insert(415);
     }
-    // An ability that does not grant the action is refused where the mask's
-    // shaper reads it: the class gate `Authorize` runs, or a bound subject's load.
+    // An ability that does not grant the action is refused where the posture's
+    // class gate runs, or a bound subject's load, and a row it may not read
+    // refuses the reply.
     if route.masked() || edge_answers.origin_refused {
         out.insert(403);
     }
@@ -1506,7 +1507,7 @@ mod tests {
         let unmasked = operation(&route("me", "/me"), "/me", &mut g, &[401, 503], None);
         assert!(
             unmasked["responses"].get("403").is_none(),
-            "no guard declares it and no mask reads an ability: {unmasked}",
+            "no guard declares it and no posture reads an ability: {unmasked}",
         );
     }
 

@@ -78,7 +78,6 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
     if ops.list {
         let list_method: ImplItem = match cfg.paginate {
-            // A plain `Vec`, so the automatic response mask applies unchanged.
             Paginate::Cursor => parse_quote! {
                 #[query]
                 #[authorize(::nest_rs_authz::Read, #entity)]

@@ -1,4 +1,4 @@
-error: unknown #[expose] argument `readonly`; expected `input`, `validate`, `complexity`, `via` or `default`
+error: unknown #[expose] argument `readonly`; expected `input`, `validate`, `complexity`, `via`, `default` or `nullable`
   --> tests/integration/diagnostics/seaorm/unknown_field_option.rs:14:14
    |
 14 |     #[expose(readonly)]

@@ -19,7 +19,7 @@ impl UsersTool {
         description = "List the people the caller is allowed to see. Scoped to the caller's \
                        organization."
     )]
-    #[authorize(Read, UserEntity, unmasked)]
+    #[authorize(Read, UserEntity)]
     async fn list_people(&self) -> Result<Json<Vec<PersonDto>>, ServiceError> {
         let rows = self.svc.list().await?;
 

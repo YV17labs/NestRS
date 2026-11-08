@@ -308,7 +308,10 @@ impl<S: Subject> RuleSpec<'_, S> {
     /// Restrict the grant to these columns, named by their `Column`, whatever the
     /// database or the wire calls them. Without this, every column is permitted.
     ///
-    /// On a grant a reply reads, the response mask keeps only these. On one a write
+    /// On a grant a reply reads, `Read` or `Manage`, a wire row built under it holds
+    /// only these, and every other reads `null`: so a column it leaves out must be
+    /// one its wire type can answer null, an `Option` or a column `#[expose(nullable)]`
+    /// declares, or the build fails naming it ([`MalformedRuleError`]). On one a write
     /// reads, `Update`, `Create` or `Manage`, they are what the write may set: `Repo`
     /// and `Creatable` refuse any other by name, sending nothing, and read neither
     /// the key, which addresses the row and is `when`'s to hold, nor what a hook, a
@@ -319,6 +322,12 @@ impl<S: Subject> RuleSpec<'_, S> {
         S: RowSubject<__Column = C>,
     {
         self.columns = FieldSet::Only(columns.into_iter().map(|c| c.as_str()).collect());
+        if matches!(self.action, Action::Read | Action::Manage)
+            && let Some((column, field)) =
+                crate::judged::unanswerable(TypeId::of::<S>(), &self.columns)
+        {
+            self.malformed(Defect::Unanswerable { column, field });
+        }
         self
     }
 }

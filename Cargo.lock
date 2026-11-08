@@ -2671,6 +2671,7 @@ name = "nest-rs-authz"
 version = "7.0.0"
 dependencies = [
  "async-graphql",
+ "inventory",
  "nest-rs-authz",
  "nest-rs-authz-macros",
  "nest-rs-config",

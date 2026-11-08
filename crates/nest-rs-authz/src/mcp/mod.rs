@@ -8,14 +8,13 @@
 //!
 //! A host writes no mask: `#[authorize(Action, Entity)]` beside an
 //! operation of `#[tools]` makes it emit the class gate
-//! ([`class_gate`](crate::class_gate), every edge's) and, beside a `#[tool]`
-//! or a `#[resource]`, the mask, exactly as `#[operations]` does on GraphQL
-//! and `#[routes]` on HTTP; a prompt's messages and a listing's entries are
-//! no row, so a gated `#[prompt]` or `#[resources]` declares `unmasked`.
+//! ([`class_gate`](crate::class_gate), every edge's), exactly as `#[operations]`
+//! does on GraphQL and `#[routes]` on HTTP, and each wire row the operation
+//! answers was judged for its caller where it was built.
 //!
 //! ```
 //! # use nest_rs_authz::{AbilityBuilder, Action, Read};
-//! # use nest_rs_core::{Layer, async_trait, injectable, input, module};
+//! # use nest_rs_core::{Layer, async_trait, injectable, module};
 //! # use nest_rs_guards::{Denial, Guard, GuardFor};
 //! # use nest_rs_http::EndpointGuards;
 //! # use nest_rs_mcp::{Json, McpError, McpView, mcp, tools};
@@ -24,25 +23,21 @@
 //! # mod users {
 //! #     use nest_rs_seaorm::expose;
 //! #     use sea_orm::entity::prelude::*;
-//! #     #[expose(name = "UserRow")]
+//! #     #[expose(name = "User")]
 //! #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 //! #     #[sea_orm(table_name = "users")]
 //! #     pub struct Model {
 //! #         #[sea_orm(primary_key)]
 //! #         #[expose]
 //! #         pub id: i32,
-//! #         #[expose]
+//! #         #[expose(nullable)]
 //! #         pub name: String,
 //! #     }
 //! #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 //! #     pub enum Relation {}
 //! #     impl ActiveModelBehavior for ActiveModel {}
 //! # }
-//! # #[input]
-//! # struct User {
-//! #     id: i32,
-//! #     name: Option<String>,
-//! # }
+//! # use users::User;
 //! # #[injectable]
 //! # #[derive(Default, Layer)]
 //! # struct PassGuard;
@@ -91,8 +86,8 @@
 //!     #[tool]
 //!     #[authorize(Read, users::Entity)]
 //!     async fn list_people(&self) -> Result<Json<Vec<User>>, McpError> {
-//!         // gate + response masking are emitted by the macro
-//! #       Ok(Json(vec![User { id: 1, name: Some("ada".into()) }]))
+//! #       let rows = [users::Model { id: 1, name: "ada".into() }];
+//!         Ok(Json(rows.iter().map(User::from).collect()))
 //!     }
 //! }
 //! # #[module(providers = [
@@ -119,5 +114,3 @@
 //! These read the *ambient* ability: rmcp dispatches an operation on its own
 //! task with no context value, so the endpoint re-installs what the request's
 //! guards attached around each operation.
-
-pub(crate) mod mask;

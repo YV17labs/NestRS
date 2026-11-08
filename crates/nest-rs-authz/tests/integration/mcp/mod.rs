@@ -1,13 +1,9 @@
 //! Mirror tests for `src/mcp/` — only compiled when the `mcp` feature is on.
 
-mod mask;
-
 use nest_rs_core::{Layer, Module, async_trait, injectable};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::call_tool_as;
-
-pub(crate) use crate::widget;
 
 /// Stand-in for the authentication guard at the request: admits it, naming
 /// its caller as the authentication guard does.

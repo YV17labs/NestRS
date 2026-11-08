@@ -111,8 +111,8 @@ async fn feed(&self) -> Result<Json<Vec<Post>>, ServiceError> {
 }
 ```
 
-It takes `#[authorize]`'s arguments and masks the same way, `unmasked` included on a
-prompt or a listing, and `bind = Service` on a `#[resource]`. A bare `#[public]`
+It takes `#[authorize]`'s arguments, `bind = Service` on a `#[resource]` included,
+and each row it answers is judged for that caller as it is built. A bare `#[public]`
 reads nothing a grant guards: its reads answer nothing, with a `warn` naming that
 line.
 
@@ -120,7 +120,7 @@ For an answer that is a **capability** rather than a row — a presigned URL, a
 computed report — the posture names the capability itself: a subject
 [`#[subject]`](/security/authorization/policies/#subjects-no-table-holds)
 declares, which no table holds. On such a subject `#[authorize]` runs the same class
-gate and arms no mask, since its answer is no row:
+gate and opens no read, since its answer is no row:
 
 ```rust title="crates/features/src/audio/mcp/tool.rs"
     #[tool(description = "Report whether an uploaded file has been transcoded.")]
@@ -136,15 +136,13 @@ granted `audio:transcode` with the challenge naming that scope
 The same posture gates the HTTP routes that mint the upload URLs: one rule,
 one gate, on every edge.
 
-Masking round-trips the value through the entity model, so it needs the full
-`#[expose]` shape to reconcile against — and MCP has no selection set to excuse
-a stripped **required** field, so such a mask fails the operation closed. A
-column a field grant may mask should be `Option` on the entity. When a tool
-deliberately answers with a narrower projection, say
-`#[authorize(Action, Entity, unmasked)]`: the gate and the row filter stay, and
-the projection *is* the field restriction. What is no row at all — a
-`CallToolResult`, a `ReadResourceResult`, a prompt's messages, a
-`#[resources]` listing — says `unmasked` too; masked, it does not compile.
+A tool's answer is written inside its site, so each wire row it carries is
+written for the caller that site answers: a column their grant withholds reads
+`null` in the structured content, as the output schema rmcp derives from the
+`Json<T>` says it may, and a row their grants refuse fails the operation with
+`FORBIDDEN`. A tool answering a projection of its own — a DTO, a
+`CallToolResult`, prose — writes what it read under the caller's ability, and
+what it copies out of a row is its own line.
 
 ## Telling a client how to authenticate
 

@@ -194,12 +194,12 @@ impl ProbeResolver {
     #[query]
     #[public]
     async fn bare_probe_book(&self) -> book::ProbeBook {
-        book::ProbeBook {
-            id: FIRST_BOOK.to_owned(),
+        book::ProbeBook::from(&book::Model {
+            id: FIRST_BOOK.parse().expect("a key"),
             title: "Sketches".to_owned(),
             isbn: ISBN.to_owned(),
-            writer_id: ADA.to_owned(),
-        }
+            writer_id: ADA.parse().expect("a key"),
+        })
     }
 }
 

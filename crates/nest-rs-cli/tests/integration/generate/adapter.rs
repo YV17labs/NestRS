@@ -568,10 +568,10 @@ fn generate_mcp_over_a_feature_port_gates_the_tool_on_the_ports_subject() {
         printed.contains("ab.can(nest_rs::authz::Action::Read, crate::posts::Post)"),
         "the next step names the grant as `authz/ability.rs` resolves it: {printed}"
     );
-    // A posture on a `#[subject]` masks nothing, so the tool says it is re-gated
-    // on the entity before it answers with rows, never that its rows are masked.
+    // A posture on a `#[subject]` opens no read, so the tool says it is re-gated
+    // on the entity before it answers with rows, never that its rows are judged.
     assert!(
-        !tool.contains("arms the field-level mask")
+        !tool.contains("each row judged for the caller")
             && tool.contains("re-gated on that entity")
             && tool.contains("#[authorize(Read, PostEntity)]"),
         "{tool}"
@@ -623,7 +623,7 @@ fn generate_mcp_over_a_port_with_an_entity_gates_the_tool_on_the_entity() {
             && tool.contains("use crate::posts::{Entity as PostEntity, PostsService};"),
         "{tool}"
     );
-    assert!(tool.contains("arms the field-level mask"), "{tool}");
+    assert!(tool.contains("each row judged for the caller"), "{tool}");
     assert_fits_the_margin(&tool);
     assert!(!src.join("posts/subject.rs").exists());
     assert!(

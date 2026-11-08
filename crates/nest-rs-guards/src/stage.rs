@@ -59,6 +59,31 @@ impl Refused {
             Self::Filed(denial) => denial,
         }
     }
+
+    /// [`into_denial`](Self::into_denial) for a unit run once per parent, a
+    /// GraphQL field resolver's: a guard's denial is filed only where `first`
+    /// says the operation has yet to file it, named by the guard and its status,
+    /// so its count is no caller's to choose.
+    pub fn into_denial_once(
+        self,
+        message: &'static str,
+        cx: &UnitContext<'_>,
+        first: impl FnOnce(String) -> bool,
+    ) -> Denial {
+        match self {
+            Self::Guard {
+                guard,
+                target,
+                denial,
+            } => {
+                if first(format!("{guard} {}", denial.http_status())) {
+                    file_denial(message, guard, target, cx, &denial);
+                }
+                denial
+            }
+            Self::Filed(denial) => denial,
+        }
+    }
 }
 
 /// A principal a `#[public]` unit's handler reads as an `Ambient`, beside the

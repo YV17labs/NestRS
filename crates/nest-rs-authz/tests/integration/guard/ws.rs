@@ -42,7 +42,7 @@ struct VisitorGateway;
 #[messages]
 impl VisitorGateway {
     #[subscribe_message("open")]
-    #[public(Delete, widget::Entity, unmasked)]
+    #[public(Delete, widget::Entity)]
     #[use_guards(AuthzGuard)]
     async fn open(&self) -> String {
         rules_read()
@@ -72,14 +72,14 @@ struct GatedAtTheUnitGateway;
 #[messages]
 impl GatedAtTheUnitGateway {
     #[subscribe_message("open")]
-    #[public(Delete, widget::Entity, unmasked)]
+    #[public(Delete, widget::Entity)]
     #[use_guards(AuthzGuard)]
     async fn open(&self) -> String {
         rules_read()
     }
 
     #[subscribe_message("gated")]
-    #[authorize(Read, widget::Entity, unmasked)]
+    #[authorize(Read, widget::Entity)]
     #[use_guards(AuthzGuard)]
     async fn gated(&self) -> Result<String, WsError> {
         Ok("reached".to_owned())
@@ -109,7 +109,7 @@ struct UndeclaredAtTheUnitGateway;
 #[messages]
 impl UndeclaredAtTheUnitGateway {
     #[subscribe_message("open")]
-    #[public(Delete, widget::Entity, unmasked)]
+    #[public(Delete, widget::Entity)]
     #[use_guards(AuthzGuard)]
     async fn open(&self) -> String {
         rules_read()

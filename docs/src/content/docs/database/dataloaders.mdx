@@ -171,7 +171,7 @@ line.
 
 A loader's rows hold every exposed column, as rows out of `Repo` do: the batch decides
 the rows, and the field answering decides the columns. `namesakes` answers `Vec<Post>`,
-so it is [masked by the caller's grants](/security/authorization/response-masking/#a-nested-graphql-field-masks-by-the-same-rule)
+so it is [masked by the caller's grants](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds)
 and its own selection, as a root field is. A scalar it derived from a row would be its
 own line, which no mask reads.
 

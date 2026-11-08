@@ -211,7 +211,14 @@ impl GuardStage for FieldGuardStage {
         Box::pin(async move {
             check_guards(&self.guards, self.needed.as_ref(), None, self.withheld, cx)
                 .await
-                .map_err(|refused| Failure::from(refused.into_denial(self.denied, cx)))
+                .map_err(|refused| {
+                    let Some(view) = cx.switch_to::<GraphqlView>() else {
+                        return Failure::from(refused.into_denial(self.denied, cx));
+                    };
+                    let fact = |said: String| view.first_filed(format!("{} {said}", view.field()));
+                    let denial = refused.into_denial_once(self.denied, cx, fact);
+                    Failure::from(denial)
+                })
         })
     }
 }
@@ -341,14 +348,19 @@ where
     Fut: Future<Output = Result<T, FieldFailure>> + Send + 'a,
 {
     let operation = ctx.query_env.operation.node.ty;
-    FieldUnit::new(
+    let mut unit = FieldUnit::new(
         site,
         ctx.data_unchecked::<Container>(),
         operation,
         kind.role(),
-    )
-    .run(tail)
-    .map_err(move |error| spelled_by_schema(ctx, error))
+    );
+    // Run once per parent: what it files repeating is one line per operation.
+    unit.view = unit.view.filing_into(
+        ctx.data_opt::<Arc<crate::filed_facts::FiledFacts>>()
+            .cloned(),
+    );
+    unit.run(tail)
+        .map_err(move |error| spelled_by_schema(ctx, error))
 }
 
 /// The operation type as a field's line names its role.

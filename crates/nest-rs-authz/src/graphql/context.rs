@@ -4,12 +4,11 @@
 use std::sync::Arc;
 
 use nest_rs_core::{Edge, Problem, code};
-use nest_rs_graphql::__private::first_in_operation;
-use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
+use nest_rs_graphql::async_graphql::{Error, Result};
 use nest_rs_guards::Denial;
 
 use crate::Ability;
-use crate::gate::{Refusal, reason};
+use crate::gate::Refusal;
 
 /// The [`Ability`] the running field's unit carries — what the guards at its
 /// request or at the field itself attached, the one its class gate checked. A
@@ -20,20 +19,6 @@ pub fn ability() -> Result<Arc<Ability>> {
         file_unreached();
         unreached_answer()
     })
-}
-
-/// [`ability`], for a nested field, which runs once per parent.
-pub(super) fn field_ability(ctx: &Context<'_>) -> Result<Arc<Ability>> {
-    crate::current_ability().ok_or_else(|| unreached(ctx))
-}
-
-/// The fail-closed exit of a nested field no ability reached: one wiring defect, its
-/// line one per operation however many parents meet it, each keeping its error.
-pub(super) fn unreached(ctx: &Context<'_>) -> Error {
-    if first_in_operation(ctx, reason::NO_AMBIENT_ABILITY.to_owned()) {
-        file_unreached();
-    }
-    unreached_answer()
 }
 
 fn file_unreached() {
@@ -59,12 +44,4 @@ const UNREACHED: &str = "attach the ability on /graphql's request — the app's 
 /// `#[authorize(A, bind = S)]` loads emits it.
 pub fn forbidden() -> Error {
     nest_rs_graphql::problem_error(&Problem::new(403, code::FORBIDDEN))
-}
-
-/// [`forbidden`] naming the response fields the caller's field grant refuses, as
-/// the schema spells them — the answer to an operation that selected a column it may
-/// not read. The `fields` extension is a list, so a name containing a comma stays
-/// one entry.
-pub(crate) fn forbidden_fields(fields: Vec<String>) -> Error {
-    forbidden().extend_with(move |_, e| e.set("fields", fields))
 }

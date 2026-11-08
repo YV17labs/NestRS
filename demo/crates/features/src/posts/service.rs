@@ -77,9 +77,7 @@ impl PostsService {
             "post published",
         );
         let post = Post::from(&published);
-        self.bus
-            .emit(PostPublishedEvent { post: post.clone() })
-            .await;
+        self.bus.emit(PostPublishedEvent { post: published }).await;
         Ok(post)
     }
 }

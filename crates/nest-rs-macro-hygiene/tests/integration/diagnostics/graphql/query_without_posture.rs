@@ -1,6 +1,6 @@
 //! A `#[query]` with neither `#[authorize(...)]` nor `#[public]` must not
 //! compile — an operation the developer forgot to think about never ships
-//! ungated and unmasked.
+//! ungated.
 
 use nest_rs::graphql::{resolver, operations};
 

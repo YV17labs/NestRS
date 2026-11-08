@@ -46,13 +46,13 @@ struct VisitorResolver;
 #[operations]
 impl VisitorResolver {
     #[query]
-    #[public(Delete, widget::Entity, unmasked)]
+    #[public(Delete, widget::Entity)]
     async fn open(&self) -> GqlResult<String> {
         Ok(rules_read())
     }
 
     #[query]
-    #[public(Read, widget::Entity, unmasked)]
+    #[public(Read, widget::Entity)]
     async fn readable(&self) -> GqlResult<String> {
         Ok(rules_read())
     }
@@ -78,7 +78,7 @@ struct GatedAtTheUnitResolver;
 #[operations]
 impl GatedAtTheUnitResolver {
     #[query]
-    #[authorize(Read, widget::Entity, unmasked)]
+    #[authorize(Read, widget::Entity)]
     async fn gated_at_the_unit(&self) -> GqlResult<String> {
         Ok("reached".to_owned())
     }
@@ -110,7 +110,7 @@ struct GuardShelfResolver;
 #[operations]
 impl GuardShelfResolver {
     #[query]
-    #[public(Delete, widget::Entity, unmasked)]
+    #[public(Delete, widget::Entity)]
     async fn guard_shelves(&self) -> GqlResult<Vec<GuardShelf>> {
         Ok(vec![GuardShelf { id: 1 }])
     }

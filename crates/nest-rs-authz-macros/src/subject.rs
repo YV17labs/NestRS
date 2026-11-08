@@ -50,10 +50,6 @@ fn expand(args: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
                 #named
             }
         }
-
-        impl ::nest_rs_authz::__private::SubjectMask for #ident {
-            type Mask = ::nest_rs_authz::__private::NoRows;
-        }
     })
 }
 
@@ -76,7 +72,10 @@ mod tests {
             expanded.contains("impl :: nest_rs_authz :: Subject for Exporting"),
             "{expanded}"
         );
-        assert!(expanded.contains("NoRows"), "{expanded}");
+        assert!(
+            expanded.contains("const __ROWS : bool = false"),
+            "{expanded}"
+        );
     }
 
     #[test]

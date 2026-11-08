@@ -61,28 +61,35 @@ fn member(org_id: Uuid) -> Ability {
 }
 ```
 
-## Masking — every grant scenario
+## Field grants — every grant scenario
 
-`mask::<E>(action, &model)` returns the wire JSON with disallowed keys
-**stripped** (not nulled). Assert the keys that must survive and the ones
-that must not — including columns with no `#[expose]`, which never reach
-the wire even under a full field grant.
+`permitted_fields::<E>(action, &model)` answers the columns a grant leaves a
+row, the same set a wire row built under that ability holds. Assert the columns
+that must survive and the ones that must not; building the ability at all is a
+test too, since a grant on `Read` withholding a column no `null` answers fails
+`build()`.
 
 ```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 #[test]
-fn member_mask_strips_admin_only_fields() {
+fn member_read_users_scopes_to_own_org_and_strips_email() {
     let org = Uuid::now_v7();
-    let json = member(org).mask::<user::Entity>(Action::Read, &user_model(Uuid::now_v7(), org));
-    let obj = json.as_object().expect("masked model is a JSON object");
-    assert!(obj.contains_key("id"));
-    assert!(obj.contains_key("name"));
-    assert!(!obj.contains_key("email"), "members must not see email");
+    // …
+    let fields = member(org)
+        .permitted_fields::<user::Entity>(Action::Read, &user_model(Uuid::now_v7(), org));
+    match fields {
+        FieldSet::Only(cols) => {
+            assert!(cols.contains("id"));
+            assert!(cols.contains("name"));
+            assert!(!cols.contains("email"), "email is admin-only");
+        }
+        _ => panic!("members must have a restricted field set"),
+    }
 }
 ```
 
-The stripped key matters most: masking **removes** the key rather than
-emitting `null`, so a field grant can never leak an admin-only column —
-or an unexposed one — by omission.
+What a row then holds on the wire — `email: null` for that member — is the
+framework's, judged where `User::from(&row)` builds it; an app's suite asserts it
+through an edge ([Response masking](/security/authorization/response-masking/)).
 
 ## Ability conditions — fail-closed by default
 

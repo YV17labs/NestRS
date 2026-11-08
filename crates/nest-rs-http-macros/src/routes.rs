@@ -1219,14 +1219,7 @@ fn gate_of(attr: &Attribute, word: &'static str, inputs: &[FnArg]) -> syn::Resul
     if let Some(unmasked) = paths.iter().find(|p| p.is_ident("unmasked")) {
         return Err(syn::Error::new_spanned(
             unmasked,
-            posture_key_unsupported(
-                "unmasked",
-                "HTTP",
-                "there is no value-level mask here to switch off. A route's response is \
-                 shaped by a `RouteResponseShaper` the compiler arms from the *type* of \
-                 the subject the posture names, so what a body carries is decided by the \
-                 attribute",
-            ),
+            nest_rs_codegen::__private::unmasked_refused(),
         ));
     }
     let mut paths = paths.into_iter();

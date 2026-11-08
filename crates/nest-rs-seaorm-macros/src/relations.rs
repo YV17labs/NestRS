@@ -1,7 +1,8 @@
 //! Auto-generated bridges for entities: a PK loader on the entity's service,
 //! trait impls connecting the entity to its loader and wire DTO, and
 //! `#[ComplexObject]` field resolvers for every exposed (`#[expose]`) relation. A
-//! loader's batch filters rows; each field masks the columns by its own selection.
+//! loader's batch filters rows in SQL and answers each as its wire row, judged
+//! for the caller whose request it runs under.
 //!
 //! The FK-side dataloader (`by_<fk_col>`) and its `RelatedTo<Parent, Via>` impl
 //! are emitted by the entity declaring `belongs_to`, never by the parent.
@@ -17,6 +18,7 @@ use crate::attr::{
     RelationKind, ResourceField, ResourceModel, complexity_attr, graphql_root, graphql_root_str,
     is_uuid,
 };
+use crate::lifecycle::is_option_type;
 
 /// Default complexity expression for an auto-emitted `HasMany` field resolver.
 ///
@@ -110,8 +112,7 @@ fn emit_pk_loader(
                     )
                     .all()
                     .await?;
-                // `scoped(Read)` filters rows; each field masks the columns by its
-                // own selection, since one batch serves every alias asking.
+                // `scoped(Read)` filters rows; each wire row is judged as it is built.
                 let mut __map: ::std::collections::HashMap<#pk_ty, #wire> =
                     ::std::collections::HashMap::with_capacity(__rows.len());
                 for __row in __rows {
@@ -309,8 +310,8 @@ fn emit_fk_loaders(
                         .await?;
                         for (__parent, __page) in __pages {
                             let mut __edges = ::std::vec::Vec::with_capacity(__page.items.len());
-                            // `scoped(Read)` filters rows; each field masks the columns
-                            // by its own selection, since one batch serves every alias.
+                            // `scoped(Read)` filters rows; each wire row is judged as
+                            // it is built.
                             for __row in &__page.items {
                                 __edges.push((
                                     ::std::string::ToString::to_string(
@@ -464,7 +465,8 @@ fn relation_registration(
 }
 
 /// One BelongsTo field resolver: load the parent's FK column via the target
-/// entity's PK loader, returning its wire DTO masked by this field's selection.
+/// entity's PK loader, returning its wire DTO, judged where the loader built it. A
+/// key the caller's grant withholds is no link to follow: the field reads `null`.
 fn emit_belongs_to_method(
     model: &ResourceModel,
     field: &ResourceField,
@@ -474,9 +476,20 @@ fn emit_belongs_to_method(
     let name = &field.ident;
     let fk_field = exposed_fk_column(model, name, fk)?;
 
-    let key_expr = wire_key_expr(&fk_field.ty, fk);
     let complexity = complexity_attr(&field.complexity, None);
     let root = graphql_root();
+    let key = if fk_field.nullable || is_option_type(&fk_field.ty) {
+        let parsed = wire_key_expr(&fk_field.ty, &format_ident!("__link"), true);
+        quote! {
+            let ::core::option::Option::Some(__link) = &self.#fk else {
+                return ::core::result::Result::Ok(::core::option::Option::None);
+            };
+            let __key = #parsed;
+        }
+    } else {
+        let parsed = wire_key_expr(&fk_field.ty, fk, false);
+        quote! { let __key = #parsed; }
+    };
 
     Ok(quote! {
         #complexity
@@ -486,22 +499,20 @@ fn emit_belongs_to_method(
         ) -> #root::Result<
             ::core::option::Option<<#target as ::nest_rs_seaorm::Exposed>::Wire>,
         > {
+            (::nest_rs_authz::__private::judged_field::<Entity>(self.__judged, false))(__ctx)?;
+            #key
             let __loader = ::nest_rs_seaorm::__private::seeded_loader::<
                 <#target as ::nest_rs_seaorm::graphql::PkLoadable>::Loader,
             >(__ctx)
             .map_err(::nest_rs_seaorm::__private::FieldFailure::into_answer)?;
-            let __key = #key_expr;
-            ::nest_rs_authz::__private::graphql_masked_row::<#target, _>(
-                __ctx,
-                __loader.load_one(__key).await?,
-            )
+            ::core::result::Result::Ok(__loader.load_one(__key).await?)
         }
     })
 }
 
-/// One HasMany field resolver: one page of the children of `self`, masked by this
-/// field's selection, as a Relay `Connection` cursored by the child's primary key,
-/// through the target's `RelatedTo<Self::Entity, Via>::Loader`.
+/// One HasMany field resolver: one page of the children of `self`, each judged
+/// where the loader built it, as a Relay `Connection` cursored by the child's
+/// primary key, through the target's `RelatedTo<Self::Entity, Via>::Loader`.
 fn emit_has_many_method(
     field: &ResourceField,
     target: &syn::Path,
@@ -509,7 +520,7 @@ fn emit_has_many_method(
     pk: &ResourceField,
 ) -> syn::Result<TokenStream2> {
     let name = &field.ident;
-    let key_expr = wire_key_expr(&pk.ty, &pk.ident);
+    let key_expr = wire_key_expr(&pk.ty, &pk.ident, false);
     let complexity = complexity_attr(&field.complexity, Some(DEFAULT_HAS_MANY_COMPLEXITY));
     let related = related_to_path(target, via)?;
     let root = graphql_root();
@@ -527,6 +538,7 @@ fn emit_has_many_method(
                 <#target as ::nest_rs_seaorm::Exposed>::Wire,
             >,
         > {
+            (::nest_rs_authz::__private::judged_field::<Entity>(self.__judged, true))(__ctx)?;
             let __after = ::nest_rs_seaorm::__private::graphql_page_cursor(
                 ::core::option::Option::as_deref(&after),
             )?;
@@ -548,7 +560,7 @@ fn emit_has_many_method(
                 .unwrap_or_default();
             ::core::result::Result::Ok(
                 ::nest_rs_seaorm::graphql::RelationPage::into_connection(
-                    ::nest_rs_seaorm::__private::masked_relation_page::<#target, _>(__ctx, __page)?,
+                    __page,
                     __has_previous_page,
                 ),
             )
@@ -557,15 +569,21 @@ fn emit_has_many_method(
 }
 
 /// The wire representation of a column → key the dataloader expects: a `Uuid`
-/// is a `String` on the wire, so it is parsed back.
-fn wire_key_expr(ty: &Type, ident: &Ident) -> TokenStream2 {
+/// is a `String` on the wire, so it is parsed back. `bound` reads an ident bound
+/// to the value by reference rather than a field of `self`.
+fn wire_key_expr(ty: &Type, ident: &Ident, bound: bool) -> TokenStream2 {
+    let place = if bound {
+        quote! { #ident }
+    } else {
+        quote! { &self.#ident }
+    };
     if is_uuid(ty) {
         let root = graphql_root();
         quote! {
-            ::nest_rs_seaorm::__private::uuid::Uuid::parse_str(&self.#ident)
+            ::nest_rs_seaorm::__private::uuid::Uuid::parse_str(#place)
                 .map_err(|__e| #root::Error::new(__e.to_string()))?
         }
     } else {
-        quote! { ::core::clone::Clone::clone(&self.#ident) }
+        quote! { ::core::clone::Clone::clone(#place) }
     }
 }

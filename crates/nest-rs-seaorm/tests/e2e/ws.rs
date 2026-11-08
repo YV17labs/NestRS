@@ -62,7 +62,7 @@ pub(crate) struct UnitGateway;
 #[messages]
 impl UnitGateway {
     #[subscribe_message("inspect")]
-    #[public(Read, Inspection, unmasked)]
+    #[public(Read, Inspection)]
     async fn inspect(&self) -> serde_json::Value {
         json!({
             "lazy": matches!(current_executor(), Some(SeaOrmExecutor::Lazy(_))),

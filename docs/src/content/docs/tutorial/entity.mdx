@@ -195,10 +195,10 @@ is opt-in, those columns stay off the wire by default;
 load-bearing.
 
 <Aside type="caution">
-An unexposed column whose type isn't trivial to default (a tenant `Uuid`, a
-`Decimal`, a custom enum) takes `#[wire_default]` or
-`#[wire_default(expr)]`, so the masker can rebuild the row. Without one,
-`#[expose]` refuses the column at compile time, naming the three ways out.
+A column a grant may hide from some callers is declared `#[expose(nullable)]`
+(or is an `Option` already): its wire field reads `null` where the grant
+withholds it. A grant on `Read` leaving out any other column fails when the
+ability builds, naming the column.
 </Aside>
 
 ## The mod entry

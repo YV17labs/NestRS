@@ -224,7 +224,6 @@ struct AuthorizeSpec {
     action: Path,
     /// `None` when derived from `<Service as CrudService>::Entity` under `bind`.
     entity: Option<Path>,
-    unmasked: bool,
     /// `bind = Service`: a by-id argument loaded into the `Authorized<Action, E>` parameter.
     bind: Option<Path>,
     /// The synthesized id argument's snake_case name (async-graphql camelCases
@@ -287,23 +286,22 @@ fn refused(
 /// The posture's shape refusal, in the words of the attribute `word` names.
 fn posture_shape(word: &str) -> String {
     format!(
-        "expected `#[{word}(Action, Subject)]` — e.g. `#[{word}(Read, users::Entity)]`; append \
-         `unmasked` to keep the class gate but mask the response yourself. `bind = Service` \
-         (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity \
-         be omitted (derived from `Service::Entity`): `#[{word}(Update, bind = ArtworksService)]`"
+        "expected `#[{word}(Action, Subject)]` — e.g. `#[{word}(Read, users::Entity)]`. \
+         `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, \
+         and lets the entity be omitted (derived from `Service::Entity`): \
+         `#[{word}(Update, bind = ArtworksService)]`"
     )
 }
 
 /// What an operation with no posture at all is told.
 const POSTURE_REQUIRED: &str = "every `#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]` \
-     declares its access posture: `#[authorize(Action, Subject)]` (class-level gate + automatic \
-     response masking — e.g. `#[authorize(Read, users::Entity)]`) for a caller a principal backs, \
+     declares its access posture: `#[authorize(Action, Subject)]` (class-level gate, and the \
+     reads it opens — e.g. `#[authorize(Read, users::Entity)]`) for a caller a principal backs, \
      `#[public(Action, Subject)]` for the same on what any caller may read, or a bare `#[public]` \
      (a caller with no credential is admitted, and the operation reads nothing a grant guards — \
      `#[use_guards]` guards still run)";
 
-/// Read `#[word(Action, Subject)]`, `#[word(Action, Subject, unmasked)]` or
-/// `#[word(Action, bind = Service)]`.
+/// Read `#[word(Action, Subject)]` or `#[word(Action, bind = Service)]`.
 fn gate_of(attr: &Attribute, word: &'static str) -> syn::Result<AuthorizeSpec> {
     let shape_err = || syn::Error::new_spanned(attr, posture_shape(word));
     if !matches!(attr.meta, syn::Meta::List(_)) {
@@ -346,11 +344,13 @@ fn gate_of(attr: &Attribute, word: &'static str) -> syn::Result<AuthorizeSpec> {
             "`id_arg` only applies with `bind = Service`",
         ));
     }
-    let unmasked = positional.iter().any(|p| p.is_ident("unmasked"));
-    let mut subject: Vec<Path> = positional
-        .into_iter()
-        .filter(|p| !p.is_ident("unmasked"))
-        .collect();
+    if let Some(unmasked) = positional.iter().find(|p| p.is_ident("unmasked")) {
+        return Err(syn::Error::new_spanned(
+            unmasked,
+            nest_rs_codegen::__private::unmasked_refused(),
+        ));
+    }
+    let mut subject = positional;
     let (action, entity) = match (subject.len(), bind.is_some()) {
         (2, _) => {
             let entity = subject.remove(1);
@@ -362,7 +362,6 @@ fn gate_of(attr: &Attribute, word: &'static str) -> syn::Result<AuthorizeSpec> {
     Ok(AuthorizeSpec {
         action,
         entity,
-        unmasked,
         bind,
         id_arg,
     })
@@ -1058,8 +1057,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 loaders,
             } = field_method(&self_ty, &deleg_attrs, &sig)?;
             field_dep_types.extend(injected.into_iter().map(|dep| (cfgs.clone(), dep)));
-            let answer = returned(&sig).value();
-            field_needs.push(field_served(&self_ty, &parent_ty, &field, &answer, &cfgs));
+            field_needs.push(field_served(&self_ty, &parent_ty, &field, &cfgs));
             field_needs.extend(
                 loaders
                     .iter()
@@ -1083,8 +1081,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                          forgetting is invisible: the router calls `_entities` with a *reference* \
                          — `{__typename, <key fields>}` — for an entity the client never named, so \
                          an ungated one is readable from outside every `#[authorize]` in the \
-                         schema. Write `#[authorize(Action, Subject)]` (class gate + response \
-                         mask) or `#[public(Action, Subject)]`, or a bare `#[public]` for an \
+                         schema. Write `#[authorize(Action, Subject)]` (class gate, and the \
+                         reads it opens) or `#[public(Action, Subject)]`, or a bare `#[public]` for an \
                          entity reading nothing a grant guards",
                     ));
                 }
@@ -1293,11 +1291,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 let entity = authz_entity(spec);
                 quote!(::nest_rs_authz::class_gate::<#action, #entity>)
             });
-            let withheld = withheld(
-                authorize_spec
-                    .as_ref()
-                    .map(|spec| (authz_entity(spec), spec.unmasked)),
-            );
+            let withheld = withheld(authorize_spec.as_ref().map(authz_entity));
             let chain_site = if is_entity {
                 ChainSite::Entity
             } else {
@@ -1329,63 +1323,26 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     .map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
                 }
             });
-            let body = match authorize_spec.as_ref().filter(|spec| !spec.unmasked) {
-                Some(spec) => {
-                    let action = &spec.action;
-                    let entity = authz_entity(spec);
-                    match root_kind {
-                        // Through the probe's mapper, so the mask reads the row
-                        // inside a renamed `Result`, not the `Result` itself.
-                        RootKind::Query | RootKind::Mutation => quote! {
-                            match #call {
-                                ::core::result::Result::Ok(__out) => {
-                                    use ::nest_rs_core::__private::AnswerFallback as _;
-                                    ::core::result::Result::map_err(
-                                        ::nest_rs_core::__private::Answer(&__out).mapper()(
-                                            __out,
-                                            |__value| {
-                                                ::nest_rs_authz::__private::graphql_masked_value::<
-                                                    #action, #entity, _,
-                                                >(#gctx, #site, __value)
-                                            },
-                                        ),
-                                        ::nest_rs_graphql::__private::FieldFailure::from,
-                                    )
-                                }
-                                ::core::result::Result::Err(__err) =>
-                                    ::core::result::Result::Err(__err),
-                            }
-                        },
-                        // The gate ran once, at subscribe: every item is masked, a
-                        // refused one dropped rather than nulled, by the ability
-                        // the gate checked — read here, inside the opening's unit,
-                        // since the items arrive outside it.
-                        RootKind::Subscription => quote! {
-                            match #call {
-                                ::core::result::Result::Ok(__stream) => {
-                                    let __ability = ::nest_rs_authz::graphql::ability()
-                                        .map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
-                                    ::core::result::Result::Ok(
-                                        ::nest_rs_graphql::async_graphql::futures_util::StreamExt::filter_map(
-                                            __stream,
-                                            move |__item| ::core::future::ready(
-                                                ::nest_rs_graphql::__private::keep_masked_item(
-                                                    #site,
-                                                    ::nest_rs_authz::__private::graphql_masked_item::<
-                                                        #action, #entity, _,
-                                                    >(#gctx, #site, &__ability, __item),
-                                                ),
-                                            ),
-                                        ),
-                                    )
-                                }
-                                ::core::result::Result::Err(__err) =>
-                                    ::core::result::Result::Err(__err),
-                            }
-                        },
+            // Under an entity's posture an item a refused row is leaves the stream,
+            // so a subscriber learns nothing of a push it may not read; every item is
+            // a push, judged where the socket polls the stream.
+            let body = match (root_kind, authorize_spec.is_some()) {
+                (RootKind::Subscription, true) => quote! {
+                    match #call {
+                        ::core::result::Result::Ok(__stream) => ::core::result::Result::Ok(
+                            ::nest_rs_graphql::async_graphql::futures_util::StreamExt::filter_map(
+                                __stream,
+                                |__item| ::core::future::ready({
+                                    #[allow(unused_imports)]
+                                    use ::nest_rs_authz::__private::PushedItemFallback as _;
+                                    ::nest_rs_authz::__private::PushedItem(__item).kept(#site)
+                                }),
+                            ),
+                        ),
+                        ::core::result::Result::Err(__err) => ::core::result::Result::Err(__err),
                     }
-                }
-                None => call,
+                },
+                _ => call,
             };
             let pipe_prelude = piped.iter().map(|pa| {
                 let ident = &pa.ident;
@@ -1621,13 +1578,7 @@ struct FieldMethod {
 /// The need every `#[field_resolver]` declares: `#[ComplexObject]` serves it with
 /// its parent, so the schema build refuses it when the app does not reach its
 /// resolver.
-fn field_served(
-    self_ty: &Type,
-    parent: &Type,
-    field: &str,
-    answer: &Type,
-    cfgs: &[TokenStream2],
-) -> TokenStream2 {
+fn field_served(self_ty: &Type, parent: &Type, field: &str, cfgs: &[TokenStream2]) -> TokenStream2 {
     quote! {
         #(#cfgs)*
         ::nest_rs_graphql::__private::inventory::submit! {
@@ -1639,12 +1590,6 @@ fn field_served(
                     ::core::any::type_name::<#self_ty>(),
                 ),
                 origin: ::core::module_path!(),
-                // A static's initializer, so a shape the mask cannot read refuses
-                // under `cargo check` too.
-                unmasked: {
-                    use ::nest_rs_graphql::__private::FieldAnswerFallback as _;
-                    <::nest_rs_graphql::__private::FieldAnswer<'_, #answer>>::UNMASKED
-                },
             }
         }
     }
@@ -1820,23 +1765,6 @@ fn field_method(
         ),
         RootKind::Query,
     );
-    // Through the probes, so the mask reads the row inside a renamed `Result`, and
-    // an answer holding no wire type's rows pays nothing.
-    let call = quote! {
-        match #call {
-            ::core::result::Result::Ok(__out) => {
-                use ::nest_rs_core::__private::AnswerFallback as _;
-                ::core::result::Result::map_err(
-                    ::nest_rs_core::__private::Answer(&__out).mapper()(__out, |__value| {
-                        use ::nest_rs_graphql::__private::FieldAnswerFallback as _;
-                        ::nest_rs_graphql::__private::FieldAnswer(&__value).mask()(__ctx, #site, __value)
-                    }),
-                    ::nest_rs_graphql::__private::FieldFailure::from,
-                )
-            }
-            ::core::result::Result::Err(__err) => ::core::result::Result::Err(__err),
-        }
-    };
     let method = quote! {
         #(#deleg_attrs)*
         async fn #method_name #generics (

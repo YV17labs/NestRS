@@ -159,7 +159,7 @@ pub mod __private {
     pub use crate::posture::{
         AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, ID_ARG_UNSUPPORTED_BECAUSE,
         Posture, PostureGate, PostureRules, authorized_entity, posture_key_unsupported,
-        take_posture, withheld,
+        take_posture, unmasked_refused, withheld,
     };
     pub use crate::provider_site::{ProviderSite, host_layers_entry, site_const};
     pub use crate::queue_name::{invalid_queue_name, is_valid_queue_name};

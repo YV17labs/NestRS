@@ -82,7 +82,7 @@ guard, filter or interceptor loop of its own.
    before the pipe runs — then runs the per-argument pipes, all after the
    gate: a refused caller never pays for validation, and a validation
    message is never an existence oracle; a rejection is the edge's native
-   error — then the handler and the posture's mask, and writes the answer
+   error — then the handler, and writes the answer
    into the view. A failure no exception filter answered is rendered by the
    edge's one rule (*Error opacity*, below) before the unit stage returns,
    so a unit-stage interceptor reads what goes out.
@@ -90,7 +90,7 @@ guard, filter or interceptor loop of its own.
    `#[authorize(Action, Subject)]`, `#[public(Action, Subject)]` or a bare
    `#[public]`, and `#[public]` means one thing on every edge: a caller with no
    credential is admitted. Naming a subject it takes `#[authorize]`'s arguments,
-   gate and mask, on the ability that caller has; bare, it reads nothing a grant
+   gate and reads, on the ability that caller has; bare, it reads nothing a grant
    guards. So what a visitor reaches is a line a reviewer reads, on every edge.
    This is what keeps *no authn/authz decision outside a guard* true. **Where an endpoint
    admits a visitor in band, the posture is what refuses one, so it is
@@ -101,7 +101,7 @@ guard, filter or interceptor loop of its own.
    message under its gateway's `#[use_guards]` at the `Gated` upgrade, the pool
    or a guard of its own, and an MCP operation under a `Gated` endpoint the pool,
    `EndpointGuards` or a guard of its own cover; `#[authorize]` adds the gate and
-   the mask. **A guard covers a unit only if it identifies or authorizes**, its
+   opens the unit's reads. **A guard covers a unit only if it identifies or authorizes**, its
    `Guard::phase` `GuardPhase::Authentication` or `Authorization`, read off the
    site's composed stage (`GuardStage::covers`): `Other`, a rate limit and a guard
    declaring no phase, covers nothing. A route, a message or an operation no
@@ -163,20 +163,17 @@ guard, filter or interceptor loop of its own.
    grant, the public-reads pattern, and licenses that visitor's reads for the unit
    when `S` has rows. One refusal reads one sentence on every edge (RFC 6750 §3.1's
    for a scope) and files one `warn`; an edge renders the `Denial` it carries.
-7. **Response masking armed by the posture**, never hand-written in a body,
-   chosen by the protocol rather than by symmetry (`data-layer.md`, *Response
-   masking*), and by the subject's type: an entity's posture masks, a
-   `#[subject]`'s arms none. A nested GraphQL field is no unit and writes no
-   posture: what it answers masks by the entity its type names (`data-layer.md`).
-   **A unit no mask shapes withholds the ability from its
-   reads, on every edge, whatever its posture says** (`UnmaskedReply`): a bare
-   `#[public]`, a covered unit stating none, a `#[subject]`'s, a route, a stream, a
-   WS connection hook.
-   `unmasked` keeps the ability and leaves the mask to the body, and so does a
-   hand-written MCP `ServerHandler`, which declares no unit and writes no posture: it
-   reads under a principal's ability, a visitor's reading nothing, and calls
-   `masked_reply` itself. It is attached only
-   where there is something to withhold, so a site running no guard with none at its
+7. **Each wire row judged where it is built**, never by an edge reading its reply
+   back (`data-layer.md`, *The wire row*): an entity's posture opens the unit's
+   reads, a `#[subject]`'s none, and each row the answer carries answers the caller
+   whose ability judged it and no one else, whatever shape holds it — the edge
+   writes a row its grants refuse as its own `FORBIDDEN`. **A unit whose posture
+   names no entity's read withholds the ability from its reads, on every edge**
+   (`UnmaskedReply`): a bare `#[public]`, a covered unit stating none, a
+   `#[subject]`'s, a route, a stream, a WS connection hook. A hand-written MCP
+   `ServerHandler`, which declares no unit and writes no posture, reads under a
+   principal's ability, a visitor's reading nothing. It is attached only where
+   there is something to withhold, so a site running no guard with none at its
    request keeps no stage and pays nothing
    (`.claude/decisions/unmasked-reply-withholds-the-ability.md`).
 8. **Guards at two scopes, and their `GuardFor` bound when the unit has a
@@ -489,8 +486,8 @@ Rust type, since a binary links objects of one GraphQL name it does not all
 serve. Every field's
 site is composed at the wiring step, so a layer it declares that does not
 resolve, or two `#[meta]` values of one type, refuse the boot. A field's
-`Ability` is the unit's — the one its class gate checked — and its mask and
-`bind` read it there, never off the GraphQL context.
+`Ability` is the unit's — the one its class gate checked — and the rows it
+builds and its `bind` read it there, never off the GraphQL context.
 
 **Every MCP request is one `mcp.operation` unit**, run on rmcp's task inside
 the `/mcp` request's context — its scope, its trace, what its guards and layers
@@ -512,9 +509,10 @@ guarded by the pool and the `EndpointGuards` alone.
 
 ## Posture inside an operation
 
-The posture is not a layer: the impl half turns it into a class gate and a mask.
-Order is fixed: **chain → gate → filters, interceptors → pipes → call →
-mask**. **The chain runs whatever
+The posture is not a layer: the impl half turns it into a class gate and the
+reads it opens.
+Order is fixed: **chain → gate → filters, interceptors → pipes → call**.
+**The chain runs whatever
 the operation returns** — the failure channel is the emitted wrapper's, never the
 developer's method, so a bare `T` answers through a `Result` like any other
 (`.claude/decisions/operation-chain-any-return.md`).
@@ -642,8 +640,7 @@ router parses. The rewrite is skipped when nothing is versioned.
 - **WS is not a `Transport`**: an upgrade is an HTTP `GET`, so a gateway
   self-mounts on `HttpTransport` and inherits its port, CORS and TLS. One
   envelope, `{event, data}`. A handler returns at most a `Result` around a
-  `Result`-free value, decided by type (`ReplyValue`), which is what the mask
-  reads too; a `Result` inside an `Option`, a `Vec` or a struct is data. An `Err` becomes a frame through
+  `Result`-free value, decided by type (`ReplyValue`); a `Result` inside an `Option`, a `Vec` or a struct is data. An `Err` becomes a frame through
   `ErrorReport`, by its type, so the chain a frame withholds is read whenever
   the type has one, and filed as *Error opacity* says.
 - **MCP aggregates** behind one endpoint, since clients point at one URL; one

@@ -482,7 +482,7 @@ struct UnreachedResolver;
 #[operations]
 impl UnreachedResolver {
     #[query]
-    #[authorize(Read, widget::Entity, unmasked)]
+    #[authorize(Read, widget::Entity)]
     async fn unreached(&self) -> GqlResult<i32> {
         Ok(0)
     }
@@ -535,7 +535,7 @@ struct UnreachedEntityResolver;
 #[operations]
 impl UnreachedEntityResolver {
     #[entity]
-    #[authorize(Read, widget::Entity, unmasked)]
+    #[authorize(Read, widget::Entity)]
     async fn find_keyed_by_id(&self, id: i32) -> GqlResult<Keyed> {
         Ok(Keyed { id })
     }
@@ -564,7 +564,7 @@ struct UnreachedSubscriptionResolver;
 #[operations]
 impl UnreachedSubscriptionResolver {
     #[subscription]
-    #[authorize(Read, widget::Entity, unmasked)]
+    #[authorize(Read, widget::Entity)]
     async fn unreached_stream(
         &self,
     ) -> impl nest_rs_graphql::async_graphql::futures_util::Stream<Item = i32> {
@@ -629,7 +629,7 @@ struct UnreachedPublicResolver;
 #[operations]
 impl UnreachedPublicResolver {
     #[query]
-    #[public(Read, widget::Entity, unmasked)]
+    #[public(Read, widget::Entity)]
     async fn unreached_public(&self) -> GqlResult<i32> {
         Ok(0)
     }

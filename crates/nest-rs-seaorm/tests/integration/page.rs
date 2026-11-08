@@ -116,9 +116,9 @@ impl ShelfResolver {
     #[query]
     #[public]
     async fn shelved_album(&self) -> album::PagedAlbum {
-        album::PagedAlbum {
-            id: "0195b4a6-4c1c-7d3e-8f00-000000000001".to_owned(),
-        }
+        album::PagedAlbum::from(&album::Model {
+            id: sea_orm::prelude::Uuid::from_u128(0x0195_b4a6_4c1c_7d3e_8f00_0000_0000_0001),
+        })
     }
 }
 

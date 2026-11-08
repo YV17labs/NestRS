@@ -8,9 +8,10 @@ use crate::contained::Uncontained;
 /// A rule the builder refused, so [`AbilityBuilder::build`] fails rather than an
 /// ability scoping rows other than the rule says: a relational predicate
 /// [`PredicateBuilder::related`] rejected (a composite key, or a relation not
-/// pointing at the declared related entity), or a condition whose text would not
+/// pointing at the declared related entity), a condition whose text would not
 /// stay where the scope writes it (a relation's `on_condition`, a value's enum type
-/// name).
+/// name), or a grant a reply reads, `Read` or `Manage`, whose `.fields` withholds a
+/// column its `#[expose]`d wire type cannot answer null.
 ///
 /// Unchecked, a malformed `cannot(...)` fails open: its `1 = 0` condition under
 /// `grant AND NOT(deny)` matches every row, and a text leaving its place in the scope
@@ -39,6 +40,12 @@ pub(crate) enum Defect {
     Relation,
     /// Its lowered condition's text would not stay where the scope writes it.
     Uncontained(Uncontained),
+    /// A reply's field set withholds a column its wire type cannot answer null:
+    /// the column, as `Column::as_str()` names it, and the field declaring it.
+    Unanswerable {
+        column: &'static str,
+        field: &'static str,
+    },
 }
 
 impl fmt::Display for Defect {
@@ -57,6 +64,11 @@ impl fmt::Display for Defect {
                  open closed inside them, no comment, and no `\"` in a type name.",
                 why.as_str(),
             ),
+            Self::Unanswerable { column, field } => write!(
+                f,
+                "withholds `{column}` in `.fields`, which a reply cannot answer null — declare \
+                 the column `#[expose(nullable)]` on `{field}`, or name it in `.fields`",
+            ),
         }
     }
 }
@@ -70,19 +82,4 @@ impl fmt::Display for Defect {
 pub struct ColumnsRefused {
     /// Each column refused, as `Column::as_str()` names it, in the order asked.
     pub columns: Vec<&'static str>,
-}
-
-/// Why `masked_reply` could not produce a masked value. Callers must treat
-/// either case as fail-closed: send an error frame, never the unmasked body.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum MaskReplyError {
-    /// No ambient [`Ability`](crate::Ability) — no ability guard ran at the
-    /// request, so masking cannot run.
-    #[error("no ambient ability — does an ability guard run at the request?")]
-    NoAmbientAbility,
-    /// The wire value could not be reconciled with the entity model — said by
-    /// where and what kind, never by the value.
-    #[error("wire value could not be reconciled with the entity model")]
-    Irreconcilable(#[source] nest_rs_core::DecodeError),
 }

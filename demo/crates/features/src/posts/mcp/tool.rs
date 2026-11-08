@@ -40,7 +40,7 @@ impl PostsTool {
         description = "Draft a follow-up post, primed with the titles the caller \
                        can already read."
     )]
-    #[authorize(Read, PostEntity, unmasked)]
+    #[authorize(Read, PostEntity)]
     async fn draft_follow_up(&self) -> Result<GetPromptResult, ServiceError> {
         let rows = self.svc.list().await?;
         let titles: Vec<&str> = rows.iter().map(|row| row.title.as_str()).collect();
@@ -60,7 +60,7 @@ impl PostsTool {
     }
 
     #[resources]
-    #[authorize(Read, PostEntity, unmasked)]
+    #[authorize(Read, PostEntity)]
     async fn posts(&self) -> Result<Vec<Resource>, ServiceError> {
         let rows = self.svc.list().await?;
 

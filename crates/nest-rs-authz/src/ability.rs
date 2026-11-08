@@ -3,81 +3,15 @@
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
-use nest_rs_core::ServedAddress;
-#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-use nest_rs_core::{Edge, Handler};
 use sea_orm::sea_query::Condition;
 use sea_orm::{EntityTrait, IdenStatic, Value};
 
 use crate::action::Action;
 use crate::error::ColumnsRefused;
 use crate::predicate::{Predicate, Truth, no_row, nothing_invented};
-use crate::wire_model::{WireModel, kept_key};
-
-/// The unit a mask answers for, as a line names it: nothing on the ambient
-/// [`Ability::mask`] and a value masked by hand, which run in no unit they know.
-#[derive(Clone, Copy, Default)]
-pub(crate) struct MaskedUnit<'a> {
-    /// The edge dispatching it, by its [`Edge`] word.
-    pub(crate) transport: Option<&'static str>,
-    /// Its host and method, where a site declared them.
-    pub(crate) site: Option<(&'static str, &'static str)>,
-    /// Where it is served, in the fields its `mounted` line names it by.
-    pub(crate) served: ServedAddress<'a>,
-}
-
-impl<'a> MaskedUnit<'a> {
-    /// The unit on `edge` served at `served`, by what `handler` declares where a
-    /// site reached one.
-    #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-    pub(crate) fn on(edge: Edge, handler: Option<&Handler>, served: ServedAddress<'a>) -> Self {
-        Self {
-            transport: Some(edge.as_str()),
-            site: handler.map(|handler| (handler.host_name(), handler.method())),
-            served,
-        }
-    }
-}
-
-/// The one fail-closed masking warn, for every edge and the ambient
-/// [`Ability::mask`]; here, always compiled, so a feature-less build reaches it.
-pub(crate) fn warn_mask_failure(
-    entity: &'static str,
-    action: Action,
-    reason: &'static str,
-    detail: &'static str,
-    unit: MaskedUnit<'_>,
-    // Rendered by `error_message`, which never quotes the value serde refused.
-    err: Option<&(dyn std::error::Error + 'static)>,
-) {
-    let MaskedUnit {
-        transport,
-        site,
-        served,
-    } = unit;
-    tracing::warn!(
-        target: crate::TARGET,
-        entity,
-        action = action.as_str(),
-        reason,
-        detail,
-        transport,
-        host = site.map(|(host, _)| host),
-        method = site.map(|(_, method)| method),
-        verb = served.verb,
-        path = served.path,
-        kind = served.kind,
-        field = served.field,
-        event = served.event,
-        tool = served.tool,
-        prompt = served.prompt,
-        resource = served.resource,
-        error = err.map(nest_rs_core::error_message).as_deref(),
-        "response masking failed",
-    );
-}
 
 /// The `(entity, action)` pairs whose pushed rows an undecidable rule already
 /// refused, so a stream refusing every item files one line, not one per item.
@@ -115,31 +49,19 @@ pub(crate) enum Provenance {
     /// action's rules: an undecidable grant grants nothing, an undecidable
     /// denial denies, and no warn is filed — the caller hears `false`.
     Held,
-    /// A subscription item, a `masked_reply` value or a body's answer to a visitor,
-    /// which no read filtered: an undecidable grant grants nothing, an undecidable
-    /// denial denies.
+    /// A subscription's item, built as its stream is polled, which no read under
+    /// the subscriber's ability filtered: an undecidable grant grants nothing, an
+    /// undecidable denial denies.
     Pushed,
 }
 
-/// Why a mask fell closed, as a value an incident query groups on.
+/// Why a unit fell closed, as a value an incident query groups on.
 pub(crate) mod mask_reason {
     /// Nothing installed an ability, so nothing decided what may be shown.
     ///
     /// Declared here and aliased by [`gate::reason`](crate::gate::reason):
     /// `gate` is feature-gated, this module is not.
     pub(crate) const NO_AMBIENT_ABILITY: &str = "no_ambient_ability";
-    /// The value could not be turned into, or read back from, JSON.
-    pub(crate) const NOT_SERIALIZABLE: &str = "not_serializable";
-    /// The wire value and the entity model could not be reconciled, so the
-    /// mask had no model to apply.
-    #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-    pub(crate) const IRRECONCILABLE: &str = "irreconcilable_wire_value";
-    /// The response carried no content type, so it could not be classified as
-    /// maskable at all. HTTP's alone — it is the one edge with a content type
-    /// to be missing.
-    #[cfg(feature = "http")]
-    pub(crate) const UNCLASSIFIED_BODY: &str = "unclassified_body";
-    // `field_not_granted` is a gate verdict, owned by `gate::reason::FIELD_NOT_GRANTED`.
 }
 
 /// Which columns of a subject a grant permits.
@@ -297,8 +219,11 @@ impl When {
 /// ([`can_class`](Ability::can_class)), the query pre-filter
 /// ([`condition_for`](Ability::condition_for)), and the response check/mask
 /// ([`can`](Ability::can) / [`permitted_fields`](Ability::permitted_fields)).
-#[derive(Default)]
 pub struct Ability {
+    /// Which ability this is, minted once: a wire row judged under it names it,
+    /// and answers only where it is the one installed. A pointer would be reused
+    /// once this one is dropped.
+    id: u64,
     rules: HashMap<(Action, TypeId), Vec<Rule>>,
     /// What each grant this actor's credential could not reach lacks, in
     /// declaration order — recorded when [`RuleSpec::requires_scope`] withholds
@@ -310,7 +235,26 @@ pub struct Ability {
     visitor: bool,
 }
 
+/// The next [`Ability::id`]: never `0`, and never one an earlier ability held.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+impl Default for Ability {
+    fn default() -> Self {
+        Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            rules: HashMap::new(),
+            withheld: HashMap::new(),
+            visitor: false,
+        }
+    }
+}
+
 impl Ability {
+    /// Which ability this is: two hold one id only if they are one.
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
     pub(crate) fn add_rule(&mut self, action: Action, subject: TypeId, rule: Rule) {
         self.rules.entry((action, subject)).or_default().push(rule);
     }
@@ -758,8 +702,8 @@ impl Ability {
     }
 
     /// The single rule scan behind [`can`](Self::can),
-    /// [`permitted_fields`](Self::permitted_fields) and
-    /// [`mask_many`](Self::mask_many): one pass yields both answers.
+    /// [`permitted_fields`](Self::permitted_fields) and the judgement a wire row
+    /// passes where it is built: one pass yields both answers.
     ///
     /// A rule the row decides counts as SQL counts it, `UNKNOWN` included.
     /// `invented` names the columns the row was given rather than read, and
@@ -853,73 +797,6 @@ impl Ability {
                 }
             }
         }
-    }
-
-    /// Layer ③ — the model's exposed columns, stripped of those this ability
-    /// does not permit for `action`.
-    ///
-    /// Only what `#[expose]` declares is ever written: an unrestricted grant
-    /// opens every exposed column, never a hidden one. [`Action::Manage`] shows
-    /// what the caller may read.
-    pub fn mask<E: WireModel>(&self, action: Action, model: &E::Model) -> serde_json::Value {
-        self.mask_with::<E>(action, model, self.permitted_fields::<E>(action, model))
-    }
-
-    /// [`mask`](Self::mask) with the field verdict already known.
-    fn mask_with<E: WireModel>(
-        &self,
-        action: Action,
-        model: &E::Model,
-        fields: FieldSet,
-    ) -> serde_json::Value {
-        let mut wire = match E::to_wire(model) {
-            Ok(wire) => wire,
-            // Fail closed: an empty body, never the unmasked model.
-            Err(err) => {
-                warn_mask_failure(
-                    E::default().table_name(),
-                    action,
-                    mask_reason::NOT_SERIALIZABLE,
-                    "model did not serialize",
-                    MaskedUnit::default(),
-                    Some(&err),
-                );
-                return serde_json::Value::Null;
-            }
-        };
-        if matches!(fields, FieldSet::Only(_)) {
-            wire.retain(|key, _| kept_key::<E>(&fields, key));
-        }
-        serde_json::Value::Object(wire)
-    }
-
-    /// Layer ③ over a collection: drop the instances the actor may not see and
-    /// mask the fields of those it may ([`mask`](Ability::mask)).
-    ///
-    /// The rows are a reply to a read through `Repo` under this ability for
-    /// this action, whose SQL decided what the rows cannot show: a relation
-    /// counts toward a row's visibility as that read counted it, and widens no
-    /// field set a decided grant narrows. [`Action::Manage`] judges them at
-    /// [`Action::Read`].
-    pub fn mask_many<'m, E>(
-        &self,
-        action: Action,
-        models: impl IntoIterator<Item = &'m E::Model>,
-    ) -> Vec<serde_json::Value>
-    where
-        E: WireModel,
-        E::Model: 'm,
-    {
-        models
-            .into_iter()
-            .filter_map(|model| {
-                let verdict =
-                    self.evaluate::<E>(action, model, Provenance::Loaded, &nothing_invented);
-                verdict
-                    .allowed
-                    .then(|| self.mask_with::<E>(action, model, verdict.fields))
-            })
-            .collect()
     }
 
     /// Layer ③ — the union of permitted fields across the grants that match this
@@ -1117,8 +994,8 @@ mod tests {
         move |p| p.related::<org::Entity, _>(post::Relation::Org, |o| o.eq(org::Column::Id, id))
     }
 
-    /// How many of `rows` a reply to a read keeps: the verdict `mask_many` drops
-    /// a row on.
+    /// How many of `rows` a reply to a read keeps: the verdict a judged wire row
+    /// refuses a row on.
     fn kept(ability: &Ability, rows: &[post::Model]) -> usize {
         rows.iter()
             .filter(|row| {
@@ -1387,35 +1264,6 @@ mod tests {
         logs.expect_none(
             "nest_rs::authz",
             "ability rule predicate does not match its keyed subject — failing closed",
-        );
-    }
-
-    #[test]
-    fn a_mask_failure_names_what_kind_of_value_it_found_never_the_value() {
-        #[derive(Debug, serde::Deserialize)]
-        #[expect(
-            dead_code,
-            reason = "the fields exist for serde to read; the test asserts the error, never a value"
-        )]
-        struct Wire {
-            age: u64,
-        }
-        let logs = nest_rs_testing::LogCapture::install();
-        let refused =
-            serde_json::from_value::<Wire>(serde_json::json!({ "age": "ada@example.com" }))
-                .expect_err("a string is no age");
-        warn_mask_failure(
-            "Widget",
-            Action::Read,
-            mask_reason::IRRECONCILABLE,
-            "wire value could not be reconciled with the entity model",
-            MaskedUnit::default(),
-            Some(&refused),
-        );
-        let event = logs.expect_one(crate::TARGET, "response masking failed");
-        assert_eq!(
-            event.field("error").as_deref(),
-            Some("invalid type: a string, expected u64")
         );
     }
 

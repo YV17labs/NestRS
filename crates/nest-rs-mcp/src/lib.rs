@@ -24,8 +24,10 @@
 //! guard stage runs each guard's `check`, the guards at the endpoint's request
 //! running `check_http` apart from it.
 //!
-//! Response masking fails *closed* on a stripped **required** field — declare
-//! `unmasked` when a tool deliberately answers with a narrower projection.
+//! A tool's answer is written inside its site, so each wire row it carries is
+//! written for the caller that site answers: a row that caller may not read
+//! refuses the operation `FORBIDDEN`, and a column its grant withholds reads
+//! `null` in the structured content, as the output schema says it may.
 //! `bind = Service` loads the row a `#[resource]`'s one template variable names;
 //! a tool, a prompt and a listing name no id and refuse it.
 //!
@@ -115,6 +117,7 @@ pub mod __private {
 
     pub use crate::ambient::ambient_parameter;
     pub use crate::endpoint::{McpMount, endpoint};
+    pub use crate::error::answered_tool;
     pub use crate::error::{
         ErrorReport, ErrorReportChain, OperationAnswer, OperationFailure, answer_of,
         resource_not_found,
@@ -139,6 +142,7 @@ pub mod __private {
     pub use nest_rs_pipes::__private::{DeclaredRules, NoRules, OptionalRules, ValidateProbe};
     pub use rmcp::handler::server::prompt::IntoGetPromptResult;
     pub use rmcp::handler::server::tool::IntoCallToolResult;
+    pub use rmcp::model::CallToolResponse;
 }
 
 /// What a host's `get_info` reports about itself and advertises.

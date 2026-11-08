@@ -68,7 +68,6 @@ full = ["http", "graphql", "ws", "mcp"]
 # columns (the dominant scalar-comparison use case) regardless of which
 # features the consuming workspace enables.
 sea-orm = { workspace = true, features = ["with-chrono"] }
-# Response masking serializes a model then strips disallowed keys.
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -88,6 +87,9 @@ nest-rs-guards.workspace = true
 nest-rs-database.workspace = true
 # `#[subject]`, re-exported at the root beside the trait it implements.
 nest-rs-authz-macros.workspace = true
+# Each `#[expose]`d entity files the columns its wire type cannot answer null, which
+# a reply's grant may not withhold.
+inventory.workspace = true
 
 # Optional dependencies — pulled in by the feature flags above.
 nest-rs-http = { workspace = true, optional = true }
@@ -125,7 +127,7 @@ nest-rs-ws = { path = "../nest-rs-ws" }
 # crate's mask round trip. Path-only: seaorm depends on this crate, and only a
 # versionless dev-edge keeps that from being a cycle a publish cannot order.
 # `http`, for the class gate's order on a `#[crud]` controller.
-nest-rs-seaorm = { path = "../nest-rs-seaorm", features = ["http"] }
+nest-rs-seaorm = { path = "../nest-rs-seaorm", features = ["http", "graphql"] }
 # `graphql` and `authz`: a gated subscription driven as a caller
 # (`graphql_socket().ability(..)`); `ws`: a gated message sent over a real
 # upgrade, where its class gate runs.

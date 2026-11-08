@@ -110,7 +110,7 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
     - [policies.mdx](/security/authorization/policies/) — `Subject`, `Action`, `RuleSpec`, predicates, fields
     - [row-level-filtering.mdx](/security/authorization/row-level-filtering/) — `condition_for`, `Repo::scoped`
     - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `#[authorize(A, bind = S)]`, the `Access` outcome
-    - [response-masking.mdx](/security/authorization/response-masking/) — `Authorize`, `mask`, `#[wire_default]`
+    - [response-masking.mdx](/security/authorization/response-masking/) — the judged wire row, `#[expose(nullable)]`
     - [endpoint-guards.mdx](/security/authorization/endpoint-guards/) — HTTP / GraphQL / WS / MCP
   - [threat-model.mdx](/security/threat-model/) — the boundary each layer enforces (read before production, not needed for your first feature)
 </FileTree>

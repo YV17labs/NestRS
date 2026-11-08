@@ -1,28 +1,28 @@
-error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`; append `unmasked` to keep the class gate but mask the response yourself. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[public(Update, bind = ArtworksService)]`
+error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[public(Update, bind = ArtworksService)]`
   --> tests/integration/diagnostics/graphql/posture_of_the_wrong_shape.rs:19:5
    |
 19 |     #[public = "x"]
    |     ^^^^^^^^^^^^^^^
 
-error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`; append `unmasked` to keep the class gate but mask the response yourself. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[public(Update, bind = ArtworksService)]`
+error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[public(Update, bind = ArtworksService)]`
   --> tests/integration/diagnostics/graphql/posture_of_the_wrong_shape.rs:31:19
    |
 31 |     #[public(Read posts::Entity)]
    |                   ^^^^^
 
-error: expected `#[authorize(Action, Subject)]` — e.g. `#[authorize(Read, users::Entity)]`; append `unmasked` to keep the class gate but mask the response yourself. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[authorize(Update, bind = ArtworksService)]`
+error: expected `#[authorize(Action, Subject)]` — e.g. `#[authorize(Read, users::Entity)]`. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[authorize(Update, bind = ArtworksService)]`
   --> tests/integration/diagnostics/graphql/posture_of_the_wrong_shape.rs:43:5
    |
 43 |     #[authorize = "x"]
    |     ^^^^^^^^^^^^^^^^^^
 
-error: expected `#[authorize(Action, Subject)]` — e.g. `#[authorize(Read, users::Entity)]`; append `unmasked` to keep the class gate but mask the response yourself. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[authorize(Update, bind = ArtworksService)]`
+error: expected `#[authorize(Action, Subject)]` — e.g. `#[authorize(Read, users::Entity)]`. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[authorize(Update, bind = ArtworksService)]`
   --> tests/integration/diagnostics/graphql/posture_of_the_wrong_shape.rs:55:22
    |
 55 |     #[authorize(Read posts::Entity)]
    |                      ^^^^^
 
-error: expected `#[authorize(Action, Subject)]` — e.g. `#[authorize(Read, users::Entity)]`; append `unmasked` to keep the class gate but mask the response yourself. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[authorize(Update, bind = ArtworksService)]`
+error: expected `#[authorize(Action, Subject)]` — e.g. `#[authorize(Read, users::Entity)]`. `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, and lets the entity be omitted (derived from `Service::Entity`): `#[authorize(Update, bind = ArtworksService)]`
   --> tests/integration/diagnostics/graphql/posture_of_the_wrong_shape.rs:67:5
    |
 67 |     #[authorize]

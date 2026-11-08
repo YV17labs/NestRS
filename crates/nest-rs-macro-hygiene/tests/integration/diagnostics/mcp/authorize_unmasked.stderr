@@ -1,0 +1,5 @@
+error: `unmasked` is gone: there is no reply mask to leave to the body, since every wire row a reply carries was judged for its caller where `#[expose]`'s conversion built it — drop it
+  --> tests/integration/diagnostics/mcp/authorize_unmasked.rs:18:38
+   |
+18 |     #[authorize(Read, users::Entity, unmasked)]
+   |                                      ^^^^^^^^

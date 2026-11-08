@@ -3,9 +3,10 @@
 //! A gateway writes no mask: `#[authorize(Action, Entity)]` beside a
 //! `#[subscribe_message]` makes `#[messages]` emit the class gate
 //! ([`class_gate`](crate::class_gate), every edge's), run in the message's guard
-//! stage, and the mask around its reply, exactly as `#[tools]` does on MCP,
-//! `#[operations]` on GraphQL and `#[routes]` on HTTP. `Gateway::dispatch`, below,
-//! calls the handler on its own, behind the class gate and inside the mask.
+//! stage, exactly as `#[tools]` does on MCP, `#[operations]` on GraphQL and
+//! `#[routes]` on HTTP, and each wire row its reply carries was judged for its
+//! caller where it was built. `Gateway::dispatch`, below, calls the handler on
+//! its own, behind the class gate.
 //!
 //! ```
 //! # use std::sync::Arc;
@@ -22,7 +23,7 @@
 //! #         #[sea_orm(primary_key)]
 //! #         #[expose]
 //! #         pub id: i32,
-//! #         #[expose]
+//! #         #[expose(nullable)]
 //! #         pub name: String,
 //! #     }
 //! #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -62,8 +63,8 @@
 //!
 //! let mut ids_only = AbilityBuilder::new();
 //! ids_only.can(Action::Read, users::Entity).fields([users::Column::Id]);
-//! let WsReply::Reply(masked) = list(ids_only.build()?).await else { panic!() };
-//! assert_eq!(masked, serde_json::json!([{ "id": 1 }]));
+//! let WsReply::Reply(judged) = list(ids_only.build()?).await else { panic!() };
+//! assert_eq!(judged, serde_json::json!([{ "id": 1, "name": null }]));
 //!
 //! let refused = list(AbilityBuilder::new().build()?).await;
 //! assert!(matches!(refused, WsReply::Error(_)));
@@ -73,5 +74,3 @@
 //!
 //! A gateway is `Gated`, so the HTTP guards run on the upgrade, and the
 //! ability they attach crosses the connection into each message.
-
-pub(crate) mod mask;

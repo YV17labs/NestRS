@@ -1,6 +1,6 @@
 ---
 title: Authorization
-description: AuthzAbility compiles your policy into an Ability per request — the framework reads it from the query filter, the by-id binding, and the response mask.
+description: AuthzAbility compiles your policy into an Ability per request — the framework reads it from the query filter, the by-id binding, and each wire row it judges where it is built.
 sidebar:
   label: Overview
   order: 1
@@ -12,8 +12,8 @@ Authorization answers *what the caller may do*. You write one
 `AbilityFactory` per app that compiles the caller's principal into an
 `Ability` — the per-request capability set. The framework reads that
 ability from three places: the query pre-filter on every read, the
-by-id binding when a route loads a row, and the response mask after
-the handler returns. Each is a line on the unit: its `#[authorize]` or
+by-id binding when a route loads a row, and each wire row where
+`#[expose]`'s conversion builds it. Each is a line on the unit: its `#[authorize]` or
 `#[public(Action, Subject)]` names what it reads, and a unit naming nothing has
 the ability withheld from its reads, so what it did not declare fails closed.
 
@@ -143,15 +143,15 @@ its denial is refused here like one with no `when`.
 
 Each refusal files one `warn`, `authorization denied`, with its `reason`, and
 reads the same on every edge, each answering in its own form: it names the unit
-by `host`, `method` and the words its `mounted` line says, a mask's refusal of a
-field as a gate's refusal of the class. The gate is no
+by `host`, `method` and the words its `mounted` line says, as a gate's refusal of
+the class does. The gate is no
 feature of an edge: a package's decorator emits it for its own posture as the
 framework's do.
 
 The subject need not be a table. A capability — may transcode, may export —
 is a [subject `#[subject]` declares](/security/authorization/policies/#subjects-no-table-holds):
 `#[authorize(Manage, Transcoding)]` runs this same gate, scope challenge
-included, and arms no mask, since there is no row to mask.
+included, and opens no read, since there is no row to read.
 
 ## Three places the framework reads it
 
@@ -166,17 +166,18 @@ included, and arms no mask, since there is no row to mask.
    decision is made in SQL, by the same predicate the list path
    joins. Missing row ⇒ 404, present but denied ⇒ 403. See
    [By-id binding](/security/authorization/by-id-binding/).
-3. **The response shaper `#[authorize(A, S)]` or `#[public(A, S)]` arms.** After a 2xx, the
-   shaper reads each row of the body back into `S::Model`, judges it
-   as `Ability::mask_many` does, and keeps only the exposed columns its
-   grants permit. See [Response masking](/security/authorization/response-masking/).
+3. **The wire row, judged where it is built.** `User::from(&row)` judges the
+   whole row under the caller's ability at `Read`: a column its grants
+   withhold reads `null`, a row they refuse answers no one, and the row
+   answers only the caller it was judged for, on every edge and in every shape.
+   See [Response masking](/security/authorization/response-masking/).
 
 ## Reading the ambient ability
 
 A query of a service's own starts from `Repo::scoped`, which joins the
 `Condition` for it ([a custom query](/security/authorization/row-level-filtering/#when-you-really-do-need-a-custom-query)).
-A service method or any code a masked unit reaches — a dataloader batch
-included — reads the ability directly:
+A service method or any code a unit naming its read reaches — a dataloader
+batch included — reads the ability directly:
 
 ```rust title="crates/features/src/users/service.rs"
 use nest_rs::authz::current_ability;
@@ -218,8 +219,8 @@ work should not be filtered by a caller's ability. See
 [Threat model](/security/threat-model/) for what that buys and what
 it does not.
 
-It returns `None` as well on a unit no mask shapes, every `#[sse]` stream among
-them, and for a visitor anywhere but a unit naming what it reads: the ability is
+It returns `None` as well on a unit whose posture names no read, every `#[sse]`
+stream among them, and for a visitor anywhere but a unit naming what it reads: the ability is
 withheld there, so a `Repo` read fails closed. A check of your own that must hold
 on such a unit asks `Repo::can`, which refuses there, rather than skipping on `None`.
 
@@ -231,8 +232,6 @@ ability.condition_for::<user::Entity>(Action::Read)
 ability.condition_for_columns::<user::Entity>(Action::Update, &[user::Column::Name])?
 ability.can::<user::Entity>(Action::Update, &model)
 Repo::<user::Entity>::can(Action::Update, &model).await?
-ability.mask::<user::Entity>(Action::Read, &model)
-ability.mask_many::<user::Entity>(Action::Read, models.iter())
 ability.permitted_fields::<user::Entity>(Action::Read, &model)
 ```
 
@@ -245,7 +244,7 @@ answers what `Ability::can` cannot see on the model.
 `Action::Manage` is the wildcard: a grant on `Manage` matches every
 other action. A grant on `Action::Read` does not imply `Update`. Asked of a
 site, `Manage` means every action at once: `can_class` and `can` hold each of
-the four, `condition_for` conjoins their conditions, and `mask` and
+the four, `condition_for` conjoins their conditions, and a wire row and
 `permitted_fields` read `Read`'s
 ([Policies](/security/authorization/policies/#actions)).
 
@@ -270,9 +269,8 @@ controller with the transport's authz module, and write a
 - [By-id binding](/security/authorization/by-id-binding/) —
   `#[authorize(A, bind = S)]` and the 404/403 distinction.
 - [Response masking](/security/authorization/response-masking/) —
-  declare `#[authorize(Action, Entity)]` and masking is automatic; the
-  round trip `#[expose]` writes and the mask's steps are documented as
-  internals (skip on a first pass).
+  each wire row judged where it is built, and what `#[expose(nullable)]`
+  declares a grant may withhold.
 - [Public reads](/security/authorization/public-reads/) —
   `define_visitor`, the anonymous branch a `#[public(Action, Subject)]` unit reads.
 - [OAuth scopes](/security/authorization/scopes/) — `.requires_scope(...)`
@@ -295,7 +293,7 @@ controller with the transport's authz module, and write a
   `#[authorize(A, bind = S)]` turning a path id into a loaded, authorized
   model.
 - [Response masking](/security/authorization/response-masking/) — the
-  fail-closed field mask a posture arms on every successful response.
+  row judged where it is built, a withheld column reading `null` in every shape.
 
 ### All options
 

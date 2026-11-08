@@ -65,18 +65,18 @@
 //! no such guard covers that does not say `#[public]`, as it refuses such a route,
 //! and a gateway running no such guard at its upgrade with no `#[public]` message,
 //! whatever guards its messages bind. `#[authorize(Action, Subject)]` emits the
-//! class gate (`nest_rs_authz::class_gate`) before the payload is deserialized and
-//! the reply mask around the returned value. `#[public]` means a caller with no
+//! class gate (`nest_rs_authz::class_gate`) before the payload is deserialized,
+//! and the reads it opens to the ability the connection carries. `#[public]` means a caller with no
 //! credential is admitted, and reads nothing a grant guards unless it names what it
-//! reads, `#[public(Action, Subject)]`, with the same gate and mask: behind an
+//! reads, `#[public(Action, Subject)]`, with the same gate: behind an
 //! upgrade running a guard that establishes or reads who the caller is, it could
 //! open nothing, and the boot refuses it.
 //!
-//! The mask acts on the **serialized** reply, so a withheld column is absent from
-//! the frame rather than an error. It fails closed on a missing ambient ability
-//! and a body that cannot be reconciled with the entity. `unmasked` keeps the
-//! gate and hands masking to the body. It reads the reply by its type, as the frame
-//! does: a bare value, a `Result` and a `Result` behind an alias mask alike.
+//! Each wire row a reply carries was judged for the connection's caller where it
+//! was built: a column its grant withholds reads `null`, and a row it may not read
+//! refuses the message with a `FORBIDDEN` frame. A push to other connections
+//! (`broadcast`, `emit_to`, `WsServer::emit`) carries no row judged for the caller
+//! pushing it: no recipient's ability judged it, so it refuses.
 //!
 //! # Return-type contract
 //!

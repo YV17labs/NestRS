@@ -2,8 +2,7 @@
 //! annotations so the ORM macros see a clean entity.
 
 use nest_rs_codegen::__private::{
-    generic_args, missing_argument, require_str_lit, site, takes_value, ungrouped_expr,
-    unknown_value,
+    missing_argument, require_str_lit, site, takes_value, ungrouped_expr, unknown_value,
 };
 use nest_rs_codegen::{Arg, Grammar};
 use proc_macro2::TokenStream as TokenStream2;
@@ -64,9 +63,10 @@ pub(crate) struct ResourceField {
     /// Override async-graphql's per-field complexity for the auto-emitted
     /// field resolver; `None` ⇒ a default per relation kind (`relations::emit`).
     pub complexity: Option<Expr>,
-    /// `#[wire_default]` (`Some(None)`, the type's `Default`) or
-    /// `#[wire_default(expr)]`: the placeholder a masked reply is rebuilt with.
-    pub wire_default: Option<Option<Expr>>,
+    /// `#[expose(nullable)]`: a column of a type with no null that a reply's grant
+    /// may withhold, so its wire field is an `Option` and its schema nullable on
+    /// every edge.
+    pub nullable: bool,
     /// `#[expose(default = expr)]`: the value an insert leaving the column
     /// unset stores.
     pub default: Option<Expr>,
@@ -78,6 +78,12 @@ pub(crate) struct ResourceField {
 impl ResourceField {
     pub(crate) fn in_output_struct(&self) -> bool {
         self.read && self.relation.is_none()
+    }
+
+    /// Whether a reply's grant may withhold this column, which its wire field then
+    /// answers `null`: an `Option` column, or one `#[expose(nullable)]` declares.
+    pub(crate) fn withholdable(&self) -> bool {
+        self.nullable || crate::lifecycle::is_option_type(&self.ty)
     }
 
     /// The key serde writes this field under: its ident, without an `r#`.
@@ -212,6 +218,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         let mut complexity: Option<Expr> = None;
         let mut via: Option<LitStr> = None;
         let mut default: Option<Expr> = None;
+        let mut nullable: Option<Ident> = None;
         let mut is_pk = false;
         let mut is_belongs_to = false;
         let mut is_has_many = false;
@@ -325,6 +332,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     via = Some(lit);
                 }
                 "default" => default = Some(arg.expr()?),
+                "nullable" => nullable = Some(arg.ident().clone()),
                 // The grammar hands over only its own keys.
                 _ => {}
             }
@@ -347,21 +355,18 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
 
         field.attrs.retain(|a| !a.path().is_ident("expose"));
 
-        let mut wire_default: Option<Option<Expr>> = None;
-        for attr in field
+        // The rebuild it fed is gone: a reply's rows are judged where they are built.
+        if let Some(attr) = field
             .attrs
             .iter()
-            .filter(|a| a.path().is_ident("wire_default"))
+            .find(|a| a.path().is_ident("wire_default"))
         {
-            if wire_default.is_some() {
-                return Err(syn::Error::new_spanned(attr, "duplicate `#[wire_default]`"));
-            }
-            wire_default = Some(match &attr.meta {
-                syn::Meta::Path(_) => None,
-                _ => Some(attr.parse_args::<Expr>()?),
-            });
+            return Err(syn::Error::new_spanned(
+                attr,
+                "`#[wire_default]` is gone: a wire row is judged on the whole row where it is \
+                 built, so a hidden column is never rebuilt — drop it",
+            ));
         }
-        field.attrs.retain(|a| !a.path().is_ident("wire_default"));
 
         // A type marker without its sea_orm marker is refused: as a scalar it
         // fails inside the `SimpleObject` expansion with a cryptic span.
@@ -444,17 +449,26 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             }
         }
 
-        if wire_default.is_some() {
-            if read {
+        if let Some(nullable) = &nullable {
+            let refused = if is_pk {
+                Some(
+                    "the primary key names its row, which no grant withholds — every reply's \
+                     `.fields` grants it",
+                )
+            } else if relation.is_some() {
+                Some(
+                    "a relation is no column — declare its foreign key column `nullable` \
+                     instead",
+                )
+            } else if crate::lifecycle::is_option_type(&ty) {
+                Some("an `Option` column already answers `null` where a grant withholds it")
+            } else {
+                None
+            };
+            if let Some(refused) = refused {
                 return Err(syn::Error::new_spanned(
-                    &field.ident,
-                    "`#[wire_default]` is only valid on an unexposed column — an exposed column reconstructs from the response body; drop `#[wire_default]` or remove `#[expose]`",
-                ));
-            }
-            if is_pk || relation.is_some() {
-                return Err(syn::Error::new_spanned(
-                    &field.ident,
-                    "`#[wire_default]` cannot be applied to a primary key or relation field",
+                    nullable,
+                    format!("{}: {refused}", site("expose", Some("nullable"))),
                 ));
             }
         }
@@ -475,7 +489,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             validate,
             relation,
             complexity,
-            wire_default,
+            nullable: nullable.is_some(),
             default,
             column,
         });
@@ -583,7 +597,14 @@ const MODEL: Grammar = Grammar::new(
 /// to the one on the `Model`.
 const FIELD: Grammar = Grammar::new(
     "expose",
-    &["input", "validate", "complexity", "via", "default"],
+    &[
+        "input",
+        "validate",
+        "complexity",
+        "via",
+        "default",
+        "nullable",
+    ],
 );
 
 /// A field key's list value — `input(create, update)` — each element read as
@@ -619,14 +640,6 @@ pub(crate) fn holds_secret(ty: &Type) -> bool {
                 _ => false,
             }
     })
-}
-
-/// The type a `Secret<T>` holds, `T`; `None` for any other type.
-pub(crate) fn secret_inner(ty: &Type) -> Option<&Type> {
-    match generic_args(ty)? {
-        (ident, args) if ident == "Secret" => args.first().copied(),
-        _ => None,
-    }
 }
 
 /// Match `HasOne<T>` / `HasMany<T>` on the last path segment.

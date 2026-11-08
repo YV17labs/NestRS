@@ -97,70 +97,47 @@ mutual TLS, are dev container environments of their own (`CLAUDE.md`, *Testing*)
 Nothing waits on them; the recommendation holds until someone decides
 otherwise.
 
-1. **Judge a loaded row on its `Model` before wire conversion** (reopens
-   `mask-provenance` for loaded rows). Recommended: not for 7.0; it needs a
-   reply type carrying the models through every edge. Section 3 may settle it.
-2. **Serve as nullable, in GraphQL, a field a grant may mask**, rather than
-   requiring an `Option` column. Recommended: yes, as an opt-in key on the
-   field's `#[expose]` in a 7.x minor, the column keeping its `NOT NULL`.
-3. **A grant cuts a row's columns, never the link a relation follows**:
-   `posts { author { id } }` answers though `.fields` withholds `author_id`.
-   Recommended: keep for 7.0, documented (`response-masking.mdx`); refusing it
-   breaks `orgs { users { name } }` for the demo's member.
-4. **A body reading a row by hand can answer a withheld column as a scalar**:
-   `writers.load_one(id).await?.map(|row| row.email)`. Recommended: keep for
-   7.0, documented; closing it is section 3's work.
-5. **The demo's roots list no `GlobalGuards` pool.** The boot refuses a unit
+1. **A `has_many` lists the children whose key a grant withholds**: `orgs {
+   users { name } }` answers for a member whose grant withholds `org_id`, the
+   children grouped by that key inside the batch, each judged on its own.
+   Recommended: keep — the relation's `#[expose]` is its visible opening;
+   refusing it breaks the demo member's directory. A `belongs_to` reads its link
+   off the judged row, so a withheld key reads `null` there
+   (`mask-provenance.md`, 2026-11-08).
+2. **The demo's roots list no `GlobalGuards` pool.** The boot refuses a unit
    with no identifying or authorizing guard, but a route under a weaker guard
    of the right phase boots without `AuthnGuard`. Recommended: keep the demo
    without a pool; one line per root puts it back, and brings back the
    probes' `503` during an authentication outage.
 
-## 3. Field-level authorization — the main design left
+## 3. Field-level authorization — what the judged row leaves
 
-**Today.** Rows are filtered in SQL. Columns are masked on the reply: each
-edge reads the answer back into a `Model`, judges it and cuts what the grant
-withholds.
+**Today.** Rows are filtered in SQL, and each wire row is judged on its whole
+`Model` where `From<&Model>` builds it: a column a grant withholds is no value in
+the row (`#[expose(nullable)]` or an `Option`), a grant withholding any other
+fails `build()`, and the row answers only the caller whose ability judged it
+(`mask-provenance.md`, 2026-11-08). What remains:
 
-**Openings that remain (seen).**
-- Four shapes ship what they hold: a scalar the body builds; a scalar or a map
-  column of an object; a `#[serde(flatten)]` beside a `#[field_resolver]` of
-  that type; a renamed column read under its resolver's name.
-- A body answering a scalar off a loaded row (decision 4 above).
-- A row type with no `#[expose]` crosses a wire through a derive; with the
+- **A row type with no `#[expose]` crosses a wire through a derive**: a `Model`
+  deriving `Serialize` answers `Json<secret::Model>`, and with `nest-rs-seaorm`'s
   `graphql` feature off, `SimpleObject` or `#[Object]` on a row compiles and
-  answers a hidden column. Close: a probe per edge refusing a `ModelTrait`.
-- A guard refusal on a `#[field_resolver]` files one line per parent row, up
-  to the complexity limit.
-
-**Candidate designs, to decide before any code.**
-- **A value-less cell.** `Repo` reads whole rows; each exposed column of a
-  wire row is a `Masked<T>` judged on the whole `Model` at conversion, and a
-  withheld cell holds no value. Measured on the mask step alone: 0.23 to
-  0.30 µs per row against 1.14 to 1.19 µs today; end to end the gain is small
-  (about 1.11 ms to 1.03 ms per request at an assumed 1 ms read, not measured
-  on a server). It closes most shapes by value. A review found what must
-  change first:
-  - a row read for another caller must not be trusted: the row carries its
-    reader, is not `Clone`, a push carries a `Model`, and `#[subscription]`
-    judges items itself;
-  - the schema must stay true: only a column declared nullable may be
-    withheld (otherwise OpenAPI's and MCP's `required` lie, and one withheld
-    non-null cell nulls a whole GraphQL list);
-  - rows must not `Deref` to the `Model` (the demo reads `row.title` under an
-    edge), a named `into_model()` instead;
-  - it must open nothing new on HTTP or `#[sse]`;
-  - a write-only token's reply keeps the key; a refused row ships no `{}`;
-  - a cell names its column only where the field resolves.
-- **Declared columns as plain `Option<T>`** (Hasura's shape): no cell, no
-  stamp, honest schema, about the cost of no mask. It loses the refusal of a
-  row read for another caller, and a body reads `None` where the cell said
-  `FORBIDDEN`.
-
-**How to decide.** Prototype both on the real `#[expose]` and a real GraphQL
-extension; measure what each changes in the demo's everyday code and the cost
-end to end; decide by rule 1, then security, then performance. **Semver:** if
-7.0 is published first, this is an 8.0 or an opt-in.
+  answers a hidden column. Close: a probe per edge refusing an answer that is a
+  `ModelTrait` (`Json<T>`, a list, an `Option`, a `Result` around one), read by
+  type as `#[routes]`' payload probe reads a body, a compile error naming
+  `#[expose]`. *seen* (2026-11-05)
+- **A `#[public]` GraphQL field whose own guard attaches the ability**, its
+  request carrying none, answers no wire row: the rows its body builds are judged
+  under the field's unit, and their columns resolve after it, where no ability is
+  installed — a root field's as a subscription's items. Fail closed, with an
+  `error` line; every `/graphql` whose request runs the ability guard is
+  unaffected. Close: nest-rs-graphql resolving a root field's answer under the
+  ability its unit attached (a wrapper `OutputType` installing it), as MCP writes
+  a tool's answer inside its site. *seen* (`gate::public::a_subscription_whose_own_guard_attaches_its_ability_streams_no_row`)
+- **A `#[field_resolver]` reading its parent's columns** checks no parent's
+  judgement: a parent row built for another caller refuses each of its columns,
+  and a scalar the resolver derives from it ships. Close: `#[field_resolver]`
+  asking the parent's `JudgedRow` where its type has one (an autoref probe), as a
+  relation's resolver does. *read*
 
 ## 4. Known gaps by area
 
@@ -308,10 +285,12 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 
 **Operator lines**
 - `http.request`, `ws.message` and `mcp.operation` name no `host` nor
-  `method`; some mask refusals name no unit; an error's `Display` can still
-  quote a path. *read*
-- A caller selecting N refused fields files up to N lines, bounded by the
-  complexity limit. *read*
+  `method`; an error's `Display` can still quote a path. *read*
+- A wire row refused where it serializes (HTTP's `Json`, a WS reply, an MCP
+  answer) files its line with the entity and the reason, and names the unit by
+  its span alone, the edge's own `http.request` or `ws.message` line carrying the
+  coordinates. Close: the serializer's refusal handed to the edge, as GraphQL's
+  column check names its root field. *read*
 
 **Docs, bench, tooling**
 - The benchmark figures are 4.0.0's, dated as such on every page. Close: the
@@ -330,6 +309,16 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   reaches no docker. Close: a by-hand `docker compose up` on a machine whose
   ports 5432, 6379 and 9000 are free, or a CI job running it, at the minutes it
   costs. *read*
+- The names the retired reply mask left on internal seams read as what they now
+  mean, a posture naming no entity's read: `UnmaskedReply`, the HTTP guard
+  stage's `StageKind::Route { unmasked }`, `RouteSite::masked` and the shaper's
+  masking probe. Close: one rename across `nest-rs-core`, `nest-rs-http`,
+  `nest-rs-authz` and the rules naming them, a tier-2 move.
+- Docs pages beside the rewritten *Response masking* still say "mask" for the
+  judged row in passing (`graphql/field-resolvers`, `graphql/relations`,
+  `database/dataloaders`, `security/authorization/public-reads`,
+  `websockets/messages`, `mcp/index`, `tutorial/security`). Close: reword each,
+  and run the docs build (the anchors they link to were moved and resolve).
 
 ## 5. Additive features for 7.x (no caller yet)
 
@@ -351,7 +340,14 @@ client TLS reload.
 ## 6. Limits kept on purpose
 
 Each is recorded in `.claude/decisions/` with its reason, re-read and still
-holding: real-clock budgets where only real time tells two outcomes apart;
+holding: a body reading a column off a whole `Model` and answering it as its
+own value (`initials(row.name)`, `row.email` in a DTO), which no type tells from a
+column it derives, so it stays the body's visible line, as an entity no
+`#[expose]` decorates is read in review; a list a body built by hand holding a row
+its grants refuse failing the whole reply closed, where a `Repo` read never hands
+it one; a push to other connections carrying no row judged for a caller, so a
+per-recipient row is built per recipient or is a DTO (`mask-provenance.md`,
+2026-11-08); real-clock budgets where only real time tells two outcomes apart;
 `Repo::delete` sending its statement under a class denial; a storage key whose
 every policy was removed booting on with its `warn` as a least-privilege one
 does, since the store answers both the boot's listing in the same document

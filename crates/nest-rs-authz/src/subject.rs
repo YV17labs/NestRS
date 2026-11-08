@@ -1,13 +1,11 @@
 //! Authorization subjects: an entity, or a class no table holds.
 
-use std::marker::PhantomData;
-
 use sea_orm::{EntityTrait, IdenStatic};
 
 /// What a rule names and a posture gates: a SeaORM entity, whose rows a rule
-/// filters and whose replies a posture masks, or a subject `#[subject]`
+/// filters and a posture opens to the unit's reads, or a subject `#[subject]`
 /// declares — a capability no table holds, which a rule grants whole and a
-/// posture gates without masking.
+/// posture gates, opening no read.
 ///
 /// ```
 /// use std::any::TypeId;
@@ -31,12 +29,11 @@ use sea_orm::{EntityTrait, IdenStatic};
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not an authorization subject",
     label = "neither an entity nor a `#[subject]`",
-    note = "a posture names a SeaORM entity, whose rows it masks, or a capability no table holds, declared with `#[subject]` on a unit struct: `#[subject] pub struct Exporting;`"
+    note = "a posture names a SeaORM entity, whose rows its unit reads, or a capability no table holds, declared with `#[subject]` on a unit struct: `#[subject] pub struct Exporting;`"
 )]
 pub trait Subject: 'static {
-    /// Whether the subject has rows a posture masks: `false` for a
-    /// `#[subject]`, whose posture withholds the unit's reads as no mask shapes
-    /// its reply.
+    /// Whether the subject has rows a posture opens to its unit's reads: `false`
+    /// for a `#[subject]`, whose posture withholds the unit's reads.
     #[doc(hidden)]
     const __ROWS: bool = true;
 
@@ -84,27 +81,3 @@ where
 {
     type __Column = E::Column;
 }
-
-/// How a posture on a subject masks the reply of the operation it gates:
-/// against an entity's rows, or not at all for a subject no table holds.
-/// Implemented for every entity here and by `#[subject]`, never by hand.
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is not an authorization subject",
-    label = "neither an entity nor a `#[subject]`",
-    note = "a posture names a SeaORM entity, whose rows it masks, or a capability no table holds, declared with `#[subject]` on a unit struct: `#[subject] pub struct Exporting;`"
-)]
-pub trait SubjectMask: Subject {
-    /// [`Rows<E>`] for an entity, [`NoRows`] for a `#[subject]`.
-    type Mask;
-}
-
-#[diagnostic::do_not_recommend]
-impl<E: sea_orm::EntityTrait> SubjectMask for E {
-    type Mask = Rows<E>;
-}
-
-/// The mask of an entity subject: a reply is reconciled with `E`'s rows.
-pub struct Rows<E>(PhantomData<fn() -> E>);
-
-/// The mask of a subject no table holds: a reply carries no row to mask.
-pub struct NoRows;

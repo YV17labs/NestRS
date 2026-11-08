@@ -96,7 +96,7 @@ impl<N: 'static> WsServer<N> {
         event: &str,
         data: &T,
     ) -> Result<usize, serde_json::Error> {
-        Ok(self.broadcast_value(event, serde_json::to_value(data)?))
+        Ok(self.broadcast_value(event, for_others(data)?))
     }
 
     /// Send `data` under `event` to connections in `room`.
@@ -106,7 +106,7 @@ impl<N: 'static> WsServer<N> {
         event: &str,
         data: &T,
     ) -> Result<usize, serde_json::Error> {
-        Ok(self.emit_to_value(room, event, serde_json::to_value(data)?))
+        Ok(self.emit_to_value(room, event, for_others(data)?))
     }
 
     /// Send `data` under `event` to a single connection. `Ok(false)` if the
@@ -117,7 +117,7 @@ impl<N: 'static> WsServer<N> {
         event: &str,
         data: &T,
     ) -> Result<bool, serde_json::Error> {
-        Ok(self.emit_value(id, event, serde_json::to_value(data)?))
+        Ok(self.emit_value(id, event, for_others(data)?))
     }
 
     /// Number of live connections currently registered — for health/metrics.
@@ -280,9 +280,7 @@ impl WsClient {
         event: &str,
         data: &T,
     ) -> Result<usize, serde_json::Error> {
-        Ok(self
-            .registry
-            .emit_to_value(room, event, serde_json::to_value(data)?))
+        Ok(self.registry.emit_to_value(room, event, for_others(data)?))
     }
 
     /// Send `data` under `event` to every connection (including this one).
@@ -291,10 +289,14 @@ impl WsClient {
         event: &str,
         data: &T,
     ) -> Result<usize, serde_json::Error> {
-        Ok(self
-            .registry
-            .broadcast_value(event, serde_json::to_value(data)?))
+        Ok(self.registry.broadcast_value(event, for_others(data)?))
     }
+}
+
+/// `data` as a push to other connections writes it: a wire row judged for the
+/// caller pushing it refuses, since no recipient's ability judged it.
+fn for_others<T: Serialize>(data: &T) -> Result<serde_json::Value, serde_json::Error> {
+    nest_rs_core::__private::for_others(|| serde_json::to_value(data))
 }
 
 #[cfg(test)]

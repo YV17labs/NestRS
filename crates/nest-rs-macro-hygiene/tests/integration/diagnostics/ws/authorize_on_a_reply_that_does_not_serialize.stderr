@@ -1,16 +1,29 @@
-error[E0277]: this posture cannot mask a reply of type `NoWireShape` on this subject
-  --> tests/integration/diagnostics/ws/authorize_on_a_reply_that_does_not_serialize.rs:35:23
+error[E0277]: the trait bound `NoWireShape: serde::Serialize` is not satisfied
+  --> tests/integration/diagnostics/ws/authorize_on_a_reply_that_does_not_serialize.rs:32:1
    |
-35 |     #[authorize(Read, note::Entity)]
-   |                       ^^^^^^^^^^^^ the reply must serialize, and this subject be an `#[expose]`d entity or a `#[subject]`
+32 | #[messages]
+   | ^^^^^^^^^^^ unsatisfied trait bound
    |
-   = help: the trait `nest_rs::authz::__private::WsMask<nest_rs::authz::Read, NoWireShape>` is not implemented for `nest_rs::authz::__private::Rows<note::Entity>`
-   = note: a posture masks its reply against its entity's `#[expose]`d wire model, read and written as the entity's rows: expose the entity and answer a value that serializes, or declare a capability no table holds with `#[subject]`, whose posture masks nothing
-note: required by a bound in `nest_rs::authz::__private::ws_masked_reply`
-  --> $WORKSPACE/crates/nest-rs-authz/src/ws/mask.rs
+help: the trait `nest_rs::mcp::rmcp::serde::Serialize` is not implemented for `NoWireShape`
+  --> tests/integration/diagnostics/ws/authorize_on_a_reply_that_does_not_serialize.rs:27:1
    |
-   | pub fn ws_masked_reply<A, S, O>(site: &'static Site, value: &O) -> WsReply
-   |        --------------- required by a bound in this function
-...
-   |     S::Mask: WsMask<A, O>,
-   |              ^^^^^^^^^^^^ required by this bound in `ws_masked_reply`
+27 | struct NoWireShape;
+   | ^^^^^^^^^^^^^^^^^^
+   = note: for local types consider adding `#[derive(serde::Serialize)]` to your `NoWireShape` type
+   = note: for types from other crates check whether the crate offers a `serde` feature flag
+   = help: the following other types implement trait `nest_rs::mcp::rmcp::serde::Serialize`:
+             &'a T
+             &'a mut T
+             ()
+             (T,)
+             (T0, T1)
+             (T0, T1, T2)
+             (T0, T1, T2, T3)
+             (T0, T1, T2, T3, T4)
+           and $N others
+note: required by a bound in `WsReply::reply`
+  --> $WORKSPACE/crates/nest-rs-ws/src/envelope.rs
+   |
+   |     pub fn reply<T: Serialize>(value: &T) -> WsReply {
+   |                     ^^^^^^^^^ required by this bound in `WsReply::reply`
+   = note: this error originates in the attribute macro `messages` (in Nightly builds, run with -Z macro-backtrace for more info)

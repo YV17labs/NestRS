@@ -159,7 +159,7 @@ The batch decides the rows and the field the columns. A batch serves every alias
 a field at once, so each field masks what it answers by its own selection, as a root
 field does: under a `.fields([Id, Name])` grant on `User`, `post.author { id name }`
 answers and `post.author { email }` is refused naming `email`
-([Response masking](/security/authorization/response-masking/#a-nested-graphql-field-masks-by-the-same-rule)).
+([Response masking](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds)).
 
 ## What fails if you get it wrong
 

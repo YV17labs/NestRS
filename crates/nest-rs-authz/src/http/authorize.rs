@@ -1,14 +1,18 @@
 //! [`Authorize<A, S>`] — the route-level class gate for action `A` on
-//! subject `S`, and the type that arms the route's response mask.
+//! subject `S`, and the type that opens the route's reads.
 
 use std::marker::PhantomData;
+
+use nest_rs_http::{Request, ResponseShaping, RouteResponseShaper};
+
+use crate::{ActionMarker, Subject};
 
 /// Enforcement plumbing for action `A` on subject `S`. A route whose posture
 /// names it, through `#[authorize(A, S)]` or `#[public(A, S)]`, runs
 /// [`class_gate`](crate::class_gate) with its guards, before any interceptor or
-/// filter the route declares, and installs the response shaper (automatic
-/// masking + ambient ability). Class-level only — the per-row filter and
-/// response mask enforce conditions.
+/// filter the route declares, and reads under the ability they attached when `S`
+/// is an entity. Class-level only — the per-row filter and the judgement each
+/// wire row passes where it is built enforce conditions.
 ///
 /// # Don't write this — write `#[authorize(Action, Entity)]`
 ///
@@ -134,3 +138,20 @@ use std::marker::PhantomData;
 /// # fn main() {}
 /// ```
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
+
+/// The class gate a posture declares, run with the route's guards. An entity's
+/// opens the route's reads to the ability they attached; a subject no table holds
+/// opens none, so the route reads as one no posture names. Nothing reshapes the
+/// reply: each wire row it carries was judged where it was built.
+impl<A, S> RouteResponseShaper for Authorize<A, S>
+where
+    A: ActionMarker,
+    S: Subject,
+{
+    const GATE: Option<nest_rs_http::__private::GateFn> = Some(crate::class_gate::<A, S>);
+    const SHAPES: bool = S::__ROWS;
+
+    fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
+        None
+    }
+}

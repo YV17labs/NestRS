@@ -25,14 +25,14 @@ impl PostsTool {
     async fn list_posts(&self) -> Result<String, ServiceError> { /* … */ }
 
     #[prompt(description = "Draft a follow-up post, primed with the titles the caller can read.")]
-    #[authorize(Read, PostEntity, unmasked)]
+    #[authorize(Read, PostEntity)]
     async fn draft_follow_up(&self) -> Result<GetPromptResult, ServiceError> { /* … */ }
 }
 ```
 
-A prompt's messages are prose the entity round-trip cannot read, so a gated
-prompt keeps its gate and declares `unmasked`, as a tool answering a
-`CallToolResult` does; a masked `#[prompt]` does not compile.
+A prompt's messages are prose the body writes from the rows it read under the
+caller's ability: the gate runs first, and what the prose says of a row is the
+body's own line.
 
 ## Resources
 
@@ -46,7 +46,7 @@ each of the template's variables is an argument of the method, typed;
 impl PostsTool {
     // …
     #[resources]
-    #[authorize(Read, PostEntity, unmasked)]
+    #[authorize(Read, PostEntity)]
     async fn posts(&self) -> Result<Vec<Resource>, ServiceError> {
         let rows = self.svc.list().await?;
 
@@ -102,16 +102,12 @@ capability is derived from the methods present, never written.
   and an `Option` to answer.
 - **The posture is the tool's.** `#[authorize(Read, bind = PostsService)]` runs the
   class gate before the load, so a token without `posts:read` is refused with
-  the scope it lacks rather than handed an empty listing, and masks the read,
-  inside an `Option` where it answers one. The mask reads your reply back into the
-  entity, so a reply leaving out a column the entity requires fails closed: answer
-  the whole `#[expose]`d shape, or [declare `unmasked`](/mcp/authorization/) beside
-  `bind` when the projection is deliberate. A listing's entries are URIs and names the round-trip
-  cannot read: a gated `#[resources]` declares `unmasked` and lists only what
-  the caller may read — the ambient ability already scopes
-  `CrudService::list`. A `ReadResourceResult` is opaque to the mask too,
-  bare or inside its `Option`: a gated resource answering one declares
-  `unmasked`, and the masked form does not compile.
+  the scope it lacks rather than handed an empty listing. Answer the
+  `#[expose]`d type built from the row (`Post::from(&post.into_inner())`), inside
+  an `Option` where it answers one: the row was judged for the caller as it was
+  built, a column its grant withholds reading `null`. A listing's entries are URIs
+  and names the body writes from what it read — the ambient ability already
+  scopes `CrudService::list`.
 
 The templates are offered a URI in the order the block declares them, so two
 templates with the same shape — `post://{id}` with a `Uuid`, then
@@ -149,8 +145,8 @@ nothing. Its endpoint is guarded where every MCP request is — the app's
 global guards, or [`EndpointGuards<McpView, G>`](/security/authorization/endpoint-guards/)
 from a module, as `AuthzMcpModule` declares them — and every row it reads
 still comes through the ambient ability, a visitor's reading nothing. It writes no
-posture, so no mask shapes its answer: `masked_reply` is what it calls before
-answering a row. Give it a path of its own, or share
+posture; a wire row it answers is judged for the caller where it builds it, as
+everywhere. Give it a path of its own, or share
 one with the hosts that declare their operations: the endpoint offers a
 completion to each.
 

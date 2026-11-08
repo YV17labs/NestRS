@@ -18,7 +18,7 @@ mod widget {
         #[sea_orm(primary_key)]
         #[expose]
         pub id: i32,
-        #[expose]
+        #[expose(nullable)]
         pub org_id: i32,
         #[expose]
         pub name: String,
@@ -108,40 +108,6 @@ fn permitted_fields_restricts_to_listed_columns() {
         }
         _ => panic!("expected a restricted field set"),
     }
-}
-
-#[test]
-fn mask_strips_unpermitted_fields_from_the_body() {
-    let mut b = AbilityBuilder::new();
-    b.can(Action::Read, widget::Entity)
-        .when(|p| p.eq(widget::Column::OrgId, 7))
-        .fields([widget::Column::Id, widget::Column::Name]);
-    let ability = b.build().expect("valid test ability");
-
-    let json = ability.mask::<widget::Entity>(Action::Read, &model(7));
-    let obj = json.as_object().expect("masked model is a JSON object");
-    assert!(obj.contains_key("id"));
-    assert!(obj.contains_key("name"));
-    assert!(!obj.contains_key("secret"), "secret must be stripped");
-    assert!(!obj.contains_key("org_id"), "org_id must be stripped");
-}
-
-#[test]
-fn mask_answers_the_exposed_columns_alone_under_an_unrestricted_grant() {
-    let json = ability(7, false).mask::<widget::Entity>(Action::Read, &model(7));
-    assert_eq!(
-        json,
-        serde_json::json!({ "id": 1, "org_id": 7, "name": "ada" }),
-        "a hidden column is no field a grant can open",
-    );
-}
-
-#[test]
-fn mask_many_drops_unauthorized_instances() {
-    let user = ability(7, false);
-    let rows = [model(7), model(8), model(7)];
-    let masked = user.mask_many::<widget::Entity>(Action::Read, rows.iter());
-    assert_eq!(masked.len(), 2);
 }
 
 #[test]

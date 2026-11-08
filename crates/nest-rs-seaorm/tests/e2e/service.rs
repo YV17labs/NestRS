@@ -39,7 +39,6 @@ mod article {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
-        #[wire_default]
         pub org_id: Uuid,
         #[expose(input(create, update))]
         pub title: String,

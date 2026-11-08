@@ -60,16 +60,13 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// - `#[authorize(Action, Entity)]` — the macro emits the class gate
 ///   (`nest_rs_authz::class_gate`, run after the operation's guards) before the
-///   call and automatic response masking after it. The mask sees through the
-///   wire DTO itself, `Option<…>` and `Vec<…>`; scalars pass through; an
-///   irreconcilable value fails **closed**. Append `unmasked`
-///   (`#[authorize(Read, E, unmasked)]`) to keep the gate but mask a custom
-///   shape (e.g. a cursor connection) yourself, each row through
-///   `nest_rs_authz::Ability::mask`.
+///   call, and the operation reads under the caller's ability. What it answers
+///   needs no mask: each wire row was judged for that caller where
+///   `#[expose]`'s conversion built it, whatever shape holds it.
 /// - `#[public(Action, Subject)]` — a caller with no credential is admitted, with
-///   `#[authorize]`'s arguments, gate and mask on the ability that caller has.
+///   `#[authorize]`'s arguments and gate on the ability that caller has.
 /// - `#[public]` — a caller with no credential is admitted, and the operation
-///   reads nothing a grant guards: no gate, no response mask, the ability withheld.
+///   reads nothing a grant guards: no gate, the ability withheld from its reads.
 ///   Struct- and method-level `#[use_guards]` still run.
 ///
 /// A `#[field_resolver]` takes neither: it inherits the operation's posture
@@ -78,11 +75,12 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `#[meta(EXPR)]` (repeatable) on a root field declares a value for it, read
 /// over the resolver's of the same type; a `#[field_resolver]` declares none.
 ///
-/// **A `#[subscription]` declares the same posture and it is enforced twice**:
-/// its layers and gate once, at subscribe, and the mask on **every item** the
-/// stream yields — evaluated against the ability the gate checked, captured at
-/// subscribe, so an item the subscriber may not read is dropped rather than
-/// nulled (`nest_rs_authz::graphql::masked_item_for`). The method is a `fn` or an
+/// **A `#[subscription]` declares the same posture**, its layers and gate run
+/// once, at subscribe; every item is a push, so a wire row its stream builds as
+/// the socket polls it is judged for the subscriber, a rule only a read could
+/// decide granting nothing, and a row built for another caller resolves for no
+/// one. Carry the row (`Model`) on the event and build the wire row in the
+/// stream. The method is a `fn` or an
 /// `async fn` returning `impl Stream<Item = T>`, optionally behind a
 /// literally-spelled `Result<…>`; an aliased `Result` is a compile error that
 /// names itself.
@@ -108,8 +106,7 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// class gate (`nest_rs_authz::class_gate`), the exception filters and
 /// interceptors (on a root field the app's and the resolver's, then the
 /// method's; on a field resolver its own alone), the
-/// per-argument pipes, the inherent method, then the response mask over what it
-/// returned.
+/// per-argument pipes, then the inherent method.
 #[proc_macro_attribute]
 pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::__private::reroot_impl_half(args.into(), |args| {
@@ -180,8 +177,8 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
 /// | `PostsService` | `author` | `PostsServiceAuthor` |
 ///
 /// Name the loader exactly that from the field that reads it:
-/// `author: &DataLoader<UsersServiceById>`. An answer holding an `#[expose]`d wire
-/// type's rows is masked by the field's selection, whatever read them.
+/// `author: &DataLoader<UsersServiceById>`. A generated loader answers wire rows,
+/// judged for the caller whose request runs the batch.
 ///
 /// # Expands to
 ///

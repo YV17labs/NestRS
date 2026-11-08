@@ -1,0 +1,5 @@
+error: #[expose] `nullable`: an `Option` column already answers `null` where a grant withholds it
+  --> tests/integration/diagnostics/seaorm/nullable_on_an_option_column.rs:14:14
+   |
+14 |     #[expose(nullable)]
+   |              ^^^^^^^^

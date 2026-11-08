@@ -1,16 +1,16 @@
-error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`, optionally followed by `unmasked`
+error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`
   --> tests/integration/diagnostics/ws/posture_of_the_wrong_shape.rs:19:5
    |
 19 |     #[public = "x"]
    |     ^^^^^^^^^^^^^^^
 
-error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`, optionally followed by `unmasked`
+error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`
   --> tests/integration/diagnostics/ws/posture_of_the_wrong_shape.rs:31:5
    |
 31 |     #[public(Read posts::Entity)]
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: expected `#[authorize(Action, Subject)]` — e.g. `#[authorize(Read, users::Entity)]`, optionally followed by `unmasked`
+error: expected `#[authorize(Action, Subject)]` — e.g. `#[authorize(Read, users::Entity)]`
   --> tests/integration/diagnostics/ws/posture_of_the_wrong_shape.rs:43:5
    |
 43 |     #[authorize]

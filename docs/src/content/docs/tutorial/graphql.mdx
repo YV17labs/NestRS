@@ -67,7 +67,7 @@ instead.
 Posture is **mandatory and fail-secure**: a `#[query]`/`#[mutation]`
 with neither `#[authorize(...)]` nor `#[public]` does not compile. You
 cannot forget to think about access — the build breaks before an
-ungated, unmasked operation can ship.
+ungated operation can ship.
 </Aside>
 
 Symmetry with the HTTP controller is intentional — the service is the

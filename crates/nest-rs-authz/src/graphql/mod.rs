@@ -6,7 +6,8 @@
 //!
 //! A resolver writes no mask: `#[authorize(Action, Entity)]` on a
 //! `#[query]`/`#[mutation]` makes `#[resolver]` emit the class gate
-//! ([`class_gate`](crate::class_gate), every edge's) and the response mask.
+//! ([`class_gate`](crate::class_gate), every edge's), and each wire row the
+//! operation answers was judged for its caller where it was built.
 //!
 //! The row an operation loads by id, `#[authorize(A, bind = S)]`, is
 //! `nest-rs-seaorm`'s.
@@ -14,7 +15,7 @@
 //! ```
 //! # use nest_rs_authz::{AbilityBuilder, Action, Read};
 //! # use nest_rs_core::{Layer, async_trait, injectable, module};
-//! # use nest_rs_graphql::async_graphql::{Result, SimpleObject};
+//! # use nest_rs_graphql::async_graphql::Result;
 //! # use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 //! # use nest_rs_guards::{Denial, Guard, GuardFor};
 //! # use nest_rs_http::EndpointGuards;
@@ -22,25 +23,21 @@
 //! # mod users {
 //! #     use nest_rs_seaorm::expose;
 //! #     use sea_orm::entity::prelude::*;
-//! #     #[expose(name = "UserRow")]
+//! #     #[expose(name = "User", graphql)]
 //! #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 //! #     #[sea_orm(table_name = "users")]
 //! #     pub struct Model {
 //! #         #[sea_orm(primary_key)]
 //! #         #[expose]
 //! #         pub id: i32,
-//! #         #[expose]
+//! #         #[expose(nullable)]
 //! #         pub name: String,
 //! #     }
 //! #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 //! #     pub enum Relation {}
 //! #     impl ActiveModelBehavior for ActiveModel {}
 //! # }
-//! # #[derive(SimpleObject, serde::Serialize, serde::Deserialize)]
-//! # struct User {
-//! #     id: i32,
-//! #     name: Option<String>,
-//! # }
+//! # use users::User;
 //! # #[injectable]
 //! # #[derive(Default, Layer)]
 //! # struct PassGuard;
@@ -81,8 +78,8 @@
 //!     #[query]
 //!     #[authorize(Read, users::Entity)]
 //!     async fn users(&self) -> Result<Vec<User>> {
-//!         // gate + response masking are emitted by the macro
-//! #       Ok(vec![User { id: 1, name: Some("ada".into()) }])
+//! #       let rows = [users::Model { id: 1, name: "ada".into() }];
+//!         Ok(rows.iter().map(User::from).collect())
 //!     }
 //! }
 //! # #[module(
@@ -111,7 +108,5 @@
 //! ```
 
 mod context;
-pub(crate) mod mask;
 
 pub use context::{ability, forbidden};
-pub use mask::masked_item_for;

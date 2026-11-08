@@ -2,8 +2,6 @@
 
 use nest_rs_testing::TestApp;
 
-mod mask;
-
 /// POST one operation as `role` (empty ⇒ no header, i.e. the anonymous caller)
 /// and return the response body as plain JSON.
 pub(crate) async fn query(app: &TestApp, role: &str, query: &str) -> serde_json::Value {

@@ -38,8 +38,18 @@ impl<T: Serialize> ResourceBody for Json<T> {
     const MIME_TYPE: Option<&'static str> = Some(JSON);
 
     fn into_read(self, uri: String) -> Result<ReadResourceResult, OperationFailure> {
-        let text = serde_json::to_string(&self.0)
-            .map_err(|refused| OperationFailure::unanswered(Failure::new(refused)))?;
+        use nest_rs_core::__private::{AnswerRefusal, take_refused_answer};
+        let _ = take_refused_answer();
+        let text = serde_json::to_string(&self.0).map_err(|refused| {
+            if take_refused_answer() == Some(AnswerRefusal::Withheld) {
+                OperationFailure::from(crate::problem_error(&nest_rs_core::Problem::new(
+                    403,
+                    nest_rs_core::code::FORBIDDEN,
+                )))
+            } else {
+                OperationFailure::unanswered(Failure::new(refused))
+            }
+        })?;
         Ok(ReadResourceResult::new(vec![
             ResourceContents::text(text, uri).with_mime_type(JSON),
         ]))

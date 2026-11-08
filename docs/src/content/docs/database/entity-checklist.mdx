@@ -48,11 +48,12 @@ carries the wire derives, so the field can be `#[expose]`d like any scalar.
 One trap on this page announces itself at compile time, the other only at
 runtime, and the difference matters when you are deciding what to test:
 
-- **A hidden column with no placeholder** is refused by `#[expose]` at the
-  field. Rebuilding the row for masking needs a value for every unexposed
-  column; where the macro has none to give — a hidden `Uuid`, timestamp,
-  `Decimal` or enum — the error names
-  [`#[wire_default(…)]`](/security/authorization/response-masking/#the-round-trip-expose-writes).
+- **A grant withholding a column no `null` answers** is refused when the
+  ability builds, naming the column: a grant on `Read` may leave out only an
+  `Option` column or one
+  [`#[expose(nullable)]`](/security/authorization/response-masking/#what-a-grant-may-withhold--exposenullable)
+  declares. A unit test building each role's ability catches it before a request
+  does.
 - **A unique column on a `soft_delete` table** answers `409` for a value every
   read calls free, when its index is a full one: index it `WHERE deleted_at IS
   NULL`. See [CRUD](/database/crud/#soft-delete-and-timestamps).
@@ -64,13 +65,13 @@ opt-in, so a column added by a later migration never leaks by omission — the
 failure direction is the safe one. The remaining risk is the reverse: an
 `#[expose]` written by habit on a column that should not travel.
 
-**Does a rule a push depends on read a column you did not expose?** Masking
-rebuilds the row from the wire body and fills unexposed columns with a
-placeholder, which the mask never decides a rule on: on a reply it trusts the
-`Repo` read, and on a subscription item or a `masked_reply` value it refuses the
-row. A feed whose policy reads a hidden column delivers nothing; expose that
-column, read-only — see
-[What the mask cannot see](/security/authorization/response-masking/#what-the-mask-cannot-see).
+**Does a push carry the row, or a wire row someone else built?** A wire row is
+judged on its whole row where it is built, hidden columns included, so a rule
+reading one decides it. A subscription builds its rows as the socket polls its
+stream, each judged for its subscriber: carry the `Model` on the event and build
+the wire row in the stream — a wire row the publisher built answers no
+subscriber, see
+[A row answers the caller who judged it](/security/authorization/response-masking/#a-row-answers-the-caller-who-judged-it).
 
 ## Going further
 

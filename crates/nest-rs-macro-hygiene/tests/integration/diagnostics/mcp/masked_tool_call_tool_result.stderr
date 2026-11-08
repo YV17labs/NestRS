@@ -1,5 +1,0 @@
-error: `#[authorize(...)]` cannot mask a `CallToolResult` — its contents are opaque to the entity round-trip. Return the wire type (`Json<T>` or `T`) and let the mask run, or keep the gate and mask by hand with `#[authorize(Action, Entity, unmasked)]` + `nest_rs::authz::masked_reply`
-  --> tests/integration/diagnostics/mcp/masked_tool_call_tool_result.rs:21:26
-   |
-21 |     async fn user(&self) -> Result<CallToolResult, McpError> {
-   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

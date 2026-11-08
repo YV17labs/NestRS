@@ -227,3 +227,19 @@ modules as a `HashSet`, so an app with two gaps read one or the other by the
 process's hash seed: 21 and 9 of 30 runs of one test told apart two refusals, one of
 them naming the wrong fix. It now walks them as `provider_order` does, roots first
 and imports depth-first, so one app reads one first refusal on every boot.
+
+## 2026-11-08 — a dependency registered later names the import the app wrote
+
+`UnbuiltCause::RegisteredLater` named the import site whose phase registered the key,
+and only a `#[module]`'s `imports = [..]` and a root were sites: a root written by hand
+that imports the consumer's module and then the registrant by `builder.import` was
+named itself, by its type's path, and the feature told to import the app's root. Each
+`builder.import::<M>()` a root's own phases make is now a site, named for `M` as the
+root writes it; what the root registers in its own phase after that import is
+`UnbuiltCause::RegisteredByARoot`, whose edit is the root's order, said beside the
+imports registering any other key it waited on, so the sentence followed boots; a second root is
+named by its type's name. Under a `#[module]` import, a hand-written module importing
+another stays named for itself, the import the app wrote — importing it is the fix,
+and a duplicate keeps naming what the app wrote rather than a framework module deep
+inside it. **Refused:** naming the innermost module whatever its depth, which reads
+right for this refusal and wrong for every duplicate under a framework module.

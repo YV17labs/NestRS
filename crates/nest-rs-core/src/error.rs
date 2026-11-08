@@ -708,6 +708,16 @@ pub enum UnbuiltCause {
     /// Only an app-wide pool's declaration lists it, and a pool registers what
     /// it lists once every module is built.
     RegisteredByAPool,
+    /// A root written by hand registers it in its own phase, after importing
+    /// the consumer's module, beside any `imports` registering the rest.
+    RegisteredByARoot {
+        /// The root, by its type's name.
+        root: &'static str,
+        /// The imports registering the rest later, as
+        /// [`RegisteredLater`](Self::RegisteredLater) names them, none when the
+        /// root registers all of it.
+        imports: Vec<&'static str>,
+    },
 }
 
 /// A provider built without an optional dependency the same boot registered
@@ -761,6 +771,26 @@ fn unbuilt_clause(cause: &UnbuiltCause, module: &str, count: usize) -> String {
                 and_list(several)
             ),
         },
+        UnbuiltCause::RegisteredByARoot { root, imports } => {
+            let built = format!("after `{module}`'s providers were built");
+            let order = format!("before importing `{module}`, or in a module `{module}` imports");
+            match imports.as_slice() {
+                [] => {
+                    format!("the root `{root}` registers {them} {built}: register {them} {order}")
+                }
+                [one] => format!(
+                    "`{one}` registers some of them later, and the root `{root}` the others \
+                     {built}: import that module in `{module}`'s `imports`, and register the \
+                     others {order}"
+                ),
+                several => format!(
+                    "{} register some of them later, and the root `{root}` the others {built}: \
+                     import those modules in `{module}`'s `imports`, and register the others \
+                     {order}",
+                    and_list(several)
+                ),
+            }
+        }
         UnbuiltCause::RegisteredByAPool => format!(
             "only an app-wide pool's declaration lists {them}, and a pool registers what it \
              lists once every module is built: list {them} in `{module}`'s `providers`"

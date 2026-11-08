@@ -266,6 +266,27 @@ async fn two_modules_binding_one_trait_object_fail_the_boot_naming_it() {
     );
 }
 
+/// A root written by hand, importing both bindings itself.
+struct BothGreetingsByHand;
+
+impl Module for BothGreetingsByHand {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<HelloModule>().import::<BonjourModule>()
+    }
+}
+
+/// Each import a hand-written root makes is named as it writes it, and the root
+/// by its type's name.
+#[tokio::test]
+async fn two_bindings_a_hand_written_root_imports_name_each_import() {
+    names_both(
+        App::builder().module::<BothGreetingsByHand>().build().await,
+        std::any::type_name::<Arc<dyn Greeting>>(),
+        "`HelloModule`, which the root `BothGreetingsByHand` imports",
+        "`BonjourModule`, which the root `BothGreetingsByHand` imports",
+    );
+}
+
 #[tokio::test]
 async fn a_seeded_trait_object_a_module_also_binds_fails_the_boot_naming_the_seed() {
     let duplicate = duplicate(
@@ -280,11 +301,9 @@ async fn a_seeded_trait_object_a_module_also_binds_fails_the_boot_naming_the_see
         std::any::type_name::<Arc<dyn Greeting>>()
     );
     assert_eq!(duplicate.first, "a seed (`App::builder().provide…`)");
-    assert!(
-        duplicate
-            .second
-            .contains("HelloModule`, a root the app is built from"),
-        "{duplicate}"
+    assert_eq!(
+        duplicate.second,
+        "`HelloModule`, a root the app is built from",
     );
 }
 

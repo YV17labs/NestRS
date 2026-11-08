@@ -446,6 +446,264 @@ async fn a_dependency_registered_later_names_the_module_registering_it_over_the_
     assert!(!said.contains(ALMANAC_REMEDY), "the wrong fix: {said}");
 }
 
+/// A root written by hand, importing the consumer's module before the one
+/// registering what it injects.
+struct HandWrittenRoot;
+
+impl Module for HandWrittenRoot {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder
+            .import::<BookkeepingModule>()
+            .import::<LedgerModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .import::<BookkeepingModule>()
+            .import::<LedgerModule>()
+    }
+}
+
+/// The module whose phase registered the key is named, never the root that
+/// imported it, which the consumer's module cannot import.
+#[tokio::test]
+async fn a_dependency_a_hand_written_root_imports_later_names_the_module_registering_it() {
+    let refused = refused_boot::<HandWrittenRoot>().await;
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+    assert_eq!(
+        unbuilt.cause,
+        UnbuiltCause::RegisteredLater(vec!["LedgerModule"]),
+        "{unbuilt}"
+    );
+}
+
+/// A second root registering it is named by its type's name, and importing it
+/// is the fix.
+#[tokio::test]
+async fn a_dependency_a_later_root_registers_names_that_root() {
+    let Err(refused) = App::builder()
+        .module::<BookkeepingModule>()
+        .module::<LedgerModule>()
+        .build()
+        .await
+    else {
+        panic!("the ledger registers after its reader");
+    };
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+    assert_eq!(
+        unbuilt.cause,
+        UnbuiltCause::RegisteredLater(vec!["LedgerModule"]),
+        "{unbuilt}"
+    );
+}
+
+/// A root written by hand registering what an import it made before injects.
+struct RegistersAfterItsImport;
+
+impl Module for RegistersAfterItsImport {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<BookkeepingModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<BookkeepingModule>().provide(Ledger)
+    }
+}
+
+/// No module to import registers it, so the edit is the root's own order.
+#[tokio::test]
+async fn a_dependency_a_hand_written_root_registers_after_its_import_is_told_the_order() {
+    let refused = refused_boot::<RegistersAfterItsImport>().await;
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+    assert_eq!(
+        unbuilt.cause,
+        UnbuiltCause::RegisteredByARoot {
+            root: "RegistersAfterItsImport",
+            imports: vec![],
+        },
+        "{unbuilt}"
+    );
+    assert!(
+        unbuilt.to_string().ends_with(
+            "; the root `RegistersAfterItsImport` registers it after `BookkeepingModule`'s \
+             providers were built: register it before importing `BookkeepingModule`, or in a \
+             module `BookkeepingModule` imports"
+        ),
+        "{unbuilt}"
+    );
+}
+
+/// That sentence followed: the root registers before importing.
+struct RegistersBeforeItsImport;
+
+impl Module for RegistersBeforeItsImport {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<BookkeepingModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide(Ledger).import::<BookkeepingModule>()
+    }
+}
+
+#[tokio::test]
+async fn following_the_roots_order_builds_the_provider() {
+    let app = App::builder()
+        .module::<RegistersBeforeItsImport>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("the order is the fix: {refused:#}"));
+    assert!(app.container().get::<Bookkeeper>().is_some());
+}
+
+/// A second type only a root registers, imperatively.
+struct Journal;
+
+#[expect(
+    dead_code,
+    reason = "the dependencies are declared for the container to resolve, never read"
+)]
+#[injectable]
+struct JournalKeeper {
+    #[inject]
+    ledger: Arc<Ledger>,
+    #[inject]
+    journal: Arc<Journal>,
+}
+
+#[module(providers = [JournalKeeper])]
+struct JournalKeepingModule;
+
+/// A root importing the consumer's module, then the ledger's, then registering
+/// the journal itself: each of the two absent keys has its own edit.
+struct RegistersTheJournalAfterItsImport;
+
+impl Module for RegistersTheJournalAfterItsImport {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder
+            .import::<JournalKeepingModule>()
+            .import::<LedgerModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .import::<JournalKeepingModule>()
+            .import::<LedgerModule>()
+            .provide(Journal)
+    }
+}
+
+/// The root's order is said beside the import registering the other key, never
+/// in its place.
+#[tokio::test]
+async fn a_root_registering_one_of_two_later_names_the_import_registering_the_other() {
+    let refused = refused_boot::<RegistersTheJournalAfterItsImport>().await;
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+    assert_eq!(unbuilt.missing, ["Ledger", "Journal"]);
+    assert_eq!(
+        unbuilt.cause,
+        UnbuiltCause::RegisteredByARoot {
+            root: "RegistersTheJournalAfterItsImport",
+            imports: vec!["LedgerModule"],
+        },
+        "{unbuilt}"
+    );
+    assert!(
+        unbuilt.to_string().ends_with(
+            "; `LedgerModule` registers some of them later, and the root \
+             `RegistersTheJournalAfterItsImport` the others after `JournalKeepingModule`'s \
+             providers were built: import that module in `JournalKeepingModule`'s `imports`, \
+             and register the others before importing `JournalKeepingModule`, or in a module \
+             `JournalKeepingModule` imports"
+        ),
+        "{unbuilt}"
+    );
+}
+
+#[module(imports = [LedgerModule], providers = [JournalKeeper])]
+struct JournalKeepingOverTheLedger;
+
+/// Both edits followed: the module imports the ledger's, and the root registers
+/// the journal before importing it.
+struct RegistersTheJournalFirst;
+
+impl Module for RegistersTheJournalFirst {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<JournalKeepingOverTheLedger>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide(Journal)
+            .import::<JournalKeepingOverTheLedger>()
+    }
+}
+
+#[tokio::test]
+async fn following_both_edits_builds_the_provider() {
+    let app = App::builder()
+        .module::<RegistersTheJournalFirst>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("both edits are the fix: {refused:#}"));
+    assert!(app.container().get::<JournalKeeper>().is_some());
+}
+
+/// A module written by hand that imports the registrant on the app's behalf.
+struct LedgerWiring;
+
+impl Module for LedgerWiring {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.import::<LedgerModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<LedgerModule>()
+    }
+}
+
+#[module(imports = [BookkeepingModule, LedgerWiring])]
+struct WiredLaterRoot;
+
+/// The import is named as the app writes it, the hand-written module whose phase
+/// imported the registrant, and importing it is the fix.
+#[tokio::test]
+async fn a_dependency_a_hand_written_module_imports_later_names_that_module() {
+    let refused = refused_boot::<WiredLaterRoot>().await;
+    let unbuilt = refused
+        .downcast_ref::<UnbuiltProviderError>()
+        .unwrap_or_else(|| panic!("not the unbuilt-provider refusal: {refused:#}"));
+    assert_eq!(
+        unbuilt.cause,
+        UnbuiltCause::RegisteredLater(vec!["LedgerWiring"]),
+        "{unbuilt}"
+    );
+}
+
+#[module(imports = [LedgerWiring], providers = [Bookkeeper])]
+struct BookkeepingOverTheWiring;
+
+#[module(imports = [BookkeepingOverTheWiring, LedgerWiring])]
+struct WiredFirstRoot;
+
+#[tokio::test]
+async fn following_that_sentence_builds_the_provider() {
+    let app = App::builder()
+        .module::<WiredFirstRoot>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("the import is the fix: {refused:#}"));
+    assert!(app.container().get::<Bookkeeper>().is_some());
+}
+
 #[module(imports = [LedgerModule], providers = [Bookkeeper])]
 struct ImportingBookkeepingModule;
 

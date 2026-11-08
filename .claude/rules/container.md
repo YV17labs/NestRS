@@ -99,7 +99,10 @@ framework half.
   being global licenses no data access outside `Repo` (`data-layer.md`). What
   a hand-written `register` installs is neither: the graph cannot see it, so
   whatever registers after it reaches it with no import and one registered
-  before it is refused (`UnbuiltProviderError`) — app-wide infrastructure is a
+  before it is refused (`UnbuiltProviderError`), naming the import as the app
+  writes it — a root's own `builder.import::<M>()` is one — and, for what a root
+  registers in its own phase after the import, that order
+  (`UnbuiltCause::RegisteredByARoot`) — app-wide infrastructure is a
   factory's output, and a gated provider is listed in `providers`. It
   governs `#[inject]`, optional or not — an optional dependency no module the
   app reaches provides is absent, never a leak — the `#[use_*]` layer lists (a

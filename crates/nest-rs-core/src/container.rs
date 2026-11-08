@@ -23,6 +23,7 @@ use crate::factory_inputs::FactoryInputs;
 use crate::layer_chain::__private::{PooledLayers, SiteChains, provide_pooled_layers};
 use crate::module::{Collecting, Module, Registering};
 use crate::net::check_budgets;
+use crate::type_name::{short_static, shorten};
 
 type AnyArc = Arc<dyn Any + Send + Sync>;
 
@@ -120,22 +121,54 @@ impl QueuedFactory {
     }
 }
 
-/// One import whose phase is running: the module whose `imports = [..]` names
-/// it — `None` for a root the app was built from — and the import as written.
+/// One import whose phase is running: who imported it, and the import as the
+/// app writes it.
 #[derive(Clone, Copy)]
 pub(crate) struct ImportSite {
-    /// The module and the import's position in its list.
-    importer: Option<(&'static str, usize)>,
+    importer: Importer,
     import: &'static str,
+}
+
+/// Who wrote an [`ImportSite`]'s import.
+#[derive(Clone, Copy)]
+enum Importer {
+    /// Nobody: a root the app is built from, by its type's path.
+    Root,
+    /// A `#[module]`'s `imports = [..]`, at a position.
+    Listed(&'static str, usize),
+    /// A call a root's own phases make, `builder.import::<M>()`, by the root's
+    /// type's path.
+    Called(&'static str),
+}
+
+impl ImportSite {
+    /// The root this site is, by its type's name.
+    fn root(&self) -> Option<&'static str> {
+        matches!(self.importer, Importer::Root).then_some(self.import)
+    }
 }
 
 impl std::fmt::Display for ImportSite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.importer {
-            Some((importer, at)) => {
+            Importer::Listed(importer, at) => {
                 write!(f, "`{}` at `imports[{at}]` of `{importer}`", self.import)
             }
-            None => write!(f, "`{}`, a root the app is built from", self.import),
+            Importer::Called(root) => {
+                write!(
+                    f,
+                    "`{}`, which the root `{}` imports",
+                    self.import,
+                    shorten(root)
+                )
+            }
+            Importer::Root => {
+                write!(
+                    f,
+                    "`{}`, a root the app is built from",
+                    shorten(self.import)
+                )
+            }
         }
     }
 }
@@ -498,6 +531,8 @@ pub(crate) struct AbsentOptional {
     /// The optional dependencies absent when it was built, each with its
     /// label.
     pub(crate) absent: Vec<(TypeId, &'static str)>,
+    /// The root whose phase imported its module.
+    pub(crate) root: Option<&'static str>,
 }
 
 /// A provider a `#[module]`'s register step could not build: what it waited
@@ -511,6 +546,8 @@ pub(crate) struct Stall {
     pub(crate) provides: Vec<TypeId>,
     /// What it waited on, each with its label.
     pub(crate) missing: Vec<(TypeId, &'static str)>,
+    /// The root whose phase imported its module.
+    pub(crate) root: Option<&'static str>,
 }
 
 /// One key a test overrode: the double sits under it from before any module
@@ -1113,6 +1150,27 @@ impl ContainerBuilder {
     /// `for_root` value; [`build`](Self::build) returns the refusal.
     #[must_use]
     pub fn import<M: Module>(mut self) -> Self {
+        let import = std::any::type_name::<M>();
+        // A root's own phases write their imports by hand: each is a site, so
+        // what it registers is named for it, never for the root, whose own
+        // import is the root's site.
+        let Some(root) = self
+            .import_sites
+            .last()
+            .and_then(ImportSite::root)
+            .filter(|&root| root != import)
+        else {
+            return self.import_phases::<M>();
+        };
+        self.import_sites.push(ImportSite {
+            importer: Importer::Called(root),
+            import: short_static(import),
+        });
+        self.import_phases::<M>().leave_import()
+    }
+
+    /// [`import`](Self::import)'s phases, under the site already entered.
+    fn import_phases<M: Module>(mut self) -> Self {
         let id = TypeId::of::<M>();
         // Marked before the phase runs, so an import cycle ends.
         if self.collected_modules.insert(id) {
@@ -1411,7 +1469,7 @@ impl ContainerBuilder {
     /// Enter the phase of the root module `root` the app is built from.
     pub(crate) fn enter_root(mut self, root: &'static str) -> Self {
         self.import_sites.push(ImportSite {
-            importer: None,
+            importer: Importer::Root,
             import: root,
         });
         self
@@ -1728,7 +1786,7 @@ impl ContainerBuilder {
             module: module_name,
             provider: stall.provider,
             missing,
-            cause: self.absence_cause(reached, module, &keys),
+            cause: self.absence_cause(reached, module, stall.root, &keys),
         })
     }
 
@@ -1743,17 +1801,18 @@ impl ContainerBuilder {
             module: built.module.1,
             provider: built.provider.1,
             dependency,
-            cause: self.absence_cause(reached, built.module.0, &[key]),
+            cause: self.absence_cause(reached, built.module.0, built.root, &[key]),
         })
     }
 
-    /// Why `keys` were absent when `module` built its providers. On a container
-    /// built by hand, one registered later was registered after the call that
-    /// imported `module`.
+    /// Why `keys` were absent when `module`, which `root`'s phase imported,
+    /// built its providers. On a container built by hand, one registered later
+    /// was registered after the call that imported `module`.
     fn absence_cause(
         &self,
         reached: &[&ModuleDescriptor],
         module: TypeId,
+        root: Option<&'static str>,
         keys: &[TypeId],
     ) -> crate::UnbuiltCause {
         if keys.iter().any(|key| self.pooled_providers.contains(key)) {
@@ -1763,24 +1822,37 @@ impl ContainerBuilder {
             crate::UnbuiltCause::RegisteredLater(_) if !self.booting => {
                 crate::UnbuiltCause::ImportedFirst
             }
-            crate::UnbuiltCause::RegisteredLater(_) => {
-                crate::UnbuiltCause::RegisteredLater(self.registrants(keys))
-            }
+            crate::UnbuiltCause::RegisteredLater(_) => self.registered_later(keys, root),
             cause => cause,
         }
     }
 
-    /// The imports whose phase registered `keys`, each once, in the keys' order.
-    fn registrants(&self, keys: &[TypeId]) -> Vec<&'static str> {
-        let mut registrants = Vec::new();
+    /// Who registered `keys` after the module waiting on them, which `root`'s
+    /// phase imported: the imports whose phase did, each once, in the keys'
+    /// order, a root by its type's name — and `root` itself, when its own phase
+    /// registers one after that import.
+    fn registered_later(&self, keys: &[TypeId], root: Option<&'static str>) -> crate::UnbuiltCause {
+        let (mut imports, mut by_root) = (Vec::new(), None);
         for key in keys {
-            if let Some(Origin::Import(site)) = self.origin(*key)
-                && !registrants.contains(&site.import)
-            {
-                registrants.push(site.import);
+            let Some(Origin::Import(site)) = self.origin(*key) else {
+                continue;
+            };
+            let registrant = site.root().map_or(site.import, short_static);
+            if root.is_some() && site.root() == root {
+                by_root = Some(registrant);
+            } else if !imports.contains(&registrant) {
+                imports.push(registrant);
             }
         }
-        registrants
+        match by_root {
+            Some(root) => crate::UnbuiltCause::RegisteredByARoot { root, imports },
+            None => crate::UnbuiltCause::RegisteredLater(imports),
+        }
+    }
+
+    /// The root whose phase is running, by its type's name.
+    fn current_root(&self) -> Option<&'static str> {
+        self.import_sites.first().and_then(ImportSite::root)
     }
 
     /// The providers `#[module]`s list that the register phase never built, in
@@ -1837,7 +1909,7 @@ pub(crate) mod __private {
     use std::collections::HashSet;
     use std::sync::PoisonError;
 
-    use super::{Container, ContainerBuilder, ImportSite};
+    use super::{Container, ContainerBuilder, ImportSite, Importer};
     use crate::access::{cycle_from, labelled};
     use crate::layer_chain::__private::SiteChains;
     use crate::module::{Collecting, DynamicModule, Registering};
@@ -1933,7 +2005,7 @@ pub(crate) mod __private {
         import: &'static str,
     ) -> ContainerBuilder {
         builder.import_sites.push(ImportSite {
-            importer: Some((importer, at)),
+            importer: Importer::Listed(importer, at),
             import,
         });
         builder
@@ -2085,12 +2157,14 @@ pub(crate) mod __private {
         let waits_outside = |i: &usize| waits[*i].iter().any(|(id, _)| !pending.contains(id));
         let off_cycle = (0..stalled.len()).filter(|i| !cyclic[*i]);
         let (outside, inside): (Vec<usize>, Vec<usize>) = off_cycle.partition(waits_outside);
+        let root = builder.current_root();
         for i in outside.into_iter().chain(inside) {
             builder.stalls.push(super::Stall {
                 module: (module, module_name),
                 provider: stalled[i].name,
                 provides: stalled[i].provides.clone(),
                 missing: waits[i].clone(),
+                root,
             });
         }
         builder
@@ -2113,10 +2187,12 @@ pub(crate) mod __private {
                 .filter(|(id, _)| !builder.contains(*id))
                 .collect();
         if !absent.is_empty() {
+            let root = builder.current_root();
             builder.absent_optionals.push(super::AbsentOptional {
                 module: (module, module_name),
                 provider: (provider, provider_name),
                 absent,
+                root,
             });
         }
         builder

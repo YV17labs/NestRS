@@ -85,5 +85,9 @@ libc.workspace = true
 name = "pipeline"
 harness = false
 
+[[bench]]
+name = "trace_context"
+harness = false
+
 [lints]
 workspace = true

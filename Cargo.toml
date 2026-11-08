@@ -109,7 +109,9 @@ argon2 = "0.6"
 getrandom = "0.4"
 constant_time_eq = "0.6"
 validator = { version = "0.21", features = ["derive"] }  # public
-uuid = { version = "1.29", features = ["v4", "v7", "serde"] }  # public
+# `fast-rng`: an id a request mints draws from the thread's ChaCha, not a
+# syscall (`nest-rs-core`'s `trace_context` bench).
+uuid = { version = "1.29", features = ["v4", "v7", "serde", "fast-rng"] }  # public
 url = "2.5"
 
 # Public. `=`: sea-orm's types are `Repo`'s API, so even a minor is a reviewed

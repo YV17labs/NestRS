@@ -15,23 +15,26 @@ use std::fmt;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use uuid::Uuid;
+use uuid::{NoContext, Timestamp, Uuid};
 
 use crate::request_scope::current_correlation_with;
 
 /// The identifier of one distributed operation — 16 bytes, spelled as 32
 /// lowercase hex characters on the wire.
 ///
-/// A minted id is a UUID v7, so it sorts by time; its right-most 7 bytes fall
-/// in the v7's random tail, which is what lets [`TraceFlags::RANDOM`] be set
-/// (Trace Context Level 2).
+/// A minted id is a UUID v7, so it sorts by the millisecond; every bit after
+/// its timestamp but the version and variant is drawn (74 bits), none counted,
+/// the right-most seven bytes among them, which is what lets
+/// [`TraceFlags::RANDOM`] be set (Trace Context Level 2).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct TraceId(Uuid);
 
 impl TraceId {
     /// Start a new trace.
     pub fn mint() -> Self {
-        Self(Uuid::now_v7())
+        // `Uuid::now_v7` counts within a millisecond, in the bytes the random
+        // flag asserts are drawn; no context keeps no count.
+        Self(Uuid::new_v7(Timestamp::now(NoContext)))
     }
 
     /// Parse the 32-hex form carried by `traceparent`; `None` for a wrong
@@ -695,7 +698,9 @@ mod tests {
     #[test]
     fn a_minted_trace_id_is_a_uuid_v7_and_a_conformant_trace_id() {
         let id = TraceId::mint();
-        assert_eq!(Uuid::from_bytes(id.to_bytes()).get_version_num(), 7, "{id}",);
+        let uuid = Uuid::from_bytes(id.to_bytes());
+        assert_eq!(uuid.get_version_num(), 7, "{id}");
+        assert_eq!(uuid.get_variant(), uuid::Variant::RFC4122, "{id}");
         let hex = id.to_hex();
         assert_eq!(hex.len(), 32, "{hex}");
         assert!(hex.bytes().all(is_lower_hex), "{hex}");
@@ -709,6 +714,32 @@ mod tests {
             .collect();
         assert_eq!(tails.len(), 64, "the random tail must not repeat");
         assert!(TraceFlags::started().bits() & TraceFlags::RANDOM != 0);
+    }
+
+    /// `random-trace-id` asserts the right-most 7 bytes are random, which a
+    /// count within one millisecond is not: a sampler reading those bits as one
+    /// number would keep or drop a whole burst together.
+    #[test]
+    fn the_right_most_seven_bytes_of_ids_minted_back_to_back_are_no_count() {
+        let tails: Vec<u64> = (0..4096)
+            .map(|_| {
+                let bytes = TraceId::mint().to_bytes();
+                u64::from_be_bytes([
+                    0, bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+                ])
+            })
+            .collect();
+        let counted = tails
+            .windows(2)
+            .filter(|pair| (pair[1] >> 32).wrapping_sub(pair[0] >> 32) & 0xff_ffff == 1)
+            .count();
+        // Uniform bits step by one with odds 2^-24 a pair: two in 4095 pairs is
+        // a count, never chance.
+        assert!(
+            counted < 2,
+            "{counted} of {} back-to-back tails step their top 24 bits by one",
+            tails.len() - 1,
+        );
     }
 
     #[test]

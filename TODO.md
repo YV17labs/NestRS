@@ -329,8 +329,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 - Copies left: the "line written once" guard eight times, the site emitter
   five times, spec vectors six times; `impl Layer for X {}` beside
   `#[derive(Layer)]` in about 260 fixtures.
-- Per-request trace and span ids are minted from `Uuid` with no `fast-rng`;
-  cost never measured.
 
 ## 5. Additive features for 7.x (no caller yet)
 

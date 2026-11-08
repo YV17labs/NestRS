@@ -239,8 +239,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
   every framework error holding one says it by its SQLSTATE, and `?` into a
   `ServiceError` never meets it. Close: `Repo` answering an error of the
   framework's, a break of every service's `?`. *seen*
-- A storage key with every policy removed answers `AccessDenied`, which reads
-  like least privilege. *read*
 - The CLI reads a `CrudService` only in `service.rs` and `services/`;
   `nestrs lint` skips a file that does not parse. *read*
 - Generated processors, scheduled tasks and listeners are neither compiled
@@ -304,7 +302,12 @@ client TLS reload.
 
 Each is recorded in `.claude/decisions/` with its reason, re-read and still
 holding: real-clock budgets where only real time tells two outcomes apart;
-`Repo::delete` sending its statement under a class denial; CORS refusing an
+`Repo::delete` sending its statement under a class denial; a storage key whose
+every policy was removed booting on with its `warn` as a least-privilege one
+does, since the store answers both the boot's listing in the same document
+(`403`, `AccessDenied`, `Access Denied`, seen on RustFS 1.0.1) and a second call
+parts them only where the policy grants that call, which a write-only key's
+does not; CORS refusing an
 unlisted same-origin request; a hand-written `HttpRoutes` route validating
 nothing unasked; dataloaders off the operation's transaction; no layer on a
 hand-written MCP `ServerHandler`; `CrudService` noticed at its first query;

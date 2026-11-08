@@ -149,3 +149,24 @@ The lines follow: `key` leaves the abandoned upload's and the resumed download's
 which name the `store` and carry the trace. The operator who must reconcile a
 dangling upload lists the bucket's incomplete uploads (S3's `ListMultipartUploads`)
 or leaves them to its lifecycle rule; object_store could never list them anyway.
+
+## 2026-11-08 — a key with no policy left is told from least privilege by nothing the store answers
+
+The limit the entry on a rejected key states (2026-11-06), read off the code, is
+now seen. On the dev container's RustFS
+1.0.1, three keys listed the suites' bucket: one never given a policy, one
+stripped of its only one, and one granted `s3:GetObject`, `s3:PutObject` and
+`s3:DeleteObject` on the bucket's objects and no `s3:ListBucket`. Each was
+answered `403` with the same 110-byte document, `<Code>AccessDenied</Code>
+<Message>Access Denied</Message>`, and the same headers but the request id: both are
+one refusal, no policy allowing `s3:ListBucket`, and a policy has no other way to
+refuse it. A `GetObject` of a key that does not exist parted the third
+(`404 NoSuchKey`) from the two others (`403`), only because its policy grants
+`GetObject`; a write-only uploader's policy refuses it as no policy does. So the
+boot keeps booting on an `AccessDenied` with its `warn`, and the first call that
+policy refuses names it. Kept as a limit; `TODO.md` lists it.
+
+**Refused, again:** the second request, which tells only the keys whose policy
+grants it, and reading the key's own policies, which takes administrative rights
+no application key should hold.
+

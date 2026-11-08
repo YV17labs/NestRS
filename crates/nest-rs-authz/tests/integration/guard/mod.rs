@@ -26,3 +26,17 @@ fn rules_read() -> String {
     );
     format!("{who} may {}", if delete { "delete" } else { "not delete" })
 }
+
+/// A gated unit whose ability guard sits at the unit alone, none at its request,
+/// names its site, the code every call would answer and where to bind the guard.
+#[cfg(any(feature = "graphql", feature = "mcp", feature = "ws"))]
+fn assert_refused_at_the_request(boot: nest_rs_core::anyhow::Result<impl Sized>, site: &str) {
+    let Err(refused) = boot else {
+        panic!("{site}: every call would answer `401`, so the boot refuses it");
+    };
+    let refused = format!("{refused:#}");
+    assert!(refused.contains(site), "{refused}");
+    assert!(refused.contains("`401`"), "{refused}");
+    assert!(refused.contains("at its request"), "{refused}");
+    assert!(refused.contains("AbilityGuard"), "{refused}");
+}

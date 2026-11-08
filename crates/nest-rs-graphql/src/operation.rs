@@ -24,7 +24,7 @@ use nest_rs_core::{
 use nest_rs_core::{anyhow, code};
 use nest_rs_guards::__private::{
     GlobalBucket, GuardSpec, NeededPrincipal, RefusalMark, SiteChainSources, carried_stage_idle,
-    check_guards, compose_site_chain, validate_carried_chain, validate_gate_reached,
+    check_guards, compose_site_chain, validate_carried_ability_reached, validate_carried_chain,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::carried_request_chain;
@@ -148,9 +148,8 @@ pub fn field_guard_stage(
             .map_err(|unresolved| unresolved.to_string())
     };
     validate_carried_chain(label, &chain, request_chain).map_err(anyhow::Error::msg)?;
-    if class_gated {
-        validate_gate_reached(label, &chain, request_chain).map_err(anyhow::Error::msg)?;
-    }
+    validate_carried_ability_reached(label, handler.posture(), class_gated, &chain, request_chain)
+        .map_err(anyhow::Error::msg)?;
     let public = handler.posture() == Posture::Public || site == GraphqlSite::Field;
     let needed = NeededPrincipal::carried(public, &ambient, &chain, request_chain)
         .map_err(anyhow::Error::msg)?;

@@ -183,7 +183,7 @@ pub fn route_guard_stage(
         validate_route_chain(&label, &chain).map_err(anyhow::Error::msg)?;
     }
     if !declared.gates.is_empty() {
-        validate_gate_reached(&label, &chain, || Ok(Vec::new())).map_err(anyhow::Error::msg)?;
+        validate_gate_reached(&label, &chain).map_err(anyhow::Error::msg)?;
     }
     log_effective_chain(&label, "guards", &chain);
     let public = handler.posture() == Posture::Public;

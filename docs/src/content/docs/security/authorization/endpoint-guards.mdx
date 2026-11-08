@@ -145,8 +145,11 @@ impl UsersResolver { /* #[authorize(Action, Entity)] or #[public] per op */ }
 ```
 
 `AuthzGuard` is the app's `AbilityGuard<AuthzAbility>` alias, and it is what
-`#[use_guards]` binds: its `check` refuses an operation no ability reaches,
-and it declares `GuardFor<GraphqlView>`, the bound `#[resolver]` emits. An
+`#[use_guards]` binds: its `check` reads the ability the endpoint guards attached,
+building one itself for a `#[public]` operation alone, so an `#[authorize]`
+operation or a `#[field_resolver]` the endpoint guards attach none for refuses the boot
+rather than answering `401` to everyone. It declares `GuardFor<GraphqlView>`, the bound `#[resolver]`
+emits. An
 `AuthnGuard` does **not** belong in that list — it checks HTTP requests only,
 so on a resolver it would run nothing; the module's endpoint guards already
 authenticated the request.

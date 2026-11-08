@@ -161,10 +161,6 @@ end to end; decide by rule 1, then security, then performance. **Semver:** if
 - Several assertions were never seen red alone (a `compile_fail,E0308` on an
   order key, the guards suite's `404` and `405`, seaorm's listener e2e). *read*
 
-**Authorization, posture, mask** (beyond section 3)
-- `AbilityGuard` alone at a unit under `#[authorize]` boots and answers `401`
-  on every call. *read*
-
 **HTTP and CORS**
 - An `Ambient<P>` behind a type alias is not read off its spelling, so a
   `#[public]` unit taking one answers an anonymous caller the wiring `500`
@@ -324,17 +320,19 @@ per row by `max_list_argument_bytes` and never by how many rows the list
 answers, which only its resolver knows once it ran, so a page of 100,000
 rows each copying 4 KiB still holds 400 MB and a list under a list multiplies
 by both row counts (the field's `complexity` and page bound it; closing it
-takes async-graphql sharing an argument's value across the rows, §7); a
-rule's `when` predicate written into `Repo`'s scope unscanned, where a value
-typed `sea_query::Enum` whose type name holds a `"` widens the rows that rule
-admits (policy the factory writes once, while the call site's condition,
-which changes per query, is scanned; closing it costs every scoped query a
-second render of its scope); past the cover search's bound of 1,024 partial
-unions, which six grants per refused action reach, `missing_scopes` at a
-`Manage` site naming the smallest set it met, which a scope lifting every
-action, declared after each action's own grants, leaves larger than the
-smallest (closing it: an exact search, which grows as the fourth power of the
-grants per refused action, on the refusal path).
+takes async-graphql sharing an argument's value across the rows, §7); a guard
+overriding the hidden `__attaches_ability` to claim an ability it never
+attaches, met by the gate's fail-closed `500`; a rule's `when` predicate
+written into `Repo`'s scope unscanned, where a value typed `sea_query::Enum`
+whose type name holds a `"` widens the rows that rule admits (policy the
+factory writes once, while the call site's condition, which changes per
+query, is scanned; closing it costs every scoped query a second render of its
+scope); past the cover search's bound of 1,024 partial unions, which six
+grants per refused action reach, `missing_scopes` at a `Manage` site naming
+the smallest set it met, which a scope lifting every action, declared after
+each action's own grants, leaves larger than the smallest (closing it: an
+exact search, which grows as the fourth power of the grants per refused
+action, on the refusal path).
 
 ## 7. Upstream
 

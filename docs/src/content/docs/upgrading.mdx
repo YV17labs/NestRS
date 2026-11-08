@@ -1810,6 +1810,23 @@ lists what the boot, a log or the wire shows when one is missed.
   Bind `AuthzGuard` where the message says. A guard of your own that delegated to
   `AbilityGuard` stops: list `AuthzGuard` in the chain beside it, the one guard the boot
   reads as attaching the ability.
+- **A gated unit whose `AuthzGuard` sits at the unit alone** — a resolver's, a message's,
+  an MCP host's — stops the boot, an opened MCP endpoint's operations under the pool among
+  them: an `#[authorize]` operation, message or tool, one stating no posture, and a
+  `#[field_resolver]` of a resolver binding the guard. The guard builds an ability for a
+  `#[public]` unit only; a gated one reads what its request attached, so every call
+  answered `401`:
+
+  ```text frame="terminal"
+  Error: query posts declares `#[authorize]`, and `AbilityGuard<AuthzAbility>` at the unit reads the ability its request attached, building one on a `#[public]` unit alone: no guard ahead of it or at its request attaches it, so every call would answer `401` — …
+  Error: ShelvesResolver.label is gated by its guards alone, and `AbilityGuard<AuthzAbility>` at the unit reads the ability its request attached, …
+  ```
+
+  Bind `AuthzGuard` at the request too: `EndpointGuards<GraphqlView, (AuthnGuard,
+  AuthzGuard)>` or `EndpointGuards<McpView, (…)>`, `GlobalGuards<(…)>`, or the gateway's
+  `#[use_guards]` for a WebSocket message; or say `#[public(Action, Subject)]` where an
+  `#[authorize]` unit serves a visitor. A field resolver reads what the `/graphql` request
+  attached, never what its root field built.
 - **An in-band chain listing authentication after authorization** stops the boot, on a
   GraphQL field, a WS message and an MCP operation, reading its request's chain ahead of
   its own. List the authentication guard first, or declare the phase of a guard of your

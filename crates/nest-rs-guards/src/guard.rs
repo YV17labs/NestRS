@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nest_rs_core::{DenialDocument, Layer, UnitContext, UnitView};
+use nest_rs_core::{DenialDocument, Layer, Posture, UnitContext, UnitView};
 
 use crate::denial::Denial;
 
@@ -180,6 +180,15 @@ pub trait Guard: Layer {
         false
     }
 
+    /// Whether this guard's `check` attaches the caller's ability on a unit an in-band
+    /// edge carries, declaring `posture`: by default what it answers for the request.
+    /// `nest_rs::authz::AbilityGuard` builds one on a `#[public]` unit alone, a gated
+    /// unit reading the one its request attached.
+    #[doc(hidden)]
+    fn __attaches_ability_to(&self, _posture: Posture) -> bool {
+        self.__attaches_ability()
+    }
+
     /// The statuses [`check_http`](Self::check_http) can refuse a request
     /// with on a route that is `#[public]` (`public`) or not, each one a
     /// [`Denial::http_status`] or the status of the error a refusing guard
@@ -288,6 +297,10 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
 
     fn __attaches_ability(&self) -> bool {
         (**self).__attaches_ability()
+    }
+
+    fn __attaches_ability_to(&self, posture: Posture) -> bool {
+        (**self).__attaches_ability_to(posture)
     }
 
     fn denial_statuses(&self, public: bool) -> &'static [u16] {

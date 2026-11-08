@@ -21,7 +21,7 @@ use nest_rs_core::{
 };
 use nest_rs_guards::__private::{
     GuardSpec, NeededPrincipal, RefusalMark, carried_stage_idle, check_guards, identifying_guard,
-    resolve_global_guards, validate_carried_chain, validate_gate_reached,
+    resolve_global_guards, validate_carried_ability_reached, validate_carried_chain,
 };
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::__private::carried_request_chain;
@@ -186,9 +186,14 @@ pub fn operation_guard_stage(
             .map_err(|unresolved| unresolved.to_string()),
     };
     validate_carried_chain(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
-    if declared.class_gated {
-        validate_gate_reached(&label, &chain, request_chain).map_err(anyhow::Error::msg)?;
-    }
+    validate_carried_ability_reached(
+        &label,
+        handler.posture(),
+        declared.class_gated,
+        &chain,
+        request_chain,
+    )
+    .map_err(anyhow::Error::msg)?;
     let public = handler.posture() == Posture::Public;
     let needed = NeededPrincipal::carried(public, &declared.ambient, &chain, request_chain)
         .map_err(anyhow::Error::msg)?;

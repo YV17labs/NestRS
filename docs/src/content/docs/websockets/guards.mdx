@@ -265,9 +265,13 @@ connection carries the ability those guards attached — with every other value
 the upgrade carried — into each message, and the gateway opens each message's
 unit of work itself. Binding
 `AuthzGuard` beside a `#[subscribe_message]` adds a per-message check
-through `check`: with no ambient ability it denies a gated message, fail-closed,
-and gives a `#[public(Read, Entity)]` one the rules of the actor a guard ahead of it
-identified, or those [`define_visitor`](/security/authorization/public-reads/) writes.
+through `check`: it reads the ability the upgrade attached, and builds one for a
+`#[public]` message alone — the rules of the actor a guard ahead of it identified, or
+those [`define_visitor`](/security/authorization/public-reads/) writes. A gated
+message whose upgrade attaches no ability would answer `401` to every caller, so the
+boot refuses it, naming the remedy: bind `AuthzGuard` at the upgrade, in the
+gateway's `#[use_guards]` or `GlobalGuards`, or declare an `#[authorize]` message
+`#[public(Action, Subject)]`, which keeps its gate.
 
 See [Security](/security/) for the strategy + ability composition, and
 [Endpoint guards](/security/authorization/endpoint-guards/) for

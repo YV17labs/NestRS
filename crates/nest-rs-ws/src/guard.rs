@@ -16,7 +16,7 @@ use nest_rs_core::{Container, Failure, Handler, LayerSite, Peer, Posture, UnitCo
 use nest_rs_guards::__private::{
     GlobalBucket, GuardSpec, NeededPrincipal, Refused, SiteChainSources, carried_stage_idle,
     check_guards, client_message, compose_site_chain, denial_code, denial_of, denial_reason,
-    host_chain, identifying_guard, validate_carried_chain, validate_gate_reached,
+    host_chain, identifying_guard, validate_carried_ability_reached, validate_carried_chain,
     validate_guard_chain,
 };
 use nest_rs_guards::{Denial, Guard};
@@ -72,13 +72,20 @@ pub fn message_guard_stage(
     let upgrade_chain = || host_chain(container, &declared.upgrade, &site);
     validate_carried_chain(&site, &guards, upgrade_chain)
         .map_err(nest_rs_core::anyhow::Error::msg)?;
+    let class_gated = declared.gate.is_some();
+    validate_carried_ability_reached(
+        &site,
+        handler.posture(),
+        class_gated,
+        &guards,
+        upgrade_chain,
+    )
+    .map_err(nest_rs_core::anyhow::Error::msg)?;
     let public = handler.posture() == Posture::Public;
     let needed = NeededPrincipal::carried(public, &declared.ambient, &guards, upgrade_chain)
         .map_err(nest_rs_core::anyhow::Error::msg)?;
-    if declared.gate.is_some() {
-        validate_gate_reached(&site, &guards, upgrade_chain)
-            .map_err(nest_rs_core::anyhow::Error::msg)?;
-    } else if needed.is_none()
+    if !class_gated
+        && needed.is_none()
         && carried_stage_idle(&guards, declared.withheld, upgrade_chain)
             .map_err(nest_rs_core::anyhow::Error::msg)?
     {

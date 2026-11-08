@@ -301,7 +301,13 @@ impl<A: ActionMarker, E: EntityTrait> std::ops::Deref for Authorized<A, E> {
 /// #         }),
 /// #         nest_rs_seaorm::SeaOrmDatabaseModule,
 /// #     ],
-/// #     providers = [UsersService, AuthzAbility, AuthzGuard, UsersResolver],
+/// #     providers = [
+/// #         UsersService,
+/// #         AuthzAbility,
+/// #         AuthzGuard,
+/// #         nest_rs_http::EndpointGuards<nest_rs_graphql::GraphqlView, (AuthzGuard,)>,
+/// #         UsersResolver,
+/// #     ],
 /// # )]
 /// # struct AppModule;
 /// # async fn fields(app: &TestApp, root: &str) -> Vec<String> {

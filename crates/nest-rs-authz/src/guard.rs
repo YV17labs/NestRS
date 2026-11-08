@@ -151,6 +151,12 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         true
     }
 
+    /// At a carried unit, on a `#[public]` one alone: a gated unit reads what its
+    /// request attached ([`check`](Guard::check)).
+    fn __attaches_ability_to(&self, posture: Posture) -> bool {
+        posture == Posture::Public
+    }
+
     /// None: a request is refused here only for a wiring defect, a `500`. The
     /// `403` an ability earns is answered by what reads it — the route's class
     /// gate, the row its `bind` loads, its service.

@@ -258,3 +258,36 @@ What it leaves: an ability guard bound at the unit alone under `#[authorize]`, w
 the request, boots and answers `401`, its sentence naming the guard to bind at the request:
 `AbilityGuard::check` builds on a `#[public]` unit only, and this entry does not make a
 gated unit's rules depend on where the guard is listed.
+
+## 2026-11-07 — an ability guard at a gated unit alone refuses the boot
+
+Under the owner's words of 2026-11-07 (take up every subject the open list names). The
+2026-11-05 entry left an ability guard bound at the unit alone under `#[authorize]`,
+with none at the request, booting and answering `401` on every call; seen on a GraphQL
+field, a WS message and an MCP operation, an opened endpoint's under the pool too, each
+pinned by the suite as booting. A unit its guards alone gate is the same shape, seen on a
+WS message and an MCP operation stating no posture and on a `#[field_resolver]`.
+
+The claim the boot reads is now per stage. `Guard::__attaches_ability` stays what a
+guard's `check_http` attaches at a request; a hidden `__attaches_ability_to(posture)`
+says what its `check` attaches at a carried unit of that posture, by default the same.
+`AbilityGuard` answers it for `Posture::Public` alone, which is what `check` does: a
+gated unit reads the ability its request attached, and the rules a gated unit runs under
+still never depend on where the guard is listed. A route keeps one chain,
+`validate_gate_reached`; every carried unit's site calls
+`validate_carried_ability_reached` with its handler's posture and whether a class gate
+reads the ability, and a guard at the unit attaching for another posture alone, with
+nothing ahead of it or at the request attaching one, is refused with its name, the `401`
+every call would answer, and where to bind it, class gate or not. A field resolver reads
+what the `/graphql` request attached, never what its root field built: a visitor's ability
+built at a `#[public]` root reaches no nested read (the *Public reads* page's limits), so the boot refuses it
+rather than widening what a nested field reads.
+
+A guard answering the hidden claim `true` and attaching nothing still boots and meets
+the gate's `500` (`authorize.rs`'s `a_route_whose_ability_guard_attached_nothing_…`).
+Refused at boot only by a claim the boot could check, and none exists across the crate
+boundary: whatever `nest-rs-authz` builds to prove an attach, a guard overriding a
+hidden trait item builds too, and overriding one is outside the API
+(`visibility-tiers.md`). No guard reaching the API can claim it, since `AmbientAbility`
+is built by authz alone, so it is kept as a limit, the gate's fail-closed `500` naming
+the remedy.

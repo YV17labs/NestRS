@@ -155,7 +155,7 @@ pub fn denial_to_ws_error(denial: Denial) -> WsError {
     WsError {
         required_scopes: denial.required_scopes().into(),
         retry_after_secs: denial.retry_after_secs(),
-        server_failed: denial.http_status() >= 500,
+        server_failure: (denial.http_status() >= 500).then(Box::default),
         ..WsError::classed(client_message(&denial), denial_code(&denial))
             .with_reason(denial_reason(&denial))
     }

@@ -77,7 +77,7 @@ use crate::ambient::McpAmbient;
 use crate::error::{
     AVAILABLE_PROMPTS, ClassData, ToolReportedError, answer, classed_method_not_found,
     method_not_found, opaque_answer, prompt_not_found, refuses_method, refuses_prompt,
-    refuses_task, refuses_tool, task_not_found, tool_not_found,
+    refuses_task, refuses_tool, task_not_found, tool_not_found, withholding,
 };
 use crate::guard::BoxFuture;
 use crate::operation::McpOperationKind;
@@ -320,10 +320,13 @@ impl OperationUnits {
         ));
 
         async move {
-            let ended = self
-                .detached
-                .run(nest_rs_core::panic::contain(scoped))
-                .await;
+            // Filed whatever the answer: a tool error reported in band, and a
+            // failure the tool handled, kept a chain all the same.
+            let (ended, withheld) =
+                withholding(self.detached.run(nest_rs_core::panic::contain(scoped))).await;
+            for withheld in withheld {
+                crate::error::file(withheld, address.named());
+            }
             match ended {
                 Some(Ok(answered)) if stopped_first.load(Ordering::Relaxed) => {
                     line.file(operation_log::CANCELLED);

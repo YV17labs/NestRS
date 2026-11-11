@@ -1719,3 +1719,140 @@ async fn a_failure_an_interceptor_swaps_says_who_failed_by_the_one_a_filter_answ
     );
     assert_span_records(&logs, "disk_swapped_for_conflict", None);
 }
+
+/// What `.opaque()` keeps from its client, in the words an operator reads.
+const LEDGER_REFUSED: &str = "the ledger at the eu-west warehouse refused";
+
+#[gateway(path = "/opaqued")]
+struct OpaquedGateway;
+
+#[messages]
+impl OpaquedGateway {
+    #[subscribe_message("settle")]
+    #[public]
+    async fn settle(&self) -> Result<String, nest_rs_ws::WsError> {
+        use nest_rs_ws::Opaque as _;
+        let settled: Result<u64, std::io::Error> = Err(std::io::Error::other(LEDGER_REFUSED));
+        Ok(format!("settled {}", settled.opaque()?))
+    }
+}
+
+#[module(imports = [WsModule], providers = [OpaquedGateway])]
+struct OpaquedModule;
+
+#[gateway(path = "/opaqued-and-caught")]
+#[use_exception_filters(AsConflict)]
+struct CaughtOpaquedGateway;
+
+#[messages]
+impl CaughtOpaquedGateway {
+    #[subscribe_message("settle")]
+    #[public]
+    async fn settle(&self) -> Result<String, nest_rs_ws::WsError> {
+        use nest_rs_ws::Opaque as _;
+        let settled: Result<u64, std::io::Error> = Err(std::io::Error::other(LEDGER_REFUSED));
+        Ok(format!("settled {}", settled.opaque()?))
+    }
+}
+
+#[module(imports = [WsModule], providers = [AsConflict, CaughtOpaquedGateway])]
+struct CaughtOpaquedModule;
+
+/// The chain `.opaque()` keeps from its client is handed to the edge, which
+/// files it once its frame is the message's answer, naming the message as
+/// every other `websocket message failed` does: one message, one field set.
+#[tokio::test]
+async fn a_chain_opaque_withholds_is_filed_naming_its_message() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<OpaquedModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+    let mut socket = app.socket("/opaqued").connect().await;
+    socket.send("settle", serde_json::Value::Null).await;
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["data"]["code"], "INTERNAL", "{frame}");
+    assert!(!frame.to_string().contains("eu-west"), "{frame}");
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let line = logs.expect_one(nest_rs_ws::TARGET, "websocket message failed");
+    assert_eq!(line.level, "error");
+    assert_eq!(line.field("path").as_deref(), Some("/opaqued"));
+    assert_eq!(line.field("event").as_deref(), Some("settle"));
+    assert_eq!(line.field("error").as_deref(), Some(LEDGER_REFUSED));
+}
+
+/// A failure an exception filter answers as the client's files nothing of the
+/// chain `.opaque()` kept, as for any failure answered `4xx`.
+#[tokio::test]
+async fn a_chain_opaque_withholds_is_filed_only_when_its_frame_is_the_answer() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<CaughtOpaquedModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+    let mut socket = app.socket("/opaqued-and-caught").connect().await;
+    socket.send("settle", serde_json::Value::Null).await;
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["data"]["code"], "CONFLICT", "{frame}");
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    logs.expect_none(nest_rs_ws::TARGET, "websocket message failed");
+}
+
+/// Answers whatever it catches as the server unable to serve it in time.
+#[injectable]
+#[derive(Default, Layer)]
+struct AsUnavailable;
+
+#[async_trait]
+impl ExceptionFilter for AsUnavailable {
+    type Exception = dyn std::error::Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(503, code::UNAVAILABLE))
+    }
+}
+
+#[gateway(path = "/opaqued-and-unavailable")]
+#[use_exception_filters(AsUnavailable)]
+struct UnavailableOpaquedGateway;
+
+#[messages]
+impl UnavailableOpaquedGateway {
+    #[subscribe_message("settle")]
+    #[public]
+    async fn settle(&self) -> Result<String, nest_rs_ws::WsError> {
+        use nest_rs_ws::Opaque as _;
+        let settled: Result<u64, std::io::Error> = Err(std::io::Error::other(LEDGER_REFUSED));
+        Ok(format!("settled {}", settled.opaque()?))
+    }
+}
+
+#[module(imports = [WsModule], providers = [AsUnavailable, UnavailableOpaquedGateway])]
+struct UnavailableOpaquedModule;
+
+/// A filter answering `.opaque()`'s failure `503` files the chain `.opaque()`
+/// kept at `warn`, the server unable to answer the message in time.
+#[tokio::test]
+async fn a_filter_answering_503_over_opaque_files_its_chain_at_warn() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<UnavailableOpaquedModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+    let mut socket = app.socket("/opaqued-and-unavailable").connect().await;
+    socket.send("settle", serde_json::Value::Null).await;
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["data"]["code"], "UNAVAILABLE", "{frame}");
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let line = logs.expect_one(nest_rs_ws::TARGET, "websocket message unavailable");
+    assert_eq!(line.level, "warn");
+    assert_eq!(line.field("event").as_deref(), Some("settle"));
+    assert_eq!(line.field("error").as_deref(), Some(LEDGER_REFUSED));
+    logs.expect_none(nest_rs_ws::TARGET, "websocket message failed");
+}

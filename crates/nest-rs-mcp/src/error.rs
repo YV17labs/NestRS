@@ -1,7 +1,9 @@
 //! What a failing operation tells the model, and what it tells the operator.
 //!
 //! A tool body talks to a **language model**, which may repeat whatever an
-//! error's `Display` carries; [`Opaque`] logs the real error and answers an opaque one.
+//! error's `Display` carries; [`Opaque`] answers an opaque error and hands the
+//! real one to the edge, which files it naming the operation once the
+//! operation ends.
 //!
 //! ```
 //! # use std::sync::Arc;
@@ -51,12 +53,14 @@
 //! A deliberate `McpError::invalid_params(…)`, meant for the model to read and
 //! retry, is returned directly, never through here.
 
+use std::cell::RefCell;
 use std::error::Error as StdError;
+use std::future::Future;
 
 use nest_rs_core::__private::{
     RefusedAnswer, SaidFailure, Withheld, caught_problem, find_in_chain,
 };
-use nest_rs_core::{Code, DecodeError, Failure, Handler, Problem, ToProblem, code};
+use nest_rs_core::{Code, DecodeError, Failure, Handler, Problem, ServedAddress, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
@@ -72,9 +76,13 @@ use crate::view::served_operation;
 /// Turn a failure the model must not read into one it may.
 ///
 /// Implemented for every `Result` whose error converts into a boxed error; the
-/// whole cause chain is logged at `error` on `nest_rs::mcp`.
+/// whole cause chain is filed at `error` on `nest_rs::mcp`, naming the
+/// operation, once the operation ends, whatever it answered: at a `5xx`'s
+/// level when an exception filter answers that error so, never when it
+/// answers it `4xx`.
 pub trait Opaque<T> {
-    /// Log the real error for the operator, hand the model an opaque one.
+    /// Hand the model an opaque error, keeping the real one for the
+    /// operator's line, which the edge files once the operation ends.
     fn opaque(self) -> Result<T, McpError>;
 }
 
@@ -84,6 +92,113 @@ where
 {
     fn opaque(self) -> Result<T, McpError> {
         self.map_err(|err| opaque_error(&*nest_rs_core::boxed_error(err)))
+    }
+}
+
+tokio::task_local! {
+    /// Every chain the running operation's answers keep from its client, each
+    /// beside the answer that keeps it, filed naming the operation once it ends.
+    static WITHHELD: RefCell<Vec<Kept>>;
+}
+
+/// A chain an answer keeps from its client, beside that answer: what tells the
+/// failure a filter answers from one the operation handled.
+struct Kept {
+    withheld: Withheld,
+    answer: McpError,
+}
+
+/// Run `operation`, handing back beside its output every chain its answers
+/// kept from its client — the edge's, a call site's [`Opaque`] or
+/// [`problem_error`]'s — in the order they were kept, however it ended.
+pub(crate) async fn withholding<F: Future>(operation: F) -> (F::Output, Vec<Withheld>) {
+    WITHHELD
+        .scope(RefCell::new(Vec::new()), async {
+            let output = operation.await;
+            let kept = WITHHELD.with(RefCell::take);
+            (output, kept.into_iter().map(|kept| kept.withheld).collect())
+        })
+        .await
+}
+
+/// Keep `withheld`, which `answer` keeps from its client, for the running
+/// operation; outside an operation, filed at once, naming the mount alone.
+fn withhold(withheld: Withheld, answer: &McpError) {
+    let mut held = Some(withheld);
+    let kept = WITHHELD.try_with(|kept| {
+        if let Some(withheld) = held.take() {
+            kept.borrow_mut().push(Kept {
+                withheld,
+                answer: answer.clone(),
+            });
+        }
+    });
+    if kept.is_err()
+        && let Some(withheld) = held
+    {
+        file_outside_an_operation(withheld);
+    }
+}
+
+/// What answering `problem` for `error` keeps from the client. A failure
+/// carrying an answer the operation kept a chain beside — a call site's
+/// `.opaque()` or [`problem_error`], the latest of equal ones — is that
+/// chain's: a `4xx` drops it and a `5xx` keeps it at its own level. Any other
+/// failure keeps its own chain behind a `5xx`, beside what the operation kept.
+fn settled(problem: &Problem, error: &(dyn StdError + 'static)) -> Option<Withheld> {
+    match find_in_chain::<McpError>(error).and_then(take_kept) {
+        Some(kept) => problem
+            .is_server_error()
+            .then(|| kept.answered_as(problem.status())),
+        None => nest_rs_core::__private::withheld(problem, error),
+    }
+}
+
+/// The chain the running operation kept beside `answer`, taken: the latest
+/// kept, should it have answered alike twice.
+fn take_kept(answer: &McpError) -> Option<Withheld> {
+    WITHHELD
+        .try_with(|kept| {
+            let mut kept = kept.borrow_mut();
+            let at = kept.iter().rposition(|kept| kept.answer == *answer)?;
+            Some(kept.remove(at).withheld)
+        })
+        .ok()
+        .flatten()
+}
+
+/// File `withheld` for a failure answered outside any operation, naming the
+/// mount when one is ambient.
+fn file_outside_an_operation(withheld: Withheld) {
+    let path = crate::operation::served_path();
+    let mount = ServedAddress::default();
+    let at = path.as_deref().map_or(mount, |path| mount.at(path));
+    file(withheld, at);
+}
+
+/// The operator's line for a chain an operation kept from its client, naming
+/// the operation `at` as its `mcp.operation` line does: at `error`, or at
+/// `warn` behind a `503`, the server unable to serve it in time.
+pub(crate) fn file(withheld: Withheld, at: ServedAddress<'_>) {
+    match withheld {
+        Withheld::Failed(said) => tracing::error!(
+            target: crate::TARGET,
+            path = at.path,
+            tool = at.tool,
+            prompt = at.prompt,
+            resource = at.resource,
+            error = %said,
+            "mcp operation failed",
+        ),
+        Withheld::Unavailable(said) => tracing::warn!(
+            target: crate::TARGET,
+            path = at.path,
+            tool = at.tool,
+            prompt = at.prompt,
+            resource = at.resource,
+            error = %said,
+            "mcp operation unavailable",
+        ),
     }
 }
 
@@ -229,26 +344,22 @@ fn rendered(problem: &Problem) -> McpError {
     }
 }
 
-/// `problem` rendered, the chain of `error` behind it filed when its answer
-/// withholds it.
+/// `problem` rendered, what it keeps from its client the chain of `error`
+/// behind it when its answer withholds one.
 fn answered(problem: &Problem, error: &(dyn StdError + 'static)) -> McpError {
-    file(nest_rs_core::__private::withheld(problem, error));
-    rendered(problem)
-}
-
-/// The operator's line for a chain an answer withholds, at its level.
-fn file(withheld: Option<Withheld>) {
-    match withheld {
-        Some(Withheld::Failed(said)) => failed(&said),
-        Some(Withheld::Unavailable(said)) => unavailable(&said),
-        None => {}
+    let answer = rendered(problem);
+    if let Some(withheld) = settled(problem, error) {
+        withhold(withheld, &answer);
     }
+    answer
 }
 
-/// The opaque answer, with `error`'s whole chain on the operator's line.
+/// The opaque answer, keeping `error`'s whole chain from its client.
 fn opaque_error(error: &(dyn StdError + 'static)) -> McpError {
-    failed(&nest_rs_core::error_message(error));
-    opaque_answer()
+    let answer = opaque_answer();
+    let said = nest_rs_core::error_message(error);
+    withhold(Withheld::Failed(said), &answer);
+    answer
 }
 
 /// The opaque answer alone, for a failure whose cause is filed elsewhere: the
@@ -299,9 +410,12 @@ pub(crate) struct Reply {
 }
 
 impl Reply {
-    /// The answer, its withheld chain filed: it is the one sent.
+    /// The answer, the chain it keeps from its client kept for the operation
+    /// beside it.
     pub(crate) fn filed(self) -> McpError {
-        file(self.withheld);
+        if let Some(withheld) = self.withheld {
+            withhold(withheld, &self.error);
+        }
         self.error
     }
 }
@@ -419,25 +533,6 @@ where
             Err(other) => OperationFailure::unanswered(Failure::new(other)),
         }
     }
-}
-
-/// The operator's line for a failure the answer withholds: its whole chain.
-fn failed(said: &str) {
-    tracing::error!(
-        target: crate::TARGET,
-        error = %said,
-        "mcp operation failed",
-    );
-}
-
-/// The operator's line for a `503` the answer withholds the cause of: the
-/// server could not serve it in time, which is no failure of its own.
-fn unavailable(said: &str) {
-    tracing::warn!(
-        target: crate::TARGET,
-        error = %said,
-        "mcp operation unavailable",
-    );
 }
 
 /// Whether `error` is rmcp's `PromptRouter` refusing `name`, a prompt its host

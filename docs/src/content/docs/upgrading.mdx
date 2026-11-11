@@ -2085,6 +2085,12 @@ lists what the boot, a log or the wire shows when one is missed.
   a scheduled job's or a lifecycle hook's lines say `host` where they said `provider`;
   a job's and a listener's say `host` and `method` where `processor` and `listener`
   held `Type::method`; `wired event listener` is `mounted`, at `info`.
+- **A log filter or an alert on a withheld chain's line** finds the unit's fields
+  beside `error`: `websocket message failed` from `.opaque()` says `path` and
+  `event` as the gateway's own always did, and `mcp operation failed` and
+  `unavailable` say `path` and the `tool`, `prompt` or `resource`. Each is filed
+  once the answer goes out, not at the `.opaque()` call: a failure an exception
+  filter answers as the caller's `4xx` files none.
 - **A log filter on what the boot says** reads nothing under its old word: `nestrs
   starting` is `app starting`, whose `version` is your app's beside `framework`;
   `attached module-contributed transport` is `transport attached`; a transport reads

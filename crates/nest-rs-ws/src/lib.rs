@@ -95,9 +95,11 @@
 //!
 //! A refusal is filed by the message's `ws.message` line alone, as HTTP files
 //! a `4xx`; an opaque error, and the chain behind a `5xx` problem, at `error`
-//! on `nest_rs::ws` — at `warn` behind a `503`. An error's `Display` never
-//! reaches the frame. [`Opaque`]'s `.opaque()?` says at the call site that a
-//! failure is none of the client's business, whatever its type.
+//! on `nest_rs::ws` — at `warn` behind a `503` — naming the message by its
+//! gateway's `path` and its `event`. An error's `Display` never reaches the
+//! frame. [`Opaque`]'s `.opaque()?` says at the call site that a failure is
+//! none of the client's business, whatever its type, and hands its chain to
+//! the gateway, which files it once that frame is the answer.
 //!
 //! # Server→client push
 //!

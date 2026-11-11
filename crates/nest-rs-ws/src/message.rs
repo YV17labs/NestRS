@@ -302,17 +302,17 @@ fn rendered(view: WsView, outcome: Outcome, event: &str) -> Answered {
         }
         (Err(failure), Some(reply)) if failure.is_answered() => {
             let server_failed =
-                rendered_class.unwrap_or_else(|| failure_rendered(&failure).frame.server_failed);
+                rendered_class.unwrap_or_else(|| failure_rendered(&failure).frame.server_failed());
             (reply, withheld, server_failed)
         }
         (Err(failure), _) => {
             let Rendered { frame, withheld } = failure_rendered(&failure);
-            let server_failed = frame.server_failed;
+            let server_failed = frame.server_failed();
             (WsReply::Error(frame), withheld, server_failed)
         }
     };
     if let Some(withheld) = withheld {
-        crate::envelope::file(withheld, path.as_deref(), event);
+        crate::envelope::file(withheld, path.as_deref(), Some(event));
     }
     Answered {
         reply,

@@ -512,7 +512,7 @@ pub(crate) mod __private {
 
     /// The chain a `5xx` answer keeps from its client, and the level the edge
     /// files it at.
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     #[expect(
         clippy::exhaustive_enums,
         reason = "tier 2: each edge's filing matches it, so a new level reaches every edge"
@@ -526,17 +526,27 @@ pub(crate) mod __private {
     }
 
     impl Withheld {
+        /// The same chain, at the level an answer of `status`, a `5xx`, files
+        /// it: what a failure kept for itself, answered by another's `5xx`.
+        #[must_use]
+        pub fn answered_as(self, status: u16) -> Self {
+            let (Self::Failed(said) | Self::Unavailable(said)) = self;
+            Self::filed_under(status, said)
+        }
+
         /// What a `status` answer keeps from the client when `error` is behind
         /// it: `error`'s whole chain for a `5xx`, else `None`.
         pub fn behind(status: u16, error: &(dyn Error + 'static)) -> Option<Self> {
-            (status >= 500).then(|| {
-                let said = crate::error_message(error);
-                if status == 503 {
-                    Self::Unavailable(said)
-                } else {
-                    Self::Failed(said)
-                }
-            })
+            (status >= 500).then(|| Self::filed_under(status, crate::error_message(error)))
+        }
+
+        /// `said`, at the level an answer of `status`, a `5xx`, files it.
+        fn filed_under(status: u16, said: String) -> Self {
+            if status == 503 {
+                Self::Unavailable(said)
+            } else {
+                Self::Failed(said)
+            }
         }
     }
 }

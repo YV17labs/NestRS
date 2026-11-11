@@ -119,10 +119,14 @@ impl WsView {
     /// Answer the message with `reply` in place of whatever it held: from an
     /// interceptor, without running the rest of it; from an exception filter,
     /// in place of the failure's frame — the unit still fails and rolls back, and
-    /// its span still says who failed.
-    pub fn respond(&mut self, reply: WsReply) -> Settled {
+    /// its span still says who failed. What an error frame keeps from its client
+    /// (`.opaque()`'s chain) is filed once it is the answer.
+    pub fn respond(&mut self, mut reply: WsReply) -> Settled {
+        self.withheld = match &mut reply {
+            WsReply::Error(frame) => frame.take_withheld(),
+            WsReply::Reply(_) | WsReply::None => None,
+        };
         self.reply = Some(reply);
-        self.withheld = None;
         nest_rs_core::__private::settled()
     }
 
@@ -130,7 +134,7 @@ impl WsView {
     /// what it withholds kept for the moment the answer is final.
     pub(crate) fn answer_failed(&mut self, rendered: Rendered, failure: &Failure) -> Settled {
         let Rendered { frame, withheld } = rendered;
-        self.rendered = Some((kept(failure), frame.server_failed));
+        self.rendered = Some((kept(failure), frame.server_failed()));
         let settled = self.respond(WsReply::Error(frame));
         self.withheld = withheld;
         settled

@@ -118,3 +118,53 @@ the edge would have answered it, as one the edge never rendered always did. One
 handle per failed message, an `Arc` clone. **Refused: comparing the error's
 address alone**, which a failure dropped by the swap could hand to the next one
 allocated.
+
+## 2026-11-11 — `.opaque()` hands its chain to the edge, and every withheld chain names its unit
+
+`websocket message failed` said one fact in two field sets: the gateway filed a
+frame's withheld chain with `path` and `event`, `.opaque()` its own at the call
+with `error` alone; MCP's `mcp operation failed` and `unavailable` named `error`
+alone everywhere. And `.opaque()` filed before the answer was final, so a filter
+answering the failure `4xx` still filed a chain its answer no longer withheld,
+against the entries above. Seen by tests on both edges, red before the change.
+
+- **Decided**: `.opaque()` keeps the chain for the edge, which files it once the
+  answer goes out, naming the unit as its operation line does. On a gateway the
+  `WsError` keeps it in a member serde skips, the gateway takes it out wherever a
+  frame becomes the answer (`WsView::respond`, the chain a handler's `Err`
+  renders), and files it with `path` and `event`. On MCP, whose error is rmcp's
+  `ErrorData`, the operation keeps it: a task-local list scoped around each
+  operation, which `.opaque()`, `problem_error` and the edge's own rendering
+  fill, each chain beside the answer keeping it, every one filed once the
+  operation ends, whatever it answered (a tool error reported in band is a failed
+  call, and a failure the tool handled kept its chain all the same), with the
+  `mcp.operation` line's `path` and `tool`, `prompt` or `resource`. A filter's
+  answer speaks for the failure it answered alone, found by the answer that
+  failure carries: a `4xx` drops that failure's chain, a `5xx` files it at its
+  own level (`Withheld::answered_as`), and any other failure's chain is filed
+  beside it, never in its place. Outside any operation, the chain is filed at
+  once, naming the mount alone.
+- **Refused: reading the unit's coordinates at the call site** and filing there:
+  it names the unit but still files a chain a filter's `4xx` then withholds
+  nothing of, and needs the operation's name ambient, an install per operation.
+- **Refused, on MCP: a marker in the error's `data`** for the edge to look up:
+  `data` is the wire, and a marker escaping a hand-written handler would reach a
+  client. Two equal answers kept beside two chains are told apart by order, the
+  latest taken: one a tool built and handled before the one it returned is filed
+  at the other's level, never dropped.
+- **Refused, on MCP: one slot, filed only when the answer is an internal error**
+  (the first cut of this entry): a tool reporting `.opaque()`'s error in band
+  lost its chain, and a filter's `5xx` over another failure filed a handled chain
+  in the answered one's place. Both seen by tests, red before the change.
+- **Left open** (`TODO.md`, seen by tests red on both edges): HTTP's and
+  GraphQL's `.opaque()` still file at the call, with `error` alone, and their
+  lines name no unit. Each needs the chain handed over to a filing point every
+  answer passes — on HTTP the route's render and the edge's answer, with
+  `into_response` filing at once; on GraphQL a root field's site and the
+  response's errors for a nested resolver's — before it can be handed over
+  without being lost: a change to every withheld line of two edges, which other
+  branches of the same wave were rewriting.
+- **A chain a dropped error keeps is lost** on WebSocket: a handler that calls
+  `.opaque()` and discards the `WsError` drops its chain with it, as any error it
+  discards; at the call, `.opaque()` filed it. MCP files it all the same, since
+  its list outlives the error.

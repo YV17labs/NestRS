@@ -404,10 +404,15 @@ Ok(match self.svc.presign_result(params.file).await.opaque()? {
 })
 ```
 
-The real error is logged at `error` on `nest_rs::mcp`, inside rmcp's own
-per-operation span; the model gets the opaque answer, one JSON-RPC internal
-error whoever answered it — a constant `internal error`, and the class every
-edge names it by under `data`:
+The real error is handed to the edge, which files it at `error` on
+`nest_rs::mcp` once the operation ends, whatever it answered, a tool error
+reported in band included — `mcp operation failed`, naming the operation as its
+`mcp.operation` line does, by its mount's `path` and its `tool`, `prompt` or
+`resource` (at `warn`, `mcp operation unavailable`, behind a `503`), and nothing
+when a filter answers that failure as the caller's; the model gets the opaque
+answer, one JSON-RPC internal error whoever answered it —
+a constant `internal error`, and the class every edge names it by under
+`data`:
 
 ```json
 { "code": -32603, "message": "internal error", "data": { "code": "INTERNAL" } }

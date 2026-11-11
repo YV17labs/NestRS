@@ -354,8 +354,9 @@ its access line alone. A guard's denial is filed at `warn` on the guard's
 target, `nest_rs::layers` when it declares none. An opaque failure is filed at `error` on `nest_rs::ws`
 (`websocket message failed`), as is the chain behind a `5xx` problem. The
 chain behind a `503`, the server unable to answer in time, is filed at `warn`
-(`websocket message unavailable`). A handler's `Err` is filed once its answer
-is final, by the status that answer says, whoever gave it: an
+(`websocket message unavailable`). Both name the message by the gateway's
+`path` and its `event`, as its `mounted` line does. A handler's `Err` is filed
+once its answer is final, by the status that answer says, whoever gave it: an
 [exception filter](#interceptors-filters-and-pipes) that answers it as a
 refusal files nothing, and one answering a `5xx` files the chain it withholds.
 
@@ -382,9 +383,11 @@ async fn on_message(
 }
 ```
 
-`.opaque()?` logs the real error at `error` on `nest_rs::ws` — the operator
-loses nothing — and hands the client a constant. The same trait exists on
-GraphQL and MCP, spelled the same way. A rejection the client *can* act on
+`.opaque()?` hands the client a constant and the gateway the real error, which
+it files at `error` on `nest_rs::ws` once that frame is the message's answer,
+naming the message as every failure does — the operator loses nothing, and a
+filter answering the failure as a refusal files nothing. The same trait exists
+on GraphQL and MCP, spelled the same way. A rejection the client *can* act on
 is the opposite case and travels as itself.
 </Aside>
 

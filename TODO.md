@@ -161,14 +161,6 @@ keeps on purpose is §5's.
   own included, and a session holding no stream is asked nothing. Close: the
   idle timeout counting the client's messages alone, owned by the mount in place
   of rmcp's (`SessionConfig::keep_alive` off). *read*
-- A withheld chain's line names `error` alone in two places, where a
-  gateway's `websocket message failed` names `path` and `event`:
-  `Opaque::opaque`'s line of that same sentence (one message, two field sets),
-  and MCP's `mcp operation failed` and `unavailable`. Each joins its unit's line
-  by its span only. Close: `.opaque()` hands the chain it withholds to the edge,
-  as a handler's `Err` does through `HandlerFailed`, and MCP's `Reply::filed`
-  takes the operation's address, so each edge files the chain with the unit's
-  coordinates, as `envelope::file` does. *read*
 
 **Auth**
 - A token `sign` mints carries `client_id` only when the claims name one,
@@ -194,6 +186,27 @@ keeps on purpose is §5's.
   instance and no module: a remedy is filed by key, and that key is the app's
   type. Close: a probe at each `#[inject]` site reading a remedy the type
   carries, a change to every `#[injectable]` expansion. *seen*
+
+**Operator lines**
+- HTTP's `request failed` and GraphQL's `graphql operation failed` (and their
+  `unavailable`) name `error` alone, joining their unit by its span, where a
+  gateway's and an MCP operation's name the unit's coordinates; and their
+  `.opaque()` files at its call, before the answer is final, so a filter
+  answering the failure `4xx` still files it. Seen 2026-11-11 by tests run red
+  and not kept: a route's and a root field's handler `Err` and `.opaque()?` each
+  filed their line with `error` alone, and a filter answering `.opaque()`'s
+  failure `409` left `request failed` or `graphql operation failed` filed.
+  Close as WebSocket and MCP were (the 2026-11-11 entry of the decision on a
+  client error's line): on HTTP, `HttpError` keeping the chain in a member the
+  wire skips, read by `withheld_behind` at the status sent, every line filed with
+  `verb` and `path` where an answer becomes final — `site::render` for a route,
+  the edge's `answer` for a mount — and at once where an `HttpError` is rendered
+  anywhere else (`into_response`); on GraphQL, the `async_graphql::Error` keeping
+  it as its `source`, which its `ServerError` carries into the response, filed
+  with `kind` and `field` where a root field's site answers and, for an error a
+  nested resolver returns, from the response's errors where the request or a
+  subscription's item answers; a chain an error the handler discards keeps is
+  lost with it there as on WebSocket (§5). *seen*
 
 **Docs, bench, tooling**
 - 48 docs pages still exceed the ~300-line budget of `docs/STYLE.md`, the
@@ -263,7 +276,10 @@ answer, held by a client gone without a close until a write to it fails, once
 the kernel nearest it gives up retransmitting the keep-alive (Linux: about 15
 minutes), an `#[sse]` stream at most `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`
 (four hours by default), both ended at the shutdown signal
-(`TCP_USER_TIMEOUT` would see only the hop to a proxy); a storage key whose
+(`TCP_USER_TIMEOUT` would see only the hop to a proxy); the chain `.opaque()`
+keeps in a WebSocket `WsError` its handler then discards, lost with it as any
+error a handler discards is, where filing at the call kept it (MCP files it all
+the same: `client-error-is-its-line.md`, 2026-11-11); a storage key whose
 every policy was removed booting on with its `warn` as a least-privilege one
 does, since the store answers both the boot's listing in the same document
 (`403`, `AccessDenied`, `Access Denied`, seen on RustFS 1.0.1) and a second call

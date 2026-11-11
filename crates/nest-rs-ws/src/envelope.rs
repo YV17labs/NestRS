@@ -11,8 +11,6 @@ use nest_rs_core::{
 use nest_rs_pipes::PipeError;
 use serde::{Deserialize, Serialize};
 
-use crate::opaque::Opaque;
-
 /// What an event no handler serves is answered.
 const UNKNOWN_EVENT: &str = "unknown event";
 
@@ -156,10 +154,19 @@ pub struct WsError {
     /// carry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub errors: Option<Box<serde_json::Value>>,
-    /// Whether the frame answers a failure of the server's own, a `5xx`'s
-    /// class: what the message's span records as an error. Never on the wire.
+    /// Set when the frame answers a failure of the server's own, a `5xx`'s
+    /// class, what the message's span records as an error, with the chain the
+    /// frame keeps from its client. Never on the wire; boxed, as `errors` is.
     #[serde(skip)]
-    pub(crate) server_failed: bool,
+    pub(crate) server_failure: Option<Box<ServerFailure>>,
+}
+
+/// What an error frame answering a failure of the server's own keeps for the
+/// gateway: the chain it withholds, filed naming the message once the frame is
+/// its answer.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ServerFailure {
+    pub(crate) withheld: Option<Withheld>,
 }
 
 impl WsError {
@@ -173,7 +180,7 @@ impl WsError {
             required_scopes: Box::default(),
             retry_after_secs: None,
             errors: None,
-            server_failed: false,
+            server_failure: None,
         }
     }
 
@@ -217,7 +224,7 @@ impl WsError {
             }),
             retry_after_secs: problem.retry_after(),
             errors: problem.errors().cloned().map(Box::new),
-            server_failed: problem.is_server_error(),
+            server_failure: problem.is_server_error().then(Box::default),
             ..Self::classed(problem.client_message(), problem.code())
         }
     }
@@ -241,6 +248,31 @@ impl WsError {
     /// code.
     pub(crate) fn internal() -> Self {
         Self::from_problem(&Problem::new(500, code::INTERNAL))
+    }
+
+    /// This frame, keeping `withheld` from its client for the gateway to file.
+    pub(crate) fn withholding(mut self, withheld: Withheld) -> Self {
+        self.server_failure.get_or_insert_default().withheld = Some(withheld);
+        self
+    }
+
+    /// Whether the frame answers a failure of the server's own.
+    pub(crate) fn server_failed(&self) -> bool {
+        self.server_failure.is_some()
+    }
+
+    /// The chain the frame keeps from its client, taken for filing.
+    pub(crate) fn take_withheld(&mut self) -> Option<Withheld> {
+        self.server_failure
+            .as_mut()
+            .and_then(|failure| failure.withheld.take())
+    }
+
+    /// The chain the frame keeps from its client.
+    fn kept(&self) -> Option<&Withheld> {
+        self.server_failure
+            .as_deref()
+            .and_then(|failure| failure.withheld.as_ref())
     }
 
     /// The frame an event no handler serves answers, so a client can tell a
@@ -317,8 +349,9 @@ pub enum WsReply {
 }
 
 impl WsReply {
-    /// Serializes a handler's return; a failure degrades to an [`Opaque`]
-    /// [`WsReply::Error`], since serde's `Display` can carry the value.
+    /// Serializes a handler's return; a failure degrades to an
+    /// [`Opaque`](crate::Opaque) [`WsReply::Error`], since serde's `Display`
+    /// can carry the value.
     pub fn reply<T: Serialize>(value: &T) -> WsReply {
         reply_at(value, None)
     }
@@ -389,7 +422,7 @@ impl WsReply {
     where
         E: Into<Box<dyn Error + Send + Sync>> + 'static,
     {
-        chain_rendered(&*nest_rs_core::boxed_error(error)).into_reply(event)
+        chain_rendered(&*nest_rs_core::boxed_error(error)).into_reply(Some(event))
     }
 }
 
@@ -408,7 +441,7 @@ pub(crate) struct Rendered {
 impl Rendered {
     /// The frame, what it withholds filed at once for the message `event`
     /// declares, at the gateway the running socket is served at.
-    fn into_reply(self, event: &str) -> WsReply {
+    pub(crate) fn into_reply(self, event: Option<&str>) -> WsReply {
         if let Some(withheld) = self.withheld {
             file(withheld, crate::gateway::served_path().as_deref(), event);
         }
@@ -432,17 +465,15 @@ pub fn reply_at<T: Serialize>(value: &T, at: Option<(&Handler, &str)>) -> WsRepl
             refused.file_at(at.map(|(handler, _)| handler), served);
             WsReply::Error(WsError::from_problem(&refused.refusal().problem()))
         }
-        (written, None) => match written.opaque() {
-            Ok(data) => WsReply::Reply(data),
-            Err(err) => WsReply::Error(err),
-        },
+        (Err(unwritten), None) => opaque_rendered(nest_rs_core::error_message(&unwritten))
+            .into_reply(at.map(|(_, event)| event)),
     }
 }
 
 /// File the chain a frame answering `event`'s message, at the gateway served at
 /// `path`, withholds: behind a `503`, the server unable to serve it in time, at
 /// `warn`; behind any other failure, at `error`.
-pub(crate) fn file(withheld: Withheld, path: Option<&str>, event: &str) {
+pub(crate) fn file(withheld: Withheld, path: Option<&str>, event: Option<&str>) {
     match withheld {
         Withheld::Unavailable(said) => tracing::warn!(
             target: crate::TARGET,
@@ -463,9 +494,10 @@ pub(crate) fn file(withheld: Withheld, path: Option<&str>, event: &str) {
 
 /// The frame a failure's chain carries, else the opaque one. A frame the
 /// chain says — a [`WsError`], a client [`Problem`], a [`PipeError`], a
-/// decode failure — is a refusal and withholds nothing.
+/// decode failure — is a refusal and withholds nothing, but what a
+/// [`WsError`] keeps itself, `.opaque()`'s chain.
 pub(crate) fn chain_rendered(error: &(dyn Error + 'static)) -> Rendered {
-    let frame = if let Some(frame) = find_in_chain::<WsError>(error) {
+    let mut frame = if let Some(frame) = find_in_chain::<WsError>(error) {
         frame.clone()
     } else if let Some(problem) = find_in_chain::<Problem>(error) {
         return problem_rendered(error, problem);
@@ -476,19 +508,23 @@ pub(crate) fn chain_rendered(error: &(dyn Error + 'static)) -> Rendered {
     } else {
         return opaque_rendered(nest_rs_core::error_message(error));
     };
-    Rendered {
-        frame,
-        withheld: None,
-    }
+    let withheld = frame.take_withheld();
+    Rendered { frame, withheld }
 }
 
 /// `problem`'s frame as the answer to `error`, whoever answered it — the
 /// handler, or an exception filter in its place: only the chain a `5xx`
-/// withholds is filed, so a refusal, and a bare problem, file nothing.
+/// withholds is filed, so a refusal, and a bare problem, file nothing. A frame
+/// in the chain keeping its own (`.opaque()`'s) withholds that one.
 pub(crate) fn problem_rendered(error: &(dyn Error + 'static), problem: &Problem) -> Rendered {
+    let kept = find_in_chain::<WsError>(error).and_then(WsError::kept);
+    let withheld = match kept {
+        Some(kept) if problem.is_server_error() => Some(kept.clone().answered_as(problem.status())),
+        _ => nest_rs_core::__private::withheld(problem, error),
+    };
     Rendered {
         frame: WsError::from_problem(problem),
-        withheld: nest_rs_core::__private::withheld(problem, error),
+        withheld,
     }
 }
 
@@ -517,7 +553,7 @@ impl HandlerFailed {
     /// The frame, what it withholds filed at once for the message `event`
     /// declares: what a handler answers called on its own.
     pub fn into_reply(self, event: &str) -> WsReply {
-        self.rendered.into_reply(event)
+        self.rendered.into_reply(Some(event))
     }
 
     /// The rendered frame, and the failure it answers.

@@ -5,16 +5,14 @@ cold continues from here. It lists every gap left after the 7.0 foundation
 work, how each was established, and what closing it takes. Remove a line when
 it closes, citing the commit that closed it.
 
-**State, 2026-11-06, `release/7.0` at `94b8eccfa`.** Everything planned is
-merged. Green on that commit or the one just before it: `just ci` (6,679
-tests, 11 skipped), the demo gate (lint, 111 unit, 152 e2e), the docs build,
-the rustdoc sweep of every feature alone with warnings denied (144 of 144),
-the five demo apps run and `curl`ed, the framework's Valkey Sentinel and
-Cluster e2e suites, the demo's five binaries on Sentinel and on Cluster, the
-demo image build and the Helm chart (`helm lint`, `helm template`), and on
-`3d95a42cf` CI's lint jobs on x86_64 (clippy, `cargo hack`, both rustdoc
-passes, the demo's clippy, in an amd64 container). Nothing is pushed, tagged
-or published.
+**State, 2026-11-11, `release/7.0` at `9ae8d14a2`.** Everything planned is
+merged, the second pass included: twelve branches (2026-11-07 to 2026-11-11)
+closing what this file listed on 2026-11-06, the CI cut to its vital minimum,
+and the benchmark against NestJS 12.4 on `node:http`. Green on `97e09d5ab`, the
+last change to Rust: `just ci` (6,756 tests, 11 skipped), the demo gate (lint,
+112 unit, 152 e2e) and the performance guard against `3290e995`; on
+`9ae8d14a2`, the docs build (161 pages). Nothing is pushed, tagged or
+published.
 
 ## How to pick this up
 
@@ -42,64 +40,31 @@ From the host, with the dev container started:
 docker compose -f .devcontainer/compose/base.yml exec -T dev bash -lc 'flock /tmp/nestrs-live.lock just ci'
 docker compose -f .devcontainer/compose/base.yml exec -T dev bash -lc \
   'cargo build --locked -p nest-rs-cli && export PATH=$CARGO_TARGET_DIR/debug:$PATH \
-   && cd demo && just lint && just chart && just test unit && flock /tmp/nestrs-live.lock just test e2e'
+   && cd demo && just lint && just test unit && flock /tmp/nestrs-live.lock just test e2e'
 docker compose -f .devcontainer/compose/base.yml exec -T -w /workspaces/nestrs/docs dev bash -lc 'npm ci && npm run build'
 ```
 
-`just chart` needs the dev container's `helm` and `yq`, which a container built
-before 2026-11-08 lacks: rebuild it. Valkey Sentinel and Cluster, and Postgres with
+The demo's Helm chart is linted and rendered by hand, never by CI and never
+installed: `just chart` in `demo/`, which needs `helm` and `yq` (a dev container
+built before 2026-11-08 lacks them). Valkey Sentinel and Cluster, and Postgres with
 mutual TLS, are dev container environments of their own (`CLAUDE.md`, *Testing*).
 
 ## 1. Before publishing 7.0
 
-- **The performance guard has not run in full since 2026-10-23** (`3290e995`;
-  per-branch measures stopped on 2026-10-30), though much has moved on the hot
-  path since. Close: the harness in `bench/` on a quiet machine, the tip
-  against the base twice, within the larger noise plus 5 % rps or 10 % p99.
-  Figures are relative, never for publication.
 - **The first CI run after the push** is the only proof of a fresh
-  `create-bucket.sh`, the dev-services action's `/etc/hosts` mapping, the
-  and the default stacks on x86_64.
+  `create-bucket.sh` on a runner, the dev-services action's `/etc/hosts`
+  mapping and trust-store step, and the default stacks on x86_64. Rehearsed in
+  the dev container on 2026-11-07: the bucket script on a RustFS that never held
+  a bucket, twice; the mapping read against every host the committed `.env`
+  files name. The owner's: it follows the push.
 - **Postgres mutual TLS never ran live**: `nest-rs-seaorm`'s two `mutual_tls`
   tests. Close: open the `postgres-mutual-tls` dev container environment, set
-  `postgres := "mutual-tls"` in `test.just`, `just test e2e`.
-- **The demo image was built and its binaries started, never booted against
-  live services**, and `migrate up` never applied a migration from it: the
-  distroless image trusts no development authority. Close: run it on the
-  compose network with a certificate bundle mounted.
-- **No app has booted on what the demo chart 0.7.0 renders**, each on a
-  Secret of its own: what each app reads is read off its modules and 0.6.0's
-  per-key boots. Close: `helm template` the install line, read each
-  workload's env off the render (the ConfigMap, its `env`, its own Secret),
-  start each binary in the dev container on that env alone against the live
-  services, on a database of its own, and see `app ready`; `migrate up` exits
-  0 on its hook Secret alone. *read*
-- **`helm install` never ran against a cluster**: the chart is linted and
-  rendered client-side alone (`nestrs run chart`). Close: install it on a
-  local cluster (kind, k3d) with the demo's image loaded and the services
-  reachable, then `helm test`.
+  `postgres := "mutual-tls"` in `test.just`, `just test e2e`. The owner's: the
+  run's script was refused by the permission classifier on 2026-11-07.
 - **`async-graphql = "=7.2"`'s floor, 7.2.0, never built**: every lockfile
   holds 7.2.1. Close: a minimal-versions resolution.
 
-## 2. Open decisions, each with the recommended answer
-
-Nothing waits on them; the recommendation holds until someone decides
-otherwise.
-
-1. **A `has_many` lists the children whose key a grant withholds**: `orgs {
-   users { name } }` answers for a member whose grant withholds `org_id`, the
-   children grouped by that key inside the batch, each judged on its own.
-   Recommended: keep — the relation's `#[expose]` is its visible opening;
-   refusing it breaks the demo member's directory. A `belongs_to` reads its link
-   off the judged row, so a withheld key reads `null` there
-   (`mask-provenance.md`, 2026-11-08).
-2. **The demo's roots list no `GlobalGuards` pool.** The boot refuses a unit
-   with no identifying or authorizing guard, but a route under a weaker guard
-   of the right phase boots without `AuthnGuard`. Recommended: keep the demo
-   without a pool; one line per root puts it back, and brings back the
-   probes' `503` during an authentication outage.
-
-## 3. Field-level authorization — what the judged row leaves
+## 2. Field-level authorization — what the judged row leaves
 
 **Today.** Rows are filtered in SQL, and each wire row is judged on its whole
 `Model` where `From<&Model>` builds it: a column a grant withholds is no value in
@@ -121,7 +86,7 @@ What remains:
   ability its unit attached (a wrapper `OutputType` installing it), as MCP writes
   a tool's answer inside its site. *seen* (`gate::public::a_subscription_whose_own_guard_attaches_its_ability_streams_no_row`)
 
-## 4. Known gaps by area
+## 3. Known gaps by area
 
 **Weak proofs and flaky tests**
 - A test of the Redis suite's own counting no run on its one-second lease,
@@ -155,7 +120,7 @@ What remains:
   double cannot place. The boot's recovery from it is seen end to end in
   process
   (`tls::a_first_hello_nothing_answers_is_asked_again_and_the_boot_opens_on_a_dial_of_its_own`,
-  red with one ask). Close: a hook in `redis`'s send, upstream (§7). *seen*
+  red with one ask). Close: a hook in `redis`'s send, upstream (§6). *seen*
 - A command blocked elsewhere still waits its whole budget. Close: a change in
   `redis`, upstream. *read*
 - `RustFS` 1.0.1 answered `404 NoSuchKey` to a first `PUT` three times in a
@@ -196,7 +161,7 @@ What remains:
   since async-graphql 7.2.1's `insert_value` joins a later copy's list items
   into the first's only where they are objects, and answered one copy's
   cells. Close: the same merge as the mutation root's, for any key whose
-  declared type nests a list in a list, or the upstream fix (§7); the
+  declared type nests a list in a list, or the upstream fix (§6); the
   refusal's test,
   `null_propagation::a_list_of_lists_selected_twice_otherwise_is_refused`,
   then asserts the merged answer. *seen*
@@ -205,7 +170,7 @@ What remains:
   of `Either`, answers `{"shape": {}}` where GraphQL §6.3.2 answers `fine`,
   since async-graphql 7.2.1's `Fields::add_set` applies a condition naming
   the concrete type, an interface it implements or the type resolved there.
-  Close: the upstream fix (§7), or, in the pass that gives an object its key,
+  Close: the upstream fix (§6), or, in the pass that gives an object its key,
   each such condition rewritten per member of the union the position may
   take, what cannot apply to that member pruned so validation still passes;
   the canary `null_propagation::a_condition_on_a_union_applies_only_where_that_union_is_resolved`
@@ -241,7 +206,6 @@ What remains:
   every app minting tokens (a client in its claims literal, two
   variables), which the developer-first rule weighs: the owner's call.
   *read*
-- DPoP and mTLS-bound tokens are refused, not verified. *seen*
 
 **Data, queue, storage, health**
 - A bare `DbErr` an app holds from `Repo` prints the server's message and
@@ -253,7 +217,7 @@ What remains:
   compiles in (webpki-roots) beside whatever root is named, the URL's
   `sslrootcert` or `PGSSLROOTCERT`: sqlx 0.9 seeds them under every root, so a
   private authority does not narrow trust to itself as libpq's does. Close: sqlx
-  seeding none under a named root (§7). *read*
+  seeding none under a named root (§6). *read*
 
 **Configuration and telemetry**
 - A provider injecting a named instance's resource with no import
@@ -261,26 +225,15 @@ What remains:
   instance and no module: a remedy is filed by key, and that key is the app's
   type. Close: a probe at each `#[inject]` site reading a remedy the type
   carries, a change to every `#[injectable]` expansion. *seen*
-- The new plaintext `warn` lines (`redis://`, `sslmode=disable`, OTLP
-  `http://`) were seen by unit tests only, never on a live plaintext server.
-  *read*
 
 **Operator lines**
-- `http.request`, `ws.message` and `mcp.operation` name no `host` nor
-  `method`; an error's `Display` can still quote a path. *read*
 - A wire row inside a GraphQL `Json` scalar, which async-graphql serializes
   itself outside any edge's claim, files its refusal naming no unit, where a
   column names its root field's `host`, `method`, `kind` and `field`. Close: with
-  the `#[public]` field's line of §3, the root field's answer resolved under its
+  the `#[public]` field's line of §2, the root field's answer resolved under its
   unit. *read*
 
 **Docs, bench, tooling**
-- Windows is not claimed, and nothing builds it: the `not(unix)` branches
-  (`way_down.rs`, `material.rs`, `static-files`' `disk.rs`) and the C of
-  `aws-lc-sys` and `zstd-sys` were never compiled for it, and CI holds no
-  Windows job (`decisions/ci-on-change.md`, 2026-11-11). Close, if Windows is
-  ever claimed: `cargo check --target x86_64-pc-windows-msvc` on a host holding
-  that target and a C cross compiler. *read*
 - 48 docs pages still exceed the ~300-line budget of `docs/STYLE.md`, the
   longest `security/authentication/oauth2.mdx` (594),
   `websockets/messages.mdx` (571), `configuration/index.mdx` (557),
@@ -307,14 +260,14 @@ What remains:
   `nest-rs-openapi` and the rules naming them, a tier-2 move but for
   `HttpRouteMeta::masked`, public.
 
-## 5. Additive features for 7.x (no caller yet)
+## 4. Additive features for 7.x (no caller yet)
 
 Each can land later without a break: an MCP `SessionStore` shipped with the
 framework; an opening on `#[gateway]` for a visitor or push-only gateway; a
 scoped `#[sse]` stream; a public tenant seam outside a request; `OPTIONS *`;
 one percent-decoder; computed response headers in OpenAPI; a cursor key
-accessor; a backend-fed subscription stream; RFC 8705 / DPoP; client
-authentication `none`, `client_secret_jwt`, `private_key_jwt`, the TLS
+accessor; a backend-fed subscription stream; RFC 8705 / DPoP (a bound token
+is refused today, never verified); client authentication `none`, `client_secret_jwt`, `private_key_jwt`, the TLS
 methods; RFC 7009 revocation and RFC 7662 introspection; an authorization-code grant
 with PKCE for the demo's first-party login (RFC 6749 §4.1, a registered
 public client identifying itself, where `<PREFIX>_SIGN_IN__CLIENT_ID` names
@@ -324,7 +277,7 @@ it today); a refresh grant on `OAuthClient`; `Repo::restore`;
 named storage disks; `ModuleRef`; `AppLifecycle::spawn`; ETag / If-Match;
 client TLS reload.
 
-## 6. Limits kept on purpose
+## 5. Limits kept on purpose
 
 Each is recorded in `.claude/decisions/` with its reason, re-read and still
 holding: a body reading a column off a whole `Model` and answering it as its
@@ -358,7 +311,7 @@ per row by `max_list_argument_bytes` and never by how many rows the list
 answers, which only its resolver knows once it ran, so a page of 100,000
 rows each copying 4 KiB still holds 400 MB and a list under a list multiplies
 by both row counts (the field's `complexity` and page bound it; closing it
-takes async-graphql sharing an argument's value across the rows, §7); a guard
+takes async-graphql sharing an argument's value across the rows, §6); a guard
 overriding the hidden `__attaches_ability` to claim an ability it never
 attaches, met by the gate's fail-closed `500`; the text an entity's own
 definition writes into a rule's scope, an `impl Iden` written by hand to
@@ -373,9 +326,15 @@ path); the demo chart's `checksum/secret`, one sum over every Secret the
 chart writes, which an install handing the chart one weak secret and nothing
 else (every other app on an `existingSecret`) publishes unsalted to whoever
 reads its pods (closing it: a salt kept in the cluster, which `helm
-template` cannot read).
+template` cannot read); the demo's Helm chart, linted and rendered by hand and
+never installed, deployment being the owner's (2026-11-11); Windows, not claimed
+and never built: the `not(unix)` branches (`way_down.rs`, `material.rs`,
+`static-files`' `disk.rs`) and the C of `aws-lc-sys` and `zstd-sys` were never
+compiled for it, and CI holds no Windows job (`ci-on-change.md`, 2026-11-11);
+claiming it takes `cargo check --target x86_64-pc-windows-msvc` on a host holding
+that target and a C cross compiler.
 
-## 7. Upstream
+## 6. Upstream
 
 To report (nothing filed yet): rmcp (session-restore waiters answer `404`
 instead of `503`; positional reads of `JsonRpcResponse`); sqlx-core 0.9

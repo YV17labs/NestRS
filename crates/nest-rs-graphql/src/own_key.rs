@@ -236,7 +236,8 @@ impl<'a> Marks<'a> {
         {
             return;
         }
-        // A subscription's root holds its one field: a key there is no answer.
+        // A subscription's root holds its one field, another refused once
+        // validation passed (`operation_units`): a key there is no answer.
         if operation.ty != OperationType::Subscription && !self.answers(&set.node, root, 0) {
             self.sets.insert(set.pos);
         }

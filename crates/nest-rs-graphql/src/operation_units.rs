@@ -355,7 +355,10 @@ impl Selected {
                         &operation.selection_set.node,
                         &variables,
                     ),
-                    OperationType::Query | OperationType::Subscription => None,
+                    OperationType::Subscription => {
+                        subscription_root_refusal(&operation.selection_set.node)
+                    }
+                    OperationType::Query => None,
                 });
             let selected = Self {
                 ty: Some(operation.ty),
@@ -563,6 +566,49 @@ fn repeated_root_selection(
         }
     };
     Some(crate::error::invalid_argument(said).into_server_error(at))
+}
+
+/// The refusal of a subscription whose root names other than one field, pointing
+/// at the first selection past it. GraphQL (September 2025) §5.2.3.1, *Single Root
+/// Field*, which async-graphql (`7.2.1`) does not hold: its executor opens a stream
+/// per field selection at the root (`collect_subscription_streams`), so a second
+/// field streams beside the first and reads the request's batches with it, a copy
+/// of one key streams each item twice, and a field a fragment selects there opens
+/// nothing. A root selection under `@skip` or `@include` is refused whatever its
+/// condition reads, as §5.2.3.1 refuses it, so the field a subscription opens is
+/// read off its document alone; a directive below that field stays the client's.
+fn subscription_root_refusal(root: &SelectionSet) -> Option<ServerError> {
+    let mut opened: Option<&str> = None;
+    root.items
+        .iter()
+        .find_map(|selection| {
+            let Selection::Field(field) = &selection.node else {
+                let said = "the subscription selects its root field through a fragment";
+                return Some((said.to_owned(), selection.pos));
+            };
+            let key = field.node.response_key().node.as_str();
+            let directed = field.node.directives.iter().find_map(|directive| {
+                let name = directive.node.name.node.as_str();
+                matches!(name, "skip" | "include").then_some(name)
+            });
+            let said = match (directed, opened) {
+                (Some(directive), _) => {
+                    format!(r#"the subscription selects "{key}" under "@{directive}" at its root"#)
+                }
+                (None, None) => {
+                    opened = Some(key);
+                    return None;
+                }
+                (None, Some(first)) if first == key => {
+                    format!(r#"the subscription selects "{key}" more than once at its root"#)
+                }
+                (None, Some(first)) => {
+                    format!(r#"the subscription selects "{key}" beside "{first}" at its root"#)
+                }
+            };
+            Some((said, selection.pos))
+        })
+        .map(|(said, at)| crate::error::invalid_argument(said).into_server_error(at))
 }
 
 /// A mutation's root selections, read before validation: each fragment is
@@ -932,6 +978,82 @@ mod tests {
             refusal("query Q { a } mutation M { a a }", Some("M")),
             Some(selects("a"))
         );
+    }
+
+    #[test]
+    fn a_subscription_whose_root_names_other_than_one_field_is_refused_naming_it() {
+        for (query, said) in [
+            (
+                "subscription { a b }",
+                r#"the subscription selects "b" beside "a" at its root"#,
+            ),
+            (
+                "subscription { x: a y: a }",
+                r#"the subscription selects "y" beside "x" at its root"#,
+            ),
+            (
+                "subscription { a __typename }",
+                r#"the subscription selects "__typename" beside "a" at its root"#,
+            ),
+            (
+                "subscription { a a }",
+                r#"the subscription selects "a" more than once at its root"#,
+            ),
+            (
+                "subscription { x: a x: a }",
+                r#"the subscription selects "x" more than once at its root"#,
+            ),
+            (
+                "subscription { ...A } fragment A on Subscription { a }",
+                "the subscription selects its root field through a fragment",
+            ),
+            (
+                "subscription { ... on Subscription { a } }",
+                "the subscription selects its root field through a fragment",
+            ),
+            (
+                "subscription { ... { a } }",
+                "the subscription selects its root field through a fragment",
+            ),
+            (
+                "subscription { a @skip(if: false) }",
+                r#"the subscription selects "a" under "@skip" at its root"#,
+            ),
+            (
+                "subscription($on: Boolean = true) { a @include(if: $on) }",
+                r#"the subscription selects "a" under "@include" at its root"#,
+            ),
+            (
+                "subscription { a b @skip(if: true) }",
+                r#"the subscription selects "b" under "@skip" at its root"#,
+            ),
+        ] {
+            assert_eq!(refusal(query, None).as_deref(), Some(said), "{query}");
+        }
+        assert_eq!(
+            refusal("subscription A { a } subscription B { a b }", Some("B")).as_deref(),
+            Some(r#"the subscription selects "b" beside "a" at its root"#),
+        );
+        for (query, name) in [
+            ("subscription { a }", None),
+            (
+                "subscription { x: a(first: 2) { b c @skip(if: true) ...F } } fragment F on A { d }",
+                None,
+            ),
+            ("subscription A { a } subscription B { a b }", Some("A")),
+            ("{ a b }", None),
+        ] {
+            assert_eq!(refusal(query, name), None, "{query}");
+        }
+    }
+
+    #[test]
+    fn a_subscriptions_refusal_points_at_the_selection_past_its_field() {
+        let Some(refusal) = refused(request("subscription {\n  a\n  ...F\n}", None)) else {
+            panic!("the subscription selects through a fragment");
+        };
+        assert_eq!(refusal.locations, [Pos { line: 3, column: 3 }]);
+        assert!(refusal.path.is_empty(), "the operation's, not a field's");
     }
 
     #[test]

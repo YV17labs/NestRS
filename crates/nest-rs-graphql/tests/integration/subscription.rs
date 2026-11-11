@@ -200,6 +200,75 @@ async fn a_synchronous_subscription_streams_like_an_async_one() {
     assert_eq!(second["data"]["counted"], 2, "{second}");
 }
 
+/// A subscription opens one stream, of the one field its root names (GraphQL
+/// §5.2.3.1). What async-graphql would open otherwise — a stream per root field
+/// sharing the request's loaders, one per copy of a key, none for a fragment, and
+/// whatever a variable decides — is refused once validation passed, before any
+/// opening runs; a directive below the root field stays the client's.
+#[tokio::test]
+async fn a_subscription_whose_root_names_other_than_one_field_is_refused_before_it_opens() {
+    let app = boot().await;
+    let state = app
+        .container()
+        .get::<TickResolverState>()
+        .expect("the resolver's state is a provider of the booted app");
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    for (index, (document, said)) in [
+        (
+            "subscription { ticks { seq } counted }",
+            r#"the subscription selects "counted" beside "ticks" at its root"#,
+        ),
+        (
+            "subscription { ticks { seq } ticks { seq } }",
+            r#"the subscription selects "ticks" more than once at its root"#,
+        ),
+        (
+            "subscription { ...Ticks } fragment Ticks on Subscription { ticks { seq } }",
+            "the subscription selects its root field through a fragment",
+        ),
+        (
+            "subscription { ... on Subscription { ticks { seq } } }",
+            "the subscription selects its root field through a fragment",
+        ),
+        (
+            "subscription($all: Boolean = true) { ticks @include(if: $all) { seq } }",
+            r#"the subscription selects "ticks" under "@include" at its root"#,
+        ),
+        (
+            "subscription { ticks @skip(if: false) { seq } }",
+            r#"the subscription selects "ticks" under "@skip" at its root"#,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = index.to_string();
+        socket.subscribe(&id, document);
+        let item = socket.next_item(&id).await.expect("the operation answers");
+        assert_eq!(item["data"], serde_json::Value::Null, "{document}: {item}");
+        assert_eq!(item["errors"][0]["message"], said, "{document}: {item}");
+        let done = socket.next_item(&id).await.expect("the operation ends");
+        assert_eq!(done["type"], "complete", "{document}: {done}");
+    }
+    assert_eq!(state.tx.receiver_count(), 0, "no opening ran");
+
+    socket.subscribe("one", "subscription { counted }");
+    let item = socket.next_item("one").await.expect("the first item");
+    assert_eq!(item["data"]["counted"], 1, "{item}");
+    socket.subscribe(
+        "directed",
+        "subscription($all: Boolean = true) { ticks { seq @include(if: $all) } }",
+    );
+    let emitted = async {
+        nest_rs_testing::wait_until(Duration::from_secs(2), || state.tx.receiver_count() > 0).await;
+        state.tx.send(Tick { seq: 3 }).expect("a receiver is live");
+    };
+    let (item, ()) = tokio::join!(socket.next_item("directed"), emitted);
+    let item = item.expect("the tick");
+    assert_eq!(item["data"]["ticks"]["seq"], 3, "{item}");
+}
+
 /// The stamp an operation on `socket` answers as `id`.
 async fn stamp_of(socket: &mut nest_rs_testing::graphql::GraphqlSocket, id: &str) -> i32 {
     let item = socket.next_item(id).await.expect("the operation answers");

@@ -255,6 +255,15 @@ Everything else is the GraphQL module's own configuration — see
 
 ## Limits
 
+- **A subscription selects one root field, by name, once.** One operation opens
+  one stream (GraphQL §5.2.3.1), so a document selecting a second root field, the
+  same one twice, its field through a fragment, or under `@skip` or `@include` at
+  the root is refused once validation passed, before anything opens:
+  `the subscription selects "b" beside "a" at its root`, one `INVALID_ARGUMENT`
+  error, then `complete`. async-graphql would open a stream per field there,
+  stream each copy's items twice, and open none for a fragment. A directive below
+  the root field is the client's as anywhere; two streams are two operations on
+  one socket.
 - **The fallible return is spelled `Result<…>`.** async-graphql reads the last
   path segment of the return type and takes any other spelling for the stream
   itself, so a `Result` under another name — `GqlResult<impl Stream<…>>` from

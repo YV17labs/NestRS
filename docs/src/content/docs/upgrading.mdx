@@ -1431,6 +1431,12 @@ lists what the boot, a log or the wire shows when one is missed.
   each selecting `grid` otherwise, reads an `INVALID_ARGUMENT` refusal naming `grid` and
   runs nothing, where it answered one copy's cells and lost the other's. Select it once,
   the copies' fields together: `{ grid { a b } }`.
+- **A GraphQL subscription whose root names other than one field** — a second root
+  field, `subscription { a b }`, one twice, one through a fragment, or one under `@skip`
+  or `@include` — reads an `INVALID_ARGUMENT` refusal, `the subscription selects "b"
+  beside "a" at its root`, and opens nothing, where it streamed each root field's items
+  beside the other's, each copy's twice, and nothing for a fragment (GraphQL §5.2.3.1).
+  Open one subscription per root field, on one socket.
 - **A GraphQL document spreading its fragments again past `max_complexity`** reads `Query
   is too complex.` before anything walks it, a `__typename` at the end of them included,
   which was answered; so does one whose arguments copy or scan more than twice what the

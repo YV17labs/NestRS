@@ -87,7 +87,7 @@ database = ["dep:nest-rs-database", "nest-rs-testing?/database"]
 # `authz` is not optional here even though `#[authorize]` is: `#[crud]` writes
 # an `#[authorize(::nest_rs_authz::<marker>, Entity)]` on *every* operation it
 # generates and an `::nest_rs_authz::Action` on each one that loads a row, and
-# `#[expose]` implements the round trip `nest_rs_authz`'s masks read on every entity,
+# `#[expose]` judges every wire row through `nest_rs_authz` where it builds it,
 # whether or not the developer writes a posture attribute. `nest-rs-seaorm`
 # depends on the crate already, so the feature carries what the expansion names
 # and costs no compilation. `pipes` the same way: `nest-rs-seaorm` links it, and a
@@ -103,7 +103,7 @@ seaorm = [
 # (`resolver.rs`), so `graphql` owns them rather than inheriting them from a
 # feature the developer might not enable.
 # `authz` is the developer's, as on every edge: `#[operations]` emits
-# `::nest_rs_authz` — the class gate, the response mask — only for an
+# `::nest_rs_authz` — the class gate, the subscription's pushed rows — only for an
 # operation carrying `#[authorize]` (a `#[public]` one names none), and
 # `#[expose(..., graphql)]` rides `seaorm`, which enables it. A GraphQL gateway
 # with no database compiles no sea-orm; a decorator whose `#[authorize]` needs
@@ -121,8 +121,9 @@ graphql = [
 # guard on `GuardFor<WsView>`. The gateway reuses the HTTP guards at the upgrade,
 # so authz's `http` binding is what runs there; `nest-rs-authz/ws` is the
 # separate per-message half `#[messages]` emits from an
-# `#[authorize(Action, Entity)]` — the reply mask, beside the class gate every
-# edge shares. Both, because a gateway needs the upgrade chain *and* the posture.
+# `#[authorize(Action, Entity)]` — the message's reads it opens, beside the class
+# gate every edge shares. Both, because a gateway needs the upgrade chain *and* the
+# posture.
 ws = [
     "dep:nest-rs-ws",
     "http",

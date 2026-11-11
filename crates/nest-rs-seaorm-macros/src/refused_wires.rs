@@ -12,8 +12,9 @@ use syn::{Attribute, Ident, Meta, Path, Token};
 use crate::attr::{ResourceModel, graphql_root};
 
 /// Every wire derive written on the row, refused at its path: `Serialize` and
-/// `SimpleObject` write each column, a hidden one too, onto a wire no mask shapes,
-/// `Deserialize` and `InputObject` read each one off a body no input validates,
+/// `SimpleObject` write each column, a hidden one too, onto a wire no judgement
+/// reaches, `Deserialize` and `InputObject` read each one off a body no input
+/// validates,
 /// and `JsonSchema` publishes each one's name and type. Read in `#[derive(…)]` and
 /// in sea-orm's `model_attrs(…)` and `model_ex_attrs(…)`, which put a derive on the
 /// `Model` and on the `ModelEx` beside it.

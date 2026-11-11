@@ -363,8 +363,8 @@ fn refuse_oversized_entity_calls(
     Err(ServerError::new(
         format!(
             "this operation carries {total} `_entities` representations, over this \
-             schema's ceiling of {max}. Each one is resolved on its own — body, \
-             posture gate and mask — so the total list length is the fan-out, \
+             schema's ceiling of {max}. Each one is resolved on its own — its \
+             posture's gate and its body — so the total list length is the fan-out, \
              however many `_entities` fields it is spread across. Split the call, \
              or raise `{field}` (`{key}`; `0` ⇒ unlimited).",
         ),

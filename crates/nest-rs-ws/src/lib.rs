@@ -146,7 +146,7 @@
 //! declares), its exception filters (the message's, the gateway's, the app's),
 //! its handler stage (the app's interceptors, the gateway's
 //! `#[use_interceptors]`, the message's) and its tail — the data pipes, the
-//! handler's own pipes, the call and the mask. A layer reads the message
+//! handler's own pipes and the call. A layer reads the message
 //! through [`WsView`] and may answer it through [`WsView::respond`].
 //!
 //! The connection loop runs after the upgrade completes, under what the

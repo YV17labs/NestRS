@@ -57,7 +57,8 @@
 //!   `nest_rs_database::UnitOfWork`, row-filtered by the caller's ability where
 //!   its posture names what it reads, and reading nothing a grant guards where
 //!   it names nothing; a hand-written `ServerHandler`, which writes no posture,
-//!   reads under a principal's ability and masks its answer itself.
+//!   reads under a principal's ability, each wire row it answers judged where it
+//!   is built.
 //!
 //! Notifications and `subscriptions/listen` run no unit of work, documented
 //! on [`PropagatingHandler`].
@@ -259,8 +260,9 @@ pub use nest_rs_mcp_macros::mcp;
 
 /// Declare an `#[mcp]` host's operations on its inherent impl block. A tool a guard
 /// identifying its caller covers at the endpoint needs no posture;
-/// `#[authorize(Action, Subject)]` adds a gate and a reply mask, which are
-/// `nest-rs-authz`'s, and `#[public]` admits a caller with no credential, the one an
+/// `#[authorize(Action, Subject)]` adds a gate, `nest-rs-authz`'s, and opens the
+/// operation's reads to the caller's ability, each wire row it answers judged for
+/// that caller where it is built; `#[public]` admits a caller with no credential, the one an
 /// endpoint the app opened takes when it declares no gate: bare it reads nothing a
 /// grant guards, and `#[public(Action, Subject)]` names what that caller reads. Its
 /// arguments are held to the rules their type declares, a refusal answered

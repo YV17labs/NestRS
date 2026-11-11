@@ -1,6 +1,6 @@
 //! WebSocket bindings (feature `ws`) — the per-message analog of `crate::mcp`.
 //!
-//! A gateway writes no mask: `#[authorize(Action, Entity)]` beside a
+//! A gateway checks nothing itself: `#[authorize(Action, Subject)]` beside a
 //! `#[subscribe_message]` makes `#[messages]` emit the class gate
 //! ([`class_gate`](crate::class_gate), every edge's), run in the message's guard
 //! stage, exactly as `#[tools]` does on MCP, `#[operations]` on GraphQL and

@@ -58,10 +58,10 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// posture** — forgetting one is a compile error, never a silently ungated
 /// operation:
 ///
-/// - `#[authorize(Action, Entity)]` — the macro emits the class gate
+/// - `#[authorize(Action, Subject)]` — the macro emits the class gate
 ///   (`nest_rs_authz::class_gate`, run after the operation's guards) before the
 ///   call, and the operation reads under the caller's ability. What it answers
-///   needs no mask: each wire row was judged for that caller where
+///   needs nothing more: each wire row was judged for that caller where
 ///   `#[expose]`'s conversion built it, whatever shape holds it.
 /// - `#[public(Action, Subject)]` — a caller with no credential is admitted, with
 ///   `#[authorize]`'s arguments and gate on the ability that caller has.

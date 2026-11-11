@@ -33,7 +33,7 @@ use crate::server::{ConnId, Registry, WsClient, WsServer};
 #[async_trait]
 pub trait Gateway: Send + Sync + 'static {
     /// Run the handler `event` names on `data`: its parameters, its payload's
-    /// pipes, the call and the posture's mask — what a message's unit runs
+    /// pipes and the call — what a message's unit runs
     /// last, once its guards and its layers let it. An error comes back
     /// rendered, its line not yet filed.
     #[doc(hidden)]
@@ -51,11 +51,10 @@ pub trait Gateway: Send + Sync + 'static {
     fn __nestrs_gate(&self, event: &str) -> Option<(&'static Handler, ClassGate)>;
 
     /// Call the handler `event` names on `data`, as a test calls it on its
-    /// own: the posture's class gate, its parameters, its payload's pipes, the
-    /// call and the posture's mask, a refusal or an error answered as its
-    /// frame and filed at once. No guard and no layer runs here — a message
-    /// arriving on a socket runs them around the handler, the class gate after
-    /// its guards.
+    /// own: the posture's class gate, its parameters, its payload's pipes and
+    /// the call, a refusal or an error answered as its frame and filed at once.
+    /// No guard and no layer runs here — a message arriving on a socket runs them
+    /// around the handler, the class gate after its guards.
     async fn dispatch(&self, client: &WsClient, event: &str, data: serde_json::Value) -> WsReply {
         let (data, attached) = match self.__nestrs_gate(event) {
             Some((handler, gate)) => match crate::guard::gate_alone(client, handler, gate, data) {
@@ -132,7 +131,8 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
 
 /// The gateway as its `mounted` lines name it, which every line its sockets
 /// file names too: its host, and the path a client connects to. Ambient for
-/// each socket, so what a message's handler calls — its mask — names it as well.
+/// each socket, so what a message's handler calls — its reply's serializer — names
+/// it as well.
 struct ServedGateway {
     host: &'static str,
     path: Arc<str>,

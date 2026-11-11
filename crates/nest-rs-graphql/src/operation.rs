@@ -241,8 +241,8 @@ pub fn field_name<'a>(ctx: &'a Context<'_>) -> &'a str {
 
 /// Run one dispatched root field as its own unit of work — `#[operations]`
 /// wraps every `#[query]`, `#[mutation]` and `#[entity]` in this — through
-/// `site`'s chains, the rest of the field being `tail`: its argument pipes, the
-/// call and the posture's mask.
+/// `site`'s chains, the rest of the field being `tail`: its argument pipes and the
+/// call.
 ///
 /// The line names the field as its `mounted` line does, by `host`, `method`,
 /// `kind` and `field` (`listUsers`, not `list_users`). It files `ok`

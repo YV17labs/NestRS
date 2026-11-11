@@ -108,7 +108,8 @@ pub mod authn {
     pub use nest_rs_authn::*;
 }
 
-/// Authorization: abilities, `#[authorize]`, the query filter and field masking.
+/// Authorization: abilities, `#[authorize]`, the query filter and the judged wire
+/// row.
 #[cfg(feature = "authz")]
 pub mod authz {
     #[doc(no_inline)]

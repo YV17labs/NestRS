@@ -419,11 +419,11 @@ where
 
 /// The entity a bound service loads, held by its one impl to the one the
 /// operation names — written in `#[authorize(A, E, bind = S)]`, or read off its
-/// `Authorized<A, E>` parameter — which the class gate and the mask read.
+/// `Authorized<A, E>` parameter — which the class gate reads.
 #[diagnostic::on_unimplemented(
     message = "the operation names `{E}`, and the service `bind` names loads `{Self}`",
     label = "the service loads another entity",
-    note = "the class gate, the response mask and the `Authorized<Action, E>` parameter read the entity the operation names, the load reads the service's: name `{Self}` in both, or bind the service loading `{E}`"
+    note = "the class gate and the `Authorized<Action, E>` parameter read the entity the operation names, the load reads the service's: name `{Self}` in both, or bind the service loading `{E}`"
 )]
 pub trait SameEntity<E> {}
 

@@ -1,10 +1,11 @@
 //! Per-route, type-directed response shaping.
 //!
-//! A route whose posture declares a masking type (in practice the
-//! `Authorize<_, _>` an `#[authorize]` or a `#[public(Action, Subject)]` emits)
-//! runs inside a [`ResponseShaping`]: the type's crate captures what it needs off
-//! the request, installs ambient state around the handler, and rewrites the body
-//! before it ships.
+//! A route declaring a shaping type, a parameter's or the posture's, runs inside a
+//! [`ResponseShaping`]: the type's crate captures what it needs off the request,
+//! installs ambient state around the handler, and may rewrite the body before it
+//! ships. The `Authorize<_, _>` an `#[authorize]` or a `#[public(Action, Subject)]`
+//! emits declares the class gate alone and captures nothing: each wire row a reply
+//! carries was judged where it was built.
 //!
 //! `#[routes]` cannot see through a renamed import, so it hands the posture's type
 //! and every handler parameter's to [`ShaperProbe`], and the compiler answers

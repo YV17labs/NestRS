@@ -7,7 +7,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Action {
-    /// Read/list the entity — the query-filter and response-mask layers.
+    /// Read/list the entity — the query filter, and the judgement of every wire
+    /// row a reply carries.
     Read,
     /// Create a new instance of the entity.
     Create,

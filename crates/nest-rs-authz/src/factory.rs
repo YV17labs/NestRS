@@ -6,7 +6,7 @@ use nest_rs_core::AmbientValue;
 use crate::builder::AbilityBuilder;
 
 /// Implemented once per app for its actor type. All three authorization layers
-/// (gate, query filter, response mask) consume the result.
+/// (gate, query filter, the judged wire row) consume the result.
 ///
 /// ```
 /// # use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};

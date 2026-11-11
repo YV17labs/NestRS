@@ -4,7 +4,7 @@
 //! `EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` a module declares)
 //! or at the field itself.
 //!
-//! A resolver writes no mask: `#[authorize(Action, Entity)]` on a
+//! A resolver checks nothing itself: `#[authorize(Action, Subject)]` on a
 //! `#[query]`/`#[mutation]` makes `#[resolver]` emit the class gate
 //! ([`class_gate`](crate::class_gate), every edge's), and each wire row the
 //! operation answers was judged for its caller where it was built.

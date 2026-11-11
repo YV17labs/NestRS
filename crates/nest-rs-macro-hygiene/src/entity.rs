@@ -48,8 +48,8 @@ pub struct Model {
     pub deleted_at: Option<DateTimeWithTimeZone>,
 }
 
-/// A `#[field_resolver]` answering the wire type: the mask it runs, its probe and
-/// the entity's impl through the umbrella.
+/// A `#[field_resolver]` answering the wire type: the check of its parent it runs,
+/// its probe and the entity's impl through the umbrella.
 #[cfg(feature = "graphql")]
 pub mod answered {
     use nest_rs::graphql::async_graphql::SimpleObject;

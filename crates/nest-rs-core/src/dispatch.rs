@@ -24,8 +24,8 @@ use crate::unit_context::{UnitContext, take_pending};
 /// A future the pipeline holds behind a box.
 pub(crate) type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// What an edge runs last: its pipes, the handler, the posture's mask and the
-/// reply written into its view.
+/// What an edge runs last: its pipes, the handler and the reply written into its
+/// view.
 pub trait Tail: Send {
     /// Run the handler for the unit `cx` describes.
     fn call(&mut self, cx: &mut UnitContext<'_>) -> impl Future<Output = Outcome> + Send;

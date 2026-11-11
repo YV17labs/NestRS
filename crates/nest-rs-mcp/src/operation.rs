@@ -241,8 +241,8 @@ const DENIED: &str = "guard denied the operation";
 /// Run one declared operation — a tool call, a prompt fetch, a resource read
 /// or listing — through the site `#[tools]` declared for it — `#[tools]`
 /// wraps every operation in this — the rest of it being
-/// `tail`: its `Scoped<T>` parameters, its pipes, the call and the posture's
-/// mask, answering the operation's value.
+/// `tail`: its `Scoped<T>` parameters, its pipes and the call, answering the
+/// operation's value, written inside the site.
 ///
 /// It runs inside the operation's own unit, whose site ran the unit stage. A
 /// site whose chains do not compose is refused opaquely, its cause filed: no

@@ -305,10 +305,11 @@ What remains:
 - The names the retired reply mask left on internal seams read as what they now
   mean, a posture naming no subject: `UnmaskedReply`, the HTTP guard
   stage's `StageKind::Route { unmasked }`, `RouteGuards::masked` and
-  `HttpRouteMeta::masked`, and about
-  150 internal comments saying "mask" for the judged row (the
-  docs site, the decorators' rustdoc, the refusal sentences and the CLI's templates
-  no longer do). Close: one rename with its naming set stated, across
+  `HttpRouteMeta::masked`, and the names and comments of tests saying "mask"
+  for the judged row (about 30 lines, in the crates' suites and unit tests; the
+  docs site, every comment in the crates' sources, their descriptions and
+  manifest comments, the refusal sentences, the errors a client reads and the
+  CLI's templates no longer do). Close: one rename with its naming set stated, across
   `nest-rs-core`, `nest-rs-http`, `nest-rs-http-macros`, `nest-rs-authz`,
   `nest-rs-openapi` and the rules naming them, a tier-2 move but for
   `HttpRouteMeta::masked`, public.

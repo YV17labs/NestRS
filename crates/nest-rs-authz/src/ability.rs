@@ -1,5 +1,6 @@
 //! The compiled rule set for one actor, and the four reads the three
-//! authorization layers (gate, query filter, response mask) perform against it.
+//! authorization layers (gate, query filter, the judged wire row) perform against
+//! it.
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
@@ -63,7 +64,7 @@ pub enum FieldSet {
     #[default]
     All,
     /// Only these columns, each as its `Column::as_str()` names it: the
-    /// database's name, which a reply's mask reads through the column's wire key.
+    /// database's name, which a wire row's judgement asks of each column it holds.
     Only(HashSet<&'static str>),
 }
 
@@ -208,8 +209,9 @@ impl When {
 /// The authorization rules compiled for a single actor. Built by an
 /// [`AbilityFactory`](crate::AbilityFactory) and consumed by the access guard
 /// ([`can_class`](Ability::can_class)), the query pre-filter
-/// ([`condition_for`](Ability::condition_for)), and the response check/mask
-/// ([`can`](Ability::can) / [`permitted_fields`](Ability::permitted_fields)).
+/// ([`condition_for`](Ability::condition_for)), and the judgement each wire row
+/// passes where it is built ([`can`](Ability::can) /
+/// [`permitted_fields`](Ability::permitted_fields)).
 pub struct Ability {
     /// Which ability this is, minted once: a wire row judged under it names it,
     /// and answers only where it is the one installed. A pointer would be reused
@@ -333,8 +335,8 @@ impl Ability {
     ///
     /// The enforcement layers ignore it; a transport admitting anonymous callers
     /// reads it so a `define_visitor` grant cannot satisfy an `#[authorize]`
-    /// operation. Read it from a guard, a posture attribute's gate or a mask judging
-    /// what no read of this caller's filtered, only.
+    /// operation. Read it from a guard, a posture attribute's gate or what opens a
+    /// unit's reads to its caller, only.
     pub fn is_visitor(&self) -> bool {
         self.visitor
     }
@@ -523,8 +525,8 @@ impl Ability {
     }
 
     /// Layer ② for a write setting `columns`: the rows on which the grants of
-    /// `action` that match the row permit each of them, as the mask reads a row's
-    /// columns off the union of the grants it meets. So `(OR of the grants
+    /// `action` that match the row permit each of them, as a wire row's judgement
+    /// reads its columns off the union of the grants it meets. So `(OR of the grants
     /// permitting one column) AND (… for each other) AND NOT (OR of denials)`, which
     /// runs in the write's own statement, a relational rule exact, in no round trip.
     ///
@@ -2409,8 +2411,8 @@ mod tests {
         );
     }
 
-    /// As the mask reads a row's columns off the union of the grants it meets, a
-    /// write needs a grant the row meets for each column, never one for them all.
+    /// As a wire row's judgement reads its columns off the union of the grants it
+    /// meets, a write needs a grant the row meets for each column, never one for them all.
     #[test]
     fn two_grants_permitting_different_columns_conjoin_on_the_row() {
         let mut b = crate::AbilityBuilder::new();

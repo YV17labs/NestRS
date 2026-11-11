@@ -6,7 +6,7 @@
 //! [`Ability`](crate::Ability) they attach is ambient for each operation the
 //! request carries.
 //!
-//! A host writes no mask: `#[authorize(Action, Entity)]` beside an
+//! A host checks nothing itself: `#[authorize(Action, Subject)]` beside an
 //! operation of `#[tools]` makes it emit the class gate
 //! ([`class_gate`](crate::class_gate), every edge's), exactly as `#[operations]`
 //! does on GraphQL and `#[routes]` on HTTP, and each wire row the operation

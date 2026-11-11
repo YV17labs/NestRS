@@ -88,8 +88,8 @@ impl<T: OutputType> RelationPage<T> {
 
 /// "This entity loads its wire type by primary key." Implemented
 /// automatically by `#[expose]` on every entity that declares a `service = …`;
-/// the wire type a load answers is the entity's [`Exposed::Wire`], every exposed
-/// column of a row the caller may read: the field answering it masks it.
+/// the wire type a load answers is the entity's [`Exposed::Wire`], judged for the
+/// caller where the loader builds it.
 pub trait PkLoadable: Exposed {
     /// The `#[dataloader]`-generated primary-key loader (`<Service>ById`).
     type Loader: Send + Sync + 'static;

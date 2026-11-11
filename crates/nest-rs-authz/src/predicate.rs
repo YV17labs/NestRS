@@ -7,8 +7,8 @@
 //! `IS NOT NULL`, as sea-orm renders it, and any other comparison with `NULL`
 //! is `UNKNOWN`, SQL's third truth value. What the row cannot show at all — a
 //! relation, a column the wire never carried, two value types only the
-//! database compares — is left undecided, and the mask says what that means
-//! for the row.
+//! database compares — is left undecided, and the row's judgement says what
+//! that means for it.
 
 use std::cmp::Ordering;
 use std::marker::PhantomData;

@@ -105,8 +105,8 @@ impl GraphqlSocketBuilder {
     }
 
     /// Subscribe as a caller granted `ability`, as the ability guard at a
-    /// real upgrade attaches it: every operation's class gate and mask read
-    /// it.
+    /// real upgrade attaches it: every operation's class gate reads it, and
+    /// each wire row an item carries is judged under it.
     #[cfg(feature = "authz")]
     #[must_use]
     pub fn ability(self, ability: Arc<nest_rs_authz::Ability>) -> Self {

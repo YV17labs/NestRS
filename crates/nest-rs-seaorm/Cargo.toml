@@ -24,7 +24,7 @@ default = []
 # runs each request's unit of work through the port itself. A headless app — a
 # worker, a scheduler — leaves it off and links no HTTP stack.
 # `nest-rs-authz/http` is forwarded because a bound route arms
-# `nest_rs_authz::http::Authorize`, its class gate and its mask.
+# `nest_rs_authz::http::Authorize`, its class gate and the reads it opens.
 http = [
     "dep:nest-rs-http",
     "nest-rs-authz/http",
@@ -125,7 +125,7 @@ nest-rs-queue = { workspace = true, optional = true }
 sea-orm-migration = { workspace = true, optional = true }
 # Behind `queue`: the boxed futures `OutboxStore` and `OutboxClaim` answer.
 futures-util = { workspace = true, optional = true }
-# Behind `http`: the extractor, the mask and the error mapping a route reads.
+# Behind `http`: the extractor and the error mapping a route reads.
 nest-rs-http = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -142,8 +142,8 @@ nest-rs-http = { path = "../nest-rs-http" }
 # expands to the per-site guard chain, which this crate only exposes with the
 # GraphQL edge compiled in.
 nest-rs-guards = { path = "../nest-rs-guards" }
-# Same reason one layer up: the mask of an operation, a message or a tool naming
-# its read sits behind authz's own `graphql`, `ws` and `mcp` features. A dev-dep,
+# Same reason one layer up: the class gate of an operation, a message or a tool
+# naming its read sits behind authz's own `graphql`, `ws` and `mcp` features. A dev-dep,
 # so no consumer of this crate gains them.
 nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql", "ws", "mcp"] }
 # `features = ["orm"]` so the framework workspace actually compiles

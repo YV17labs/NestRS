@@ -111,7 +111,7 @@ struct UnscopedGatedTool;
 
 #[tools]
 impl UnscopedGatedTool {
-    /// Gated, with no mask to arm, so its posture states a caller is needed and
+    /// Gated, so its posture states a caller is needed and
     /// only the ability it reads stands in front of the body.
     #[tool]
     #[authorize(Read, widget::Entity)]

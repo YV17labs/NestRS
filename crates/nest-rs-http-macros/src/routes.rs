@@ -1357,7 +1357,7 @@ fn shaper_selection(param_types: &[Type]) -> TokenStream2 {
 /// One routed handler, as its route's site declares it and its mount mounts
 /// it: the site (its interceptors and exception filters, its guard stage and
 /// class gates), and the call registering the handler — its response shaper
-/// (the mask) innermost, its global pipes before it — on the pipeline.
+/// innermost, its global pipes before it — on the pipeline.
 struct EmittedRoute {
     /// The controller's hidden associated items: the site, its layers and its
     /// guard stage.

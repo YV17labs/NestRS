@@ -180,7 +180,7 @@ async fn a_bound_route_is_documented_as_masked() {
 
     let route = &controllers[0].meta.routes()[0];
 
-    assert!(route.masked(), "the posture arms the response mask");
+    assert!(route.masked(), "the posture arms the route's shaper");
     assert!(
         route.path_params().is_empty(),
         "the subject's id is no `Path<T>` the document types"

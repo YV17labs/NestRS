@@ -170,7 +170,8 @@ so is the `T` a route's `Ambient<T>` reads, an alias included, and an in-band
 half asks every parameter it hands its protocol whether it is an `Ambient` or a
 `Scoped` (`ParamProbe::decoded`), refusing either behind an alias with the fix.
 What a dependency's type tells a refusal is read the same way: each `#[inject]`
-field and each such parameter asks `nest_rs_core::__private::RemedyProbe`, on
+field, each such parameter and each service a GraphQL field resolver takes by
+reference asks `nest_rs_core::__private::RemedyProbe`, on
 `&&RemedyProbe<T>`, whether its type carries a remedy (`CarriesRemedy`;
 `Scoped<T>` carries `T`'s), and hands it to `Discoverable::injected_remedies` —
 an edge's struct half through its `__nestrs_injected_remedies()`, its impl half

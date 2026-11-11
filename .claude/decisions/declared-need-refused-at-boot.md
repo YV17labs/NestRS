@@ -169,9 +169,10 @@ too, no remedy having been filed for it.
 answering the sentence, implemented by `RedisConnection<I>` and `RedisQueueProducer<I>`
 for every instance — "Import `nest_rs::redis::RedisModule::<Cache>`, which opens the Redis
 connection every binding of the `cache` instance shares." Each `#[inject]` field, required
-or optional, and each handler parameter resolving a provider asks
-`__private::RemedyProbe` through autoref, as a parameter asks `ParamProbe`; `Scoped<T>`
-carries `T`'s. `Discoverable::injected_remedies` (a default method) hands the answers to
+or optional, each handler parameter resolving a provider and each service a GraphQL field
+resolver takes by reference asks `__private::RemedyProbe` through autoref, as a parameter
+asks `ParamProbe`; `Scoped<T>` carries `T`'s. A layer (`#[use_guards]` and its kin) is
+bound, not injected: its key is a type its crate names, and the registry answers for it. `Discoverable::injected_remedies` (a default method) hands the answers to
 the descriptor, an app-wide pool forwards its layers', and the access graph reads them
 where it writes `MissingDependencyError` or `AccessGraphError`, before the registry. The
 read runs only on a refusal, so the hot path and the boot that succeeds pay nothing; the

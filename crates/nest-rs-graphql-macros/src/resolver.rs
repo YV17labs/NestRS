@@ -1591,6 +1591,9 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         scoped_params
             .iter()
             .map(|(cfgs, item)| Conditional { cfgs, item }),
+        field_dep_types
+            .iter()
+            .map(|(cfgs, item)| Conditional { cfgs, item }),
     );
     let site_pushes = site_refs.iter().map(|(cfgs, site)| {
         quote! {

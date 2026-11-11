@@ -523,8 +523,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let layers = layer_deps(conditional(&message_layers));
     // A provider a parameter resolves per message is checked like an `#[inject]`
     // one: an unimported `Scoped<T>` target fails the boot.
-    let injected_methods =
-        injected_methods_with_layers(&self_ty, &layers, conditional(&message_params));
+    let injected_methods = injected_methods_with_layers(
+        &self_ty,
+        &layers,
+        conditional(&message_params),
+        std::iter::empty(),
+    );
     let crossings = declared.crossings();
     let gate_lookup = if gate_arms.is_empty() {
         quote! {

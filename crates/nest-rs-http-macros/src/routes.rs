@@ -902,6 +902,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     item,
                 })
             }),
+        std::iter::empty(),
     );
 
     let capability_bounds = guard_capability_bounds(

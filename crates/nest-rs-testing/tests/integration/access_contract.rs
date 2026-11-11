@@ -650,6 +650,30 @@ impl ShelfPerRequestTools {
     }
 }
 
+#[derive(async_graphql::SimpleObject)]
+#[graphql(complex)]
+struct Book {
+    title: String,
+}
+
+#[resolver]
+struct ShelvedBookResolver;
+
+#[operations]
+impl ShelvedBookResolver {
+    #[query]
+    #[public]
+    async fn book(&self) -> async_graphql::Result<Book> {
+        Ok(Book { title: "ok".into() })
+    }
+
+    #[field_resolver]
+    async fn shelved(&self, parent: &Book, shelf: &Shelf<Archive>) -> String {
+        let _ = shelf;
+        parent.title.clone()
+    }
+}
+
 #[module(providers = [ShelfPerRequestController])]
 struct ShelfPerRequestHttpModule;
 
@@ -662,20 +686,25 @@ struct ShelfPerRequestGraphqlModule;
 #[module(providers = [ShelfPerRequestTools])]
 struct ShelfPerRequestMcpModule;
 
+#[module(providers = [ShelvedBookResolver])]
+struct ShelvedBookGraphqlModule;
+
 #[tokio::test]
-async fn every_parameter_resolving_a_type_that_carries_its_remedy_is_told_that_line() {
+async fn every_parameter_reaching_a_type_that_carries_its_remedy_is_told_that_line() {
     assert_eq!(
         vec![
             unmet_shelf::<ShelfPerRequestHttpModule>().await,
             unmet_shelf::<ShelfPerRequestWsModule>().await,
             unmet_shelf::<ShelfPerRequestGraphqlModule>().await,
             unmet_shelf::<ShelfPerRequestMcpModule>().await,
+            unmet_shelf::<ShelvedBookGraphqlModule>().await,
         ],
         told_to_open_the_archive(&[
             "ShelfPerRequestController",
             "ShelfPerRequestGateway",
             "ShelfPerRequestResolver",
             "ShelfPerRequestTools",
+            "ShelvedBookResolver",
         ]),
     );
 }

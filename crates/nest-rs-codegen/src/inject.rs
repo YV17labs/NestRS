@@ -529,26 +529,39 @@ pub fn injected_optional_fns(
 /// dependencies come from the struct's [`injected_optional_fns`] as they are.
 /// Beside them, `injected_per_request`, the provider each of the handlers'
 /// `params` resolves per request, and `injected_remedies`: the struct's
-/// [`injected_remedies_fn`], then the remedy each parameter carries.
+/// [`injected_remedies_fn`], then the remedy each parameter carries and each
+/// of `resolved` — the services a method takes by reference from the
+/// container, a GraphQL field resolver's — is asked for.
 ///
 /// One function over one [`LayerDeps`], so a key never goes without its label.
 pub fn injected_methods_with_layers<'a>(
     self_ty: &impl quote::ToTokens,
     layers: &LayerDeps,
     params: impl IntoIterator<Item = Conditional<'a, Type>>,
+    resolved: impl IntoIterator<Item = Conditional<'a, Type>>,
 ) -> TokenStream2 {
     let keys = &layers.keys;
     let labels = &layers.labels;
     let params = per_request_params(params);
     let injected_per_request = injected_per_request_method(&params);
-    let asks = params.iter().map(|(cfgs, ty)| {
+    let param_asks = params.iter().map(|(cfgs, ty)| {
         let remedy = per_request_remedy(ty);
         quote! {
             #(#cfgs)*
             let () = __nestrs_remedies.extend(#remedy);
         }
     });
-    let remedies = remedies_body(quote! { <#self_ty>::__nestrs_injected_remedies() }, asks);
+    let resolved_asks = resolved.into_iter().map(|Conditional { cfgs, item }| {
+        let remedy = carried_remedy(item, &quote! { ::core::any::TypeId::of::<#item>() });
+        quote! {
+            #(#cfgs)*
+            let () = __nestrs_remedies.extend(#remedy);
+        }
+    });
+    let remedies = remedies_body(
+        quote! { <#self_ty>::__nestrs_injected_remedies() },
+        param_asks.chain(resolved_asks),
+    );
     quote! {
         fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
             let mut __keys = <#self_ty>::__nestrs_injected();
@@ -986,11 +999,13 @@ mod tests {
     }
 
     /// An impl half's remedies are its struct half's, then each parameter's,
-    /// under the method's `#[cfg]`s; a provider injecting nothing emits none.
+    /// under the method's `#[cfg]`s, then each service a method takes by
+    /// reference; a provider injecting nothing emits none.
     #[test]
     fn an_impl_half_reads_its_struct_halfs_remedies_and_asks_each_parameter() {
         let scoped: Type = parse_quote!(Scoped<RedisConnection<Cache>>);
         let gated = [quote!(#[cfg(feature = "cache")])];
+        let service: Type = parse_quote!(RedisConnection<Cache>);
         let emitted = injected_methods_with_layers(
             &quote!(CacheController),
             &layer_deps(std::iter::empty::<&Type>()),
@@ -998,6 +1013,7 @@ mod tests {
                 cfgs: &gated,
                 item: &scoped,
             }],
+            [Conditional::from(&service)],
         )
         .to_string();
         assert!(
@@ -1015,6 +1031,14 @@ mod tests {
         assert!(
             emitted.contains("RemedyProbe :: < Scoped < RedisConnection < Cache > > >"),
             "{emitted}"
+        );
+        assert!(
+            emitted.contains(
+                "RemedyProbe :: < RedisConnection < Cache > > :: new ()) . carried_remedy () . \
+                 map (| __remedy | (:: core :: any :: TypeId :: of :: < RedisConnection < Cache \
+                 > > ()"
+            ),
+            "a service a method takes by reference is asked under its own key: {emitted}"
         );
         assert!(injected_remedies_method(&[]).is_empty());
     }

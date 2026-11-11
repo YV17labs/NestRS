@@ -85,7 +85,10 @@ The visitor sums a score across every selected field. The default
 scoring is async-graphql's: each field contributes `1 +
 child_complexity` (one for the field itself, plus the sum of its
 selected sub-fields). A flat wide query of 500 fields scores 500;
-a 4-level relation chain scores roughly 4.
+a 4-level relation chain scores roughly 4. The score reads the document that
+runs: copies of one field GraphQL merges into one, a mutation's root field or a
+list of lists selected twice, count once, as they run once
+([where a failed field's `null` lands](/graphql/errors/#where-a-failed-fields-null-lands)).
 
 The **per-field override** is where complexity becomes a real
 anti-DoS mechanism. The `#[expose]` macro applies one

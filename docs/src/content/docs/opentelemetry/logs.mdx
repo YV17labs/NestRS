@@ -216,7 +216,8 @@ line per root field it resolves, its `kind` `query` or `mutation`, an `#[entity]
 and a subgraph's `_service` and `_entities` being `query`; the federation fields'
 `host` is `FederationExtension`. A mutation resolves
 none after a root field whose `null` reached `data`, and none at all when it
-selects one root field twice, so those file no line
+selects one key twice with different arguments, so those file no line; one
+selecting a root field twice alike resolves it once, one line
 ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 The operation's name is the document's, which
 the client writes, so it rides the operation's span as `graphql.operation.name`

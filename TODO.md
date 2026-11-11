@@ -143,32 +143,14 @@ keeps on purpose is §5's.
   framework's own parse of the type, as `essence` reads its name. *seen*
 
 **GraphQL**
-- A mutation naming one root field twice at its root, `mutation { a: write
-  a: write }`, which GraphQL §6.3.2 runs once, is refused before anything
-  runs, since async-graphql 7.2.1 runs each copy's writes. Close: merge the
-  copies of one name, arguments and directives into the first before
-  validation, as `own_key.rs` hands a set its key, through fragments, held
-  by a test that one write ran. *seen*
-- A list of lists selected twice at one place with different selections,
-  `{ grid { fine } grid { inner { fine } } }` with `grid: [[Shape!]!]!`, which
-  GraphQL §6.3.2 merges into one field, is refused before anything runs,
-  since async-graphql 7.2.1's `insert_value` joins a later copy's list items
-  into the first's only where they are objects, and answered one copy's
-  cells. Close: the same merge as the mutation root's, for any key whose
-  declared type nests a list in a list, or the upstream fix (§6); the
-  refusal's test,
-  `null_propagation::a_list_of_lists_selected_twice_otherwise_is_refused`,
-  then asserts the merged answer. *seen*
-- A type condition on a union applies only where that union is resolved:
-  `{ shape { ... on Either { ... on Shape { fine } } } }`, `Shape` a member
-  of `Either`, answers `{"shape": {}}` where GraphQL §6.3.2 answers `fine`,
-  since async-graphql 7.2.1's `Fields::add_set` applies a condition naming
-  the concrete type, an interface it implements or the type resolved there.
-  Close: the upstream fix (§6), or, in the pass that gives an object its key,
-  each such condition rewritten per member of the union the position may
-  take, what cannot apply to that member pruned so validation still passes;
-  the canary `null_propagation::a_condition_on_a_union_applies_only_where_that_union_is_resolved`
-  turns red when it closes. *seen*
+- async-graphql 7.2.1 runs no `SameResponseShape` (GraphQL §5.3.2): copies of one key
+  under conditions on two object types answer in two shapes, `{ results { ... on User {
+  x: name } ... on Org { x: size } } }` a string for one row and a number for the next,
+  where the specification refuses the document. Close: in the read
+  `crates/nest-rs-graphql/src/field_collection.rs` makes of a place's copies, compare the
+  declared shape of each key's copies across the types the place may hold, and refuse as
+  it refuses copies naming different fields. *read* (`overlapping_fields_can_be_merged.rs`
+  compares names and arguments alone)
 
 **WebSocket and MCP**
 - An MCP event stream carries no frame its client answers, so a peer gone
@@ -307,7 +289,11 @@ action reach, `missing_scopes` at a `Manage` site naming the smallest set it
 met, which a scope lifting every action, declared after each action's own
 grants, leaves larger than the smallest (closing it: an exact search, which
 grows as the fourth power of the grants per refused action, on the refusal
-path); the demo chart's `checksum/secret`, one sum over every Secret the
+path); a GraphQL document whose copies merge one field per type a position may hold, or
+whose condition on a union is rewritten per member, scoring each copy, so
+complexity counts more than runs for such a document alone, never less
+(`graphql-transactions.md`, 2026-11-11; closing it: scoring the rewritten
+document per type, which async-graphql's visitor does not do); the demo chart's `checksum/secret`, one sum over every Secret the
 chart writes, which an install handing the chart one weak secret and nothing
 else (every other app on an `existingSecret`) publishes unsalted to whoever
 reads its pods (closing it: a salt kept in the cluster, which `helm
@@ -332,10 +318,13 @@ writes twice; an argument copied at each row of a list, `Context::var_value`
 and `get_param_value` cloning, which the framework bounds meanwhile with
 `max_list_argument_bytes`; a type condition on a union applied only where
 that union is resolved, `Fields::add_set`; a later copy of a list of lists
-dropped, `insert_value` joining list items only where they are objects, which
-the framework refuses meanwhile; a `Json` scalar whose value fails to serialize
-answered `null` with no error, `Json::resolve`, which the framework answers
-meanwhile as its root field's refusal); redis-rs (`PipelineSink` loses a
+dropped, `insert_value` joining list items only where they are objects; these
+three the framework collects meanwhile, rewriting the document before
+validation; `OverlappingFieldsCanBeMerged` comparing copies under one type
+condition alone, which the framework refuses meanwhile, and running no
+`SameResponseShape`; a `Json` scalar whose value fails to serialize answered
+`null` with no error, `Json::resolve`, which the framework answers meanwhile as
+its root field's refusal); redis-rs (`PipelineSink` loses a
 read error with nothing in flight; a command sent as its connection's driver
 ends is neither answered nor dropped, so its caller waits out its budget, and
 no hook in the send lets a test place one there); sse-stream 0.2.6

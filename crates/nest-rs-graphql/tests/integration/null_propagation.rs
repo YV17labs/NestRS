@@ -527,80 +527,90 @@ async fn no_copy_hides_another_selections_answer() {
     }
 }
 
-/// What [`a_list_of_lists_selected_twice_otherwise_is_refused`] answers in place of
-/// `key`'s copies.
-fn unjoined(key: &str) -> String {
-    format!(
-        r#"the operation selects "{key}", a list of lists, more than once at one place with different selections"#
-    )
+/// The cells of the root's `grid`, each answering `cell`.
+fn grid_of(cell: &Value) -> Value {
+    json!([[cell, cell], [cell]])
 }
 
 /// async-graphql 7.2.1 joins a later copy of one response key into the first only
 /// where the first's list items are objects (`insert_value`), so a list of lists
 /// selected twice at one place answered one copy's items whole and lost the other's,
-/// with no error. Such a document is refused before anything runs, naming the key,
-/// a copy below another copy's list included, on `POST`, in a batch and over the
-/// socket.
+/// with no error. The copies merge before validation (`src/field_collection.rs`), a
+/// copy below another copy's list included, and each cell answers what both select,
+/// its nulls placed, on `POST`, in a batch and over the socket.
 #[tokio::test]
-async fn a_list_of_lists_selected_twice_otherwise_is_refused() {
+async fn a_list_of_lists_selected_twice_otherwise_answers_both_copies() {
     let app = boot().await;
-    for (document, key) in [
-        ("{ grid { fine } grid { inner { fine } } }", "grid"),
-        ("{ grid { inner { fine } } grid { fine } }", "grid"),
-        ("{ g: grid { fine } g: grid { broken } }", "g"),
-        ("{ grid { fine } ... { grid { inner { fine } } } }", "grid"),
+    let merged = json!({ "fine": 1, "inner": { "fine": 1 } });
+    for (document, data) in [
+        (
+            "{ grid { fine } grid { inner { fine } } }",
+            json!({ "grid": grid_of(&merged) }),
+        ),
+        (
+            "{ grid { inner { fine } } grid { fine } }",
+            json!({ "grid": grid_of(&json!({ "inner": { "fine": 1 }, "fine": 1 })) }),
+        ),
+        (
+            "{ grid { fine } ... { grid { inner { fine } } } }",
+            json!({ "grid": grid_of(&merged) }),
+        ),
         (
             "{ ...A ...B } fragment A on Query { grid { fine } } \
              fragment B on Query { grid { inner { fine } } }",
-            "grid",
+            json!({ "grid": grid_of(&merged) }),
         ),
         (
             "{ sureShapes { grid { fine } } sureShapes { grid { inner { fine } } } }",
-            "grid",
-        ),
-        (
-            "{ shape { inner { grid { fine } } } shape { inner { grid { broken } } } }",
-            "grid",
+            json!({ "sureShapes": [{ "grid": [[merged.clone()]] }, { "grid": [[merged.clone()]] }] }),
         ),
         (
             "{ either { ... on Shape { grid { fine } } } \
                either { ... on Shape { grid { inner { fine } } } } }",
-            "grid",
+            json!({ "either": { "grid": [[merged.clone()]] } }),
         ),
     ] {
         let answer = post(&app, &json!({ "query": document })).await;
-        assert_eq!(answer["data"], Value::Null, "{document}: {answer}");
-        assert_eq!(
-            answer["errors"][0]["message"],
-            unjoined(key),
-            "{document}: {answer}"
-        );
-        assert_eq!(
-            answer["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
-            "{document}: {answer}"
-        );
+        assert_eq!(answer, json!({ "data": data }), "{document}");
     }
-    let refused = "{ grid { fine } grid { inner { fine } } }";
+    let document = "{ g: grid { fine } g: grid { broken } }";
+    let answer = post(&app, &json!({ "query": document })).await;
+    assert_answers(
+        &answer,
+        document,
+        &json!({ "g": grid_of(&json!({ "fine": 1, "broken": null })) }),
+        &[
+            json!(["g", 0, 0, "broken"]),
+            json!(["g", 0, 1, "broken"]),
+            json!(["g", 1, 0, "broken"]),
+        ],
+    );
+    let document = "{ shape { inner { grid { fine } } } shape { inner { grid { broken } } } }";
+    let answer = post(&app, &json!({ "query": document })).await;
+    assert_answers(
+        &answer,
+        document,
+        &json!({ "shape": { "inner": { "grid": [[{ "fine": 1, "broken": null }]] } } }),
+        &[json!(["shape", "inner", "grid", 0, 0, "broken"])],
+    );
+
+    let document = "{ grid { fine } grid { inner { fine } } }";
     let answer = post(
         &app,
-        &json!([{ "query": refused }, { "query": "{ grid { fine } }" }]),
+        &json!([{ "query": document }, { "query": "{ grid { fine } }" }]),
     )
     .await;
-    assert_eq!(
-        answer[0]["errors"][0]["message"],
-        unjoined("grid"),
-        "{answer}"
-    );
+    assert_eq!(answer[0], json!({ "data": { "grid": grid_of(&merged) } }));
     assert_eq!(
         answer[1],
-        json!({ "data": { "grid": [[{ "fine": 1 }, { "fine": 1 }], [{ "fine": 1 }]] } }),
+        json!({ "data": { "grid": grid_of(&json!({ "fine": 1 })) } }),
         "{answer}"
     );
     let mut socket = app.graphql_socket().open();
     socket.connect().await;
-    socket.subscribe("grid", refused);
+    socket.subscribe("grid", document);
     let item = socket.next_item("grid").await.expect("the answer");
-    assert_eq!(item["errors"][0]["message"], unjoined("grid"), "{item}");
+    assert_eq!(item, json!({ "data": { "grid": grid_of(&merged) } }));
 }
 
 /// What no copy loses answers as GraphQL §6.3.2 merges it: copies alike, one a
@@ -691,19 +701,19 @@ async fn an_object_no_type_condition_of_which_applies_answers_an_empty_object() 
 
 /// async-graphql 7.2.1 (`Fields::add_set`) applies a condition on a union only where
 /// that union is resolved, where GraphQL §6.3.2 applies it to a member wherever one is
-/// selected: a canary, whose `{}` answers turn `{"fine": 1}` on the bump fixing it
-/// (`TODO.md` §4).
+/// selected: the condition is rewritten before validation (`src/field_collection.rs`),
+/// and answers as the specification reads.
 #[tokio::test]
-async fn a_condition_on_a_union_applies_only_where_that_union_is_resolved() {
+async fn a_condition_on_a_union_applies_wherever_a_member_is_resolved() {
     let app = boot().await;
     for (document, data) in [
         (
             "{ shape { ... on Either { ... on Shape { fine } } } }",
-            json!({ "shape": {} }),
+            json!({ "shape": { "fine": 1 } }),
         ),
         (
             "{ shape { ...E } } fragment E on Either { ... on Shape { fine } }",
-            json!({ "shape": {} }),
+            json!({ "shape": { "fine": 1 } }),
         ),
         (
             "{ either { ... on Either { ... on Shape { fine } } } }",
@@ -713,9 +723,13 @@ async fn a_condition_on_a_union_applies_only_where_that_union_is_resolved() {
             "{ either { ...E } } fragment E on Either { ... on Shape { fine } }",
             json!({ "either": { "fine": 1 } }),
         ),
+        (
+            "{ shapes { ... on Either { ... on Shape { strict } } } }",
+            json!({ "shapes": [null, null] }),
+        ),
     ] {
         let answer = post(&app, &json!({ "query": document })).await;
-        assert_eq!(answer, json!({ "data": data }), "{document}");
+        assert_eq!(answer["data"], data, "{document}: {answer}");
     }
 }
 

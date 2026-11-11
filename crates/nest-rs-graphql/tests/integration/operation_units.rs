@@ -662,76 +662,96 @@ async fn a_driver_offering_no_atomic_block_fails_the_first_root_field_and_resolv
     );
 }
 
-/// async-graphql runs a root field once per selection, where the
-/// specification runs one response key once: a mutation naming one root field
-/// twice — under one key, through fragments, a copy a directive skips included
-/// — would write twice and answer one of the two, so it is refused before any
-/// root field runs.
+/// async-graphql runs a root field once per selection, where the specification
+/// runs one response key once: a mutation naming one root field twice — under one
+/// key, through fragments — has its copies merged before validation, so the field
+/// runs once, in one block, and answers what each copy selects.
 #[tokio::test]
-async fn a_mutation_selecting_one_root_field_twice_is_refused_before_any_runs() {
+async fn a_mutation_selecting_one_root_field_twice_runs_it_once() {
     let logs = LogCapture::install();
     let (app, journal) = boot().await;
     let documents = [
         (
             "mutation { a: maybeShaped { broken } a: maybeShaped { fine } }",
-            r#""a""#,
+            json!({ "a": { "broken": null, "fine": 1 } }),
         ),
         (
             "mutation { maybeWrite(fail: false) ... on Mutation { maybeWrite(fail: false) } }",
-            r#""maybeWrite""#,
+            json!({ "maybeWrite": "block" }),
         ),
         (
             "mutation { ...A ...B } \
              fragment A on Mutation { w: maybeWrite(fail: false) } \
              fragment B on Mutation { w: maybeWrite(fail: false) }",
-            r#""w""#,
+            json!({ "w": "block" }),
         ),
         (
             "mutation { ...A ...A } fragment A on Mutation { maybeWrite(fail: false) }",
-            r#""A""#,
+            json!({ "maybeWrite": "block" }),
         ),
     ];
-    for (document, named) in documents {
+    for (document, data) in &documents {
         let reply = post(&app, json!({ "query": document })).await;
-        assert_eq!(reply["data"], Value::Null, "{document}: {reply}");
-        assert_eq!(
-            reply["errors"].as_array().map(Vec::len),
-            Some(1),
-            "{document}: {reply}"
-        );
-        let refused = &reply["errors"][0];
-        assert!(
-            refused["message"]
-                .as_str()
-                .is_some_and(|message| message.contains(named)),
-            "{document}: {reply}"
-        );
-        assert_eq!(
-            refused["extensions"]["code"], "INVALID_ARGUMENT",
-            "{document}: {reply}"
-        );
+        assert_eq!(&reply["data"], data, "{document}: {reply}");
     }
     assert_eq!(
         journal.read(),
         [
             "open graphql.operation per_unit",
-            "settle graphql.operation false"
+            "block released",
+            "settle graphql.operation true"
         ]
         .repeat(documents.len()),
-        "each refused operation is a unit that runs nothing and keeps nothing"
+        "each operation runs its root field once, in one block"
     );
-    assert!(dispatched(&logs).is_empty(), "no root field resolves");
+    assert_eq!(
+        dispatched(&logs).len(),
+        documents.len(),
+        "{:?}",
+        dispatched(&logs)
+    );
 
     let reply = post(&app, json!({ "query": "{ a: policy a: policy }" })).await;
-    assert_eq!(
-        reply["data"],
-        json!({ "a": "pool" }),
-        "a query writes nothing, so it runs as async-graphql runs it: {reply}"
-    );
+    assert_eq!(reply["data"], json!({ "a": "pool" }), "{reply}");
 }
 
-/// A document validation refuses says what validation says of it: the repeat
-/// is refused only of a document that could have run.
+/// Copies of one root key naming different fields or arguments are no one field
+/// (§5.3.2), which async-graphql's validation passes where a type condition stands
+/// between them: refused before any root field runs, a unit that runs nothing and
+/// keeps nothing.
+#[tokio::test]
+async fn a_mutation_selecting_one_key_twice_otherwise_is_refused_before_any_runs() {
+    let logs = LogCapture::install();
+    let (app, journal) = boot().await;
+    let reply = post(
+        &app,
+        json!({
+            "query": "mutation { a: maybeWrite(fail: false) ... on Mutation { a: maybeWrite(fail: true) } }",
+        }),
+    )
+    .await;
+    assert_eq!(reply["data"], Value::Null, "{reply}");
+    assert_eq!(
+        reply["errors"][0]["message"],
+        r#"the operation selects "a" more than once at one place with different fields or arguments"#,
+        "{reply}"
+    );
+    assert_eq!(
+        reply["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
+        "{reply}"
+    );
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "settle graphql.operation false"
+        ],
+    );
+    assert!(dispatched(&logs).is_empty(), "no root field resolves");
+}
+
+/// A document validation refuses says what validation says of it, its copies
+/// merged or not.
 #[tokio::test]
 async fn a_mutation_selecting_one_root_field_twice_answers_validation_first() {
     let (app, journal) = boot().await;
@@ -864,9 +884,9 @@ fn fragment_chain(links: usize, last: &str) -> String {
     query
 }
 
-/// A mutation fanning out is refused for what its fragments cost, where its root's
-/// read would call it a repeat once validation passed, as a `__typename` lets it
-/// pass: its unit opens and settles with nothing in it.
+/// A mutation fanning out is refused for what its fragments cost, before anything
+/// collects its copies, as a `__typename` lets it pass validation's score: its unit
+/// opens and settles with nothing in it.
 #[tokio::test]
 async fn a_mutation_fanning_out_runs_nothing() {
     let logs = LogCapture::install();
@@ -905,18 +925,26 @@ async fn a_fragment_chain_past_the_recursion_limit_is_refused_and_overflows_noth
     assert!(journal.read().iter().all(|line| !line.contains("block")));
 }
 
-/// A chain as deep as async-graphql runs is read to its end, and the first one
-/// deeper is refused by it: a bump that moves the limit fails here, and
-/// `RECURSIVE_DEPTH` moves with it.
+/// A chain as deep as async-graphql runs is read to its end, its copies merged,
+/// and the first one deeper is refused by it: a bump that moves the limit fails
+/// here, and `RECURSIVE_DEPTH` moves with it.
 #[tokio::test]
 async fn the_read_of_a_mutations_root_reaches_as_deep_as_a_document_runs() {
-    let (app, _) = boot().await;
+    let (app, journal) = boot().await;
     let repeat = "maybeWrite(fail: false) maybeWrite(fail: false)";
     let reply = post(&app, json!({ "query": fragment_chain(32, repeat) })).await;
     assert_eq!(
-        reply["errors"][0]["message"],
-        r#"the mutation selects "maybeWrite" more than once at its root"#,
+        reply,
+        json!({ "data": { "maybeWrite": "block" } }),
         "{reply}"
+    );
+    assert_eq!(
+        journal.read(),
+        [
+            "open graphql.operation per_unit",
+            "block released",
+            "settle graphql.operation true"
+        ],
     );
     let reply = post(&app, json!({ "query": fragment_chain(33, repeat) })).await;
     assert_eq!(
@@ -1182,12 +1210,12 @@ async fn a_required_variable_sent_null_is_refused_before_anything_runs() {
 }
 
 #[tokio::test]
-async fn a_batch_refuses_only_its_mutation_selecting_a_root_field_twice() {
+async fn a_batch_refuses_only_its_mutation_selecting_a_root_field_twice_otherwise() {
     let (app, journal) = boot().await;
     let replies = post(
         &app,
         json!([
-            { "query": "mutation { a: write(fail: false) a: write(fail: false) }" },
+            { "query": "mutation { a: write(fail: false) ... on Mutation { a: write(fail: true) } }" },
             { "query": "mutation { write(fail: false) }" },
         ]),
     )
@@ -1750,7 +1778,7 @@ async fn over_graphql_ws_each_mutation_runs_as_its_unit_inside_the_sockets() {
             true => assert!(answer["payload"]["errors"].is_array(), "{answer}"),
         }
     }
-    let query = "mutation { a: write(fail: false) a: write(fail: false) }";
+    let query = "mutation { a: write(fail: false) ... on Mutation { a: write(fail: true) } }";
     socket
         .send_text(
             json!({ "id": "3", "type": "subscribe", "payload": { "query": query } }).to_string(),
@@ -1779,6 +1807,6 @@ async fn over_graphql_ws_each_mutation_runs_as_its_unit_inside_the_sockets() {
             "settle graphql.operation false",
         ],
         "the socket's pool unit holds no transaction; each mutation opens and settles its own, \
-         on its own answer, and one selecting a root field twice runs none"
+         on its own answer, and one selecting a root field twice otherwise runs none"
     );
 }

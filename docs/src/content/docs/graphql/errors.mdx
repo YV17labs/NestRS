@@ -341,13 +341,11 @@ also decides which writes stand: a root field answering `null` rolls back its
 own, and a `null` reaching `data` the whole operation's
 ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 
-Two selections fall outside it, both from async-graphql 7.2.1. A field selected
-on an interface type reports its error without a `path`, so its key stays
-absent, and under a mutation its root field's writes stand with the root
-field's answer: select it inside `... on <ConcreteType>` and its error carries
-the path, so its `null` lands. At a mutation's root, where each copy of a root
-field selected twice would run its writes, such a document is refused before
-anything runs ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
+One selection falls outside it, from async-graphql 7.2.1. A field selected on an
+interface type reports its error without a `path`, so its key stays absent, and
+under a mutation its root field's writes stand with the root field's answer:
+select it inside `... on <ConcreteType>` and its error carries the path, so its
+`null` lands.
 
 An object the client selected answers an object, as GraphQL §6.3 reads, even when
 it has no key to answer: `{ org { name @skip(if: true) } }` answers `{"org": {}}`,
@@ -363,22 +361,31 @@ key of its own before validation, which judges nothing new by it, and that key
 leaves the answer before you read it: a document holding no fragment, no directive
 and no object selected twice pays nothing for it.
 
-A list of lists is the one shape no key joins. async-graphql 7.2.1 joins a later
-copy's list items into the first's only where those items are objects, so with
-`grid: [[Cell!]!]!`, `{ grid { a } grid { b } }`, or two fragments that each select
-`grid` otherwise, would answer one copy's cells and lose the other's. Such a
-document is refused before anything runs, with an `INVALID_ARGUMENT` error naming
-the key, at that place or below two copies of its parent: select it once, its
-copies' fields together, `{ grid { a b } }`. Copies selecting alike, as two
-fragments asking for the same fields do, are answered.
+A document async-graphql 7.2.1 would answer otherwise than GraphQL §6.3.2 reads it
+is rewritten before validation, which judges the rewrite as it would the document
+you sent, and answers as the specification does:
 
-One type condition still reads otherwise: async-graphql 7.2.1 applies a condition
-on a union only where that union is resolved. With `SearchResult` a union of `User`
-and `Org`, `{ search { ... on SearchResult { ... on User { name } } } }` answers each
-user's name, but the same fragment under a field answering a `User`,
-`{ user { ... on SearchResult { ... on User { name } } } }`, answers `{"user": {}}`,
-where the specification answers the name. Spread a union's fragments where the
-union is selected.
+- **A mutation's root field selected twice runs once.**
+  `mutation { a: createPost(input: $p) { id } a: createPost(input: $p) { title } }`,
+  or two fragments each selecting it, writes one post and answers its `id` and
+  `title`, where async-graphql ran each copy's write
+  ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
+- **A list of lists selected twice answers what each copy selects.** With
+  `grid: [[Cell!]!]!`, `{ grid { a } grid { b } }`, or two fragments that each select
+  `grid`, answers each cell's `a` and `b`, at that place or below two copies of its
+  parent, where async-graphql kept one copy's cells.
+- **A condition on a union applies wherever a member of it is resolved.** With
+  `SearchResult` a union of `User` and `Org`,
+  `{ user { ... on SearchResult { ... on User { name } } } }` answers the name, where
+  async-graphql applied the condition only under a field answering `SearchResult`.
+
+Copies of one key naming different fields or arguments are no one field (§5.3.2),
+even under different type conditions, where async-graphql's validation does not
+compare them: the operation runs nothing and answers one `INVALID_ARGUMENT` error at
+the copy that differs, `the operation selects "a" more than once at one place with
+different fields or arguments`. Complexity and depth count the document that runs,
+copies merged counting once ([query limits](/graphql/query-limits/#complexity)). A
+document needing none of this pays one read of its selections.
 
 ## Multiple errors in one response
 

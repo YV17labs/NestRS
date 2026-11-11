@@ -920,7 +920,8 @@ lists what the boot, a log or the wire shows when one is missed.
     savepoint settled on the answer that field gives: a failed nullable root
     field answers `null` and rolls back alone; a Non-Null root field's `null`
     reaching `data` rolls the whole operation back and runs no later root
-    field; a mutation naming one root field twice is refused. Return
+    field; a mutation naming one root field twice runs it once, its copies
+    merged, and one naming it twice with different arguments is refused. Return
     `Result<Option<T>>` from a mutation whose work must stand beside a
     sibling's failure, and put the writes that stand or fall together in one
     field. A batch's operations no longer share one transaction. A driver whose
@@ -1430,9 +1431,15 @@ lists what the boot, a log or the wire shows when one is missed.
   alone now.
 - **A GraphQL document selecting a list of lists twice at one place with different
   selections**, `{ grid { a } grid { b } }` with `grid: [[Cell!]!]!`, or two fragments
-  each selecting `grid` otherwise, reads an `INVALID_ARGUMENT` refusal naming `grid` and
-  runs nothing, where it answered one copy's cells and lost the other's. Select it once,
-  the copies' fields together: `{ grid { a b } }`.
+  each selecting `grid` otherwise, answers each cell's `a` and `b`, where it answered one
+  copy's cells and lost the other's.
+- **A GraphQL type condition on a union spread where a member of it is resolved**,
+  `{ user { ... on SearchResult { ... on User { name } } } }` with `SearchResult` a union
+  holding `User`, answers the member's fields, where it answered `{}`.
+- **A GraphQL document selecting one key twice at one place with different fields or
+  arguments under different type conditions**, `{ a: user { id } ... on Query { a: org {
+  id } } }`, reads an `INVALID_ARGUMENT` refusal at the copy that differs and runs
+  nothing, where it answered both fields under one key. Give each copy its own alias.
 - **A GraphQL subscription whose root names other than one field** — a second root
   field, `subscription { a b }`, one twice, one through a fragment, or one under `@skip`
   or `@include` — reads an `INVALID_ARGUMENT` refusal, `the subscription selects "b"

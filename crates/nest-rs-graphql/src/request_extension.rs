@@ -1,11 +1,12 @@
 //! What the schema does around each request, in the one extension it keeps,
 //! since an extension is entered on every field (`redact.rs`): before anything
 //! walks the document it refuses one that does not parse ([`unparsed`]) and what
-//! one that does would cost ([`document_cost`]), gives each object that could answer
-//! no key one of its own ([`OwnKey`]), seeds the request's loaders and what it files
-//! once ([`FiledFacts`]), and once validation passed answers the refusal the
-//! operation's read or that key's left ([`OperationRefusal`]). No other hook sits
-//! between validation and execution.
+//! one that does would cost ([`document_cost`]), collects it as GraphQL §6.3.2 reads
+//! it and gives each object that could answer no key one of its own ([`OwnKey`]),
+//! seeds the request's loaders and what it files once ([`FiledFacts`]), and once
+//! validation passed, each of its errors said once, answers the refusal the
+//! operation's read or that collection left ([`OperationRefusal`]). No other hook
+//! sits between validation and execution.
 
 use std::sync::Arc;
 
@@ -79,10 +80,11 @@ impl Extension for RequestExtension {
         let operation = request.operation_name.take();
         let registry = &ctx.schema_env.registry;
         // The operation's read cached a parse that passed; one that failed runs again
-        // here, and the refusal says only what this one left. Its objects are given
-        // their keys once its cost is counted, which bounds what that read expands,
-        // and copies no key joins are refused once validation passed.
-        let mut unjoined = None;
+        // here, and the refusal says only what this one left. It is collected, and its
+        // objects given their keys, once its cost is counted, which bounds what that
+        // read expands, and copies no one field answers are refused once validation
+        // passed.
+        let mut uncollected = None;
         let read = match request.parsed_query() {
             Ok(document) => match document_cost::refusal(
                 document,
@@ -98,7 +100,7 @@ impl Extension for RequestExtension {
                         own_key
                             .give(document, &selected.node, registry, &variables)
                             .unwrap_or_else(|refusal| {
-                                unjoined = Some(refusal);
+                                uncollected = Some(refusal);
                                 None
                             })
                     })),
@@ -110,7 +112,7 @@ impl Extension for RequestExtension {
         if let Some(given) = read? {
             request.set_parsed_query(given);
         }
-        if let Some(refusal) = unjoined
+        if let Some(refusal) = uncollected
             && held_by::<OperationRefusal>(&request.data).is_none()
         {
             request.data.insert(OperationRefusal::new(refusal));
@@ -130,7 +132,7 @@ impl Extension for RequestExtension {
         ctx: &ExtensionContext<'_>,
         next: NextValidation<'_>,
     ) -> Result<ValidationResult, Vec<ServerError>> {
-        let validated = next.run(ctx).await?;
+        let validated = next.run(ctx).await.map_err(said_once)?;
         match ctx
             .data_opt::<OperationRefusal>()
             .map(OperationRefusal::said)
@@ -139,4 +141,13 @@ impl Extension for RequestExtension {
             None => Ok(validated),
         }
     }
+}
+
+/// `errors` each said once: a fragment the operation's spreads were inlined from
+/// ([`crate::field_collection`]) is judged at each of them, where the document
+/// sent was judged once.
+fn said_once(mut errors: Vec<ServerError>) -> Vec<ServerError> {
+    let mut said = std::collections::HashSet::with_capacity(errors.len());
+    errors.retain(|error| said.insert((error.message.clone(), error.locations.clone())));
+    errors
 }

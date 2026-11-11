@@ -19,26 +19,24 @@
 //! document holding a fragment, a directive or an object selected twice at one
 //! place: without one, every set selects a field, and nothing is given.
 //!
-//! What no key joins is refused: `insert_value` joins a later copy into the first
-//! only where both are objects, or lists of objects, so a list nested in a list keeps
-//! the first copy to finish whole. A response key a value of some type selects more
-//! than once at one place, its copies answering such a list and selecting otherwise,
-//! at that place or below copies of its parent, refuses the operation once validation
-//! passed ([`OwnKey::give`]); copies selecting alike answer alike, and stay.
+//! The document read is the one [`crate::field_collection`] collected as GraphQL
+//! §6.3.2 reads it, where async-graphql would have answered it otherwise: what no
+//! key joins, a list of lists selected twice, is merged there before any key is
+//! given.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};
 
-use async_graphql::indexmap::IndexMap;
 use async_graphql::parser::types::{
-    Directive, DocumentOperations, ExecutableDocument, Field, FragmentDefinition,
-    OperationDefinition, OperationType, Selection, SelectionSet,
+    DocumentOperations, ExecutableDocument, Field, FragmentDefinition, OperationDefinition,
+    OperationType, Selection, SelectionSet,
 };
-use async_graphql::registry::{MetaField, MetaType, MetaTypeName, Registry};
+use async_graphql::registry::{MetaType, MetaTypeName, Registry};
 use async_graphql::{Name, Pos, Positioned, ServerError, Value, Variables};
 
+use crate::field_collection::{self, engine_applies, repeats_below};
 use crate::operation_units::{RECURSIVE_DEPTH, is_skipped};
 
 /// What the key a request's document gives its objects starts with, sixteen hex
@@ -51,16 +49,16 @@ const KEY: &str = "__nestrs_key";
 pub(crate) struct OwnKey(Arc<OnceLock<Name>>);
 
 impl OwnKey {
-    /// `document`, its operation `operation` selects, with every selection set that
-    /// could answer no key given one; `None` when none could. `registry` holds the
+    /// `document`, its operation `operation` selects, collected as GraphQL §6.3.2
+    /// reads it ([`field_collection::collected`]), with every selection set that could
+    /// answer no key given one; `None` when it stands as sent. `registry` holds the
     /// schema's types, and `variables` what `@skip` and `@include` read. Read once
     /// the document's cost was counted, which bounds what each fragment expands to.
     ///
     /// # Errors
     ///
-    /// The refusal of a response key whose copies no key joins, pointing at the
-    /// first copy selecting otherwise than the first: a list of lists selected more
-    /// than once at one place.
+    /// The refusal [`field_collection::collected`] answers: a response key whose
+    /// copies no one field answers.
     pub(crate) fn give(
         &self,
         document: &ExecutableDocument,
@@ -68,26 +66,33 @@ impl OwnKey {
         registry: &Registry,
         variables: &Variables,
     ) -> Result<Option<ExecutableDocument>, ServerError> {
-        let mut marks = Marks::new(&document.fragments, registry, variables);
-        marks.of_operation(operation);
-        if let Some((key, at)) = marks.unjoined {
-            return Err(unjoined(key, at));
-        }
-        if marks.sets.is_empty() {
-            return Ok(None);
+        let collected = field_collection::collected(document, operation, registry, variables)?;
+        let (read, chosen) = collected
+            .as_ref()
+            .and_then(|rewritten| {
+                Some((rewritten, field_collection::chosen(rewritten, operation)?.1))
+            })
+            .unwrap_or((document, operation));
+        let sets = {
+            let mut marks = Marks::new(&read.fragments, registry, variables);
+            marks.of_operation(chosen);
+            marks.sets
+        };
+        if sets.is_empty() {
+            return Ok(collected);
         }
         let key = drawn_key();
         // A request is read once; were it read again, the answer could lose only the
         // key it was first given, so no second one is.
         if self.0.set(key.clone()).is_err() {
-            return Ok(None);
+            return Ok(collected);
         }
-        let mut given = document.clone();
+        let mut given = collected.unwrap_or_else(|| document.clone());
         if let Some(chosen) = selected_operation_mut(&mut given, operation) {
-            give_key(&mut chosen.selection_set, &marks.sets, &key);
+            give_key(&mut chosen.selection_set, &sets, &key);
         }
         for fragment in given.fragments.values_mut() {
-            give_key(&mut fragment.node.selection_set, &marks.sets, &key);
+            give_key(&mut fragment.node.selection_set, &sets, &key);
         }
         Ok(Some(given))
     }
@@ -184,17 +189,6 @@ struct Marks<'a> {
     selects: HashMap<(&'a str, &'a str, &'a str), bool>,
     /// Each set read so far, and whether a repeat stood above it then.
     walked: HashMap<Pos, bool>,
-    /// Whether a set selects one object's response key more than once.
-    repeats: bool,
-    /// The fields each fragment selects of a value of a type, resolved as a type,
-    /// read once.
-    collected: HashMap<(&'a str, &'a str, &'a str), Vec<&'a Positioned<Field>>>,
-    /// Each place read for copies no key joins, by where its copies open and the
-    /// type it declares.
-    joined: HashSet<(Vec<Pos>, &'a str)>,
-    /// The first response key whose copies no key joins, and where the copy
-    /// selecting otherwise stands.
-    unjoined: Option<(&'a str, Pos)>,
 }
 
 impl<'a> Marks<'a> {
@@ -211,10 +205,6 @@ impl<'a> Marks<'a> {
             merged: HashMap::new(),
             selects: HashMap::new(),
             walked: HashMap::new(),
-            repeats: false,
-            collected: HashMap::new(),
-            joined: HashSet::new(),
-            unjoined: None,
         }
     }
 
@@ -242,10 +232,6 @@ impl<'a> Marks<'a> {
             self.sets.insert(set.pos);
         }
         self.walk(set, root, false, 0);
-        // Copies meet only below a repeat, which the walk read wherever it stands.
-        if self.repeats {
-            self.unjoined = self.first_unjoined(&[set], root, 0);
-        }
     }
 
     /// Each set of an object merged into `set`, selected on `on`, read: given a key
@@ -270,7 +256,6 @@ impl<'a> Marks<'a> {
                 repeats.insert(composite.key);
             }
         }
-        self.repeats |= !repeats.is_empty();
         for composite in merged {
             let below = &composite.field.node.selection_set;
             let repeated = repeated || repeats.contains(composite.key);
@@ -390,9 +375,12 @@ impl<'a> Marks<'a> {
                 && match &selection.node {
                     Selection::Field(_) => true,
                     Selection::InlineFragment(fragment) => match &fragment.node.type_condition {
-                        Some(condition) => {
-                            self.applies(condition.node.on.node.as_str(), concrete, resolving)
-                        }
+                        Some(condition) => engine_applies(
+                            self.registry,
+                            condition.node.on.node.as_str(),
+                            concrete,
+                            resolving,
+                        ),
                         None => Some(resolving),
                     }
                     .is_some_and(|resolving| {
@@ -426,7 +414,8 @@ impl<'a> Marks<'a> {
         }
         self.selects.insert(read_as, false);
         let read = self.fragments.get(name).is_some_and(|fragment| {
-            self.applies(
+            engine_applies(
+                self.registry,
                 fragment.node.type_condition.node.on.node.as_str(),
                 concrete,
                 resolving,
@@ -444,276 +433,10 @@ impl<'a> Marks<'a> {
         read
     }
 
-    /// The type a value of `concrete` resolved as `resolving` is resolved as below a
-    /// type condition on `condition`, as async-graphql (`7.2.1`, `Fields::add_set`)
-    /// applies it: `concrete` below its own name or an interface it implements,
-    /// `resolving` below its own, and `None` below any other. So a condition on a
-    /// union applies only where that union is resolved, never to a member selected
-    /// elsewhere, where GraphQL §6.3.2 applies it (`TODO.md` §4).
-    fn applies(&self, condition: &str, concrete: &'a str, resolving: &'a str) -> Option<&'a str> {
-        let implemented = self
-            .registry
-            .implements
-            .get(concrete)
-            .is_some_and(|interfaces| interfaces.contains(condition));
-        if condition == concrete || implemented {
-            Some(concrete)
-        } else if condition == resolving {
-            Some(resolving)
-        } else {
-            None
-        }
-    }
-
     /// The named type field `name` of `on` answers.
     fn field_type(&self, on: &str, name: &str) -> Option<&'a str> {
         let declared = self.registry.types.get(on)?.field_by_name(name)?;
         Some(MetaTypeName::concrete_typename(&declared.ty))
-    }
-
-    /// The first response key, at the place the sets `copies` merge into, all
-    /// selected on `ty`, or below it, whose copies of a value of one type select
-    /// otherwise and answer a list of lists, and where the first copy selecting
-    /// otherwise stands. Each place is read once, and copies alike stand for one.
-    fn first_unjoined(
-        &mut self,
-        copies: &[&'a Positioned<SelectionSet>],
-        ty: &'a str,
-        depth: usize,
-    ) -> Option<(&'a str, Pos)> {
-        let place: (Vec<Pos>, &'a str) = (copies.iter().map(|set| set.pos).collect(), ty);
-        if depth > RECURSIVE_DEPTH || !self.joined.insert(place) {
-            return None;
-        }
-        let registry = self.registry;
-        let concretes: Vec<&'a str> = match registry.types.get(ty)? {
-            MetaType::Object { .. } => vec![ty],
-            abstract_type => abstract_type
-                .possible_types()?
-                .iter()
-                .map(String::as_str)
-                .collect(),
-        };
-        for concrete in concretes {
-            let mut fields = Vec::new();
-            for set in copies {
-                self.collect(&set.node, concrete, ty, depth, &mut fields);
-            }
-            let mut seen = HashSet::with_capacity(fields.len());
-            let mut keys: IndexMap<&'a str, Vec<&'a Positioned<Field>>> = IndexMap::new();
-            for field in fields {
-                if seen.insert(field.pos) {
-                    let key = field.node.response_key().node.as_str();
-                    keys.entry(key).or_default().push(field);
-                }
-            }
-            for (key, group) in keys {
-                let first = group[0];
-                let otherwise = group[1..]
-                    .iter()
-                    .find(|copy| !self.alike_fields(&first.node, &copy.node, depth));
-                let declared = |copy: &&'a Positioned<Field>| -> Option<&'a MetaField> {
-                    registry
-                        .types
-                        .get(concrete)?
-                        .field_by_name(copy.node.name.node.as_str())
-                };
-                if let Some(otherwise) = otherwise
-                    && group
-                        .iter()
-                        .filter_map(declared)
-                        .any(|field| nests_lists(&field.ty))
-                {
-                    return Some((key, otherwise.pos));
-                }
-                let Some(below) = declared(&first) else {
-                    // A field the schema does not declare is validation's to refuse.
-                    continue;
-                };
-                let below = MetaTypeName::concrete_typename(&below.ty);
-                let sets: Vec<_> = match otherwise {
-                    Some(_) => group.iter().map(|copy| &copy.node.selection_set).collect(),
-                    None => vec![&first.node.selection_set],
-                };
-                if let Some(found) = self.first_unjoined(&sets, below, depth + 1) {
-                    return Some(found);
-                }
-            }
-        }
-        None
-    }
-
-    /// The fields with a selection set of their own that `set` selects of a value
-    /// of type `concrete` resolved as `resolving`, through its fragments, applied as
-    /// [`Self::selects`] applies them.
-    fn collect(
-        &mut self,
-        set: &'a SelectionSet,
-        concrete: &'a str,
-        resolving: &'a str,
-        depth: usize,
-        fields: &mut Vec<&'a Positioned<Field>>,
-    ) {
-        if depth > RECURSIVE_DEPTH {
-            return;
-        }
-        for selection in &set.items {
-            if is_skipped(selection.node.directives(), self.variables) {
-                continue;
-            }
-            match &selection.node {
-                Selection::Field(field) => {
-                    if !field.node.selection_set.node.items.is_empty() {
-                        fields.push(field);
-                    }
-                }
-                Selection::InlineFragment(fragment) => {
-                    let applied = match &fragment.node.type_condition {
-                        Some(condition) => {
-                            self.applies(condition.node.on.node.as_str(), concrete, resolving)
-                        }
-                        None => Some(resolving),
-                    };
-                    if let Some(resolving) = applied {
-                        let below = &fragment.node.selection_set.node;
-                        self.collect(below, concrete, resolving, depth + 1, fields);
-                    }
-                }
-                Selection::FragmentSpread(spread) => {
-                    let name = spread.node.fragment_name.node.as_str();
-                    let selected = self.fragment_fields(name, concrete, resolving, depth + 1);
-                    fields.extend(selected.iter().copied());
-                }
-            }
-        }
-    }
-
-    /// What fragment `name` collects of a value of type `concrete` resolved as
-    /// `resolving`, read once: one still being read, a cycle validation refuses,
-    /// collects nothing.
-    fn fragment_fields(
-        &mut self,
-        name: &'a str,
-        concrete: &'a str,
-        resolving: &'a str,
-        depth: usize,
-    ) -> &[&'a Positioned<Field>] {
-        let read_as = (name, concrete, resolving);
-        if !self.collected.contains_key(&read_as) {
-            self.collected.insert(read_as, Vec::new());
-            let mut fields = Vec::new();
-            if let Some(fragment) = self.fragments.get(name) {
-                let condition = fragment.node.type_condition.node.on.node.as_str();
-                if let Some(resolving) = self.applies(condition, concrete, resolving) {
-                    let below = &fragment.node.selection_set.node;
-                    self.collect(below, concrete, resolving, depth, &mut fields);
-                }
-            }
-            self.collected.insert(read_as, fields);
-        }
-        self.collected.get(&read_as).map_or(&[], Vec::as_slice)
-    }
-
-    /// Whether two copies of one response key answer alike wherever they stand: one
-    /// field, read with one argument list and one directive list, `@skip` and
-    /// `@include` aside, which were read before, and what runs of each selection
-    /// set alike, selection by selection.
-    fn alike_fields(&self, a: &Field, b: &Field, depth: usize) -> bool {
-        a.name.node == b.name.node
-            && a.arguments == b.arguments
-            && alike_directives(&a.directives, &b.directives)
-            && self.alike_sets(&a.selection_set.node, &b.selection_set.node, depth + 1)
-    }
-
-    fn alike_sets(&self, a: &SelectionSet, b: &SelectionSet, depth: usize) -> bool {
-        if depth > RECURSIVE_DEPTH {
-            return false;
-        }
-        let (mut a, mut b) = (running(a, self.variables), running(b, self.variables));
-        loop {
-            match (a.next(), b.next()) {
-                (None, None) => return true,
-                (Some(a), Some(b)) if self.alike_selections(&a.node, &b.node, depth) => {}
-                _ => return false,
-            }
-        }
-    }
-
-    fn alike_selections(&self, a: &Selection, b: &Selection, depth: usize) -> bool {
-        match (a, b) {
-            (Selection::Field(a), Selection::Field(b)) => {
-                a.node.response_key().node == b.node.response_key().node
-                    && self.alike_fields(&a.node, &b.node, depth)
-            }
-            (Selection::InlineFragment(a), Selection::InlineFragment(b)) => {
-                let (a_on, b_on) = (&a.node.type_condition, &b.node.type_condition);
-                a_on.as_ref().map(|condition| &condition.node.on.node)
-                    == b_on.as_ref().map(|condition| &condition.node.on.node)
-                    && alike_directives(&a.node.directives, &b.node.directives)
-                    && self.alike_sets(
-                        &a.node.selection_set.node,
-                        &b.node.selection_set.node,
-                        depth + 1,
-                    )
-            }
-            (Selection::FragmentSpread(a), Selection::FragmentSpread(b)) => {
-                a.node.fragment_name.node == b.node.fragment_name.node
-                    && alike_directives(&a.node.directives, &b.node.directives)
-            }
-            _ => false,
-        }
-    }
-}
-
-/// The refusal of `key`, whose copy at `at` no key joins to the first.
-fn unjoined(key: &str, at: Pos) -> ServerError {
-    crate::error::invalid_argument(format!(
-        r#"the operation selects "{key}", a list of lists, more than once at one place with different selections"#
-    ))
-    .into_server_error(at)
-}
-
-/// Whether `ty`, a field's declared type, holds a list inside a list.
-fn nests_lists(ty: &str) -> bool {
-    let (mut ty, mut lists) = (ty, 0);
-    loop {
-        match MetaTypeName::create(ty) {
-            MetaTypeName::List(item) => {
-                lists += 1;
-                ty = item;
-            }
-            MetaTypeName::NonNull(inner) => ty = inner,
-            MetaTypeName::Named(_) => return lists > 1,
-        }
-    }
-}
-
-/// The selections of `set` that `@skip` and `@include` leave in.
-fn running<'s>(
-    set: &'s SelectionSet,
-    variables: &'s Variables,
-) -> impl Iterator<Item = &'s Positioned<Selection>> {
-    set.items
-        .iter()
-        .filter(move |selection| !is_skipped(selection.node.directives(), variables))
-}
-
-/// Whether two selections carry one directive list, `@skip` and `@include` aside,
-/// which were read before.
-fn alike_directives(a: &[Positioned<Directive>], b: &[Positioned<Directive>]) -> bool {
-    let read = |directive: &&Positioned<Directive>| {
-        !matches!(directive.node.name.node.as_str(), "skip" | "include")
-    };
-    let same = |a: &Positioned<Directive>, b: &Positioned<Directive>| {
-        a.node.name.node == b.node.name.node && a.node.arguments == b.node.arguments
-    };
-    let (mut a, mut b) = (a.iter().filter(read), b.iter().filter(read));
-    loop {
-        match (a.next(), b.next()) {
-            (None, None) => return true,
-            (Some(a), Some(b)) if same(a, b) => {}
-            _ => return false,
-        }
     }
 }
 
@@ -730,22 +453,6 @@ fn drawn_key() -> Name {
     static DRAWN: AtomicU64 = AtomicU64::new(0);
     let drawn = SEED.hash_one(DRAWN.fetch_add(1, Ordering::Relaxed));
     Name::new(format!("{KEY}_{drawn:016x}"))
-}
-
-/// Whether two selections of `set`, or of a set within `depth` sets of it, name one
-/// object's response key, in a document holding no fragment, whose sets merge none.
-/// Each key is looked up, never scanned for: this runs before validation scores a
-/// document, whose width the body cap alone holds.
-fn repeats_below(set: &SelectionSet, depth: usize) -> bool {
-    let mut keys: HashSet<&str> = HashSet::new();
-    depth > 0
-        && set.items.iter().any(|selection| match &selection.node {
-            Selection::Field(field) if !field.node.selection_set.node.items.is_empty() => {
-                !keys.insert(field.node.response_key().node.as_str())
-                    || repeats_below(&field.node.selection_set.node, depth - 1)
-            }
-            _ => false,
-        })
 }
 
 /// Whether `set` holds a directive or a fragment within `depth` sets of it: the one
@@ -805,10 +512,6 @@ mod tests {
             Vec::new()
         }
 
-        async fn grid(&self) -> Vec<Vec<Fine>> {
-            Vec::new()
-        }
-
         async fn either(&self) -> Option<Either> {
             None
         }
@@ -829,8 +532,8 @@ mod tests {
         registry
     }
 
-    /// The document `text`, its objects given their key, as text again, with its
-    /// variables `variables`; `None` when no set needs one.
+    /// The paths of the sets of the document `text`, with its variables
+    /// `variables`, given a key; `None` when no set needs one.
     fn given(text: &str, variables: serde_json::Value) -> Option<String> {
         let document = parse_query(text).expect("the document parses");
         let (_, operation) = selected_operation(&document, None).expect("one operation");
@@ -839,8 +542,8 @@ mod tests {
         own_key
             .give(&document, &operation.node, &registry(), &variables)
             .unwrap_or_else(|refusal| panic!("{text}: {}", refusal.message))
-            .map(|given| {
-                let key = own_key.0.get().expect("a key given");
+            .and_then(|given| {
+                let key = own_key.0.get()?;
                 let (_, operation) = selected_operation(&given, None).expect("one operation");
                 let mut keyed = Vec::new();
                 keyed_sets(&operation.node.selection_set.node, key, "", &mut keyed);
@@ -850,7 +553,7 @@ mod tests {
                 }
                 fragments.sort();
                 keyed.extend(fragments);
-                keyed.join(" ")
+                Some(keyed.join(" "))
             })
     }
 
@@ -946,26 +649,28 @@ mod tests {
         }
     }
 
-    /// async-graphql applies a condition on a union where that union is resolved, and
-    /// to no member of it selected elsewhere, which is then left with no key.
+    /// A condition on a union is read as async-graphql applies it, where that union
+    /// is resolved; one on a member resolved elsewhere was collected to apply there
+    /// before any key is given (`crate::field_collection`).
     #[test]
-    fn a_condition_on_a_union_applies_where_that_union_is_resolved_alone() {
+    fn a_condition_on_a_union_takes_no_key_where_it_applies() {
         for document in [
             "{ either { ... on Either { ... on Fine { fine } ... on Other { other } } } }",
             "{ either { ...E } } fragment E on Either { ... on Fine { fine } ... on Other { other } }",
-        ] {
-            assert_eq!(given(document, json!({})), None, "{document}");
-        }
-        for document in [
             "{ fine { ... on Either { ... on Fine { fine } } } }",
             "{ fine { ...E } } fragment E on Either { ... on Fine { fine } }",
         ] {
-            assert_eq!(
-                given(document, json!({})).as_deref(),
-                Some("/fine"),
-                "{document}"
-            );
+            assert_eq!(given(document, json!({})), None, "{document}");
         }
+        assert_eq!(
+            given(
+                "{ either { ... on Either { ... on Fine { fine } } } }",
+                json!({})
+            )
+            .as_deref(),
+            Some("/either"),
+            "an `Other` meets no condition"
+        );
     }
 
     /// One fragment spread twice runs the same selections twice, which answer alike:
@@ -983,72 +688,6 @@ mod tests {
         assert_eq!(keyed.as_deref(), Some("/fine /fine"));
         let keyed = given("{ fines { fine } fines { fine } }", json!({}));
         assert_eq!(keyed.as_deref(), Some("/fines /fines"));
-    }
-
-    /// The refusal `text`'s operation is read to, when a key's copies no key joins.
-    fn refused(text: &str) -> Option<ServerError> {
-        let document = parse_query(text).expect("the document parses");
-        let (_, operation) = selected_operation(&document, None).expect("one operation");
-        OwnKey::default()
-            .give(
-                &document,
-                &operation.node,
-                &registry(),
-                &Variables::default(),
-            )
-            .err()
-    }
-
-    /// A list of lists whose copies at one place run otherwise is refused at the first
-    /// copy that does; copies running alike, a list of objects and two keys are not.
-    #[test]
-    fn a_list_of_lists_selected_twice_otherwise_is_refused_at_the_copy_that_differs() {
-        let refusal = refused("{\n  grid { fine }\n  grid { fine }\n  grid { f: fine }\n}")
-            .expect("the third copy selects otherwise");
-        assert_eq!(refusal.locations, [Pos { line: 4, column: 3 }]);
-        assert_eq!(
-            refusal.message,
-            r#"the operation selects "grid", a list of lists, more than once at one place with different selections"#
-        );
-        for document in [
-            "{ grid { fine @skip(if: true) } grid { fine } }",
-            "{ grid { fine } ... on Query { grid { f: fine } } }",
-            "{ ...A grid { f: fine } } fragment A on Query { grid { fine } }",
-            "{ fines { fine } fines { f: fine } grid { fine } grid { f: fine } }",
-        ] {
-            assert!(refused(document).is_some(), "{document}");
-        }
-        for document in [
-            "{ grid { fine } grid { fine } }",
-            "{ grid { fine @include(if: true) } grid { fine } }",
-            "{ grid @include(if: true) { fine } grid { fine } }",
-            "{ grid { ...F } grid { ...F } } fragment F on Fine { fine }",
-            "{ ...A ...A } fragment A on Query { grid { fine } }",
-            "{ a: grid { fine } b: grid { f: fine } }",
-            "{ fines { fine } fines { f: fine } }",
-            "{ grid { fine } grid @skip(if: true) { f: fine } }",
-        ] {
-            assert!(refused(document).is_none(), "{document}");
-        }
-    }
-
-    /// One key repeated across a wide document is read once per copy: the copies
-    /// compared to the first, and what stands below them read once.
-    #[test]
-    fn a_wide_repeat_costs_no_square_of_its_width() {
-        let copies: String = (0..20_000).map(|_| "grid { fine } ").collect();
-        let text = format!("{{ {copies}}}");
-        let started = thread_cpu_time();
-        let document = parse_query(&text).expect("the document parses");
-        let parsing = thread_cpu_time() - started;
-        let (_, operation) = selected_operation(&document, None).expect("one operation");
-        let (registry, variables) = (registry(), Variables::default());
-        let mut marks = Marks::new(&document.fragments, &registry, &variables);
-        let started = thread_cpu_time();
-        let unjoined = marks.first_unjoined(&[&operation.node.selection_set], "Query", 0);
-        let past = thread_cpu_time() - started;
-        assert!(unjoined.is_none(), "every copy alike");
-        assert!(past < parsing, "parsed in {parsing:?}, then {past:?}");
     }
 
     /// Each request draws a key of its own, which nothing the answer holds spells: a

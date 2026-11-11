@@ -16,22 +16,25 @@
 //! - `src/null_propagation.rs`: a failed field's key left out, the first of a
 //!   field's selections to finish kept, a request's cached parse executed, and a
 //!   mutation root field reading the errors filed so far off its context;
+//! - `src/field_collection.rs`: a root field run once per selection (so a
+//!   mutation's copies of one merge), a later copy's list items joined only where
+//!   they are objects (`insert_value`, so a list of lists selected twice merges), a
+//!   type condition applied to the concrete type, an interface it implements or the
+//!   type its position resolves (`Fields::add_set`, so one on a union is rewritten
+//!   where a member of it is resolved), `OverlappingFieldsCanBeMerged` comparing
+//!   copies under one type condition alone (so copies naming different fields are
+//!   refused), the parse `Request::set_parsed_query` caches being the one validated
+//!   and executed, `check_recursive_depth` counting an inline fragment as a spread,
+//!   and complexity and depth counting every field the document holds;
 //! - `src/own_key.rs`: `null` for an object with no key, what finishes after a
-//!   `null` dropped, a later copy's list items joined only where they are objects
-//!   (`insert_value`, so a list of lists selected twice with different selections
-//!   is refused), `__typename` answered under its response key
-//!   by `Fields::add_set` and scored nothing, a type condition applied to the
-//!   concrete type, an interface it implements or the type its position resolves
-//!   (so one on a union only where that union is resolved, never to a member
-//!   selected elsewhere: `TODO.md` §4), and the parse `Request::set_parsed_query`
-//!   caches executed after `Extension::prepare_request`;
-//! - `src/operation_units.rs`: a root field run once per selection (so a mutation
-//!   naming one twice is refused), the private rule of `remove_skipped_selection`
+//!   `null` dropped, and `__typename` answered under its response key by
+//!   `Fields::add_set` and scored nothing;
+//! - `src/operation_units.rs`: the private rule of `remove_skipped_selection`
 //!   (copied), a directive reading `request.variables` alone (so a variable's
 //!   default is filled in), a variable's Non-Null wrappers read by no validation
 //!   rule (so a `null` is refused there), and `check_recursive_depth`'s bound;
 //! - `src/request_extension.rs`: `Extension::validation` wrapping `check_rules`
-//!   with the request's data attached;
+//!   with the request's data attached, its errors said once;
 //! - `src/document_cost.rs`: the walks `check_rules` inlines, which pay a
 //!   fragment's expansion at each spread, a field's arguments read again at each
 //!   row of a list (`Context::get_param_value` and `var_value` cloning, the rows
@@ -52,6 +55,7 @@ mod endpoint;
 mod error;
 mod federation;
 mod field_answer;
+mod field_collection;
 mod field_spellings;
 mod filed_facts;
 mod loader;

@@ -7,7 +7,6 @@
 //! data rolls back whole — a response never reports work that was rolled back,
 //! nor stays silent on work that stands.
 
-use std::collections::{HashMap, HashSet};
 use std::convert::identity;
 use std::future::Future;
 use std::pin::Pin;
@@ -18,11 +17,11 @@ use std::time::Duration;
 use async_graphql::futures_util::StreamExt;
 use async_graphql::futures_util::stream::{self, BoxStream, FuturesOrdered, Stream};
 use async_graphql::parser::types::{
-    BaseType, Directive, DocumentOperations, ExecutableDocument, FragmentDefinition,
-    OperationDefinition, OperationType, Selection, SelectionSet, Type, VariableDefinition,
+    BaseType, Directive, DocumentOperations, ExecutableDocument, OperationDefinition,
+    OperationType, Selection, SelectionSet, Type, VariableDefinition,
 };
 use async_graphql::{
-    BatchRequest, BatchResponse, Context, Data, Executor, Name, Pos, Positioned, Request, Response,
+    BatchRequest, BatchResponse, Context, Data, Executor, Name, Positioned, Request, Response,
     ServerError, ServerResult, Value, Variables,
 };
 use async_graphql_value::Value as Written;
@@ -346,19 +345,14 @@ impl Selected {
     /// global pipe, which is handed the variables as the request sent them.
     fn of(request: &mut Request) -> Self {
         let mut variables = std::mem::take(&mut request.variables);
-        let read = read_selected(request, |document, name, operation| {
+        let read = read_selected(request, |_, name, operation| {
             let operation = &operation.node;
             let refusal = coerce_variables(&operation.variable_definitions, &mut variables)
                 .or_else(|| match operation.ty {
-                    OperationType::Mutation => repeated_root_selection(
-                        &document.fragments,
-                        &operation.selection_set.node,
-                        &variables,
-                    ),
                     OperationType::Subscription => {
                         subscription_root_refusal(&operation.selection_set.node)
                     }
-                    OperationType::Query => None,
+                    OperationType::Query | OperationType::Mutation => None,
                 });
             let selected = Self {
                 ty: Some(operation.ty),
@@ -540,34 +534,6 @@ pub(crate) fn is_skipped(directives: &[Positioned<Directive>], variables: &Varia
     })
 }
 
-/// The refusal of a mutation whose root selections, through its fragments,
-/// name one response key or spread one fragment more than once, pointing at
-/// the repeated selection: async-graphql (`7.2.1`) runs a root field once per
-/// selection — its writes twice — where GraphQL §6.3.2 runs one key once, and
-/// answers only one of the two. A selection `@skip` or `@include` leaves out
-/// runs nothing, so it repeats nothing.
-fn repeated_root_selection(
-    fragments: &HashMap<Name, Positioned<FragmentDefinition>>,
-    root: &SelectionSet,
-    variables: &Variables,
-) -> Option<ServerError> {
-    let mut selections = RootSelections {
-        fragments,
-        variables,
-        keys: HashSet::new(),
-        spread: HashSet::new(),
-        expanding: Vec::new(),
-    };
-    let (repeated, at) = selections.first_repeated(root, 0)?;
-    let said = match repeated {
-        Repeated::Key(key) => format!(r#"the mutation selects "{key}" more than once at its root"#),
-        Repeated::Fragment(name) => {
-            format!(r#"the mutation spreads "{name}" more than once at its root"#)
-        }
-    };
-    Some(crate::error::invalid_argument(said).into_server_error(at))
-}
-
 /// The refusal of a subscription whose root names other than one field, pointing
 /// at the first selection past it. GraphQL (September 2025) §5.2.3.1, *Single Root
 /// Field*, which async-graphql (`7.2.1`) does not hold: its executor opens a stream
@@ -609,68 +575,6 @@ fn subscription_root_refusal(root: &SelectionSet) -> Option<ServerError> {
             Some((said, selection.pos))
         })
         .map(|(said, at)| crate::error::invalid_argument(said).into_server_error(at))
-}
-
-/// A mutation's root selections, read before validation: each fragment is
-/// expanded once at most and no deeper than [`RECURSIVE_DEPTH`], so the walk
-/// never outgrows the document or the stack, and a fragment cycle, which
-/// validation refuses, ends it.
-struct RootSelections<'d> {
-    fragments: &'d HashMap<Name, Positioned<FragmentDefinition>>,
-    variables: &'d Variables,
-    keys: HashSet<&'d str>,
-    spread: HashSet<&'d str>,
-    /// The fragments being expanded, the innermost last.
-    expanding: Vec<&'d str>,
-}
-
-/// What a root selection names a second time.
-enum Repeated<'d> {
-    Key(&'d str),
-    Fragment(&'d str),
-}
-
-impl<'d> RootSelections<'d> {
-    /// The first selection of `set`, `depth` selection sets below the root,
-    /// naming a response key, or spreading a fragment, the root already holds, and
-    /// where it stands.
-    fn first_repeated(
-        &mut self,
-        set: &'d SelectionSet,
-        depth: usize,
-    ) -> Option<(Repeated<'d>, Pos)> {
-        if depth > RECURSIVE_DEPTH {
-            return None;
-        }
-        let variables = self.variables;
-        set.items
-            .iter()
-            .filter(|selection| !is_skipped(selection.node.directives(), variables))
-            .find_map(|selection| match &selection.node {
-                Selection::Field(field) => {
-                    let key = field.node.response_key().node.as_str();
-                    (!self.keys.insert(key)).then_some((Repeated::Key(key), selection.pos))
-                }
-                Selection::FragmentSpread(spread) => {
-                    let name = spread.node.fragment_name.node.as_str();
-                    if self.expanding.contains(&name) {
-                        return None;
-                    }
-                    if !self.spread.insert(name) {
-                        return Some((Repeated::Fragment(name), selection.pos));
-                    }
-                    let fragment = self.fragments.get(name)?;
-                    self.expanding.push(name);
-                    let repeated =
-                        self.first_repeated(&fragment.node.selection_set.node, depth + 1);
-                    self.expanding.pop();
-                    repeated
-                }
-                Selection::InlineFragment(fragment) => {
-                    self.first_repeated(&fragment.node.selection_set.node, depth + 1)
-                }
-            })
-    }
 }
 
 /// An operation answered `problem` alone: no data, since nothing it wrote
@@ -853,7 +757,7 @@ mod tests {
     use async_graphql::parser::types::Field;
     use async_graphql::registry::Registry;
     use async_graphql::{
-        ContainerType, ContextSelectionSet, EmptySubscription, Object, ObjectType, OutputType,
+        ContainerType, ContextSelectionSet, EmptySubscription, Object, ObjectType, OutputType, Pos,
         Schema,
     };
 
@@ -943,44 +847,6 @@ mod tests {
     }
 
     #[test]
-    fn a_mutation_naming_one_root_field_twice_is_refused_naming_it() {
-        let selects =
-            |key: &str| format!(r#"the mutation selects "{key}" more than once at its root"#);
-        let spreads =
-            |name: &str| format!(r#"the mutation spreads "{name}" more than once at its root"#);
-        for (query, said) in [
-            ("mutation { a a }", selects("a")),
-            ("mutation { x: a x: b }", selects("x")),
-            ("mutation { a b: a a }", selects("a")),
-            ("mutation { a ... { a } }", selects("a")),
-            ("mutation { a ... on Mutation { a } }", selects("a")),
-            (
-                "mutation { ...A b } fragment A on Mutation { b }",
-                selects("b"),
-            ),
-            (
-                "mutation { ...A ...B } fragment A on Mutation { a } fragment B on Mutation { a }",
-                selects("a"),
-            ),
-            (
-                "mutation { ...A ...A } fragment A on Mutation { a }",
-                spreads("A"),
-            ),
-            (
-                "mutation { ...A ...B } fragment A on Mutation { ...C } \
-                 fragment B on Mutation { ...C } fragment C on Mutation { c }",
-                spreads("C"),
-            ),
-        ] {
-            assert_eq!(refusal(query, None), Some(said), "{query}");
-        }
-        assert_eq!(
-            refusal("query Q { a } mutation M { a a }", Some("M")),
-            Some(selects("a"))
-        );
-    }
-
-    #[test]
     fn a_subscription_whose_root_names_other_than_one_field_is_refused_naming_it() {
         for (query, said) in [
             (
@@ -1054,15 +920,6 @@ mod tests {
         };
         assert_eq!(refusal.locations, [Pos { line: 3, column: 3 }]);
         assert!(refusal.path.is_empty(), "the operation's, not a field's");
-    }
-
-    #[test]
-    fn a_refusal_points_at_the_selection_repeated_and_says_its_class() {
-        let Some(refusal) = refused(request("mutation {\n  a\n  a\n}", None)) else {
-            panic!("the mutation names `a` twice");
-        };
-        assert_eq!(refusal.locations, [Pos { line: 3, column: 3 }]);
-        assert!(refusal.path.is_empty(), "the operation's, not a field's");
         let code = refusal
             .extensions
             .as_ref()
@@ -1108,26 +965,6 @@ mod tests {
             reading < copying,
             "read in {reading:?}, copied in {copying:?}"
         );
-    }
-
-    #[test]
-    fn a_document_naming_each_root_field_once_is_not_refused() {
-        for (query, name) in [
-            ("mutation { a b }", None),
-            ("mutation { a { b b } c: a { b } }", None),
-            (
-                "mutation { ...A b } fragment A on Mutation { a { x x } }",
-                None,
-            ),
-            ("{ a a }", None),
-            ("query Q { a a } mutation M { a }", Some("M")),
-            // Validation refuses these; the walk ends on them.
-            ("mutation { ...A } fragment A on Mutation { ...A b }", None),
-            ("mutation { ...Missing a }", None),
-            ("mutation { a a", None),
-        ] {
-            assert_eq!(refusal(query, name), None, "{query}");
-        }
     }
 
     /// `query`'s variables once read, sent as `variables`.
@@ -1257,77 +1094,6 @@ mod tests {
             ("[[Int]]", json!([null, [null]]), None),
         ] {
             assert_eq!(sent(ty, value.clone()), said, "{ty}: {value}");
-        }
-    }
-
-    #[test]
-    fn a_selection_a_directive_leaves_out_repeats_nothing() {
-        let with = |query: &str, variables: serde_json::Value| {
-            refused(request(query, None).variables(Variables::from_json(variables)))
-                .map(|refusal| refusal.message)
-        };
-        for (query, variables) in [
-            ("mutation { a @skip(if: true) a }", serde_json::json!({})),
-            (
-                "mutation { a a @include(if: false) }",
-                serde_json::json!({}),
-            ),
-            (
-                "mutation($x: Boolean!) { a @skip(if: $x) a @include(if: $x) }",
-                serde_json::json!({ "x": true }),
-            ),
-            (
-                "mutation($x: Boolean!) { a @skip(if: $x) a @include(if: $x) }",
-                serde_json::json!({ "x": false }),
-            ),
-            (
-                "mutation($x: Boolean = true) { a @skip(if: $x) a }",
-                serde_json::json!({}),
-            ),
-            (
-                "mutation { ...A @skip(if: true) ...A } fragment A on Mutation { a }",
-                serde_json::json!({}),
-            ),
-            (
-                "mutation { a ... @skip(if: true) { a } }",
-                serde_json::json!({}),
-            ),
-            (
-                "mutation { a ...A } fragment A on Mutation { a @skip(if: true) }",
-                serde_json::json!({}),
-            ),
-        ] {
-            assert_eq!(with(query, variables), None, "{query}");
-        }
-        for (query, variables, key) in [
-            (
-                "mutation { a @skip(if: false) a }",
-                serde_json::json!({}),
-                "a",
-            ),
-            (
-                "mutation { a a @include(if: true) }",
-                serde_json::json!({}),
-                "a",
-            ),
-            (
-                "mutation($x: Boolean = false) { a @skip(if: $x) a }",
-                serde_json::json!({}),
-                "a",
-            ),
-            (
-                "mutation($x: Boolean = false) { a @skip(if: $x) a }",
-                serde_json::json!({ "x": false }),
-                "a",
-            ),
-        ] {
-            assert_eq!(
-                with(query, variables),
-                Some(format!(
-                    r#"the mutation selects "{key}" more than once at its root"#
-                )),
-                "{query}"
-            );
         }
     }
 
@@ -1470,25 +1236,5 @@ mod tests {
         let response = schema.execute("mutation { shaped { broken } }").await;
         assert_eq!(response.errors.len(), 1, "{response:?}");
         assert_eq!(*added.lock().unwrap(), [1]);
-    }
-
-    /// Pins why a mutation naming one root field twice is refused: async-graphql
-    /// runs it once per selection, where GraphQL §6.3.2 runs one response key
-    /// once. A bump that merges them fails here, and the refusal can go.
-    #[tokio::test]
-    async fn a_root_field_selected_twice_runs_twice() {
-        let added = Arc::new(Mutex::new(Vec::new()));
-        let schema = Schema::new(
-            Query,
-            Counted {
-                root: Mutation,
-                added: Arc::clone(&added),
-            },
-            EmptySubscription,
-        );
-        schema
-            .execute("mutation { a: shaped { broken } a: shaped { broken } }")
-            .await;
-        assert_eq!(*added.lock().unwrap(), [1, 1]);
     }
 }

@@ -13,6 +13,7 @@ mod document_cost;
 mod duplicate_operation;
 mod endpoint;
 mod federation;
+mod field_collection;
 mod field_spellings;
 mod global_pipe;
 mod guard;

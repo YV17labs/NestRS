@@ -117,6 +117,7 @@ mod mcp_impl;
 mod module;
 mod operation;
 mod parameters;
+mod ping;
 mod propagate;
 mod registry;
 mod resource;

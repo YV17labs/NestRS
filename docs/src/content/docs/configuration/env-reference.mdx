@@ -340,6 +340,8 @@ no `aud` or no `iss` is refused. The MCP endpoint's `Host` allowlist admits
 | `OPERATION_TIMEOUT_SECS` | how long one operation may run, `subscriptions/listen` aside — default `20`, the request timeout's; whole seconds from `1` to `3600`, or `0` ⇒ none. An overrun answers a JSON-RPC internal error whose `data.reason` is `timeout`. A timeout past `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, files one `warn` at boot |
 | `MAX_CONCURRENT_SESSIONS` | live sessions one endpoint holds, whole numbers from `1` to `1048576` — default `1024`. Past it an `initialize` is answered `503` with `Retry-After: 5`; a stateless request is never refused for it |
 | `SESSION_IDLE_TIMEOUT_SECS` | how long a session may go without a message before it is closed, whole seconds from `1` to `3600`, never off — default `300` |
+| `PING_INTERVAL_SECS` | how long a session's client holding its stream may send nothing before it is sent MCP's `ping` on that stream, whole seconds from `1` to `3600` (`0` ⇒ none) — default `20` |
+| `PING_TIMEOUT_SECS` | how long that `ping` waits for anything back before the session is closed, whole seconds from `1` to `3600`, never off — default `20` |
 
 ## `social` — `<PREFIX>_SOCIAL__<PROVIDER>__*`
 

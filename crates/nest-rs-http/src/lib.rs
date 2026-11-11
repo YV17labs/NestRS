@@ -45,6 +45,7 @@ mod form;
 mod guard_stage;
 mod headers;
 mod json;
+mod keep_alive;
 mod link;
 mod location;
 mod matched;
@@ -279,6 +280,7 @@ pub mod __private {
     pub use crate::guard_stage::{
         attached, attached_pending, behind_guards, check_request, denial_to_http_response,
     };
+    pub use crate::keep_alive::{Due, KeepAlive};
     pub use crate::module::RUNTIME;
     pub use crate::multipart::{BoundaryRefused, boundary as multipart_boundary};
     pub use crate::origin::OriginScheme;
@@ -304,15 +306,15 @@ pub mod __private {
 
     /// Whether a request asks for a WebSocket and, behind the `websocket`
     /// feature, the opening handshake on hyper's upgrade, the socket above it,
-    /// the codes it closes with and its keepalive, for the edges that speak one.
+    /// and the codes it closes with, for the edges that speak one.
     pub mod websocket {
         #[cfg(feature = "websocket")]
         pub use crate::error::HandshakeRefused;
         pub use crate::websocket::requested;
         #[cfg(feature = "websocket")]
         pub use crate::websocket::{
-            CloseCode, Due, Error, KeepAlive, Message, Signal, Utf8Bytes, WebSocketLimits,
-            WebSocketStream, WebSocketUpgrade, close_frame, read_failed,
+            CloseCode, Error, Message, Signal, Utf8Bytes, WebSocketLimits, WebSocketStream,
+            WebSocketUpgrade, close_frame, read_failed,
         };
     }
 }

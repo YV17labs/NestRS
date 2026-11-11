@@ -15,8 +15,9 @@ use nest_rs_core::{
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_guards::__private::GuardSpec;
 use nest_rs_http::__private::websocket::{
-    self, CloseCode, Due, KeepAlive, Message, Signal, WebSocketLimits, WebSocketUpgrade,
+    self, CloseCode, Message, Signal, WebSocketLimits, WebSocketUpgrade,
 };
+use nest_rs_http::__private::{Due, KeepAlive};
 use nest_rs_http::{BoxEndpoint, DetachedWork, Endpoint, Request, Response};
 use nest_rs_pipes::__private::PipeSpec;
 use tracing::Instrument;

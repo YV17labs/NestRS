@@ -95,3 +95,54 @@ refusal wakes the same loop, and takes the same signal.
 - Refused: a `Notified` pinned across frames, which still takes the lock on
   each poll to refresh its waker; an `mpsc(1)` arm, lock-free too, whose full
   channel a raise would have to set aside as no error.
+
+**2026-11-11, an MCP session's client is pinged on its stream** (closing the
+`TODO.md` line "an MCP event stream carries no frame its client answers"). A
+client gone without a close while holding its session's `GET` stream kept its
+session — a worker, its handler, a place under the cap — to the idle timeout, and
+past it while the server wrote to it: rmcp's session worker re-arms its idle timer
+on every message, either way. Seen by `nest-rs-mcp`'s `ping` suite on paused
+time: a silent client's stream carried nothing and lived to the idle timeout.
+
+- **MCP's own `ping` request** (the specification's *Ping* utility, which both
+  sides must answer promptly), once the client has sent nothing for
+  `ping_interval`, and the session ended when nothing comes back within
+  `ping_timeout`: the sockets' rule, their ranges and their defaults, read as
+  `<PREFIX>_MCP__PING_*_SECS`. `KeepAlive` moved to `nest-rs-http`'s root, its
+  third user, with `heard_at` for a peer heard on another task.
+- **Written on the stream, never through rmcp's worker.** Sent through the worker,
+  a ping and its answer would re-arm its idle timer, so an idle client answering
+  would never idle out, and with no stream open the ping would wait in the
+  session's cache and be replayed to the next one. The stream wrapper writes it
+  ahead of what the stream holds, its answer stops in the session manager
+  (`is_ping_answer`), and any message the manager admits for the session — a
+  `GET` included — is the client heard.
+- **Only a session holding a stream is asked.** One holding none has no channel,
+  and holds no connection a vanished client would leave open; its idle timeout
+  bounds it while the server writes nothing to it. Several streams of one session
+  each ask; the first to give up says it, once.
+- **The session ends by its worker's token**, which rmcp's own end then follows:
+  the place frees, every stream of it ends, the next request reads `404` — or,
+  with a session store, restores the session, whose record only a client's
+  `DELETE` removes.
+- The ids are strings, `ping-` and a random UUID: rmcp numbers its own requests,
+  so no request of rmcp's, or of a host writing through its peer, takes one, and
+  the specification's rule that an id is never reused in a session holds across a
+  restore from the store and another instance serving the session, each of which
+  gets a client of its own with no count to go on. Refused: `ping-<n>` numbered
+  per client, which a restored session numbered from 1 again.
+
+**Refused:**
+
+- **`Peer::send_request` with a timeout** (rmcp's own request path): through the
+  worker, with both faults above, and its timeout ends the request, not the
+  session.
+- **A per-session task** to time the wait whether or not the stream is polled:
+  the transport polls a stream whenever it can write, and a stream it cannot write
+  to is the kernel's to end; a task per session pays for a case the kernel bounds.
+- **`TCP_USER_TIMEOUT`**: Linux's alone, and behind a proxy the server's hop is the
+  live proxy.
+
+Left open, in `TODO.md`: a stream the transport cannot write to (the kernel's
+buffer full toward a vanished client) asks nothing until the kernel gives up; a
+session whose stream is gone while the server keeps writing to it never idles out.

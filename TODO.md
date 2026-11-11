@@ -150,16 +150,17 @@ keeps on purpose is §5's.
   compares names and arguments alone)
 
 **WebSocket and MCP**
-- An MCP event stream carries no frame its client answers, so a peer gone
-  without a close is noticed only when the kernel nearest it gives up
-  retransmitting the 15-second keep-alive (Linux: about 15 minutes), or at
-  `SESSION_IDLE_TIMEOUT_SECS` for an idle session; an `#[sse]` stream likewise.
-  The WebSocket gateway and the graphql-ws socket ping instead (the decision on
-  socket pings). Close, for a legacy session: MCP's own `ping` request, sent by
-  rmcp's peer once the session is quiet for an interval, the session ended when
-  none is answered; a stateless `subscriptions/listen` has no channel for one.
-  `TCP_USER_TIMEOUT` is no answer: behind a proxy the server's hop is the live
-  proxy. *read*
+- An MCP session's `ping` rides its stream, so it is asked only while the
+  transport can write that stream: a client gone with the kernel's send buffer
+  full toward it (the server pushing faster than a vanished peer drains) is
+  asked nothing until the kernel gives up retransmitting (Linux: about 15
+  minutes). Close: the wait timed off the stream, a timer per session or one
+  sweep per mount, its cost measured. *read*
+- An MCP session whose stream is gone while the server keeps writing to it never
+  idles out: rmcp's worker re-arms its idle timer on every message, the server's
+  own included, and a session holding no stream is asked nothing. Close: the
+  idle timeout counting the client's messages alone, owned by the mount in place
+  of rmcp's (`SessionConfig::keep_alive` off). *read*
 - A withheld chain's line names `error` alone in two places, where a
   gateway's `websocket message failed` names `path` and `event`:
   `Opaque::opaque`'s line of that same sentence (one message, two field sets),
@@ -256,7 +257,13 @@ arrived (an item that must not say even that is a row, a list, or one inside an
 `Option` or a `Result`, which leaves the stream); a push to other connections carrying no row judged for a caller, so a
 per-recipient row is built per recipient or is a DTO (`mask-provenance.md`,
 2026-11-08); real-clock budgets where only real time tells two outcomes apart;
-`Repo::delete` sending its statement under a class denial; a storage key whose
+`Repo::delete` sending its statement under a class denial; a stateless MCP
+`subscriptions/listen` and an `#[sse]` stream, which have no channel for an
+answer, held by a client gone without a close until a write to it fails, once
+the kernel nearest it gives up retransmitting the keep-alive (Linux: about 15
+minutes), an `#[sse]` stream at most `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`
+(four hours by default), both ended at the shutdown signal
+(`TCP_USER_TIMEOUT` would see only the hop to a proxy); a storage key whose
 every policy was removed booting on with its `warn` as a least-privilege one
 does, since the store answers both the boot's listing in the same document
 (`403`, `AccessDenied`, `Access Denied`, seen on RustFS 1.0.1) and a second call

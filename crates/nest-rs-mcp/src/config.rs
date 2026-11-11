@@ -17,10 +17,17 @@
 //! [`session_idle_timeout`](McpConfig::session_idle_timeout) bound what a legacy
 //! client's sessions hold: a session outlives the HTTP connection that opened it,
 //! so the transport's connection cap does not count it.
+//!
+//! [`ping_interval`](McpConfig::ping_interval) and
+//! [`ping_timeout`](McpConfig::ping_timeout) bound what a client gone without a
+//! close holds while its session's stream is open: MCP's `ping` request, sent on
+//! that stream once the client is silent, and the session ended when nothing
+//! comes back.
 
 use std::time::Duration;
 
 use nest_rs_config::{Bound, CountBounds, DurationBounds, Floor, config};
+use nest_rs_http::{PING_INTERVAL_BOUNDS, PING_TIMEOUT_BOUNDS};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::transport::streamable_http_server::session::local::SessionConfig;
 
@@ -173,6 +180,32 @@ pub struct McpConfig {
     /// struct alike; defaults to 300 seconds.
     #[config(bounds = SESSION_IDLE_TIMEOUT)]
     pub session_idle_timeout: Duration,
+    /// How long a session's client may send nothing while it holds the
+    /// session's stream open (its `GET`) before it is sent MCP's `ping` request
+    /// on that stream, which a client answers as it reads; any message from the
+    /// client counts, so a client that talks is never pinged. A ping and its
+    /// answer are no use of the session:
+    /// [`session_idle_timeout`](Self::session_idle_timeout) counts neither. A
+    /// session holding no stream has no channel to ask through and is pinged by
+    /// nothing. `None` ⇒ no ping, and a client gone without a close holds its
+    /// session to its idle timeout, or past it while the server writes to it.
+    /// Read from `<PREFIX>_MCP__PING_INTERVAL_SECS`, whole seconds from 1 to
+    /// 3600 or `0` for none — refused outside, from the environment and from
+    /// the pinned struct alike; defaults to 20 seconds,
+    /// [`nest_rs_http::DEFAULT_PING_INTERVAL`].
+    #[config(bounds = PING_INTERVAL_BOUNDS)]
+    pub ping_interval: Option<Duration>,
+    /// How long a ping waits for any message back; past it the client is taken
+    /// for gone and its session closed, its place under
+    /// [`max_concurrent_sessions`](Self::max_concurrent_sessions) freed and its
+    /// streams ended. A client that vanished while holding its stream is so
+    /// released within the interval and this timeout of its last message. Read
+    /// from `<PREFIX>_MCP__PING_TIMEOUT_SECS`, whole seconds from 1 to 3600,
+    /// never off — refused outside, from the environment and from the pinned
+    /// struct alike; defaults to 20 seconds,
+    /// [`nest_rs_http::DEFAULT_PING_TIMEOUT`].
+    #[config(bounds = PING_TIMEOUT_BOUNDS)]
+    pub ping_timeout: Duration,
 }
 
 impl Default for McpConfig {
@@ -189,6 +222,8 @@ impl Default for McpConfig {
             operation_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
             max_concurrent_sessions: DEFAULT_MAX_CONCURRENT_SESSIONS,
             session_idle_timeout: DEFAULT_SESSION_IDLE_TIMEOUT,
+            ping_interval: Some(nest_rs_http::DEFAULT_PING_INTERVAL),
+            ping_timeout: nest_rs_http::DEFAULT_PING_TIMEOUT,
         }
     }
 }
@@ -259,6 +294,57 @@ mod tests {
             d.operation_timeout,
             Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT)
         );
+    }
+
+    /// A session's pings read their variables over a pinned base, `0` turning
+    /// them off, and default to the sockets' own values.
+    #[test]
+    fn the_ping_keys_read_over_a_pinned_base_and_default_to_the_sockets() {
+        let d = McpConfig::default();
+        assert_eq!(d.ping_interval, Some(nest_rs_http::DEFAULT_PING_INTERVAL));
+        assert_eq!(d.ping_timeout, nest_rs_http::DEFAULT_PING_TIMEOUT);
+
+        let cfg = McpConfig::from_env(
+            &ConfigService::with_vars(
+                "mcp",
+                [("PING_INTERVAL_SECS", "45"), ("PING_TIMEOUT_SECS", "10")],
+            ),
+            McpConfig {
+                ping_interval: Some(Duration::from_secs(5)),
+                ..McpConfig::default()
+            },
+        )
+        .expect("no error");
+        assert_eq!(cfg.ping_interval, Some(Duration::from_secs(45)));
+        assert_eq!(cfg.ping_timeout, Duration::from_secs(10));
+
+        let off = McpConfig::from_env(
+            &ConfigService::with_vars("mcp", [("PING_INTERVAL_SECS", "0")]),
+            McpConfig::default(),
+        )
+        .expect("no error");
+        assert_eq!(off.ping_interval, None, "`0` is the off sentinel");
+    }
+
+    /// The timeout is never off: a ping nobody waits for releases nothing.
+    #[test]
+    fn a_ping_key_outside_its_range_is_refused_naming_its_variable() {
+        for (key, value, said) in [
+            ("PING_INTERVAL_SECS", "3601", "must be at most 3600 seconds"),
+            ("PING_TIMEOUT_SECS", "3601", "must be at most 3600 seconds"),
+            ("PING_TIMEOUT_SECS", "0", "must be at least 1 second"),
+        ] {
+            let refused = McpConfig::from_env(
+                &ConfigService::with_vars("mcp", [(key, value)]),
+                McpConfig::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("mcp", key)) && refused.contains(said),
+                "{key}={value}: {refused}"
+            );
+        }
     }
 
     /// One byte to a gibibyte, from the environment and from a pin, naming the

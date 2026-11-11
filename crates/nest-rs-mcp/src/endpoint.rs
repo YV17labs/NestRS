@@ -23,6 +23,7 @@ use crate::error::{
     SESSION_NOT_FOUND, classed_method_not_found, is_transport_message, said_by_code,
     transport_sentence, unread_message,
 };
+use crate::ping::Pings;
 use crate::propagate::{OperationUnits, PropagatingHandler, RequestChains, ServedPath};
 use crate::registry::MountIndex;
 use crate::sessions::{BoundedSessions, Principal, Refused, ReportedStore, say_no_subject};
@@ -213,6 +214,11 @@ where
         served_at,
     } = mount;
 
+    let pings = Pings::new(
+        config.ping_interval,
+        config.ping_timeout,
+        served_at.as_ref().map(|served| Arc::clone(&served.0)),
+    );
     let units = OperationUnits::new(
         unit_of_work,
         detached.clone(),
@@ -228,6 +234,7 @@ where
         config.max_concurrent_sessions,
         posture,
         session_store.clone(),
+        pings,
     ));
 
     // The stop, not the signal: rmcp ends every stream on this token, a POST's

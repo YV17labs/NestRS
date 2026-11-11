@@ -1,6 +1,8 @@
-//! [`KeepAlive`], RFC 6455 §5.5.2's keepalive both socket edges hold: a Ping
-//! once the peer has been silent for the interval, and the peer given up when
-//! nothing comes back within the timeout of it.
+//! [`KeepAlive`], the keepalive every edge holding a peer's channel open runs: a
+//! ping once the peer has been silent for the interval — RFC 6455 §5.5.2's Ping
+//! on a gateway's and a graphql-ws socket, MCP's `ping` request on a session's
+//! stream — and the peer given up when nothing comes back within the timeout of
+//! it.
 
 use std::future::Future as _;
 use std::pin::Pin;
@@ -9,37 +11,37 @@ use std::time::Duration;
 
 use tokio::time::{Instant, Sleep};
 
-/// What a socket owes its peer once [`KeepAlive::poll_due`] is ready.
+/// What an edge owes its peer once [`KeepAlive::poll_due`] is ready.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "a keepalive has these two outcomes, and each socket edge matches both"
+    reason = "a keepalive has these two outcomes, and each edge holding one matches both"
 )]
 pub enum Due {
-    /// The peer has been silent for the interval: send it a Ping.
+    /// The peer has been silent for the interval: send it a ping.
     Ping,
-    /// Nothing came back within the timeout of the Ping: the peer is gone, and
-    /// the socket is dropped.
+    /// Nothing came back within the timeout of the ping: the peer is gone, and
+    /// what it held is dropped.
     Silent,
 }
 
-/// A socket's keepalive: one timer, armed at the instant the next Ping or the
-/// end of its wait is due, so a frame from the peer costs a clock read, and the
-/// timer moves when it fires or when a Ping is answered.
+/// A peer's keepalive: one timer, armed at the instant the next ping or the
+/// end of its wait is due, so a message from the peer costs a clock read, and
+/// the timer moves when it fires or when a ping is answered.
 pub struct KeepAlive(Option<Pinging>);
 
 struct Pinging {
     interval: Duration,
     timeout: Duration,
     timer: Pin<Box<Sleep>>,
-    /// When the peer's last frame arrived, or the socket opened.
+    /// When the peer's last message arrived, or the keepalive started.
     heard_at: Instant,
-    /// A Ping is out and nothing has come back since.
+    /// A ping is out and nothing has come back since.
     awaiting: bool,
 }
 
 impl KeepAlive {
-    /// A keepalive sending a Ping once the peer is silent for `interval`, and
+    /// A keepalive sending a ping once the peer is silent for `interval`, and
     /// giving the peer up when nothing comes back within `timeout`; `None`
     /// sends none and never gives up.
     pub fn new(interval: Option<Duration>, timeout: Duration) -> Self {
@@ -55,21 +57,26 @@ impl KeepAlive {
         }))
     }
 
-    /// A frame of any kind came from the peer: it is there. The first frame
-    /// after a Ping moves the timer to the next Ping's instant, once per Ping,
+    /// A message of any kind came from the peer: it is there. The first one
+    /// after a ping moves the timer to the next ping's instant, once per ping,
     /// so a wait past the interval never holds the next one back.
     pub fn heard(&mut self) {
+        self.heard_at(Instant::now());
+    }
+
+    /// [`heard`](Self::heard), for a message that arrived `at`, read later by
+    /// an edge whose peer is heard on another task than the one pinging it.
+    pub fn heard_at(&mut self, at: Instant) {
         if let Some(pinging) = &mut self.0 {
-            pinging.heard_at = Instant::now();
+            pinging.heard_at = at;
             if pinging.awaiting {
                 pinging.awaiting = false;
-                let next = pinging.heard_at + pinging.interval;
-                pinging.timer.as_mut().reset(next);
+                pinging.timer.as_mut().reset(at + pinging.interval);
             }
         }
     }
 
-    /// Ready once a Ping is due or the peer let one go unanswered past the
+    /// Ready once a ping is due or the peer let one go unanswered past the
     /// timeout; never when the keepalive is off. Ready again with
     /// [`Due::Silent`] once given up.
     pub fn poll_due(&mut self, cx: &mut Context<'_>) -> Poll<Due> {
@@ -206,6 +213,33 @@ mod tests {
                 .await
                 .is_pending(),
             "a peer that answered is not given up, and is not pinged again before the interval",
+        );
+    }
+
+    /// A message heard on another task, read when the wait ends, answers the
+    /// ping as one heard in time does: the next ping comes an interval after
+    /// it arrived, never an interval after it was read.
+    #[tokio::test(start_paused = true)]
+    async fn a_message_read_after_it_arrived_counts_from_its_arrival() {
+        let start = Instant::now();
+        let mut keep_alive = KeepAlive::new(Some(INTERVAL), TIMEOUT);
+        assert_eq!(next_due(&mut keep_alive, start).await.0, Due::Ping);
+
+        let answered = start + INTERVAL + Duration::from_secs(1);
+        tokio::time::sleep(TIMEOUT).await;
+        keep_alive.heard_at(answered);
+
+        assert_eq!(
+            next_due(&mut keep_alive, start).await,
+            (Due::Ping, INTERVAL + Duration::from_secs(1) + INTERVAL),
+        );
+
+        let long_ago = Instant::now() - INTERVAL * 2;
+        keep_alive.heard_at(long_ago);
+        assert_eq!(
+            next_due(&mut keep_alive, start).await,
+            (Due::Ping, INTERVAL + Duration::from_secs(1) + INTERVAL),
+            "heard longer ago than the interval, the peer is pinged at once",
         );
     }
 

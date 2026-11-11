@@ -50,15 +50,16 @@ pub const DEFAULT_MAX_CONNECTION: Duration = Duration::from_secs(4 * 60 * 60);
 /// idle timeout common to proxies and browsers. Each reads its own variable.
 pub const DEFAULT_SSE_KEEP_ALIVE: Duration = Duration::from_secs(15);
 
-/// How long a socket's peer may stay silent before it is sent a Ping (RFC 6455
-/// §5.5.2) by default — a WebSocket gateway's and a graphql-ws socket's, each in
-/// its own crate: 20 seconds, under the 60 s idle timeout of nginx and of a cloud
-/// load balancer, and HTTP/2's own Ping here. Each reads its own variable.
+/// How long a peer holding a channel open may stay silent before it is pinged by
+/// default — a WebSocket gateway's and a graphql-ws socket's peer, sent a Ping
+/// (RFC 6455 §5.5.2), and an MCP session's client, sent MCP's `ping` request, each
+/// in its own crate: 20 seconds, under the 60 s idle timeout of nginx and of a
+/// cloud load balancer, and HTTP/2's own Ping here. Each reads its own variable.
 pub const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(20);
 
-/// How long a socket's Ping waits for any frame back by default before the
-/// socket is dropped as its peer gone: 20 seconds, so a peer that vanished
-/// without a close holds its socket for 40 seconds at most. Each socket edge
+/// How long a ping waits for anything back by default before what the peer held
+/// is dropped as its peer gone: 20 seconds, so a peer that vanished without a
+/// close holds its socket, or its MCP session, for 40 seconds at most. Each edge
 /// reads its own variable.
 pub const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -103,37 +104,39 @@ pub const SSE_KEEP_ALIVE_BOUNDS: DurationBounds = DurationBounds::secs(
     ),
 );
 
-/// The range of a socket's Ping interval — a WebSocket gateway's and a graphql-ws
-/// socket's, in their own crates — from a second to an hour, `0` turning the
-/// Pings off.
+/// The range of a ping interval — a WebSocket gateway's, a graphql-ws socket's
+/// and an MCP session's, in their own crates — from a second to an hour, `0`
+/// turning the pings off.
 pub const PING_INTERVAL_BOUNDS: DurationBounds = DurationBounds::secs(
     Floor::Units(Bound::new(
         1,
-        "a Ping under a second after the peer's last frame is traffic, not a keepalive",
+        "a ping under a second after the peer's last message is traffic, not a keepalive",
     )),
     Bound::new(
         60 * 60,
-        "a Ping finds a peer that vanished without a close and keeps an intermediary's idle \
-         timeout from closing a quiet socket, and those timeouts are minutes — nginx's and a \
-         cloud load balancer's sixty seconds by default — so one sent less often than hourly \
-         keeps nothing alive and finds a vanished peer an hour late",
+        "a ping finds a peer that vanished without a close and keeps an intermediary's idle \
+         timeout from closing a quiet connection, and those timeouts are minutes — nginx's and \
+         a cloud load balancer's sixty seconds by default — so one sent less often than \
+         hourly keeps nothing alive and finds a vanished peer an hour late",
     ),
 );
 
-/// The range of a socket's Ping timeout — a WebSocket gateway's and a graphql-ws
-/// socket's, in their own crates — from a second to an hour, never off.
+/// The range of a ping timeout — a WebSocket gateway's, a graphql-ws socket's
+/// and an MCP session's, in their own crates — from a second to an hour, never
+/// off.
 pub const PING_TIMEOUT_BOUNDS: DurationBounds = DurationBounds::secs(
     Floor::Units(Bound::new(
         1,
-        "a shorter wait drops a peer whose Pong is still crossing a slow network, and `0` is \
-         no off switch: a Ping nobody waits for releases no vanished peer, so a deployment \
+        "a shorter wait drops a peer whose answer is still crossing a slow network, and `0` \
+         is no off switch: a ping nobody waits for releases no vanished peer, so a deployment \
          that wants none turns off `PING_INTERVAL_SECS`",
     )),
     Bound::new(
         60 * 60,
-        "a peer that sends nothing back for an hour after a Ping is gone, and a wait that \
-         long holds its socket, its task and its place under the connection cap; it is a unit \
-         slip more often than a choice (`20000` meant as milliseconds is five and a half hours)",
+        "a peer that sends nothing back for an hour after a ping is gone, and a wait that \
+         long holds its socket or its session, its task and its place under the cap; it is a \
+         unit slip more often than a choice (`20000` meant as milliseconds is five and a half \
+         hours)",
     ),
 );
 

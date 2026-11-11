@@ -1,7 +1,8 @@
-//! [`BoundedSessions`] — rmcp's in-memory sessions, held to a maximum and each
-//! bound to the principal that opened it — and [`ReportedStore`], the app's
-//! session store, keeping that principal beside each session. Each says the
-//! failures it hands rmcp, whose own lines are clamped.
+//! [`BoundedSessions`] — rmcp's in-memory sessions, held to a maximum, each
+//! bound to the principal that opened it and ended when its client holding a
+//! stream answers no ping — and [`ReportedStore`], the app's session store,
+//! keeping that principal beside each session. Each says the failures it hands
+//! rmcp, whose own lines are clamped.
 //!
 //! A session is bound only to what is unique to its principal, as MCP's
 //! security guidance asks: on a gated mount the subject its credential names,
@@ -27,8 +28,10 @@ use rmcp::transport::streamable_http_server::session::{
     EventStore, RestoreOutcome, ServerSseMessage, SessionId, SessionManager,
 };
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::SessionsError;
+use crate::ping::{PingingStream, Pings, SessionClient, is_ping_answer};
 
 tokio::task_local! {
     /// The request rmcp is answering while [`BoundedSessions::answering`]
@@ -203,33 +206,43 @@ fn take_stored(id: &str) -> Option<Option<SessionState>> {
         .map(|stored| stored.state)
 }
 
+/// A live session as the mount holds it: the principal it is bound to — the
+/// one its `initialize`, or the request restoring it, was served for — and its
+/// client as last heard.
+struct LiveSession {
+    owner: Principal,
+    client: Arc<SessionClient>,
+}
+
 /// rmcp's local session manager, refusing a session past `max` with
-/// [`SessionsError::Full`] and serving each session to the principal that
-/// opened it alone.
+/// [`SessionsError::Full`], serving each session to the principal that opened
+/// it alone, and pinging the client of each session whose stream it holds.
 pub(crate) struct BoundedSessions {
     inner: LocalSessionManager,
     max: usize,
     /// Held across the count and the insert, so the cap is exact: a close only
     /// lowers the count.
     creating: Mutex<()>,
-    /// The principal each live session is bound to: the one its `initialize`,
-    /// or the request restoring it, was served for.
-    owners: RwLock<HashMap<SessionId, Principal>>,
+    /// Each live session, by its id.
+    bound: RwLock<HashMap<SessionId, LiveSession>>,
     /// Who the mount serves, which decides what a session is bound to.
     posture: Posture,
     /// The app's store, holding the sessions other instances opened.
     store: Option<Arc<ReportedStore>>,
+    /// What a session's stream asks its silent client.
+    pings: Pings,
 }
 
 impl BoundedSessions {
     /// rmcp's local manager running each session on `session`, holding at
-    /// most `max` live sessions on a mount of `posture`, and asking `store`
-    /// whose a session it does not hold is.
+    /// most `max` live sessions on a mount of `posture`, asking `store` whose a
+    /// session it does not hold is, and a session's client its `pings`.
     pub(crate) fn new(
         session: SessionConfig,
         max: usize,
         posture: Posture,
         store: Option<Arc<ReportedStore>>,
+        pings: Pings,
     ) -> Self {
         // `#[non_exhaustive]`: rmcp's default, its session config replaced.
         let mut inner = LocalSessionManager::default();
@@ -238,9 +251,10 @@ impl BoundedSessions {
             inner,
             max,
             creating: Mutex::new(()),
-            owners: RwLock::new(HashMap::new()),
+            bound: RwLock::new(HashMap::new()),
             posture,
             store,
+            pings,
         }
     }
 
@@ -301,29 +315,53 @@ impl BoundedSessions {
     /// Whether session `id` is bound to the caller, to another principal, or
     /// to none this manager knows of.
     fn bound_to_caller(&self, id: &SessionId) -> Option<bool> {
-        self.owners
+        self.bound
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .get(id)
-            .map(is_caller)
+            .map(|live| is_caller(&live.owner))
     }
 
     /// Bind session `id` to `owner`, the principal the request being answered
-    /// is served for.
-    fn bind(&self, id: SessionId, owner: Principal) {
-        self.owners
+    /// is served for, its client heard now; `end` ends the session.
+    fn bind(&self, id: SessionId, owner: Principal, end: CancellationToken) {
+        let client = Arc::new(SessionClient::new(end));
+        self.bound
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, owner);
+            .insert(id, LiveSession { owner, client });
     }
 
     /// Refuse, at `call`, the request being answered a session another
     /// principal opened; one this manager does not hold is rmcp's to refuse.
+    /// A request admitted to its own session is its client heard.
     fn admit(&self, id: &SessionId, call: &'static str) -> Result<(), SessionsError> {
-        match self.bound_to_caller(id) {
-            Some(false) => Err(foreign(call)),
-            Some(true) | None => Ok(()),
-        }
+        let admitted = match self
+            .bound
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+        {
+            Some(live) if is_caller(&live.owner) => {
+                live.client.heard();
+                true
+            }
+            Some(_) => false,
+            None => true,
+        };
+        if admitted { Ok(()) } else { Err(foreign(call)) }
+    }
+
+    /// Session `id`'s stream `inner`, asking the session's client a ping once
+    /// it is silent.
+    fn pinging<S>(&self, id: &SessionId, inner: S) -> PingingStream<S> {
+        let client = self
+            .bound
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .map(|live| Arc::clone(&live.client));
+        PingingStream::new(inner, client, &self.pings)
     }
 
     /// Whether a client's `DELETE` may close session `id`: one bound to its
@@ -386,7 +424,7 @@ impl SessionManager for BoundedSessions {
             return Err(self.full());
         }
         let (id, transport) = said("create_session", self.inner.create_session().await)?;
-        self.bind(id.clone(), owner);
+        self.bind(id.clone(), owner, transport.cancel_token());
         Ok((id, transport))
     }
 
@@ -439,7 +477,7 @@ impl SessionManager for BoundedSessions {
             self.admit_close(id).await?;
         }
         let closed = said("close_session", self.inner.close_session(id).await);
-        self.owners
+        self.bound
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(id);
@@ -455,12 +493,17 @@ impl SessionManager for BoundedSessions {
         said("create_stream", self.inner.create_stream(id, message).await)
     }
 
+    /// An answer to one of the mount's pings stops here, the client heard:
+    /// rmcp's worker, whose idle timer every message re-arms, never sees it.
     async fn accept_message(
         &self,
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<(), Self::Error> {
         self.admit(id, "accept_message")?;
+        if is_ping_answer(&message) {
+            return Ok(());
+        }
         said(
             "accept_message",
             self.inner.accept_message(id, message).await,
@@ -472,10 +515,11 @@ impl SessionManager for BoundedSessions {
         id: &SessionId,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
         self.admit(id, "create_standalone_stream")?;
-        said(
+        let stream = said(
             "create_standalone_stream",
             self.inner.create_standalone_stream(id).await,
-        )
+        )?;
+        Ok(self.pinging(id, stream))
     }
 
     /// rmcp answers a resume it cannot serve with an empty stream, so its
@@ -487,14 +531,19 @@ impl SessionManager for BoundedSessions {
         last_event_id: String,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
         self.admit(id, "resume")?;
-        self.inner.resume(id, last_event_id).await.map_err(|error| {
-            tracing::warn!(
-                target: crate::TARGET,
-                error = %error_message(&error),
-                "mcp stream not resumed: answered with an empty stream",
-            );
-            SessionsError::from(error)
-        })
+        let stream = self
+            .inner
+            .resume(id, last_event_id)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    error = %error_message(&error),
+                    "mcp stream not resumed: answered with an empty stream",
+                );
+                SessionsError::from(error)
+            })?;
+        Ok(self.pinging(id, stream))
     }
 
     /// A restored session takes a place like a created one; one already
@@ -513,8 +562,8 @@ impl SessionManager for BoundedSessions {
             "restore_session",
             self.inner.restore_session(id.clone()).await,
         )?;
-        if matches!(restored, RestoreOutcome::Restored(_)) {
-            self.bind(id, caller());
+        if let RestoreOutcome::Restored(transport) = &restored {
+            self.bind(id, caller(), transport.cancel_token());
         }
         Ok(restored)
     }
@@ -664,18 +713,37 @@ impl SessionStore for ReportedStore {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use nest_rs_testing::{CapturedEvent, LogCapture};
 
     use super::*;
 
     /// One place, on a public mount: every caller here is anonymous.
     fn one_place() -> BoundedSessions {
-        BoundedSessions::new(SessionConfig::default(), 1, Posture::Public, None)
+        BoundedSessions::new(
+            SessionConfig::default(),
+            1,
+            Posture::Public,
+            None,
+            no_pings(),
+        )
     }
 
     /// Two places on a gated mount, holding no store.
     fn gated() -> BoundedSessions {
-        BoundedSessions::new(SessionConfig::default(), 2, Posture::Gated, None)
+        BoundedSessions::new(
+            SessionConfig::default(),
+            2,
+            Posture::Gated,
+            None,
+            no_pings(),
+        )
+    }
+
+    /// A mount asking no one.
+    fn no_pings() -> Pings {
+        Pings::new(None, Duration::from_secs(20), None)
     }
 
     /// The session id a client names, which no line may carry.
@@ -1043,7 +1111,7 @@ mod tests {
         assert!(!held);
         assert!(
             sessions
-                .owners
+                .bound
                 .read()
                 .unwrap_or_else(PoisonError::into_inner)
                 .is_empty(),

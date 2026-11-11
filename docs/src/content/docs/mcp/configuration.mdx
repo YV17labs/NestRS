@@ -49,13 +49,31 @@ McpModule::for_root((
 | `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS` | `20` | How long one operation may run; whole seconds from `1` to `3600`, `0` ⇒ none |
 | `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` | `1024` | Live sessions one endpoint holds; from `1` to `1048576` |
 | `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS` | `300` | How long a session may stay idle before it is closed; whole seconds from `1` to `3600`, never off |
+| `<PREFIX>_MCP__PING_INTERVAL_SECS` | `20` | How long a session's client holding its stream may send nothing before it is sent MCP's `ping` on that stream; whole seconds from `1` to `3600`, `0` ⇒ none |
+| `<PREFIX>_MCP__PING_TIMEOUT_SECS` | `20` | How long that `ping` waits for anything back before the session is closed; whole seconds from `1` to `3600`, never off |
 
 The keep-alive is a comment no client answers: it keeps an idle stream through a
-proxy, but nothing on an MCP stream tells the server its client is gone. A
-client that vanished without a close is noticed when a write to it fails, once
-the kernel nearest it gives up retransmitting — about fifteen minutes on Linux —
-or, for a session nothing reaches, at its idle timeout. A WebSocket, which has a
-frame a client answers, is pinged instead ([WebSockets](/websockets/#what-bounds-a-socket)).
+proxy, but tells the server nothing of its client. A session's stream — the
+`GET` a client holds to hear what the server pushes — asks instead: once the
+client has sent nothing for `ping_interval`, the server writes MCP's own `ping`
+request on that stream, which every client answers as it reads (the
+specification's *Ping* utility), and any message from the client counts, so a
+client that talks is never asked. One that sends nothing back within
+`ping_timeout` is taken for gone: its session closes, its place frees, its
+streams end, and one `warn` on `nest_rs::mcp` — `mcp session closed: the client
+sent nothing back within the ping timeout` — names the mount by `host` and
+`path`. A client that vanished holding its stream is so released within 40
+seconds of its last message. A ping and its answer are no use of the session:
+the idle timeout counts neither.
+
+A session holding no stream has no channel to ask through, so nothing asks it:
+its idle timeout bounds it while the server writes nothing to it, since rmcp
+counts the server's own messages as use of the session. A stateless
+`2026-07-28` request, a `subscriptions/listen` among them, opens no session and
+has no channel for an answer either: a client gone without a close holds its stream until a write to
+it fails, once the kernel nearest it gives up retransmitting the keep-alive —
+about fifteen minutes on Linux. A WebSocket is pinged the same way, with its own
+frame ([WebSockets](/websockets/#what-bounds-a-socket)).
 
 ## The operation timeout
 

@@ -87,6 +87,7 @@ mod identity;
 mod module;
 mod operation;
 mod parameters;
+mod ping;
 mod propagate;
 mod registry;
 mod resource;

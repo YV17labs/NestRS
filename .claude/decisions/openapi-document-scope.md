@@ -184,3 +184,16 @@ protocol's arguments by its type would need one trait choosing per type between 
 input and the unit's value: its impl for `Ambient<T>` overlaps a blanket over async-graphql's
 `InputType` or serde's `Deserialize`, which coherence refuses, and it would hand a value to a
 schema the macro has already written.
+
+## 2026-11-11 — a request target past the head's bound is hyper's `431`
+
+Pinned over a socket: a 12 KiB target is served, a 70 KiB one on HTTP/1 and a 17 KiB `:path` on
+HTTP/2 are answered `431` before any route, as is an HTTP/2 header list past the 16 KiB the
+connection advertises, on its stream alone. RFC 9112 §3 names `414` for a request line a server
+will not parse; hyper refuses a head whose buffer fills before it is whole, and cannot tell the
+line from the fields then (hyperium/hyper#3874).
+
+Refused: **answering `414` from above hyper.** Only the bytes say where the line ends, so the
+transport would scan every head it reads and rewrite a status hyper already wrote, a cost on
+every request for a status no client acts on otherwise. The fix is hyper's (hyperium/hyper#4133),
+listed in `TODO.md`'s upstream section.

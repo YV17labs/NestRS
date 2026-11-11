@@ -119,7 +119,15 @@ What one connection may do is fixed:
   client resetting streams faster than they are answered is sent `GOAWAY`
   ([CVE-2023-44487](https://nvd.nist.gov/vuln/detail/CVE-2023-44487));
 - an HTTP/1 request head larger than `64 KiB` is answered
-  `431 Request Header Fields Too Large` (RFC 6585 §5) rather than buffered;
+  `431 Request Header Fields Too Large` (RFC 6585 §5) rather than buffered,
+  and an HTTP/2 header list larger than `16 KiB`, the limit the connection
+  advertises in `SETTINGS_MAX_HEADER_LIST_SIZE` (RFC 9113 §6.5.2), is answered
+  `431` on its stream alone, the connection serving on. A request target counts
+  in both — the head's first line, or `:path` in the list — so one past them is
+  answered `431` too, where RFC 9112 §3 names `414 URI Too Long` for a request
+  line: hyper, which reads the head, cannot tell the two apart
+  ([hyperium/hyper#3874](https://github.com/hyperium/hyper/issues/3874)). Short
+  of those bounds, a long target reaches the router like any other;
 - a client speaking HTTP/2 from its first byte is served in plaintext too, and
   every socket is written without Nagle's delay (`TCP_NODELAY`).
 

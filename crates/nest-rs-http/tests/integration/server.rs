@@ -234,6 +234,95 @@ async fn a_head_that_does_not_parse_answers_400_before_any_route() {
     cancel.cancel();
 }
 
+/// An HTTP/2 header list past the 16 KiB the connection advertises is refused
+/// `431` on its stream alone, by the HTTP/2 layer before any route; one under
+/// it is served, and the connection serves on after the refusal.
+#[tokio::test]
+async fn an_http2_header_list_past_16_kib_answers_431_on_its_stream_alone() {
+    let (port, cancel) = serve(HttpConfig::default()).await;
+    let (client, connection) = h2::client::handshake(connect(port).await)
+        .await
+        .expect("the HTTP/2 preface is accepted");
+    let connection = tokio::spawn(connection);
+    let asked = |filler: usize| {
+        let client = client.clone();
+        async move {
+            let request = http::Request::get(format!("http://127.0.0.1:{port}/server/ping"))
+                .header("x-filler", "a".repeat(filler))
+                .body(())
+                .expect("a request");
+            let (response, _) = client
+                .ready()
+                .await
+                .expect("a stream can open")
+                .send_request(request, true)
+                .expect("sent");
+            tokio::time::timeout(PATIENCE, response)
+                .await
+                .expect("the stream ends")
+                .expect("answered")
+        }
+    };
+
+    let refused = asked(17 * 1024).await;
+    assert_eq!(refused.status(), 431);
+    for absent in ["x-request-id", "traceparent", "x-content-type-options"] {
+        assert!(refused.headers().get(absent).is_none(), "{absent}");
+    }
+    assert_eq!(asked(15 * 1024).await.status(), 200);
+    assert!(!connection.is_finished(), "the connection serves on");
+    cancel.cancel();
+}
+
+/// A request target is refused only past what the head holds: on HTTP/1 the
+/// 64 KiB read buffer, on HTTP/2 the 16 KiB header list `:path` counts in. Short
+/// of that, a long target reaches the router like any other.
+#[tokio::test]
+async fn a_request_target_past_the_head_s_bound_is_refused_before_any_route() {
+    let (port, cancel) = serve(HttpConfig::default()).await;
+    let mut stream = connect(port).await;
+    let target = format!("/server/ping?q={}", "a".repeat(12 * 1024));
+    let _ = stream
+        .write_all(format!("GET {target} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
+        .await;
+    let (head, body) = read_answer(&mut stream).await;
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert_eq!(body, "pong");
+
+    let mut stream = connect(port).await;
+    let target = format!("/server/ping?q={}", "a".repeat(70 * 1024));
+    // The server answers before it has read it all, so the tail may meet a reset.
+    let _ = stream
+        .write_all(format!("GET {target} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
+        .await;
+    let head = read_head(&mut stream).await;
+    assert!(head.starts_with("HTTP/1.1 431"), "{head}");
+    assert_no_route_answered(&head);
+
+    let (client, connection) = h2::client::handshake(connect(port).await)
+        .await
+        .expect("the HTTP/2 preface is accepted");
+    tokio::spawn(connection);
+    let request = http::Request::get(format!(
+        "http://127.0.0.1:{port}/server/ping?q={}",
+        "a".repeat(17 * 1024)
+    ))
+    .body(())
+    .expect("a request");
+    let (response, _) = client
+        .ready()
+        .await
+        .expect("a stream can open")
+        .send_request(request, true)
+        .expect("sent");
+    let response = tokio::time::timeout(PATIENCE, response)
+        .await
+        .expect("the stream ends")
+        .expect("answered");
+    assert_eq!(response.status(), 431);
+    cancel.cancel();
+}
+
 /// A head the transport wrote alone: no layer stamped it, and it carries no
 /// problem document, so no route's answer and no route's document holds it.
 #[track_caller]

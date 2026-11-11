@@ -168,3 +168,22 @@ as the proxy, said by that `warn`: the deployment lists that hop, or has the pro
 Refused: **preferring `X-Real-IP` over a chain**, which would answer right behind the nginx above and
 let the caller choose behind a proxy appending to `X-Forwarded-For` and passing `X-Real-IP` on: no
 header says which one the proxy wrote.
+
+## 2026-11-11: each proxy's documented shapes are pinned, and Google's forwarding rule is a hop to list
+
+No proxy binary had run against the reader, and the dev container holds none, so the shapes each
+proxy writes were read off its own documentation (nginx's `ngx_http_proxy_module`, Envoy's header
+reference, HAProxy's `option forwardfor` and `option forwarded`, AWS's Application Load Balancer
+and Google Cloud's external Application Load Balancer pages, RFC 7239 §4 and §7) and driven
+through an app, `client_ip::behind_a_proxy`. Every one names its client; no rule moved. One shape
+needs a line of the deployment's own: Google's balancer appends its forwarding rule's address
+after the client's and connects from its front ends, so the rule's address, unlisted, answers for
+every caller. The docs' table says to list it beside the front ends.
+
+Refused: **reading Google's chain one hop further left** when the peer is a Google front end. A
+range of front ends is no proof of what stands to its left, and a rule keyed on a vendor's ranges
+would be a second reading of the one list; the rule's address is the deployment's own hop, named
+as every other is.
+
+Left: a proxy binary in front of an app, which a dev container environment of its own would run by
+hand, a new service the owner admits first (`TODO.md`).

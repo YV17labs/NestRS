@@ -187,8 +187,8 @@ The document composes from the route table, so everything in it is derived:
 
 No operation lists what the connection answers before a request exists: a head
 the server cannot parse is answered `400`, one past the 64 KiB read buffer `431`,
-by the HTTP layer underneath, with no problem document, layer or correlation
-header. No route received it, and OpenAPI's responses are an operation's.
+as is an HTTP/2 header list past 16 KiB, by the HTTP layer underneath, with no
+problem document, layer or correlation header. No route received it, and OpenAPI's responses are an operation's.
 
 `operationId` is derived too, as `<controller>_<handler>`, mapped onto what an
 identifier can carry — `PostsController::list` publishes `posts_list`, and a raw

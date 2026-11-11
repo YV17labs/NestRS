@@ -244,6 +244,25 @@ multicast and reserved space), from the environment and from code alike; so does
 its prefix (`10.0.0.1/8`), which could mean the one proxy or the whole range. A listener on `[::]` reports an IPv4 peer as `::ffff:10.0.0.1`: that is
 `10.0.0.1`, to this list and in the address `ClientIp` answers.
 
+**What to list behind each proxy.** Each writes its hop as its documentation
+says, and each shape below is pinned by the HTTP suite:
+
+| In front of the app | What it writes | What to list |
+|---|---|---|
+| nginx, `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` | the caller's `X-Forwarded-For` with its peer appended; `X-Real-IP $remote_addr` beside it agrees | nginx's address |
+| Envoy, `use_remote_address: true` | its downstream appended to `x-forwarded-for` | every Envoy hop, the mesh's range |
+| HAProxy, `option forwardfor` or `option forwarded` | an `X-Forwarded-For` line of its own after the caller's, or `forwarded: proto=http;for=…` | HAProxy's address |
+| AWS Application Load Balancer, `append` mode | the client appended, `ip:port` (`[ip]:port` for IPv6) with client port preservation | the subnets its nodes take |
+| Google Cloud external Application Load Balancer | the client appended, **then the forwarding rule's own address** | its front ends (`35.191.0.0/16`, `130.211.0.0/22`) **and the forwarding rule's address** |
+
+Behind Google Cloud's balancer, leaving the forwarding rule's address off the
+list answers that address for every caller: it stands right of the client, and
+anything not listed is the client. A proxy writing one header passes the others
+through as the caller sent them, and two headers naming different clients are
+both refused; behind HAProxy's `option forwarded` alone, a caller's own
+`X-Forwarded-For` leaves its request with the proxy's address, so have the proxy
+delete what it does not write (`http-request del-header X-Forwarded-For`).
+
 **Rightmost, not leftmost.** A proxy appends the address it received the request
 from to the right of the chain, so the genuine client is the last hop your
 infrastructure wrote; a caller can only prepend, and a prepended entry lands to

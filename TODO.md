@@ -131,8 +131,13 @@ keeps on purpose is §5's.
   is current, a move a reproduction proves first. *seen*
 
 **HTTP and CORS**
-- No real proxy has run against the forwarding-header reader, and hyper's
-  HTTP/2 header-list refusal and a `414` are pinned by no test. *read*
+- No proxy binary has run against the forwarding-header reader: the shapes
+  nginx, Envoy, HAProxy, AWS's and Google Cloud's load balancers and RFC 7239
+  document are driven through an app in process
+  (`client_ip::behind_a_proxy`, every one read as its documentation writes
+  it), and the dev container holds no proxy. Close: a dev container
+  environment of its own running nginx, Envoy and HAProxy in front of an app,
+  its suite run by hand, a new service the owner admits first. *read*
 
 **GraphQL**
 - async-graphql 7.2.1 runs no `SameResponseShape` (GraphQL §5.3.2): copies of one key
@@ -336,6 +341,14 @@ not exist or is empty` on a site defining none, its `console.warn` mute around
 route /[...slug]`, the `404.md` its docs offer as the custom page rendered by
 its 404 route and offered again by the catch-all — harmless, `/404.html` is
 that page).
+
+hyper 1.12 answers `431` for an HTTP/1 request line its 64 KiB read buffer
+cannot hold, where RFC 9112 §3 names `414 URI Too Long`: it cannot tell the
+line from the header fields once the buffer is full (hyperium/hyper#3874; the
+fix, hyperium/hyper#4133, is open without consensus). Seen and pinned by
+`server::a_request_target_past_the_head_s_bound_is_refused_before_any_route`,
+which asserts `431` and fails the day hyper answers `414`: its assertion then
+flips to `414` and this paragraph leaves. Nothing above hyper sees the line.
 
 Known limits whose cause is upstream: `RUSTSEC-2026-0253` (lru through
 async-graphql 7.2.1) ignored until async-graphql 8 is final; a statement cut

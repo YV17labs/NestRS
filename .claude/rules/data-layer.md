@@ -352,12 +352,20 @@ subscriber, and an item a refusal makes — a row, a list's, or one inside an
 arrives, its row answering no column. A `belongs_to` reads its
 link off the judged row, so a key the grant withholds reads `null`; a `has_many`
 groups its children by their key in the batch, its `#[expose]` its visible
-opening. An MCP tool's answer is written inside its site. What a refused row or a
+opening. An MCP tool's answer is written inside its site; a GraphQL root field's,
+which async-graphql resolves once the field's unit ended, resolves under what that
+unit judged its rows by (`nest_rs_graphql::__private::FieldAnswer`, through core's
+`AnswerContext`, what crosses into a `Continuation::Answer`: the ability alone) — the
+field resolvers below it, the batches it reads and a subscription's items included —
+so an ability the field's own guards attached answers as one its request carried.
+What a refused row or a
 row judged for another caller files is one line per operation and per fact, naming
 the unit as its `mounted` line does: the serializer hands its refusal to the edge
 answering, which files it there (`nest_rs_core::__private::answering`), and one no
 edge claims is filed where it is met; a GraphQL column names its root field's site,
-which the operation notes as each root field runs, never the alias a client wrote.
+which the operation notes as each root field runs, never the alias a client wrote,
+and a refusal a scalar meets serializing a row (async-graphql's `Json`, which writes
+`null` for it) is its root field's answer, the refusal's code, filed naming that site.
 
 **A dispatched method answers no `Model`**, `#[expose]`d or not, held by rustc: every
 type its return type spells is asked of `nest_rs_core::__private::RowProbe`, a
@@ -396,7 +404,13 @@ dependency cycle.** What they guarantee:
 - **A dataloader batch** runs off-task under what its request carries into a
   batch — the request's values, never one field's, and the pool — captured
   where a field asks the loader; nothing is bound for it. A generated loader
-  answers wire rows, judged there for that request's caller.
+  answers wire rows, judged there for that request's caller. Where a root field's
+  own guards attached the ability its request did not carry, the batch carries it
+  too, and a query's or a mutation's answer and loader parameters read through
+  loaders of the field's own (`UnitLoaders`), so no other root field's keys join
+  a batch judged under it; a subscription's opening reads the request's, its
+  operation holding one root field — GraphQL §5.2.3.1, which async-graphql does
+  not hold, so a second is refused before either opens.
 - **No edge has a data context of its own**: each runs its unit through the
   port, so commit and rollback cannot drift between edges.
 

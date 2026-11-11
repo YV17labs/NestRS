@@ -51,6 +51,7 @@ mod document_cost;
 mod endpoint;
 mod error;
 mod federation;
+mod field_answer;
 mod field_spellings;
 mod filed_facts;
 mod loader;
@@ -90,11 +91,12 @@ pub mod __private {
     pub use crate::ambient::ambient_parameter;
     pub use crate::context::{ENDPOINT, connection_data};
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate, FieldFailure};
+    pub use crate::field_answer::{FieldAnswer, FieldAnswers};
     pub use crate::field_spellings::schema_field_spelling;
     pub use crate::filed_facts::first_in_operation;
     pub use crate::loader::{
         GraphqlLoaderRegistration, GraphqlRelationRegistration, GraphqlRootLoaderRegistration,
-        LoaderOwner, batch_spawner, seeded_loader,
+        LoaderOwner, UnitLoaders, batch_spawner, seeded_loader,
     };
     pub use crate::module::RUNTIME;
     pub use crate::operation::{
@@ -107,7 +109,7 @@ pub mod __private {
         GraphqlResolverRegistration, GraphqlRootMember, GraphqlSiteRegistration,
         GraphqlSubscriptionObject, ResolverDescriptor,
     };
-    pub use crate::root_fields::root_site;
+    pub use crate::root_fields::{file_below_root, root_site};
     pub use crate::scope::{scoped_parameter, unprovided};
     pub use crate::subscription::compose_schema;
 

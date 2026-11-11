@@ -257,27 +257,11 @@ pub fn judged_field<E: EntityTrait>(
             }
             Err(refused) => refused,
         };
-        let entity = E::default().table_name();
-        let root = nest_rs_graphql::__private::root_site(ctx);
-        let kind = nest_rs_graphql::__private::served_field(ctx, None)
-            .kind
-            .unwrap_or_default();
-        let field = root.map(|site| site.handler().address());
-        if nest_rs_graphql::__private::first_in_operation(
+        nest_rs_graphql::__private::file_below_root(
             ctx,
-            format!(
-                "judged {entity} {} {}",
-                refused.as_str(),
-                field.unwrap_or_default()
-            ),
-        ) {
-            // A root no unit dispatched (a schema built by hand) names nothing a
-            // client wrote.
-            let served = field.map_or_else(ServedAddress::default, |field| {
-                ServedAddress::field(kind, field)
-            });
-            refused_answer::<E>(refused).file_at(root.map(Site::handler), served);
-        }
+            &refused_answer::<E>(refused),
+            nest_rs_graphql::__private::root_site(ctx),
+        );
         Err(match refused {
             Refused::Withheld => crate::graphql::forbidden(),
             _ => nest_rs_graphql::denial_to_graphql_error(nest_rs_guards::Denial::internal(

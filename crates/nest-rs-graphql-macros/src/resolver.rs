@@ -10,7 +10,7 @@ use syn::ext::IdentExt;
 use syn::spanned::Spanned as _;
 use syn::{
     Attribute, FnArg, GenericArgument, Ident, ImplItem, ItemImpl, ItemStruct, LitStr, Path,
-    PathArguments, Signature, Token, Type, parse_quote,
+    PathArguments, Signature, Token, Type, TypeImplTrait, TypeParamBound, parse_quote,
 };
 
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
@@ -681,6 +681,72 @@ fn wrapper_output(sig: &Signature) -> syn::ReturnType {
     parse_quote!(-> ::nest_rs_graphql::async_graphql::Result<#value>)
 }
 
+/// What a root field's wrapper answers: its value as a `FieldAnswer`, resolved
+/// under the unit that built it, a `#[subscription]` each item it streams. A
+/// stream a type names is wrapped as it is, `FieldAnswers<S>`: its item read
+/// through `Stream` here, a type that is no stream would fail this signature,
+/// ahead of the body's refusal saying why (`answers_a_stream`).
+fn root_output(sig: &Signature, root: RootKind) -> syn::ReturnType {
+    let value = returned(sig).value();
+    match (root, &value) {
+        (RootKind::Subscription, Type::ImplTrait(stream)) => {
+            let item = stream_item(stream);
+            parse_quote!(
+                -> ::nest_rs_graphql::async_graphql::Result<
+                    impl ::nest_rs_graphql::async_graphql::futures_util::Stream<
+                        Item = ::nest_rs_graphql::__private::FieldAnswer<#item>,
+                    >,
+                >
+            )
+        }
+        (RootKind::Subscription, _) => parse_quote!(
+            -> ::nest_rs_graphql::async_graphql::Result<
+                ::nest_rs_graphql::__private::FieldAnswers<#value>,
+            >
+        ),
+        (RootKind::Query | RootKind::Mutation, _) => parse_quote!(
+            -> ::nest_rs_graphql::async_graphql::Result<
+                ::nest_rs_graphql::__private::FieldAnswer<#value>,
+            >
+        ),
+    }
+}
+
+/// The item a `#[subscription]` returning the `impl` type `stream` yields, read
+/// as async-graphql reads it: the `Item` its last trait bound names, else that
+/// bound's `Stream::Item`.
+fn stream_item(stream: &TypeImplTrait) -> Type {
+    let Some(bound) = stream
+        .bounds
+        .iter()
+        .filter_map(|bound| match bound {
+            TypeParamBound::Trait(bound) => Some(bound),
+            _ => None,
+        })
+        .next_back()
+    else {
+        return Type::ImplTrait(stream.clone());
+    };
+    let named = bound
+        .path
+        .segments
+        .last()
+        .and_then(|last| match &last.arguments {
+            PathArguments::AngleBracketed(args) => args.args.iter().find_map(|arg| match arg {
+                GenericArgument::AssocType(assoc) if assoc.ident == "Item" => {
+                    Some(assoc.ty.clone())
+                }
+                _ => None,
+            }),
+            _ => None,
+        });
+    named.unwrap_or_else(|| {
+        parse_quote!(
+            <dyn #bound as ::nest_rs_graphql::async_graphql::futures_util::Stream>::Item
+        )
+    })
+}
+
 /// The developer's call as the tail's `Result<T, FieldFailure>`. A value
 /// return goes through `nest_rs_core::__private::Answer`, which knows a
 /// `Result` by its type; a `#[subscription]`'s is refused there at compile
@@ -1276,7 +1342,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             };
             let route_label = format!("{role_label} {method_name}");
             let (mut gsig, gctx) = ensure_ctx_param(&wrapper_sig);
-            gsig.output = wrapper_output(&sig);
+            gsig.output = root_output(&sig, root_kind);
             let authz_entity = |spec: &AuthorizeSpec| match &subject_entity {
                 Some(entity) => entity.clone(),
                 None => {
@@ -1350,6 +1416,17 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 },
                 _ => call,
             };
+            // Captured inside the unit: what its guards attached judged the rows the
+            // answer holds, and async-graphql resolves that answer once the unit ended.
+            let answer = match root_kind {
+                RootKind::Subscription => quote!(FieldAnswers),
+                RootKind::Query | RootKind::Mutation => quote!(FieldAnswer),
+            };
+            let body = quote! {
+                ::core::result::Result::map(#body, |__answer| {
+                    ::nest_rs_graphql::__private::#answer::new(__answer, #site)
+                })
+            };
             let pipe_prelude = piped.iter().map(|pa| {
                 let ident = &pa.ident;
                 let carrier = &pa.carrier;
@@ -1369,9 +1446,22 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     root_loader_read(&self_ty, &base, &route_label, loader, &cfgs)
                 }),
             );
-            let loader_prelude = loaders.iter().map(|(ident, loader)| {
+            // Read inside the unit, so what its own guards attached judges the
+            // rows its batches build. A subscription's stream may borrow its
+            // loader past the opening, so it reads the request's, whose batches
+            // carry its unit's values too: its operation holds no other root field,
+            // a second refused before either opens.
+            let own_loaders = !loaders.is_empty() && root_kind != RootKind::Subscription;
+            let unit_loaders = own_loaders.then(|| {
                 quote! {
-                    let #ident = ::nest_rs_graphql::__private::seeded_loader::<#loader>(#gctx)?;
+                    let __nestrs_loaders = ::nest_rs_graphql::__private::UnitLoaders::of(#gctx);
+                }
+            });
+            let loader_prelude = loaders.iter().map(|(ident, loader)| {
+                if own_loaders {
+                    quote!(let #ident = __nestrs_loaders.get::<#loader>(#gctx)?;)
+                } else {
+                    quote!(let #ident = ::nest_rs_graphql::__private::seeded_loader::<#loader>(#gctx)?;)
                 }
             });
             // Bare on purpose: `graphql` is an inert helper the `#[Object]` derive
@@ -1409,6 +1499,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     #run(#site, #gctx, #site_kind, move || async move {
                         #(#tail_prelude)*
                         #(#validate_prelude)*
+                        #unit_loaders
                         #(#loader_prelude)*
                         #bind_prelude
                         #(#pipe_prelude)*
@@ -2096,9 +2187,10 @@ mod tests {
             "a subscription's opening and a field resolver run inside theirs: {expanded}",
         );
         for wrapped in [
-            "async_graphql :: Result < i32 >",
-            "async_graphql :: Result < Thing >",
-            "async_graphql :: Result < impl Stream < Item = i32 > >",
+            "async_graphql :: Result < :: nest_rs_graphql :: __private :: FieldAnswer < i32 > , >",
+            "async_graphql :: Result < :: nest_rs_graphql :: __private :: FieldAnswer < Thing > , >",
+            "async_graphql :: Result < impl :: nest_rs_graphql :: async_graphql :: futures_util :: \
+             Stream < Item = :: nest_rs_graphql :: __private :: FieldAnswer < i32 > , > , >",
             "async_graphql :: Result < String >",
         ] {
             assert!(
@@ -2113,6 +2205,36 @@ mod tests {
         assert!(
             !expanded.contains(". expect ("),
             "no request-path panic in a wrapper: {expanded}",
+        );
+    }
+
+    /// The item a subscription's answer wraps is the one async-graphql registers,
+    /// and a stream a type names is wrapped whole: its item is read in no signature.
+    #[test]
+    fn a_streams_item_is_read_as_async_graphql_reads_it() {
+        for (stream, item) in [
+            (parse_quote!(impl Stream<Item = i32>), "i32"),
+            (parse_quote!(impl Send + Stream<Item = Row>), "Row"),
+            (
+                parse_quote!(impl RowStream),
+                "< dyn RowStream as :: nest_rs_graphql :: async_graphql :: futures_util :: \
+                 Stream > :: Item",
+            ),
+        ] {
+            let stream: TypeImplTrait = stream;
+            let read = stream_item(&stream);
+            assert_eq!(quote!(#read).to_string(), item);
+        }
+        let sig: Signature =
+            parse_quote!(async fn ticks(&self) -> Fallible<BoxStream<'static, i32>>);
+        let output = root_output(&sig, RootKind::Subscription);
+        let output = quote!(#output).to_string();
+        assert!(
+            output.contains(
+                "Result < :: nest_rs_graphql :: __private :: FieldAnswers < Fallible < \
+                 BoxStream < 'static , i32 > > > , >"
+            ),
+            "{output}"
         );
     }
 }

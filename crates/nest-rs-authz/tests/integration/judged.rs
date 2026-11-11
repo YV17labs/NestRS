@@ -613,6 +613,13 @@ impl MembersResolver {
         cache().lock().expect("the cache").clone()
     }
 
+    /// A scalar the body builds around the row a cache kept.
+    #[query]
+    #[authorize(Read, member::Entity)]
+    async fn cached_json(&self) -> GqlJson<Option<Member>> {
+        GqlJson(cache().lock().expect("the cache").clone())
+    }
+
     #[mutation]
     #[authorize(Update, member::Entity)]
     async fn write_member(&self) -> Member {
@@ -835,6 +842,40 @@ async fn a_columns_refusal_names_its_root_field_never_the_clients_alias() {
         ("method", "cached"),
         ("kind", "query"),
         ("field", "cached"),
+    ] {
+        assert_eq!(filed[0].field(field).as_deref(), Some(named), "{field}");
+    }
+}
+
+/// A row inside a `Json` scalar, which async-graphql serializes itself, refuses as a
+/// column does: its root field answers the refusal rather than a `null` no error
+/// explains, and its line names that field as its `mounted` line does.
+#[tokio::test]
+async fn a_json_scalars_refusal_is_answered_and_names_its_root_field() {
+    let app = TestApp::for_module::<MembersGraphqlModule>()
+        .await
+        .expect("boots");
+    *cache().lock().expect("the cache") = Some(published());
+    let logs = nest_rs_testing::LogCapture::install();
+    let read = graphql_as(&app, "admin", "{ chosen_by_the_client: cachedJson }").await;
+    assert_eq!(read["data"], serde_json::Value::Null, "{read}");
+    assert_eq!(
+        read["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{read}"
+    );
+    assert!(!read.to_string().contains("member 1"), "{read}");
+    let filed = logs.find(
+        nest_rs_authz::TARGET,
+        "a wire row answered a caller it was not judged for",
+    );
+    assert_eq!(filed.len(), 1, "{filed:#?}");
+    for (field, named) in [
+        ("entity", "members"),
+        ("reason", "judged_for_another"),
+        ("host", "MembersResolver"),
+        ("method", "cached_json"),
+        ("kind", "query"),
+        ("field", "cachedJson"),
     ] {
         assert_eq!(filed[0].field(field).as_deref(), Some(named), "{field}");
     }

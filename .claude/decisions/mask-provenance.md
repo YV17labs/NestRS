@@ -560,3 +560,73 @@ work filing nothing itself.
 reply back, the design the judged row replaced, to hide only that a push arrived, which is
 all such an item tells its subscriber. Kept as a limit in `TODO.md` §6; an item that must
 not say even that is a row, a list, or one inside an `Option` or a `Result`.
+
+## 2026-11-11 — a GraphQL root field's answer resolves under the unit that built it
+
+The 2026-11-08 entry left a limit: a `#[public]` GraphQL field whose own guard attaches
+the ability, its request carrying none, answered no wire row. async-graphql resolves what
+a root field returned once the field's future returned, outside the unit whose guards
+installed the ability, so every column of a row judged there refused as another caller's
+(seen: `{ feed { title } }` answered `INTERNAL` at each column, a subscription's canary
+`complete` before any item, a field resolver's parent `INTERNAL`, a relation's batch and
+a root field's own `&DataLoader` judging by nothing). And a row a `Json` scalar held that
+refused its caller answered `null` with no error, async-graphql's `Json::resolve` writing
+`to_value(..).ok().unwrap_or_default()`, its line naming no unit (seen).
+
+**Decided: each root field's value is a `FieldAnswer`** (`nest-rs-graphql`), a wrapper
+`OutputType` whose schema is the value's, built inside the field's unit, which captures
+there what crosses into a new `Continuation::Answer` that the unit's caller does not hold
+(core's `AnswerContext`), and merges it back over whatever resolves the answer — a
+subscription's `FieldAnswers` around each poll and each item. What crosses is opt-in, and
+the ability alone opts in: the license a posture gives its own reads
+(`VisitorReadNamed`), what a posture naming no subject withholds (`UnmaskedReply`), a
+principal and the executor stay the unit's, so a visitor's reads below a root stay closed,
+a nested field reads what it read below a root its request's ability reached, and a
+mutation's fields keep their savepoint. An ability its request carried is held by the
+caller, so nothing is captured and the answer pays one scan of the unit's values. Its
+batches carry it too: the spawner merges the capture of the field asking the loader, and a
+query's or a mutation's answer and loader parameters read through loaders of the field's
+own where it captured something, so no other root field's keys — under another ability —
+join a batch judged under it; a subscription's operation holds one root field, and its
+stream may borrow its loader past the opening, so it keeps the request's. That premise is
+GraphQL §5.2.3.1's, which async-graphql 7.2.1 does not hold: it opens a stream per field at
+a subscription's root, so two root fields whose own guards attached abilities of their own
+shared a batch, the second's row refused as another caller's (seen: `subscription { a:
+firstArticleStream { title } b: firstArticleStream { title } }` streamed `a` alone and
+filed an `error`). An operation whose root names other than one field — a second, one twice,
+one through a fragment, one under `@skip` or `@include` — is refused once validation passed,
+before anything opens. Each resolution's
+polls run as an edge's serializer runs (`answering`): a refusal a serializer meets there is
+the root field's answer, the refusal's code, filed once per operation, table and reason
+naming the field as a column's refusal does (`file_below_root`, which the column's guard now
+shares).
+
+**Cost**, release, a schema of two `#[public]` queries executed in process, before
+(`cc83dde49`) and after, five alternating runs of nine rounds each, medians of the runs'
+medians, on a loaded host (load average 7, each run's own spread ±3–5 %): one root field
+answering 100 objects 119.1 → 120.1 µs bare and 119.9 → 120.7 µs under four request
+values, one crossing into an answer as an ability does; ten aliased root fields answering
+a scalar 39.4 → 39.7 µs bare and 41.4 → 42.6 µs under the four values, about 0.1 µs a root
+field, the capture's scan. Within the runs' noise.
+
+**With it, the stream's own reads.** An ability a field's own guards attached reaches its
+stream's polls, since a row the stream builds there is judged under what is installed: a
+caller a token backs reads under it there, as under one its socket carried, and a visitor
+reads nothing.
+
+**Refused:**
+
+- **Installing the ability around `resolve_field`**: the unit's guards have not run when
+  the field is entered, so the answer's value would need a slot written from inside the
+  unit; the wrapper carries what it needs with the value.
+- **The `Body` continuation, or every value crossing by default**: the executor steps down
+  to the pool on a body, which would take a mutation's reply off its savepoint, and a
+  visitor's license would open the reads of every field below the root.
+- **Merging the field's ability into the request's shared batches for a query**: two root
+  fields under two abilities (`{ a: feed { … } b: feed { … } }`, each `#[public]` field
+  building its own) would share a batch judged under the first, the second refusing.
+- **Loaders of its own for a subscription's opening**: its stream may borrow its loader
+  past the opening, and loaders of the opening's own end with it, while the request's live
+  as long as the stream; the operation holds no other root field once §5.2.3.1 is held.
+- **Keeping async-graphql's `null` for a refused `Json`**: a caller would hear success with
+  a default in place of the refusal (`CLAUDE.md`, no swallowed error).

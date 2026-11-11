@@ -174,10 +174,14 @@ a `Continuation`, and `AmbientValue::carry` decides what crosses into it:
 | `Commit` | work held for the commit: `after_commit`, an emitted event's listeners | crosses |
 | `Connection` | a connection's next units: a socket's messages, a graphql-ws operation | crosses |
 | `Envelope` | a job the unit pushes | nothing crosses |
+| `Answer` | the answer it returned, resolved inside the unit that dispatched it: a GraphQL root field's selection set, a subscription's items | nothing crosses |
 
 A job is system work, run later and elsewhere, so its envelope carries only
 its own keys — the trace, the actor, the tenant and W3C `baggage` — whatever a
-value's `carry` says. A value that must stay closer to its unit narrows it:
+value's `carry` says. An answer resolves inside the unit that dispatched it,
+so it keeps that unit's values and takes only what judged the rows it holds —
+the ability the field's own guards attached. A value that must stay closer to
+its unit narrows it:
 
 ```rust title="crates/features/src/posts/budget.rs"
 use std::sync::Arc;
@@ -194,7 +198,7 @@ impl AmbientValue for QueryBudget {
 
 The framework's own values follow the same contract: the executor steps down
 to the pool wherever the unit outlives its transaction, and the ability
-crosses everywhere but an envelope — see
+crosses everywhere but an envelope, an answer included — see
 [transactions](/database/transactions/).
 
 Work a unit captured usually continues where no other unit runs: a spawned

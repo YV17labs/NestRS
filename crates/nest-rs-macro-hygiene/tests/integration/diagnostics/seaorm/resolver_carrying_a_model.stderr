@@ -5,6 +5,30 @@ error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a rep
    | ^^^^^^^^^^^^^ this carries every column, hidden ones included
    |
    = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
+help: the trait `OutputType` is implemented for `nest_rs::graphql::__private::FieldAnswer<T>`
+  --> $WORKSPACE/crates/nest-rs-graphql/src/field_answer.rs
+   |
+   | impl<T: OutputType> OutputType for FieldAnswer<T> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required for `post::Model` to implement `OutputType`
+  --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
+   |
+ 8 |     #[expose(name = "Post", graphql)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+...
+11 |     pub struct Model {
+   |                ^^^^^
+   = note: 1 redundant requirement hidden
+   = note: required for `nest_rs::graphql::__private::FieldAnswer<post::Model>` to implement `OutputType`
+   = note: this error originates in the attribute macro `operations` which comes from the expansion of the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
+  --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:29:1
+   |
+29 | #[operations]
+   | ^^^^^^^^^^^^^ this carries every column, hidden ones included
+   |
+   = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
 help: the trait `OutputType` is implemented for `post::Model`
   --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
    |
@@ -18,20 +42,11 @@ note: required for `post::Model` to implement `OutputType`
 ...
 11 |     pub struct Model {
    |                ^^^^^
-   = note: this error originates in the attribute macro `operations` which comes from the expansion of the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
-  --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:29:1
+note: required by a bound in `<nest_rs::graphql::__private::FieldAnswer<T> as OutputType>`
+  --> $WORKSPACE/crates/nest-rs-graphql/src/field_answer.rs
    |
-29 | #[operations]
-   | ^^^^^^^^^^^^^ this carries every column, hidden ones included
-   |
-   = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-note: required by a bound in `<post::Model as OutputType>`
-  --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
-   |
- 8 |     #[expose(name = "Post", graphql)]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `<Model as OutputType>`
+   | impl<T: OutputType> OutputType for FieldAnswer<T> {
+   |         ^^^^^^^^^^ required by this bound in `<FieldAnswer<T> as OutputType>`
    = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
@@ -84,28 +99,6 @@ note: required by a bound in `nest_rs::core::__private::RowProbe::<T>::answered`
    |     where
    |         T: CrossesAWire,
    |            ^^^^^^^^^^^^ required by this bound in `RowProbe::<T>::answered`
-
-error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
-  --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:33:27
-   |
-33 |     fn answered(&self) -> post::Model {
-   |                           ^^^^^^^^^^^ this carries every column, hidden ones included
-   |
-   = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-help: the trait `OutputType` is implemented for `post::Model`
-  --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
-   |
- 8 |     #[expose(name = "Post", graphql)]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required for `post::Model` to implement `OutputType`
-  --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
-   |
- 8 |     #[expose(name = "Post", graphql)]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced here
-...
-11 |     pub struct Model {
-   |                ^^^^^
-   = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a reply answers, and a write takes the input `#[expose(input(..))]` declares
   --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:39:26

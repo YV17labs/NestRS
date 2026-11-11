@@ -118,6 +118,11 @@ that the ability installed where it answers is that one, so:
 - a `#[field_resolver]` whose parent is such a row, or one the caller may not read,
   refuses before it runs, as the parent's own columns refuse, so nothing it derives
   from the parent ships;
+- a GraphQL root field's answer resolves under the ability its own unit judged its
+  rows by — the one its request carried, or the one the field's own guards attached
+  where the request carried none — and so do the field resolvers below it, the
+  batches its relations read and a subscription's items: `AbilityGuard` bound on the
+  field answers as it does bound at `/graphql`'s request;
 - a push to other connections (`WsServer`'s `broadcast`, `emit_to`, `emit`)
   refuses a row judged for the caller pushing it — no recipient's ability judged
   it — and takes a row a job built, which holds every exposed column for no caller
@@ -149,7 +154,10 @@ subscriber must not learn a push happened.
 Since a withheld column is no value in the row, there is nothing for any shape to
 leak: a scalar a body builds (`Json<Vec<User>>` in GraphQL), an object holding a
 row or copying its columns (`#[graphql(flatten)]`), a map column, a column renamed
-onto a field resolver's name — each holds the row as it was judged. A generated
+onto a field resolver's name — each holds the row as it was judged. A row a
+scalar holds that refuses its caller — one judged for another, kept in a `Json` —
+fails its root field with the refusal's code rather than the `null` async-graphql
+writes for a value it cannot serialize, its line naming that field. A generated
 loader answers wire rows too, judged for the caller whose request runs the batch,
 so a body reading `writers.load_one(id).await?.and_then(|row| row.email)` reads
 `None` where the grant withholds the email.

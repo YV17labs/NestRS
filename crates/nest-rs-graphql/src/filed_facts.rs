@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use async_graphql::Context;
+use async_graphql::ContextBase;
 
 /// Held in each operation's data. Built by the first line, so an operation filing none
 /// pays for one empty value.
@@ -24,7 +24,7 @@ impl FiledFacts {
 
 /// Whether the operation `ctx` runs has yet to file `fact`. A schema no app composed
 /// keeps no record, so there each files its own.
-pub fn first_in_operation(ctx: &Context<'_>, fact: String) -> bool {
+pub fn first_in_operation<T>(ctx: &ContextBase<'_, T>, fact: String) -> bool {
     ctx.data_opt::<Arc<FiledFacts>>()
         .is_none_or(|filed| filed.first(fact))
 }

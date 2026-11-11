@@ -13,10 +13,10 @@ note: required by a bound in `nest_rs::graphql::__private::answers_a_stream`
    |                            ^^^^^^^^^^^^^^ required by this bound in `answers_a_stream`
 
 error[E0277]: the trait bound `Result<Pin<Box<dyn Stream<Item = i32> + std::marker::Send>>, nest_rs::graphql::async_graphql::Error>: Stream` is not satisfied
-  --> tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:19:30
+  --> tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1
    |
-19 |     async fn ticks(&self) -> Fallible<BoxStream<'static, i32>> {
-   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+15 | #[operations]
+   | ^^^^^^^^^^^^^ unsatisfied trait bound
    |
    = help: the trait `Stream` is not implemented for `Result<Pin<Box<dyn Stream<Item = i32> + std::marker::Send>>, nest_rs::graphql::async_graphql::Error>`
    = help: the following other types implement trait `Stream`:
@@ -29,6 +29,8 @@ error[E0277]: the trait bound `Result<Pin<Box<dyn Stream<Item = i32> + std::mark
              Buffered<St>
              FlatMapUnordered<St, U, F>
            and $N others
+   = note: required for `nest_rs::graphql::__private::FieldAnswers<Result<Pin<Box<dyn Stream<Item = i32> + std::marker::Send>>, nest_rs::graphql::async_graphql::Error>>` to implement `Stream`
+   = note: this error originates in the attribute macro `::nest_rs::graphql::async_graphql::Subscription` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `Result<Pin<Box<dyn Stream<Item = i32> + std::marker::Send>>, nest_rs::graphql::async_graphql::Error>: Stream` is not satisfied
   --> tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1
@@ -47,6 +49,7 @@ error[E0277]: the trait bound `Result<Pin<Box<dyn Stream<Item = i32> + std::mark
              Buffered<St>
              FlatMapUnordered<St, U, F>
            and $N others
+   = note: required for `nest_rs::graphql::__private::FieldAnswers<Result<Pin<Box<dyn Stream<Item = i32> + std::marker::Send>>, nest_rs::graphql::async_graphql::Error>>` to implement `Stream`
 note: required by a bound in `nest_rs::http::futures_util::StreamExt::then`
   --> $CARGO/futures-util-$VERSION/src/stream/stream/mod.rs
    |
@@ -56,27 +59,3 @@ note: required by a bound in `nest_rs::http::futures_util::StreamExt::then`
    |     fn then<Fut, F>(self, f: F) -> Then<Self, Fut, F>
    |        ---- required by a bound in this associated function
    = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: the trait bound `Result<Pin<Box<dyn Stream<Item = i32> + std::marker::Send>>, nest_rs::graphql::async_graphql::Error>: Stream` is not satisfied
-  --> tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1
-   |
-15 | #[operations]
-   | ^^^^^^^^^^^^^ unsatisfied trait bound
-   |
-   = help: the trait `Stream` is not implemented for `Result<Pin<Box<dyn Stream<Item = i32> + std::marker::Send>>, nest_rs::graphql::async_graphql::Error>`
-   = help: the following other types implement trait `Stream`:
-             &mut S
-             Abortable<St>
-             AssertUnwindSafe<S>
-             Box<S>
-             Buffer<S, Item>
-             BufferUnordered<St>
-             Buffered<St>
-             FlatMapUnordered<St, U, F>
-           and $N others
-   = note: required for `nest_rs::http::futures_util::stream::Then<Result<Pin<Box<dyn Stream<Item = i32> + std::marker::Send>>, nest_rs::graphql::async_graphql::Error>, {async block@$DIR/tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1: 15:14}, {closure@$DIR/tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1: 15:14}>` to implement `Stream`
-   = note: required for `nest_rs::http::futures_util::stream::Then<Result<Pin<Box<dyn Stream<Item = i32> + std::marker::Send>>, nest_rs::graphql::async_graphql::Error>, {async block@$DIR/tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1: 15:14}, {closure@$DIR/tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1: 15:14}>` to implement `TryStream`
-   = note: 2 redundant requirements hidden
-   = note: required for `nest_rs::http::futures_util::stream::Map<nest_rs::http::futures_util::stream::TryFlatten<nest_rs::http::futures_util::stream::Once<{async block@$DIR/tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1: 15:14}>>, {closure@$DIR/tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1: 15:14}>` to implement `Stream`
-   = note: required for the cast from `Pin<Box<nest_rs::http::futures_util::stream::Map<nest_rs::http::futures_util::stream::TryFlatten<nest_rs::http::futures_util::stream::Once<{async block@$DIR/tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1: 15:14}>>, {closure@$DIR/tests/integration/diagnostics/graphql/aliased_result_around_a_named_stream.rs:15:1: 15:14}>>>` to `Pin<Box<dyn Stream<Item = nest_rs::graphql::async_graphql::Response> + std::marker::Send>>`
-   = note: this error originates in the attribute macro `::nest_rs::graphql::async_graphql::Subscription` (in Nightly builds, run with -Z macro-backtrace for more info)

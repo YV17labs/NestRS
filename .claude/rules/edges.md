@@ -488,7 +488,9 @@ serve. Every field's
 site is composed at the wiring step, so a layer it declares that does not
 resolve, or two `#[meta]` values of one type, refuse the boot. A field's
 `Ability` is the unit's — the one its class gate checked — and the rows it
-builds and its `bind` read it there, never off the GraphQL context.
+builds and its `bind` read it there, never off the GraphQL context; its answer,
+which async-graphql resolves once the unit ended, resolves under it again, a
+subscription's items too (`FieldAnswer`, `FieldAnswers`).
 
 **Every MCP request is one `mcp.operation` unit**, run on rmcp's task inside
 the `/mcp` request's context — its scope, its trace, what its guards and layers

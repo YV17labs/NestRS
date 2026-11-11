@@ -281,10 +281,10 @@ Everything else is the GraphQL module's own configuration — see
   `nest_rs::authz` logs one `warn` (`reason = "undecidable_on_push"`) per
   entity and action, not one per item.
 - **A stream's own reads.** A visitor's read nothing; a caller a token backs reads
-  under the ability its request carried, and what a scalar built from those rows
-  says is the body's own line. An ability a field's own guards attach, with none
-  at the socket's request, judges the rows its opening builds and leaves with that
-  unit: no item answers the socket. Attach the ability at `/graphql`'s request.
+  under the ability its socket carried, or the one the field's own guards attached
+  at its opening, and what a scalar built from those rows says is the body's own
+  line. Its items are judged and answered under that same ability, so a field
+  binding `AbilityGuard` itself streams as one under a guarded upgrade does.
 - **`bind = Service` binds at subscribe, not per item** — it names one
   subject for the subscription, the way it names one for a mutation.
 - **A subscription's request scope lasts as long as the subscription.** A

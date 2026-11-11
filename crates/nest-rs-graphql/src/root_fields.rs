@@ -5,8 +5,12 @@
 
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use async_graphql::{Context, Name, QueryPathSegment};
-use nest_rs_core::__private::Site;
+use async_graphql::{Context, ContextBase, Name, QueryPathSegment};
+use nest_rs_core::__private::{RefusedAnswer, Site};
+use nest_rs_core::ServedAddress;
+
+use crate::filed_facts::first_in_operation;
+use crate::operation::operation_label;
 
 /// Held in each operation's data. Built by the first root field noted, so an
 /// operation that dispatches none pays for one empty value.
@@ -35,6 +39,31 @@ impl RootFields {
 pub(crate) fn note_root(ctx: &Context<'_>, site: &'static Site) {
     if let Some(roots) = ctx.data_opt::<Arc<RootFields>>() {
         roots.note(&ctx.item.node.response_key().node, site);
+    }
+}
+
+/// File `refused`, a wire row's refusal met resolving below the root field `root`
+/// dispatched, once per operation, table and reason, naming that field as its
+/// `mounted` line does. A root no unit dispatched (a schema built by hand) names
+/// nothing a client wrote.
+pub fn file_below_root<T>(
+    ctx: &ContextBase<'_, T>,
+    refused: &RefusedAnswer,
+    root: Option<&'static Site>,
+) {
+    let field = root.map(|site| site.handler().address());
+    let fact = format!(
+        "judged {} {} {}",
+        refused.entity(),
+        refused.reason(),
+        field.unwrap_or_default()
+    );
+    if first_in_operation(ctx, fact) {
+        let kind = operation_label(ctx.query_env.operation.node.ty);
+        let served = field.map_or_else(ServedAddress::default, |field| {
+            ServedAddress::field(kind, field)
+        });
+        refused.file_at(root.map(Site::handler), served);
     }
 }
 

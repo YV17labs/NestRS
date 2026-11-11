@@ -74,17 +74,11 @@ job's, inside a job and on a push alone), a refused row answers its key in a
 GraphQL mutation's reply alone, a `#[field_resolver]` under a row that answers no
 one refuses before it runs, a posture naming an entity or a `#[subject]` opens
 its unit's reads, and a dispatched method answering a `Model` does not compile
-(`mask-provenance.md`, `unmasked-reply-withholds-the-ability.md`, 2026-11-08).
-What remains:
-
-- **A `#[public]` GraphQL field whose own guard attaches the ability**, its
-  request carrying none, answers no wire row: the rows its body builds are judged
-  under the field's unit, and their columns resolve after it, where no ability is
-  installed — a root field's as a subscription's items. Fail closed, with an
-  `error` line; every `/graphql` whose request runs the ability guard is
-  unaffected. Close: nest-rs-graphql resolving a root field's answer under the
-  ability its unit attached (a wrapper `OutputType` installing it), as MCP writes
-  a tool's answer inside its site. *seen* (`gate::public::a_subscription_whose_own_guard_attaches_its_ability_streams_no_row`)
+(`mask-provenance.md`, `unmasked-reply-withholds-the-ability.md`, 2026-11-08). A
+GraphQL root field's answer resolves under the ability its own unit judged its rows
+by, one its own guards attached included — its field resolvers, its batches and a
+subscription's items with it (2026-11-11). Nothing of it remains open here; what it
+keeps on purpose is §5's.
 
 ## 3. Known gaps by area
 
@@ -226,13 +220,6 @@ What remains:
   type. Close: a probe at each `#[inject]` site reading a remedy the type
   carries, a change to every `#[injectable]` expansion. *seen*
 
-**Operator lines**
-- A wire row inside a GraphQL `Json` scalar, which async-graphql serializes
-  itself outside any edge's claim, files its refusal naming no unit, where a
-  column names its root field's `host`, `method`, `kind` and `field`. Close: with
-  the `#[public]` field's line of §2, the root field's answer resolved under its
-  unit. *read*
-
 **Docs, bench, tooling**
 - 48 docs pages still exceed the ~300-line budget of `docs/STYLE.md`, the
   longest `security/authentication/oauth2.mdx` (594),
@@ -348,7 +335,9 @@ and `get_param_value` cloning, which the framework bounds meanwhile with
 `max_list_argument_bytes`; a type condition on a union applied only where
 that union is resolved, `Fields::add_set`; a later copy of a list of lists
 dropped, `insert_value` joining list items only where they are objects, which
-the framework refuses meanwhile); redis-rs (`PipelineSink` loses a
+the framework refuses meanwhile; a `Json` scalar whose value fails to serialize
+answered `null` with no error, `Json::resolve`, which the framework answers
+meanwhile as its root field's refusal); redis-rs (`PipelineSink` loses a
 read error with nothing in flight; a command sent as its connection's driver
 ends is neither answered nor dropped, so its caller waits out its budget, and
 no hook in the send lets a test place one there); sse-stream 0.2.6

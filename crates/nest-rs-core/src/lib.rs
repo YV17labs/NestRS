@@ -300,6 +300,7 @@ pub mod __private {
     pub use crate::problem::__private::{Withheld, retry_after_secs, withheld};
     pub use crate::process_start::ProcessStart;
     pub use crate::request_scope::__private::{RequestScopes, nested_continuation};
+    pub use crate::request_scope::AnswerContext;
     pub use crate::row_probe::{CrossesAWire, RowProbe, RowProbeFallback};
     pub use crate::site::{
         GlobalLayers, Shape, Site, SiteDeclaration, SiteLayers, UnitChains, compose_site,

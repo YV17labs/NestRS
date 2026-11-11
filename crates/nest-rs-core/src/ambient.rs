@@ -42,9 +42,9 @@ use crate::request_scope;
 /// ```
 pub trait AmbientValue: Any + Send + Sync {
     /// What crosses into `into`: the value itself (the default, everywhere but
-    /// a job's envelope), a narrower value, or nothing.
+    /// a job's envelope and an answer), a narrower value, or nothing.
     fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
-        (into != Continuation::Envelope).then_some(self)
+        (!matches!(into, Continuation::Envelope | Continuation::Answer)).then_some(self)
     }
 
     /// What a captured value is where its capture is re-entered inside another
@@ -78,6 +78,11 @@ pub enum Continuation {
     Connection,
     /// A job it pushes: nothing crosses but the envelope's own keys.
     Envelope,
+    /// The answer it returned, resolved once it returned, inside the unit that
+    /// dispatched it: a GraphQL root field's selection set, a subscription's
+    /// items. Only what judges the rows it answers crosses, merged over what
+    /// resolves it; nothing else does unless its `carry` says so.
+    Answer,
 }
 
 /// The running unit's `T`, when it carries one.
@@ -269,6 +274,23 @@ impl Entries {
         self.len() == other.len() && other.iter().all(|entry| self.holds(entry))
     }
 
+    /// What crosses into an [`Answer`](Continuation::Answer) that `opened_in`, the
+    /// values of the unit these were opened in, does not hold already: what the
+    /// unit's own stages attached. `None` when nothing does.
+    pub(crate) fn answered(&self, opened_in: Option<&Self>) -> Option<Self> {
+        let mut crossing = Self::default();
+        for entry in self.iter() {
+            let Some(value) = (entry.carry)(Arc::clone(&entry.value), Continuation::Answer) else {
+                continue;
+            };
+            let entry = entry.holding(value);
+            if !opened_in.is_some_and(|held| held.holds(&entry)) {
+                crossing.push(entry);
+            }
+        }
+        (!crossing.is_empty()).then_some(crossing)
+    }
+
     /// Each value as `map` returns it, or dropped; `None` when every value is
     /// returned unchanged.
     fn mapped(&self, map: impl Fn(&Entry) -> Option<Erased>) -> Option<Self> {
@@ -418,13 +440,14 @@ mod tests {
         }
     }
 
-    const EVERY: [Continuation; 6] = [
+    const EVERY: [Continuation; 7] = [
         Continuation::Body,
         Continuation::Batch,
         Continuation::Task,
         Continuation::Commit,
         Continuation::Connection,
         Continuation::Envelope,
+        Continuation::Answer,
     ];
 
     /// What a `T` reads as on the far side of `into`, captured inside `fut`'s
@@ -556,11 +579,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_default_value_crosses_every_continuation_but_a_jobs_envelope() {
+    async fn a_default_value_crosses_every_continuation_but_a_jobs_envelope_and_an_answer() {
         for into in EVERY {
             let crossed = across(Arc::new(Tenant("acme")), into).await;
             match into {
-                Continuation::Envelope => assert!(crossed.is_none(), "{into:?}"),
+                Continuation::Envelope | Continuation::Answer => {
+                    assert!(crossed.is_none(), "{into:?}");
+                }
                 _ => assert_eq!(crossed.as_deref(), Some(&Tenant("acme")), "{into:?}"),
             }
         }
@@ -611,7 +636,10 @@ mod tests {
                     crossed.is_some_and(|crossed| Arc::ptr_eq(&crossed, &scope)),
                     "{into:?} resolves from the request's own scope",
                 ),
-                Continuation::Batch | Continuation::Connection | Continuation::Envelope => assert!(
+                Continuation::Batch
+                | Continuation::Connection
+                | Continuation::Envelope
+                | Continuation::Answer => assert!(
                     crossed.is_none(),
                     "{into:?} resolves from no scope of the request's",
                 ),

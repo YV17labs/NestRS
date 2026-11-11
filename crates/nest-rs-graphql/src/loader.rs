@@ -15,10 +15,12 @@
 
 use std::any::TypeId;
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use async_graphql::dataloader::DataLoader;
-use async_graphql::{Context, Request};
+use async_graphql::{Context, ContextBase, Data, Request};
 use futures_util::future::Either;
+use nest_rs_core::__private::AnswerContext;
 use nest_rs_core::{
     Container, Continuation, Failure, ReachableProviders, RequestContinuation,
     UngatedDiscoveryError, anyhow,
@@ -113,6 +115,33 @@ where
     })
 }
 
+/// The loaders a query's or a mutation's own `&DataLoader<L>` parameters read:
+/// the request's, or, where the field's unit holds what its request does not —
+/// an ability its own guards attached — loaders of the field's own, whose
+/// batches judge under it ([`batch_spawner`]).
+pub struct UnitLoaders(Option<Data>);
+
+impl UnitLoaders {
+    /// The loaders of the root field `ctx` resolves, read inside its unit.
+    pub fn of(ctx: &Context<'_>) -> Self {
+        if AnswerContext::capture().is_empty() {
+            return Self(None);
+        }
+        Self(LoaderSeeds::seed_own(ctx))
+    }
+
+    /// The `L` loader the field reads, failing as [`seeded_loader`] does.
+    pub fn get<'a, L>(&'a self, ctx: &Context<'a>) -> Result<&'a DataLoader<L>, FieldFailure>
+    where
+        L: Send + Sync + 'static,
+    {
+        match self.0.as_ref().and_then(held_by::<DataLoader<L>>) {
+            Some(own) => Ok(own),
+            None => seeded_loader(ctx),
+        }
+    }
+}
+
 /// The spawner a request's DataLoader batches run through, filed under
 /// `batches`.
 ///
@@ -123,7 +152,12 @@ where
 /// it. Built where the request seeds its loaders, before any field runs, it
 /// holds the span of the unit whose identity the batch carries — the request's,
 /// outside the operation's own — so the export files a batch where its lines
-/// do.
+/// do. A field whose unit holds what its request does not — an ability a root
+/// field's own guards attached — carries that too, merged over the request's
+/// ([`AnswerContext`]): a query's or a mutation's root field reads through
+/// loaders of its own there ([`UnitLoaders`], `LoaderSeeds::seed_own`), so no
+/// other root field's keys join its batches, and a subscription's operation
+/// holds one root field, another refused before it opens (`operation_units`).
 pub fn batch_spawner(
     batches: &DetachedWork,
 ) -> impl Fn(crate::BoxFuture<'static, ()>) + Send + Sync + 'static {
@@ -132,6 +166,7 @@ pub fn batch_spawner(
         .with_borrow(Option::clone)
         .unwrap_or_else(tracing::Span::current);
     move |batch| {
+        let batch = AnswerContext::capture().scope(batch);
         let batch = match RequestContinuation::capture(Continuation::Batch) {
             Some(carried) => Either::Left(carried.scope(batch)),
             None => Either::Right(batch),
@@ -204,6 +239,20 @@ impl LoaderSeeds {
             seeds,
             batches,
         })
+    }
+
+    /// A loader of each owner the app reaches, of the root field `ctx` resolves
+    /// alone, its batches in the span its request's run in: a request's loaders
+    /// are shared by every field reading through them, so a batch of theirs would
+    /// join the keys of root fields whose units hold different abilities. `None`
+    /// in a schema no `GraphqlModule` built, which seeds none.
+    pub(crate) fn seed_own<T>(ctx: &ContextBase<'_, T>) -> Option<Data> {
+        let seeds = ctx.data_opt::<Arc<Self>>()?;
+        let mut request = Request::new("");
+        if let Some(span) = ctx.data_opt::<BatchSpan>() {
+            request = request.data(BatchSpan(span.0.clone()));
+        }
+        Some(seeds.seed(request).data)
     }
 
     /// `request`, holding a loader of each owner the app reaches.
@@ -310,8 +359,6 @@ fn warn_unreachable_loaders(reachable: &ReachableProviders) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use async_graphql::registry::Registry;
 
     use super::*;

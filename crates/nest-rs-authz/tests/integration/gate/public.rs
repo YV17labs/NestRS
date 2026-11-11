@@ -218,6 +218,29 @@ impl Reads {
     }
 }
 
+/// Reads articles again by their id, as a relation's loader does: each row judged
+/// where the batch builds it.
+#[injectable]
+#[derive(Default)]
+struct Articles;
+
+#[dataloader]
+impl Articles {
+    async fn by_id(&self, keys: &[i32]) -> HashMap<i32, Article> {
+        keys.iter()
+            .map(|&id| {
+                let row = article::Model {
+                    id,
+                    title: format!("article {id}"),
+                    published: id != 3,
+                    body: Some(format!("body {id}")),
+                };
+                (id, Article::from(&row))
+            })
+            .collect()
+    }
+}
+
 #[resolver]
 struct ArticlesResolver;
 
@@ -225,12 +248,14 @@ struct ArticlesResolver;
 impl ArticlesResolver {
     #[query]
     #[public(Read, article::Entity)]
+    #[use_guards(AuthzGuard)]
     async fn feed(&self) -> GqlResult<Vec<Article>> {
         Ok(rows())
     }
 
     #[query]
     #[public(Read, article::Entity)]
+    #[use_guards(AuthzGuard)]
     async fn feed_by_hand(&self) -> GqlResult<bool> {
         Ok(reads_under_an_ability())
     }
@@ -243,21 +268,44 @@ impl ArticlesResolver {
 
     #[query]
     #[public(Read, sealed::Entity)]
+    #[use_guards(AuthzGuard)]
     async fn sealed(&self) -> GqlResult<Vec<i32>> {
         Ok(Vec::new())
     }
 
     #[query]
     #[public(Read, Browsing)]
+    #[use_guards(AuthzGuard)]
     async fn browsing(&self) -> GqlResult<bool> {
         Ok(reads_under_an_ability())
     }
 
     #[query]
     #[public(Read, article::Entity)]
+    #[use_guards(AuthzGuard)]
     async fn batched(&self, reads: &DataLoader<ReadsUnderAnAbility>) -> GqlResult<Option<bool>> {
         let Ok(read) = reads.load_one(1).await;
         Ok(read)
+    }
+
+    /// The first article, read through a batch the field itself asks.
+    #[query]
+    #[public(Read, article::Entity)]
+    #[use_guards(AuthzGuard)]
+    async fn first_article(
+        &self,
+        articles: &DataLoader<ArticlesById>,
+    ) -> GqlResult<Option<Article>> {
+        let Ok(read) = articles.load_one(1).await;
+        Ok(read)
+    }
+
+    /// The feed a write answers, read again.
+    #[mutation]
+    #[public(Read, article::Entity)]
+    #[use_guards(AuthzGuard)]
+    async fn refreshed_feed(&self) -> GqlResult<Vec<Article>> {
+        Ok(rows())
     }
 
     /// Each item is masked as a row: a draft dropped, a published one its title.
@@ -266,6 +314,18 @@ impl ArticlesResolver {
     #[use_guards(AuthzGuard)]
     async fn feed_stream(&self) -> impl Stream<Item = Article> {
         stream::iter(rows())
+    }
+
+    /// The first article, read at the opening through a batch it asks.
+    #[subscription]
+    #[public(Read, article::Entity)]
+    #[use_guards(AuthzGuard)]
+    async fn first_article_stream(
+        &self,
+        articles: &DataLoader<ArticlesById>,
+    ) -> impl Stream<Item = Article> {
+        let Ok(read) = articles.load_one(1).await;
+        stream::iter(read)
     }
 
     /// What a stream's own body reads, after its opening's unit ended.
@@ -282,6 +342,17 @@ impl ArticlesResolver {
         let _ = parent;
         Ok(reads_under_an_ability())
     }
+
+    /// The article a batch reads again, as a relation reads its row.
+    #[field_resolver]
+    async fn reread(
+        &self,
+        parent: &Article,
+        articles: &DataLoader<ArticlesById>,
+    ) -> GqlResult<Option<Article>> {
+        let Ok(read) = articles.load_one(parent.id).await;
+        Ok(read)
+    }
 }
 
 #[module(
@@ -291,6 +362,7 @@ impl ArticlesResolver {
         CallerGuard,
         AuthzGuard,
         Reads,
+        Articles,
         ArticlesController,
         ArticlesResolver,
         EndpointGuards<GraphqlView, (CallerGuard, AuthzGuard)>,
@@ -302,6 +374,20 @@ async fn app() -> TestApp {
     TestApp::for_module::<ArticlesApp>()
         .await
         .expect("the routes and the resolver boot")
+}
+
+/// The resolver with no guard at its `/graphql` request: each root field's own guard
+/// attaches the ability, its request carrying none.
+#[module(
+    imports = [GraphqlModule],
+    providers = [Rules, AuthzGuard, Reads, Articles, ArticlesResolver],
+)]
+struct OwnGuardedArticlesApp;
+
+async fn own_guarded_app() -> TestApp {
+    TestApp::for_module::<OwnGuardedArticlesApp>()
+        .await
+        .expect("each gated root field binds its own ability guard")
 }
 
 async fn body(response: nest_rs_http::Response) -> Value {
@@ -545,18 +631,160 @@ async fn a_subscription_naming_its_read_judges_each_item_by_the_visitors_grant()
     assert_eq!(done["type"], "complete", "the draft never arrived: {done}");
 }
 
-/// An ability the field's own guard attaches judges the rows its opening builds,
-/// and leaves with that unit: no item answers the socket, which holds none.
+/// An ability the field's own guard attaches, the socket carrying none, judges the
+/// rows its opening builds and answers them: a draft never arrives, a published
+/// article its title alone.
 #[tokio::test]
-async fn a_subscription_whose_own_guard_attaches_its_ability_streams_no_row() {
+async fn a_subscription_whose_own_guard_attaches_its_ability_streams_its_rows() {
     let app = app().await;
     let mut socket = app.graphql_socket().open();
     socket.connect().await;
-    socket.subscribe("1", "subscription { feedStream { title } }");
+    socket.subscribe("1", "subscription { feedStream { title body } }");
+    for title in ["article 1", "article 2"] {
+        let item = socket.next_item("1").await.expect("a published article");
+        assert_eq!(
+            item["data"]["feedStream"],
+            json!({ "title": title, "body": null }),
+            "{item}",
+        );
+    }
     let done = socket.next_item("1").await.expect("the stream ends");
+    assert_eq!(done["type"], "complete", "the draft never arrived: {done}");
+}
+
+/// A batch a subscription's opening asks judges under the ability the field's own
+/// guard attached, the socket carrying its caller and no ability.
+#[tokio::test]
+async fn a_batch_a_subscriptions_own_guard_judges_streams_its_row() {
+    let app = app().await;
+    let mut socket = app.graphql_socket().attach(Arc::new(Caller)).open();
+    socket.connect().await;
+    socket.subscribe("1", "subscription { firstArticleStream { title } }");
+    let item = socket.next_item("1").await.expect("the first article");
     assert_eq!(
-        done["type"], "complete",
-        "no row answered the socket: {done}"
+        item["data"]["firstArticleStream"],
+        json!({ "title": "article 1" }),
+        "{item}",
+    );
+}
+
+/// A subscription's opening reads the request's loaders, since its operation holds
+/// one root field: a second, whose own guard attaches an ability of its own, would
+/// join its batch. It is refused before either opens, and no row is judged.
+#[tokio::test]
+async fn a_subscription_selecting_two_own_guarded_roots_is_refused_before_either_opens() {
+    let logs = LogCapture::install();
+    let app = app().await;
+    let mut socket = app.graphql_socket().attach(Arc::new(Caller)).open();
+    socket.connect().await;
+    socket.subscribe(
+        "1",
+        "subscription { a: firstArticleStream { title } b: firstArticleStream { title } }",
+    );
+    let item = socket.next_item("1").await.expect("the refusal");
+    assert_eq!(item["data"], Value::Null, "{item}");
+    assert_eq!(
+        item["errors"][0]["message"], r#"the subscription selects "b" beside "a" at its root"#,
+        "{item}",
+    );
+    let done = socket.next_item("1").await.expect("the operation ends");
+    assert_eq!(done["type"], "complete", "{done}");
+    logs.expect_none(
+        "nest_rs::authz",
+        "a wire row answered a caller it was not judged for",
+    );
+    assert!(
+        logs.events_at(tracing::Level::ERROR).is_empty(),
+        "{:#?}",
+        logs.events(),
+    );
+}
+
+/// A query whose own guard attaches the ability, its request carrying none, answers
+/// the rows it built under that ability, as one its request carried would.
+#[tokio::test]
+async fn a_query_whose_own_guard_attaches_its_ability_answers_its_rows() {
+    let answer = query(&own_guarded_app().await, "", "{ feed { title body } }").await;
+    assert_eq!(
+        answer,
+        json!({ "data": { "feed": [
+            { "title": "article 1", "body": null },
+            { "title": "article 2", "body": null },
+        ] } }),
+    );
+}
+
+/// A mutation's reply, under the ability its own guard attached.
+#[tokio::test]
+async fn a_mutation_whose_own_guard_attaches_its_ability_answers_its_rows() {
+    let answer = query(
+        &own_guarded_app().await,
+        "",
+        "mutation { refreshedFeed { title } }",
+    )
+    .await;
+    assert_eq!(
+        answer,
+        json!({ "data": { "refreshedFeed": [
+            { "title": "article 1" },
+            { "title": "article 2" },
+        ] } }),
+    );
+}
+
+/// A batch below such a root, a relation's, judges the rows it builds under the
+/// root's ability, as one below a root its request's ability reached does.
+#[tokio::test]
+async fn a_batch_below_a_root_whose_own_guard_attaches_its_ability_judges_under_it() {
+    let document = "{ feed { title reread { title } } }";
+    let expected = json!({ "data": { "feed": [
+        { "title": "article 1", "reread": { "title": "article 1" } },
+        { "title": "article 2", "reread": { "title": "article 2" } },
+    ] } });
+    assert_eq!(
+        query(&app().await, "", document).await,
+        expected,
+        "its request's"
+    );
+    assert_eq!(
+        query(&own_guarded_app().await, "", document).await,
+        expected
+    );
+}
+
+/// A batch the root field itself asks judges under the ability its own guard
+/// attached, as one under its request's does.
+#[tokio::test]
+async fn a_batch_a_root_whose_own_guard_attaches_its_ability_asks_judges_under_it() {
+    let document = "{ firstArticle { title } }";
+    let expected = json!({ "data": { "firstArticle": { "title": "article 1" } } });
+    assert_eq!(
+        query(&app().await, "", document).await,
+        expected,
+        "its request's"
+    );
+    assert_eq!(
+        query(&own_guarded_app().await, "", document).await,
+        expected
+    );
+}
+
+/// A field resolver below such a root reads its parent, judged for its caller, and
+/// a visitor's reads there stay closed, as below a root its request's ability reached.
+#[tokio::test]
+async fn a_field_below_a_root_whose_own_guard_attaches_its_ability_reads_its_parent() {
+    let answer = query(
+        &own_guarded_app().await,
+        "",
+        "{ feed { title nestedRead } }",
+    )
+    .await;
+    assert_eq!(
+        answer,
+        json!({ "data": { "feed": [
+            { "title": "article 1", "nestedRead": false },
+            { "title": "article 2", "nestedRead": false },
+        ] } }),
     );
 }
 
@@ -594,16 +822,24 @@ async fn a_streams_own_reads_are_closed_to_a_visitor_and_open_to_a_caller() {
     );
 }
 
-/// A field's own guard attaches its ability to the opening's unit and the mask of its
-/// items, and the stream's body, polled after that unit ended, reads under none.
+/// What a stream's own body reads under an ability its field's own guard attached,
+/// the socket carrying none: what it would under one the socket carried — a caller
+/// a token backs reads under it, a visitor nothing.
 #[tokio::test]
-async fn an_ability_a_fields_own_guard_attaches_stays_off_its_streams_reads() {
+async fn an_ability_a_fields_own_guard_attaches_reaches_its_streams_reads_as_a_carried_one() {
     let app = app().await;
-    let mut socket = app.graphql_socket().attach(Arc::new(Caller)).open();
-    socket.connect().await;
-    socket.subscribe("1", "subscription { streamReads }");
-    let item = socket.next_item("1").await.expect("an item");
-    assert_eq!(item["data"]["streamReads"], false, "{item}");
+    for (caller, reads) in [(Some(Arc::new(Caller)), true), (None, false)] {
+        let socket = app.graphql_socket();
+        let socket = match caller {
+            Some(caller) => socket.attach(caller),
+            None => socket,
+        };
+        let mut socket = socket.open();
+        socket.connect().await;
+        socket.subscribe("1", "subscription { streamReads }");
+        let item = socket.next_item("1").await.expect("an item");
+        assert_eq!(item["data"]["streamReads"], reads, "{item}");
+    }
 }
 
 #[gateway(path = "/ws/articles")]

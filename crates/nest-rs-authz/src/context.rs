@@ -5,7 +5,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use nest_rs_core::__private::UnmaskedReply;
-use nest_rs_core::{AmbientValue, UnitContext};
+use nest_rs_core::{AmbientValue, Continuation, UnitContext};
 use nest_rs_database::__private::installed_scope;
 use nest_rs_database::{ExecutorScope, current_executor_scope};
 
@@ -31,6 +31,12 @@ impl AmbientAbility {
 /// The caller's rules travel wherever the unit continues, and never into a
 /// job's envelope: a job is system work.
 impl AmbientValue for AmbientAbility {
+    /// Into the answer the unit returned too: the rows it built were judged under
+    /// it, so they answer where that answer resolves.
+    fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
+        (into != Continuation::Envelope).then_some(self)
+    }
+
     /// Re-entered inside another unit, a capture's ability is narrowed to the
     /// one that unit reads under, kept where that unit is a job or no unit at
     /// all — the capture continuing its own — and dropped in a request reading
@@ -319,6 +325,7 @@ mod tests {
             Continuation::Commit,
             Continuation::Connection,
             Continuation::Envelope,
+            Continuation::Answer,
         ] {
             let carried = install_ability(Arc::clone(&ability), async {
                 RequestContinuation::capture(into)
@@ -334,6 +341,27 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// The answer a unit naming a visitor's read returned resolves under that
+    /// visitor's ability, which judged its rows, and reads nothing: the license a
+    /// posture gave its own unit stays there, as below a root its request reached.
+    #[tokio::test]
+    async fn a_visitors_answer_is_judged_under_its_ability_and_reads_nothing() {
+        let visitor = visitor();
+        let answer = nest_rs_core::with_request_scope(
+            None,
+            nest_rs_core::Correlation::minted(None),
+            install_ability(Arc::clone(&visitor), async {
+                nest_rs_core::__private::AnswerContext::capture()
+            }),
+        )
+        .await;
+        let (judging, reading) = answer
+            .scope(async { (installed(), current_ability()) })
+            .await;
+        assert!(judging.is_some_and(|judging| Arc::ptr_eq(&judging, &visitor)));
+        assert!(reading.is_none(), "a nested field names no visitor's read");
     }
 
     /// What a request holding `reading()` carries into its commit.

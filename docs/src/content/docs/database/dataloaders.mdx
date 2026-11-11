@@ -223,7 +223,13 @@ logs carries the request's `trace_id`.
 A batch is shared by every field of the request that loads through the
 loader, so it belongs to the **request**: it carries the request's values,
 never one field's, and its lines and spans sit in the request's span, not
-under the field that asked first. Its executor is the **pool**, never the
+under the field that asked first. One exception keeps a root field's rows its
+own: where a query's or a mutation's own guards attached the ability its
+request did not carry, its answer and its loader parameters read through
+loaders of the field's own, whose batches judge their rows under that ability —
+no other root field's keys join them. A subscription's opening reads the
+request's, since its operation holds no other root field: a second is refused
+before either opens ([Subscriptions](/graphql/subscriptions/#limits)). Its executor is the **pool**, never the
 request transaction — a batch runs beside the request, and a write inside a
 loader would race the commit. So a relation resolved in a mutation's own
 response reads the rows as they stood before the mutation's transaction: a

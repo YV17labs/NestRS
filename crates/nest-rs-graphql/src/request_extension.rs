@@ -32,7 +32,7 @@ pub(crate) struct RequestExtensionFactory(Arc<RequestExtension>);
 impl RequestExtensionFactory {
     /// Each request seeded from `seeds`, what its document adds to its text held to
     /// what `config` bounds.
-    pub(crate) fn new(seeds: LoaderSeeds, config: &GraphqlConfig) -> Self {
+    pub(crate) fn new(seeds: Arc<LoaderSeeds>, config: &GraphqlConfig) -> Self {
         Self(Arc::new(RequestExtension {
             seeds,
             repeated_selections: config.repeated_selections(),
@@ -48,7 +48,7 @@ impl ExtensionFactory for RequestExtensionFactory {
 }
 
 struct RequestExtension {
-    seeds: LoaderSeeds,
+    seeds: Arc<LoaderSeeds>,
     repeated_selections: usize,
     list_argument_bytes: usize,
 }

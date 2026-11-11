@@ -65,7 +65,9 @@ impl RequestCtx {
     fn captured(self: &Arc<Self>, into: Continuation) -> Arc<Self> {
         let (unit, keeps_scope) = match into {
             Continuation::Batch => (self.unit_root(), false),
-            Continuation::Connection | Continuation::Envelope => (self, false),
+            Continuation::Connection | Continuation::Envelope | Continuation::Answer => {
+                (self, false)
+            }
             Continuation::Body | Continuation::Task | Continuation::Commit => (self, true),
         };
         let ambient = unit.ambient.carried(into);
@@ -327,6 +329,50 @@ impl TaskContext {
             Install::new(move || request.map(|request| reentered(&request.0)), fut),
             span,
         )
+    }
+}
+
+/// What an answer resolves under once the unit that built it returned, inside
+/// the unit that dispatched it — a GraphQL root field's selection set, a
+/// subscription's items: what crosses into an [`Answer`](Continuation::Answer)
+/// that the unit holds beyond what it was opened with, merged over whatever
+/// resolves it. Empty where the unit added none of it, so an answer its
+/// request's own values judge pays for no install.
+#[derive(Clone, Default)]
+pub struct AnswerContext(Option<Arc<Entries>>);
+
+impl AnswerContext {
+    /// Capture, inside the running unit, what its answer resolves under.
+    pub fn capture() -> Self {
+        Self(
+            current_request_ctx(|ctx| {
+                ctx.ambient
+                    .answered(ctx.parent.as_deref().map(|opened_in| &opened_in.ambient))
+            })
+            .flatten()
+            .map(Arc::new),
+        )
+    }
+
+    /// Whether the unit held nothing its answer needs beyond what it was opened
+    /// with.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+
+    /// Run `fut` with what was captured merged over the running unit's values.
+    pub fn scope<F: Future>(&self, fut: F) -> impl Future<Output = F::Output> + use<F> {
+        let added = self.0.clone();
+        install(move || added.as_deref().cloned().unwrap_or_default(), fut)
+    }
+
+    /// Run `f` with what was captured merged over the running unit's values:
+    /// synchronous, for a stream's poll.
+    pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
+        match self.0.as_deref().cloned().and_then(extended) {
+            Some(ctx) => REQUEST_CTX.sync_scope(ctx, f),
+            None => f(),
+        }
     }
 }
 
@@ -597,6 +643,10 @@ mod tests {
             (
                 "TaskContext::carry",
                 std::mem::size_of_val(&TaskContext::current().carry(heavy())),
+            ),
+            (
+                "AnswerContext::scope",
+                std::mem::size_of_val(&AnswerContext::default().scope(heavy())),
             ),
         ];
         for (installer, size) in installed {
@@ -874,5 +924,59 @@ mod tests {
             .get()
             .expect("a different scoped provider resolves after a sibling factory panicked");
         assert_eq!(resolved.0, "recovered");
+    }
+
+    /// A value judging what its unit answers: it crosses into the answer.
+    struct Judge(&'static str);
+
+    impl crate::AmbientValue for Judge {
+        fn carry(self: Arc<Self>, into: crate::Continuation) -> Option<Arc<Self>> {
+            (into != crate::Continuation::Envelope).then_some(self)
+        }
+    }
+
+    /// What `fut` reads, run as a unit nested in one carrying `opened`.
+    async fn nested_in<T>(opened: Arc<Judge>, fut: impl Future<Output = T>) -> T {
+        let correlation = || crate::Correlation::minted(None);
+        with_request_scope(
+            None,
+            correlation(),
+            crate::with_ambient(opened, with_request_scope(None, correlation(), fut)),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_answer_carries_what_its_unit_attached_beyond_what_it_was_opened_with() {
+        let attached = nested_in(Arc::new(Judge("request")), async {
+            crate::with_ambient(
+                Arc::new(Judge("field")),
+                crate::with_ambient(Arc::new(Marker), async { AnswerContext::capture() }),
+            )
+            .await
+        })
+        .await;
+        let read = || {
+            (
+                crate::ambient::<Judge>().map(|judge| judge.0),
+                crate::ambient::<Marker>().is_some(),
+                crate::ambient::<Other>().is_some(),
+            )
+        };
+        let resolved = crate::with_ambient(Arc::new(Other), attached.scope(async { read() })).await;
+        assert_eq!(
+            resolved,
+            (Some("field"), false, true),
+            "what judges crosses, merged over what resolves it; nothing else does",
+        );
+        let polled = crate::with_ambient(Arc::new(Other), async { attached.enter(read) }).await;
+        assert_eq!(polled, resolved, "a stream's poll reads what its items do");
+
+        let request = Arc::new(Judge("request"));
+        let inherited = nested_in(Arc::clone(&request), async { AnswerContext::capture() }).await;
+        assert!(
+            inherited.is_empty(),
+            "a unit holding only what it was opened with captures nothing to install",
+        );
     }
 }

@@ -164,8 +164,9 @@ names one, so a visitor's ability is withheld there and its read answers nothing
 with a `warn` of its own saying so: a relation reads `null` or an empty page, even of
 the entity its root names. A [batch loader](/database/dataloaders/#reading-a-loader) reads
 nothing for a visitor either, even from the root field naming the read: a batch
-carries the request's values, never that field's, so a visitor's rows are read in
-the field's own body. A caller a token backs reads in all of these by `define`, its
+carries the request's values, and the ability the field's own guards attached where
+its request carried none, never the license the field's posture gave its own reads,
+so a visitor's rows are read in the field's own body. A caller a token backs reads in all of these by `define`, its
 rows filtered and [each field masked by its grants](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds),
 under an `#[authorize]` operation as under a `#[public]` one.
 

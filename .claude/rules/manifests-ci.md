@@ -130,14 +130,14 @@ rustdoc, then every test against real Postgres, Valkey and S3 — never a mock �
 each on one server, the dev container's: a backend's other shapes run by hand
 (`decisions/one-server-per-backend.md`).
 `demo.yml` runs the demo's own recipes — `just lint` with the tree's `nestrs
-lint`, every suite, and `just chart`, the chart's render cases — on a change to
+lint`, and every suite — on a change to
 what its build or its services read: its tree, the framework it builds on by path,
 the dev container files the services start from. `docs.yml` builds the site on a
 change to `docs/` and deploys it from `main` alone. **A check earns a runner only
 by keeping the product from regressing, and a new check is a step of an existing
-job before it is a job**: the benchmarks, an image and a platform the product
-does not claim are a developer's, on their host — no workflow builds, lints,
-audits or runs them. **A workflow skips only what no build
+job before it is a job**: the benchmarks, an image, the demo's Helm chart and a
+platform the product does not claim are a developer's, on their host — no
+workflow builds, renders, lints, audits or runs them. **A workflow skips only what no build
 or test reads**: a file under a crate's `src/` is compiled whatever its
 extension, and a docs page a test reads is listed in `framework.yml`'s paths.
 The cargo cache is saved by `main` and `release/**` alone.

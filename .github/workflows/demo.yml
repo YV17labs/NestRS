@@ -1,8 +1,8 @@
-# The demo's checks — its lint and its chart's render cases, its suites in
-# process and against Postgres, Valkey and S3 — on every change to what its
-# build or its services read: its tree, the framework it builds on by path, the
-# dev container files the services start from. The demo is its own workspace
-# with its own commands; this runs them.
+# The demo's checks — its lint, its suites in process and against Postgres,
+# Valkey and S3 — on every change to what its build or its services read: its
+# tree, the framework it builds on by path, the dev container files the
+# services start from. The demo is its own workspace with its own commands;
+# this runs them.
 
 name: Demo
 
@@ -65,21 +65,6 @@ jobs:
           cargo build --locked -p nest-rs-cli
           echo "$GITHUB_WORKSPACE/target/debug" >> "$GITHUB_PATH"
       - run: just lint
-        working-directory: demo
-      # The chart's render cases, a step here rather than a job of their own: helm
-      # fetched by version and checked against its digest; yq is the runner's.
-      - name: Install helm
-        env:
-          VERSION: 4.3.1
-          SHA256: 0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
-        run: |
-          archive="helm-v${VERSION}-linux-amd64.tar.gz"
-          curl -fsSL -o "$RUNNER_TEMP/$archive" "https://get.helm.sh/$archive"
-          echo "$SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
-          mkdir -p "$HOME/.local/bin"
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$HOME/.local/bin" --strip-components=1 linux-amd64/helm
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - run: just chart
         working-directory: demo
 
   test:

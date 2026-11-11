@@ -59,8 +59,7 @@ mutual TLS, are dev container environments of their own (`CLAUDE.md`, *Testing*)
   Figures are relative, never for publication.
 - **The first CI run after the push** is the only proof of a fresh
   `create-bucket.sh`, the dev-services action's `/etc/hosts` mapping, the
-  default stacks on x86_64, and the chart's render cases as a step of
-  `Demo`'s `lint` job (seen green on the host).
+  and the default stacks on x86_64.
 - **Postgres mutual TLS never ran live**: `nest-rs-seaorm`'s two `mutual_tls`
   tests. Close: open the `postgres-mutual-tls` dev container environment, set
   `postgres := "mutual-tls"` in `test.just`, `just test e2e`.

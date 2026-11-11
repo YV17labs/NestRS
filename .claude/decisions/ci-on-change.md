@@ -119,8 +119,8 @@ The second pass (B-230, 2026-11-08) added `bench.yml`, a `demo.yml` `image` job 
 release branches and tags, and a `framework.yml` `windows` job, to close `TODO.md`
 lines that asked for proof of the Dockerfiles and of Windows. The owner, on
 2026-11-11: "on doit économiser la CI … c'est le minimum vital". All three are
-removed; the chart's render cases, cheap and holding what the demo deploys, stay as
-a step of `demo.yml`'s `lint` job rather than a job of their own.
+removed, and so is the chart's render job: the owner, the same day, keeps the demo's
+Helm chart out of every run but a developer's (`nestrs run chart`).
 
 **Refused, again:** the benchmarks in CI, any image build (the demo's, a
 contestant's) and a platform the product does not claim (Windows). Each costs

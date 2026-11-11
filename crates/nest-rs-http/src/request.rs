@@ -124,41 +124,6 @@ impl ServedRoute {
     }
 }
 
-/// A `Content-Type`'s type and subtype, its parameters dropped: what a body
-/// extractor decides on.
-pub(crate) struct Essence<'a> {
-    kind: &'a str,
-    subtype: &'a str,
-}
-
-impl Essence<'_> {
-    /// Whether this is exactly `kind/subtype`, ignoring case.
-    pub(crate) fn is_exactly(&self, kind: &str, subtype: &str) -> bool {
-        self.kind.eq_ignore_ascii_case(kind) && self.subtype.eq_ignore_ascii_case(subtype)
-    }
-
-    /// Whether this is `kind/subtype` or carries `subtype` as its structured
-    /// syntax suffix (`application/problem+json`, RFC 6839 §3.1), ignoring case.
-    pub(crate) fn is(&self, kind: &str, subtype: &str) -> bool {
-        self.kind.eq_ignore_ascii_case(kind)
-            && (self.subtype.eq_ignore_ascii_case(subtype)
-                || self
-                    .subtype
-                    .rsplit_once('+')
-                    .is_some_and(|(_, suffix)| suffix.eq_ignore_ascii_case(subtype)))
-    }
-}
-
-/// `content_type`'s essence, or `None` when it names no `type/subtype`.
-pub(crate) fn essence(content_type: &str) -> Option<Essence<'_>> {
-    let essence = content_type
-        .split_once(';')
-        .map_or(content_type, |(essence, _)| essence)
-        .trim();
-    let (kind, subtype) = essence.split_once('/')?;
-    (!kind.is_empty() && !subtype.is_empty()).then_some(Essence { kind, subtype })
-}
-
 /// The facts riding a request's extensions while a library that speaks `http`
 /// holds it.
 #[derive(Clone)]

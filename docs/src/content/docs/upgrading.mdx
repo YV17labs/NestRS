@@ -2261,6 +2261,12 @@ lists what the boot, a log or the wire shows when one is missed.
   every caller behind it read as the proxy, and files `forwarding headers
   disagree about the client — neither is believed`. List that hop, or have the
   proxy append to `X-Forwarded-For` (nginx's `$proxy_add_x_forwarded_for`).
+- **A multipart client whose boundary RFC 2046 does not admit** — longer than
+  70 characters, holding a character outside its set (`!`, `#`, `%`), ending in
+  a space, empty — or whose type names `boundary` twice, reads `400` with `the
+  multipart body is malformed: …` saying which, on a route reading `Multipart`
+  and on `/graphql`, where the body was read. Browsers, curl and the common
+  HTTP libraries write a boundary RFC 2046 admits.
 - **A cap or a deadline of `0`** — `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS`,
   `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS`, an idle or send timeout — fails the
   boot naming the variable. A replica at its connection cap files

@@ -755,6 +755,82 @@ mod the_answer_on_the_wire {
         .await;
     }
 
+    /// [`upload_of`]'s three parts, delimited by `nestrs`, the file `abc`.
+    const UPLOAD: &str = "--nestrs\r\n\
+        content-disposition: form-data; name=\"operations\"\r\n\r\n\
+        {\"query\":\"mutation ($file: Upload!) { uploadSize(file: $file) }\",\"variables\":{\"file\":null}}\r\n\
+        --nestrs\r\n\
+        content-disposition: form-data; name=\"map\"\r\n\r\n\
+        {\"0\":[\"variables.file\"]}\r\n\
+        --nestrs\r\n\
+        content-disposition: form-data; name=\"0\"; filename=\"notes.txt\"\r\n\r\n\
+        abc\r\n\
+        --nestrs--\r\n";
+
+    /// RFC 9110 §5.6.6 admits whitespace around each `;`, an empty parameter
+    /// and a name in any case, which mime 0.3 refused: the edge reads the
+    /// boundary off its own parse of the type, as the `Multipart` extractor does.
+    #[tokio::test]
+    async fn a_multipart_upload_reads_its_boundary_as_rfc_9110_admits_the_type() {
+        let app = boot().await;
+        for content_type in [
+            "multipart/form-data ; boundary=nestrs",
+            "multipart/form-data;\tBoundary=nestrs",
+            "multipart/form-data; boundary=nestrs;;",
+            "multipart/form-data; boundary=\"nestrs\"",
+        ] {
+            let resp = app
+                .http()
+                .post("/graphql")
+                .header("content-type", content_type)
+                .body(UPLOAD)
+                .send()
+                .await;
+
+            resp.assert_status_is_ok();
+            resp.assert_json(json!({ "data": { "uploadSize": 3 } }))
+                .await;
+        }
+    }
+
+    /// A type naming its boundary twice, which two readers could each take
+    /// otherwise, or one whose parameters do not parse, is refused said by kind,
+    /// never as a part that does not decode.
+    #[tokio::test]
+    async fn a_multipart_type_the_rfcs_do_not_admit_is_refused_said_by_kind() {
+        let app = boot().await;
+        for (content_type, said) in [
+            (
+                "multipart/form-data; boundary=nestrs; boundary=other",
+                "its type names more than one boundary",
+            ),
+            (
+                "multipart/form-data; boundary=\"nestrs",
+                "its type does not parse",
+            ),
+            ("multipart/form-data", "its type names no boundary"),
+        ] {
+            let resp = app
+                .http()
+                .post("/graphql")
+                .header("content-type", content_type)
+                .body(UPLOAD)
+                .send()
+                .await;
+
+            resp.assert_status(StatusCode::BAD_REQUEST);
+            resp.assert_json(json!({
+                "errors": [{
+                    "message": format!(
+                        "the body is not a GraphQL request: the multipart body is malformed: {said}"
+                    ),
+                    "extensions": { "code": "INVALID_ARGUMENT" },
+                }],
+            }))
+            .await;
+        }
+    }
+
     #[tokio::test]
     async fn a_multipart_upload_over_the_cap_is_413() {
         let app = boot().await;

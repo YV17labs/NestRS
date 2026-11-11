@@ -172,7 +172,7 @@ pub(crate) fn unserialized(error: &serde_json::Error) {
 /// Whether `content_type` names JSON: `application/json`, or a structured
 /// syntax suffix `+json` (RFC 6839 §3.1), whatever its parameters.
 fn is_json(content_type: &str) -> bool {
-    crate::request::essence(content_type).is_some_and(|essence| essence.is("application", "json"))
+    crate::media_type::media_type(content_type).is_some_and(|media| media.is("application", "json"))
 }
 
 #[cfg(test)]

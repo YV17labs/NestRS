@@ -48,6 +48,7 @@ mod json;
 mod link;
 mod location;
 mod matched;
+mod media_type;
 mod module;
 mod multipart;
 mod opaque;
@@ -279,6 +280,7 @@ pub mod __private {
         attached, attached_pending, behind_guards, check_request, denial_to_http_response,
     };
     pub use crate::module::RUNTIME;
+    pub use crate::multipart::{BoundaryRefused, boundary as multipart_boundary};
     pub use crate::origin::OriginScheme;
     pub use crate::pipe::piped;
     pub use crate::problem::{framework_sentence, method_not_allowed};

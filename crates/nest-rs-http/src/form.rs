@@ -83,8 +83,8 @@ impl<'a, T: DeserializeOwned> FromRequest<'a> for Form<T> {
         }
         let is_form = req
             .content_type()
-            .and_then(crate::request::essence)
-            .is_some_and(|essence| essence.is("application", "x-www-form-urlencoded"));
+            .and_then(crate::media_type::media_type)
+            .is_some_and(|media| media.is("application", "x-www-form-urlencoded"));
         if !is_form {
             return Err(FormError::MediaType.into());
         }

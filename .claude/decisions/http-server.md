@@ -454,3 +454,36 @@ or `route_any` entry was never reached from a listed origin. A page's own
 admitted it, a method `SENDABLE_METHODS` advertises. Now only a request carrying
 the header is a preflight, and any other goes on with the headers an admitted
 answer carries. The refusal an unlisted origin gets stands in front of both.
+
+## 2026-11-11 — a multipart boundary is read off the edge's own parse of its type
+
+The 2026-10-23 entry reads a `Multipart` body through multer, and the
+2026-10-19 one `/graphql`'s through async-graphql's `receive_batch_body`. Each
+took its boundary from mime 0.3's parse of the client's `Content-Type`, which
+refuses types RFC 9110 §5.6.6 admits (whitespace before a `;`, an empty
+parameter) and reads a `boundary` named twice by its first. Both readers now
+take the boundary from the edge's own parse of the type, the `MediaType` whose
+essence the body extractors already decide on, through one function:
+
+- **The boundary is RFC 2046 §5.1.1's**: 1 to 70 of its characters, the last no
+  space. A type naming none, or one outside that set, answers `400` said by kind
+  (`BoundaryRefused`), never the value.
+- **A `boundary` named twice is refused.** A parameter is named once (RFC 6838
+  §4.3), and a reader in front of the app, a proxy or a firewall scanning
+  uploads, that takes the other one reads a body the app does not: one reading
+  of the type leaves no second.
+- **`/graphql` hands async-graphql `multipart/form-data; boundary="<b>"`**,
+  built from the boundary the edge read, never the client's type. A boundary in
+  that set holds no `"` and no `\`, so it cannot leave its quotes, and mime 0.3
+  reads every one.
+
+A client whose boundary is outside RFC 2046's set, or named twice, now reads
+`400` where it was read; browsers, curl and the common HTTP libraries write one
+inside it, and the upgrading guide says so.
+
+Refused: **any token as a boundary**, which RFC 9110's parameter grammar admits
+and RFC 2046 does not; a reader holding to RFC 2046 would refuse or cut what the
+app reads. **The first of two `boundary` parameters**, mime 0.3's reading, which
+another reader may take as the last. **Handing async-graphql the client's
+type**, which answered a type RFC 9110 admits "the `operations` part does not
+decode" and kept a second parse of the type beside the edge's.

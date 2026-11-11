@@ -8,6 +8,7 @@
     reason = "multer is the multipart parser this file wraps, and the one that names it"
 )]
 
+use std::borrow::Cow;
 use std::fmt;
 use std::io::{self, Result as IoResult};
 use std::pin::Pin;
@@ -19,6 +20,7 @@ use tokio::io::AsyncRead;
 use tokio_util::io::{ReaderStream, StreamReader};
 
 use crate::error::{BodyError, HttpError, MultipartError, Result};
+use crate::media_type::{MediaType, Unparsed, media_type};
 use crate::request::{FromRequest, Request, RequestBody};
 
 /// A `multipart/form-data` body, read one part at a time as it arrives.
@@ -68,26 +70,90 @@ impl fmt::Debug for Multipart {
 
 impl<'a> FromRequest<'a> for Multipart {
     async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
-        let Some(content_type) = req
+        let Some(media) = req
             .headers()
             .get(http::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
-            .filter(|value| {
-                crate::request::essence(value)
-                    .is_some_and(|essence| essence.is_exactly("multipart", "form-data"))
-            })
+            .and_then(media_type)
+            .filter(|media| media.is_exactly("multipart", "form-data"))
         else {
             return Err(MultipartError::MediaType.into());
         };
-        let boundary = multer::parse_boundary(content_type).map_err(|refused| match refused {
-            // A type no media-type parser reads is no `multipart/form-data`.
-            multer::Error::NoMultipart => HttpError::from(MultipartError::MediaType),
-            refused => malformed(refused),
-        })?;
+        let boundary = boundary_of(&media).map_err(MultipartError::from)?;
         Ok(Self {
-            parts: multer::Multipart::new(body.take()?.into_stream(), boundary),
+            parts: multer::Multipart::new(body.take()?.into_stream(), boundary.into_owned()),
         })
     }
+}
+
+/// Why a multipart type names no boundary its body can be read by, said by
+/// kind, never by the type the client wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BoundaryRefused {
+    /// Its parameters are not the list RFC 9110 §5.6.6 writes.
+    Unparsed,
+    /// It names no boundary.
+    Missing,
+    /// It names more than one, which two readers could each take otherwise
+    /// (RFC 6838 §4.3).
+    Repeated,
+    /// Its boundary is not 1 to 70 of the characters RFC 2046 §5.1.1 allows,
+    /// the last no space.
+    Invalid,
+}
+
+impl BoundaryRefused {
+    /// What the refusal says after the body's own sentence.
+    fn said(self) -> &'static str {
+        match self {
+            Self::Unparsed => "its type does not parse",
+            Self::Missing => "its type names no boundary",
+            Self::Repeated => "its type names more than one boundary",
+            Self::Invalid => "its boundary is not one RFC 2046 admits",
+        }
+    }
+}
+
+impl From<BoundaryRefused> for MultipartError {
+    fn from(refused: BoundaryRefused) -> Self {
+        Self::Malformed(refused.said().into())
+    }
+}
+
+impl fmt::Display for BoundaryRefused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&MultipartError::from(*self), f)
+    }
+}
+
+impl std::error::Error for BoundaryRefused {}
+
+/// The boundary `content_type` names, read off the edge's own parse of the
+/// type, so every multipart body the edge reads, `/graphql`'s too, admits what
+/// RFC 9110 §5.6.6 does and refuses the same.
+pub fn boundary(content_type: &str) -> std::result::Result<Cow<'_, str>, BoundaryRefused> {
+    boundary_of(&media_type(content_type).ok_or(BoundaryRefused::Unparsed)?)
+}
+
+/// The one `boundary` parameter of `media`, as RFC 2046 §5.1.1 writes one.
+fn boundary_of<'a>(media: &MediaType<'a>) -> std::result::Result<Cow<'a, str>, BoundaryRefused> {
+    let mut named = None;
+    for parameter in media.parameters() {
+        let parameter = parameter.map_err(|Unparsed| BoundaryRefused::Unparsed)?;
+        if parameter.name.eq_ignore_ascii_case("boundary")
+            && named.replace(parameter.value).is_some()
+        {
+            return Err(BoundaryRefused::Repeated);
+        }
+    }
+    let boundary = named.ok_or(BoundaryRefused::Missing)?;
+    let admitted = (1..=70).contains(&boundary.len())
+        && !boundary.ends_with(' ')
+        && boundary
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"'()+_,-./:=? ".contains(&byte));
+    admitted.then_some(boundary).ok_or(BoundaryRefused::Invalid)
 }
 
 /// What the parser refused, said by kind: its own sentence names the field, the
@@ -105,9 +171,6 @@ fn by_kind(refused: multer::Error) -> MultipartError {
         Refused::IncompleteStream => "the body ends before its closing boundary",
         Refused::FieldSizeExceeded { .. } => "a part is larger than its limit",
         Refused::StreamSizeExceeded { .. } => "the body is larger than its limit",
-        Refused::NoBoundary => "its type names no boundary",
-        // multer raises it only from `parse_boundary`, over the request's own type.
-        Refused::DecodeContentType(_) => "its type does not parse",
         _ => "its parts do not parse",
     };
     MultipartError::Malformed(said.into())
@@ -511,5 +574,110 @@ mod tests {
             body.contains("the multipart body is malformed: its type does not parse"),
             "{body}"
         );
+    }
+
+    /// RFC 9110 §5.6.6 admits whitespace around each `;`, an empty parameter
+    /// and a name in any case, and §5.6.4 a quoted-pair; RFC 2046 §5.1.1 a
+    /// boundary of up to 70 of its characters, a space among them.
+    #[tokio::test]
+    async fn every_type_the_rfcs_admit_reads_its_boundary() {
+        const SPACED: &str = "--a b\r\ncontent-disposition: form-data; name=\"title\"\r\n\r\n\
+            Hello\r\n--a b--\r\n";
+        const LONGEST: &str = "--0123456789012345678901234567890123456789012345678901234567890123456789\r\n\
+            content-disposition: form-data; name=\"title\"\r\n\r\nHello\r\n\
+            --0123456789012345678901234567890123456789012345678901234567890123456789--\r\n";
+        for (content_type, body) in [
+            ("multipart/form-data ; boundary=x", FORM),
+            ("multipart/form-data;boundary=x", FORM),
+            ("multipart/form-data;\tboundary=x", FORM),
+            ("multipart/form-data\t;\tboundary=x\t", FORM),
+            ("multipart/form-data; boundary=x;;", FORM),
+            ("multipart/form-data;; boundary=x", FORM),
+            ("multipart/form-data; boundary=x ;", FORM),
+            ("multipart/form-data; BOUNDARY=x", FORM),
+            ("Multipart/Form-Data; boundary=\"x\"", FORM),
+            ("multipart/form-data; charset=utf-8; boundary=x", FORM),
+            ("multipart/form-data; boundary=\"\\x\"", FORM),
+            ("multipart/form-data; boundary=\"a b\"", SPACED),
+            (
+                "multipart/form-data; boundary=0123456789012345678901234567890123456789012345678901234567890123456789",
+                LONGEST,
+            ),
+        ] {
+            let mut form = parts(content_type, body)
+                .await
+                .unwrap_or_else(|refused| panic!("{content_type}: {refused:?}"));
+            let title = form.next_field().await.unwrap().unwrap();
+            assert_eq!(title.name(), Some("title"), "{content_type}");
+        }
+    }
+
+    /// A type a parameter list does not parse, a boundary RFC 2046 §5.1.1 does
+    /// not admit, or one named twice, which two readers could each take
+    /// otherwise (RFC 6838 §4.3), is refused saying which, never the value.
+    #[tokio::test]
+    async fn a_boundary_the_rfcs_do_not_admit_is_400_said_by_kind() {
+        for (content_type, said) in [
+            ("multipart/form-data; boundary", "its type does not parse"),
+            ("multipart/form-data; =x", "its type does not parse"),
+            (
+                "multipart/form-data; boundary=x y",
+                "its type does not parse",
+            ),
+            (
+                "multipart/form-data; boundary=\"x\" y",
+                "its type does not parse",
+            ),
+            (
+                "multipart/form-data; boundary=\"x\\",
+                "its type does not parse",
+            ),
+            (
+                "multipart/form-data; boundary=x, charset=utf-8",
+                "its type does not parse",
+            ),
+            (
+                "multipart/form-data; charset=utf-8",
+                "its type names no boundary",
+            ),
+            ("multipart/form-data", "its type names no boundary"),
+            (
+                "multipart/form-data; boundary=x; Boundary=y",
+                "its type names more than one boundary",
+            ),
+            (
+                "multipart/form-data; boundary=\"\"",
+                "its boundary is not one RFC 2046 admits",
+            ),
+            (
+                "multipart/form-data; boundary=\"x \"",
+                "its boundary is not one RFC 2046 admits",
+            ),
+            (
+                "multipart/form-data; boundary=sk_live!",
+                "its boundary is not one RFC 2046 admits",
+            ),
+            (
+                "multipart/form-data; boundary=01234567890123456789012345678901234567890123456789012345678901234567890",
+                "its boundary is not one RFC 2046 admits",
+            ),
+        ] {
+            let refused = parts(content_type, FORM)
+                .await
+                .map(|_| ())
+                .expect_err(content_type);
+            assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{content_type}");
+            let body = refused
+                .into_response()
+                .into_body()
+                .into_string()
+                .await
+                .unwrap();
+            assert!(
+                body.contains(&format!("the multipart body is malformed: {said}")),
+                "{content_type}: {body}"
+            );
+            assert!(!body.contains("sk_live"), "{body}");
+        }
     }
 }

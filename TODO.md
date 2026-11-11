@@ -137,10 +137,6 @@ keeps on purpose is §5's.
   parameter's type, as `__body_of!` reads a body, on every edge. *read*
 - No real proxy has run against the forwarding-header reader, and hyper's
   HTTP/2 header-list refusal and a `414` are pinned by no test. *read*
-- A `multipart/form-data` type RFC 9110 §5.6.6 admits and mime 0.3 refuses,
-  whitespace before a `;` or an empty parameter (`boundary=x;;`), answers
-  `400` `its type does not parse`. Close: read the boundary off the
-  framework's own parse of the type, as `essence` reads its name. *seen*
 
 **GraphQL**
 - async-graphql 7.2.1 runs no `SameResponseShape` (GraphQL §5.3.2): copies of one key

@@ -18,7 +18,7 @@ use nest_rs_core::code;
 use nest_rs_core::{
     Container, Handler, Posture, ReachableProviders, UngatedDiscoveryError, UnitContext,
 };
-use nest_rs_http::__private::{RequestDeadline, with_view};
+use nest_rs_http::__private::{RequestDeadline, multipart_boundary, with_view};
 use nest_rs_http::{
     Body, BodyError, Endpoint, HeaderValue, HttpError, Request, Response, ResponseError,
     StatusCode, current_body_limit, declare_endpoint, header,
@@ -288,6 +288,11 @@ async fn read_batch(req: &Request, body: Body) -> Result<BatchRequest, Response>
             .is_some_and(|kind| kind.eq_ignore_ascii_case("multipart/"))
     });
     if let Some(content_type) = multipart {
+        let boundary =
+            multipart_boundary(content_type).map_err(|said| refused(&said.to_string()))?;
+        // async-graphql reads the type with mime 0.3, which refuses some types
+        // RFC 9110 admits: it is handed the boundary alone, quoted.
+        let content_type = format!("multipart/form-data; boundary=\"{boundary}\"");
         // A file is never larger than the body the transport's cap admits.
         let options = MultipartOptions::default().max_file_size(current_body_limit());
         let body = body.into_stream().into_async_read();

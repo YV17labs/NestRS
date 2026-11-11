@@ -121,6 +121,12 @@ states the parts.
 
 ## Limits
 
+- The request's `Content-Type` is read as RFC 9110 writes a media type —
+  whitespace around a `;` and an empty parameter are fine — and its `boundary`
+  as RFC 2046 does: 1 to 70 of its characters, named once. Any other type
+  answers `415 Unsupported Media Type`; a boundary that is missing, named twice
+  or outside that set answers `400`, saying which and never the value. A
+  [GraphQL multipart request](/graphql/configuration/) reads its type the same way.
 - The [`max_body_bytes` cap](/http/limits/#request-body-size-limit)
   gates **every** body, `Multipart` included. An upload declaring a length past
   the cap — a browser's form does — is answered `413 Content Too Large` unread;

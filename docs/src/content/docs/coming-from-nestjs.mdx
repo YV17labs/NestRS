@@ -183,8 +183,8 @@ In NestJS, authorization is a habit: you remember to add `@UseGuards` and a
 policy check on each route, and a forgotten one is a silent hole. NestRS moves
 the guarantee into composition. Once a feature imports the database and authz
 modules, every read through the data layer is filtered and every mutating write
-is gated, and what a unit answers is masked where its posture names what it
-reads. A unit naming nothing reads nothing a grant guards, so the line you forget
+is gated, and each row a unit answers is judged for its caller where it is
+built. A unit naming nothing reads nothing a grant guards, so the line you forget
 fails closed.
 
 You still bind guards explicitly with `#[use_guards(...)]`, and every posture

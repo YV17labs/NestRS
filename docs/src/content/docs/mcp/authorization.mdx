@@ -86,8 +86,9 @@ impl UsersTool {
 ```
 
 `#[authorize(Action, Entity)]` emits the class-level gate before the body and
-masks the returned value through the caller's field grants after it — the tool
-writes neither.
+opens its reads to the caller's ability, and each `User` the body builds with
+`User::from` is judged for that caller where it is built — the tool writes
+neither.
 
 **`#[public]` means what it means on every edge: a caller with no credential is
 admitted.** So it belongs on an endpoint [the app opened](/mcp/#the-smallest-possible-tool)

@@ -61,11 +61,14 @@ ability they attached — see [Endpoint guards](/security/authorization/endpoint
 - **Every by-id write checks access.** `#[authorize(A, bind = S)]` calls
   `Service::access(action, id)`; missing rows return `404`, denied rows return
   `403` — see [By-id binding](/security/authorization/by-id-binding/).
-- **Every response is masked.** The
-  [`Authorize` shaper](/security/authorization/response-masking/) runs
-  after a 2xx handler: fields the caller cannot read are stripped from
-  the body, and only the columns `#[expose]` lists ship, so an
-  unrestricted grant cannot leak an unexposed column.
+- **Every wire row is judged.** The exposed type a service builds from a
+  row, `User::from(&row)`,
+  [judges it for the caller](/security/authorization/response-masking/)
+  whose ability is installed there: a column their grant withholds reads
+  `null`, a row their grants refuse answers nobody, and only the columns
+  `#[expose]` lists exist on the wire, so an unrestricted grant cannot leak
+  an unexposed column. A value your body copies a column into is its own
+  visible line.
 
 The wiring sketch for an app that serves all three transports:
 

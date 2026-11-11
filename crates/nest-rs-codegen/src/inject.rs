@@ -583,7 +583,7 @@ pub fn injected_per_request_method<'a>(
 /// `tokens` with every named lifetime read as `'static`: a probe in a method
 /// body names no lifetime of the signature it was read off, and a provider's
 /// key is `'static` anyway.
-fn lifetimes_static(tokens: TokenStream2) -> TokenStream2 {
+pub(crate) fn lifetimes_static(tokens: TokenStream2) -> TokenStream2 {
     let mut out = Vec::new();
     let mut tokens = tokens.into_iter().peekable();
     while let Some(token) = tokens.next() {

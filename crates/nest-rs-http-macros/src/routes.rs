@@ -1401,7 +1401,6 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
         None => quote! {},
     };
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
-    // Read off its spelling, as `Piped` is: what each `Ambient<T>` reads.
     let ambient = ambient_type_ids(param_types);
     let force_guard_typeids = force_guard_typeids(force_guards);
     let method_pipe_specs = scoped_specs(method_pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
@@ -1674,8 +1673,9 @@ fn validate_statement(argument: &TokenStream2) -> TokenStream2 {
     }
 }
 
-/// A `Piped<P, S>` parameter, read off its spelling as `Scoped` and `Ambient` are:
-/// its pipe, and the extractor it reads when it names one.
+/// A `Piped<P, S>` parameter, read off its spelling: its pipe, and the extractor
+/// it reads when it names one. `Piped` is no extractor, so one behind an alias
+/// does not compile.
 fn piped_parts(ty: &Type) -> Option<(&Type, Option<&Type>)> {
     let pipe = nth_generic_type(ty, "Piped", 0)?;
     Some((pipe, nth_generic_type(ty, "Piped", 1)))

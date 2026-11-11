@@ -23,10 +23,11 @@ use nest_rs_codegen::__private::{
     forwarded_idents, from_container_method, guard_capability_bounds, handler_const, host_meta_fn,
     host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, injected_per_request_method, injects_impls,
-    interceptor_specs, key_as_written, layer_deps, no_row_answered, normalize_forwarded_args,
-    nth_generic_type, one_role_per_method, piped_input, reject_meta_on_operations, return_type,
-    scoped_specs, shared_receiver, site_items, site_ref, spelled, tail_param, take_posture,
-    takes_value, type_label, unit_of_work_required, unknown_argument, validate_argument, withheld,
+    interceptor_specs, key_as_written, layer_deps, no_row_answered, no_tail_decoded,
+    normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
+    reject_meta_on_operations, return_type, scoped_specs, shared_receiver, site_items, site_ref,
+    spelled, tail_param, take_posture, takes_value, type_label, unit_of_work_required,
+    unknown_argument, validate_argument, withheld,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -1084,6 +1085,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             &cfgs,
             return_type(&method.sig.output).as_slice(),
         ));
+        sites.push(no_tail_decoded(&method_name, &cfgs, &method.sig.inputs));
 
         if is_field {
             if authorize_spec.is_some() || is_public {

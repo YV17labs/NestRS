@@ -176,9 +176,9 @@ pub mod __private {
     pub use crate::trusted_proxy::trusted_proxy_entry;
     pub use crate::ty::{
         HostBorrow, TailParam, ambient_type_ids, answer_span, await_if_async, concrete_signature,
-        generic_args, impl_self_ident, last_segment_ident, nth_generic_type, path_label,
-        payload_arg_type, piped_input, return_type, returns_unit, shared_receiver, spelled,
-        tail_param, type_label,
+        generic_args, impl_self_ident, last_segment_ident, no_tail_decoded, nth_generic_type,
+        path_label, payload_arg_type, piped_input, return_type, returns_unit, shared_receiver,
+        spelled, tail_param, type_label,
     };
     pub use crate::ungrouped::ungrouped_expr;
     pub use crate::unit_of_work::unit_of_work_required;

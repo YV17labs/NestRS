@@ -295,7 +295,10 @@ pub mod __private {
     pub use crate::operation_log::__private::{declare_unit, unit_opened_by};
     pub use crate::outcome::__private::{caught_problem, is_same_failure, kept, settled};
     pub use crate::panic::__private::{Unwound, unwound};
-    pub use crate::param::{ParamProbe, ParamProbeFallback, ParamProbeResolves};
+    pub use crate::param::{
+        ParamProbe, ParamProbeAmbient, ParamProbeFallback, ParamProbeResolves, ProtocolArgument,
+        TailParam,
+    };
     pub use crate::probe_runtime::ProbeRuntime;
     pub use crate::problem::__private::{Withheld, retry_after_secs, withheld};
     pub use crate::process_start::ProcessStart;

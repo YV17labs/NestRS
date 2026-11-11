@@ -1,0 +1,117 @@
+error[E0277]: the trait bound `Ambient<Caller>: InputType` is not satisfied
+  --> tests/integration/diagnostics/graphql/an_ambient_or_a_scoped_behind_an_alias_is_no_argument.rs:27:33
+   |
+23 | #[operations]
+   | ------------- required by a bound introduced by this call
+...
+27 |     async fn me(&self, _caller: Me, _cart: MyCart) -> i32 {
+   |                                 ^^ the trait `InputType` is not implemented for `Ambient<Caller>`
+   |
+   = help: the following other types implement trait `InputType`:
+             Arc<T>
+             Arc<[T]>
+             Arc<str>
+             BTreeMap<K, V>
+             BTreeSet<T>
+             Box<T>
+             Box<[T]>
+             Box<str>
+           and $N others
+note: required by a bound in `ContextBase::<'a, &'a Positioned<nest_rs::graphql::async_graphql::async_graphql_parser::types::Field>>::param_value`
+  --> $CARGO/async-graphql-$VERSION/src/context.rs
+   |
+   |     pub fn param_value<T: InputType>(
+   |                           ^^^^^^^^^ required by this bound in `ContextBase::<'a, &Positioned<Field>>::param_value`
+
+error[E0277]: the trait bound `Scoped<Cart>: InputType` is not satisfied
+  --> tests/integration/diagnostics/graphql/an_ambient_or_a_scoped_behind_an_alias_is_no_argument.rs:27:44
+   |
+23 | #[operations]
+   | ------------- required by a bound introduced by this call
+...
+27 |     async fn me(&self, _caller: Me, _cart: MyCart) -> i32 {
+   |                                            ^^^^^^ the trait `InputType` is not implemented for `Scoped<Cart>`
+   |
+   = help: the following other types implement trait `InputType`:
+             Arc<T>
+             Arc<[T]>
+             Arc<str>
+             BTreeMap<K, V>
+             BTreeSet<T>
+             Box<T>
+             Box<[T]>
+             Box<str>
+           and $N others
+note: required by a bound in `ContextBase::<'a, &'a Positioned<nest_rs::graphql::async_graphql::async_graphql_parser::types::Field>>::param_value`
+  --> $CARGO/async-graphql-$VERSION/src/context.rs
+   |
+   |     pub fn param_value<T: InputType>(
+   |                           ^^^^^^^^^ required by this bound in `ContextBase::<'a, &Positioned<Field>>::param_value`
+
+error[E0277]: `Ambient<Caller>` is read by its name on this edge, and this parameter is named otherwise
+  --> tests/integration/diagnostics/graphql/an_ambient_or_a_scoped_behind_an_alias_is_no_argument.rs:27:33
+   |
+27 |     async fn me(&self, _caller: Me, _cart: MyCart) -> i32 {
+   |                                 ^^ read as an argument the protocol decodes
+   |
+   = help: the trait `nest_rs::core::__private::ProtocolArgument` is not implemented for `Ambient<Caller>`
+   = note: write `Ambient<T>` or `Scoped<T>` in the signature, not an alias of it: a GraphQL operation, a WebSocket message and an MCP operation leave a parameter so named out of their protocol's arguments and resolve it from the unit
+note: required by a bound in `nest_rs::core::__private::ParamProbe::<T>::decoded`
+  --> $WORKSPACE/crates/nest-rs-core/src/param.rs
+   |
+   |     pub fn decoded(&self)
+   |            ------- required by a bound in this associated function
+   |     where
+   |         T: ProtocolArgument,
+   |            ^^^^^^^^^^^^^^^^ required by this bound in `ParamProbe::<T>::decoded`
+
+error[E0277]: `Scoped<Cart>` is read by its name on this edge, and this parameter is named otherwise
+  --> tests/integration/diagnostics/graphql/an_ambient_or_a_scoped_behind_an_alias_is_no_argument.rs:27:44
+   |
+27 |     async fn me(&self, _caller: Me, _cart: MyCart) -> i32 {
+   |                                            ^^^^^^ read as an argument the protocol decodes
+   |
+   = help: the trait `nest_rs::core::__private::ProtocolArgument` is not implemented for `Scoped<Cart>`
+   = note: write `Ambient<T>` or `Scoped<T>` in the signature, not an alias of it: a GraphQL operation, a WebSocket message and an MCP operation leave a parameter so named out of their protocol's arguments and resolve it from the unit
+note: required by a bound in `nest_rs::core::__private::ParamProbe::<T>::decoded`
+  --> $WORKSPACE/crates/nest-rs-core/src/param.rs
+   |
+   |     pub fn decoded(&self)
+   |            ------- required by a bound in this associated function
+   |     where
+   |         T: ProtocolArgument,
+   |            ^^^^^^^^^^^^^^^^ required by this bound in `ParamProbe::<T>::decoded`
+
+error[E0277]: the trait bound `Ambient<Caller>: InputType` is not satisfied
+  --> tests/integration/diagnostics/graphql/an_ambient_or_a_scoped_behind_an_alias_is_no_argument.rs:27:33
+   |
+27 |     async fn me(&self, _caller: Me, _cart: MyCart) -> i32 {
+   |                                 ^^ the trait `InputType` is not implemented for `Ambient<Caller>`
+   |
+   = help: the following other types implement trait `InputType`:
+             Arc<T>
+             Arc<[T]>
+             Arc<str>
+             BTreeMap<K, V>
+             BTreeSet<T>
+             Box<T>
+             Box<[T]>
+             Box<str>
+           and $N others
+
+error[E0277]: the trait bound `Scoped<Cart>: InputType` is not satisfied
+  --> tests/integration/diagnostics/graphql/an_ambient_or_a_scoped_behind_an_alias_is_no_argument.rs:27:44
+   |
+27 |     async fn me(&self, _caller: Me, _cart: MyCart) -> i32 {
+   |                                            ^^^^^^ the trait `InputType` is not implemented for `Scoped<Cart>`
+   |
+   = help: the following other types implement trait `InputType`:
+             Arc<T>
+             Arc<[T]>
+             Arc<str>
+             BTreeMap<K, V>
+             BTreeSet<T>
+             Box<T>
+             Box<[T]>
+             Box<str>
+           and $N others

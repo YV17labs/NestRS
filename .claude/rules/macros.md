@@ -165,7 +165,10 @@ What a parameter resolves is read the same way: an extractor that resolves a
 provider implements `nest_rs_core::ResolvesProvider`, and the impl half asks
 `nest_rs_core::__private::ParamProbe` per parameter type — called on
 `&&ParamProbe<T>`, the autoref depth its unit tests pin — and hands what it
-answers to `Discoverable::injected_per_request`, so the access graph checks it.
+answers to `Discoverable::injected_per_request`, so the access graph checks it;
+so is the `T` a route's `Ambient<T>` reads, an alias included, and an in-band
+half asks every parameter it hands its protocol whether it is an `Ambient` or a
+`Scoped` (`ParamProbe::decoded`), refusing either behind an alias with the fix.
 Spelling decides only what no value can tell a macro, and each such reading is
 stated in the decorator's rustdoc: the wrapper async-graphql's derive itself
 reads by name, the `Json<T>` a tool's output schema is read off (`#[tools]` hands

@@ -30,9 +30,10 @@ use nest_rs_codegen::__private::{
     PostureRules, SiteGuards, SiteItems, TailParam, ambient_type_ids, answer_span, await_if_async,
     cfg_attrs, concrete_signature, force_guard_typeids, forwarded_arg_idents, generic_args,
     guard_capability_bounds, handler_const, handler_ref, impl_self_ident, layer_deps,
-    no_row_answered, normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
-    reject_meta_on_operations, return_type, scoped_specs, shared_receiver, site_const_ident,
-    site_items, site_ref, tail_param, ungrouped_expr, unit_of_work_required, validate_argument,
+    no_row_answered, no_tail_decoded, normalize_forwarded_args, nth_generic_type,
+    one_role_per_method, piped_input, reject_meta_on_operations, return_type, scoped_specs,
+    shared_receiver, site_const_ident, site_items, site_ref, tail_param, ungrouped_expr,
+    unit_of_work_required, validate_argument,
 };
 use nest_rs_codegen::snake_case;
 
@@ -1198,10 +1199,13 @@ fn operation_sites(self_ty: &Type, base: &syn::Ident, operations: &Operations) -
             class_gate: class_gate(&op.posture),
         });
         let no_row = no_row_answered(method, cfgs, return_type(&op.sig.output).as_slice());
+        let no_tail = no_tail_decoded(method, cfgs, &op.sig.inputs);
         quote! {
             #handler
 
             #no_row
+
+            #no_tail
 
             #site
         }

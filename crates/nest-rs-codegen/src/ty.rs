@@ -1,9 +1,12 @@
 //! Type/path inspection helpers shared by the decorator macros.
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{ToTokens, format_ident, quote, quote_spanned};
+use syn::ext::IdentExt as _;
+use syn::spanned::Spanned as _;
 use syn::{FnArg, GenericArgument, Ident, PathArguments, Type, TypeParamBound};
 
+use crate::inject::lifetimes_static;
 use crate::ungrouped::ungrouped_type;
 
 /// The base ident of an impl block's self type — last path segment of
@@ -121,13 +124,77 @@ pub fn tail_param(ty: &Type) -> Option<TailParam> {
 
 /// What each `Ambient<T>` among a handler's parameter `types` reads, as the
 /// `Vec<TypeId>` of its `T`s: the principal a guard of the unit's chain produces,
-/// among them, is one a `#[public]` unit admitted without is refused for.
+/// among them, is one a `#[public]` unit admitted without is refused for. Each
+/// type is asked of `nest_rs_core::__private::ParamProbe`, so an alias reads as
+/// the name does.
 pub fn ambient_type_ids<'a>(types: impl IntoIterator<Item = &'a Type>) -> TokenStream {
-    let read = types
+    let probed: Vec<TokenStream> = types
         .into_iter()
-        .filter(|ty| tail_param(ty) == Some(TailParam::Ambient))
-        .filter_map(|ty| nth_generic_type(ty, "Ambient", 0));
-    quote!(::std::vec![#(::std::any::TypeId::of::<#read>()),*])
+        .map(|ty| lifetimes_static(ty.to_token_stream()))
+        .collect();
+    if probed.is_empty() {
+        return quote!(::std::vec::Vec::<::std::any::TypeId>::new());
+    }
+    quote!({
+        #[allow(
+            unused_imports,
+            reason = "the probe's two arms are in scope for autoref, which no lint sees"
+        )]
+        use ::nest_rs_core::__private::{ParamProbeAmbient as _, ParamProbeFallback as _};
+        let mut __nestrs_ambient = ::std::vec::Vec::<::std::any::TypeId>::new();
+        #(
+            __nestrs_ambient.extend(
+                (&&::nest_rs_core::__private::ParamProbe::<#probed>::new()).ambient_type(),
+            );
+        )*
+        __nestrs_ambient
+    })
+}
+
+/// An associated function, compiled and never called, asking of each of a
+/// dispatched method's `inputs` the macro does not read as `Scoped` or `Ambient`
+/// whether it is one under another name: an edge carrying operations hands its
+/// protocol every other parameter, so an alias of either is refused with the fix
+/// rather than decoded. Placed in an inherent `impl` of the host, under the
+/// method's `cfgs`.
+pub fn no_tail_decoded<'a>(
+    method: &Ident,
+    cfgs: &[TokenStream],
+    inputs: impl IntoIterator<Item = &'a FnArg>,
+) -> TokenStream {
+    let calls: Vec<TokenStream> = inputs
+        .into_iter()
+        .filter_map(|input| match input {
+            FnArg::Typed(typed) => Some(typed.ty.as_ref()),
+            FnArg::Receiver(_) => None,
+        })
+        .filter(|ty| tail_param(ty).is_none() && !matches!(ty, Type::ImplTrait(_)))
+        .map(|ty| {
+            // Stable `span()` is a path's first token: point at its own name instead.
+            let at = match ty {
+                Type::Path(path) => last_segment_ident(&path.path).span(),
+                _ => ty.span(),
+            };
+            let asked = lifetimes_static(ty.to_token_stream());
+            quote_spanned! {at=>
+                ::nest_rs_core::__private::ParamProbe::<#asked>::new().decoded();
+            }
+        })
+        .collect();
+    if calls.is_empty() {
+        return TokenStream::new();
+    }
+    let probe = format_ident!("__nestrs_no_tail_{}", method.unraw());
+    quote! {
+        #(#cfgs)*
+        #[doc(hidden)]
+        #[allow(dead_code, non_snake_case)]
+        fn #probe() {
+            #[allow(unused_imports)]
+            use ::nest_rs_core::__private::ParamProbeFallback as _;
+            #(#calls)*
+        }
+    }
 }
 
 /// Whether a parameter's type is spelled `name<..>`, by its last path segment:
@@ -666,21 +733,21 @@ mod tests {
         }
     }
 
+    /// Every parameter is asked, whatever its spelling, so an alias is read as
+    /// the name it stands for; a method taking none asks nothing.
     #[test]
-    fn what_an_ambient_parameter_reads_is_its_type_argument() {
-        let types: [Type; 4] = [
-            parse_quote!(nest_rs::core::Ambient<Claims>),
-            parse_quote!(Scoped<Cart>),
-            parse_quote!(Option<Ambient<Tenant>>),
-            parse_quote!(Ambient<Tenant>),
-        ];
+    fn what_an_ambient_parameter_reads_is_asked_of_its_type() {
+        let types: [Type; 2] = [parse_quote!(Me), parse_quote!(&'a Request)];
+        let probed = ambient_type_ids(&types).to_string();
+        for asked in [
+            quote!(ParamProbe::<Me>::new()),
+            quote!(ParamProbe::<&'static Request>::new()),
+        ] {
+            assert!(probed.contains(&asked.to_string()), "{probed}");
+        }
         assert_eq!(
-            ambient_type_ids(&types).to_string(),
-            quote!(::std::vec![
-                ::std::any::TypeId::of::<Claims>(),
-                ::std::any::TypeId::of::<Tenant>()
-            ])
-            .to_string(),
+            ambient_type_ids(&[]).to_string(),
+            quote!(::std::vec::Vec::<::std::any::TypeId>::new()).to_string(),
         );
     }
 }

@@ -61,7 +61,10 @@ into an owned value before `cx.attach`, as above.
 
 `Ambient<T>` refuses the unit if the value is absent — a `500` on a route, the
 opaque internal error elsewhere, the type filed at `error` — since a missing
-context means the guard that should have set it never ran. A large value goes in a
+context means the guard that should have set it never ran. A route reads it by
+its type, so an alias of it reads the same; a GraphQL operation, a WebSocket
+message and an MCP tool find it by its name, and refuse an alias at compile
+time saying to write `Ambient<T>` out. A large value goes in a
 newtype holding an `Arc` (`struct Catalog(Arc<Entries>)`), which clones for
 the price of a count; the newtype is what implements `AmbientValue`.
 

@@ -533,6 +533,9 @@ mod guards {
 
     impl GuardFor<HttpView> for OwnAccount {}
 
+    /// What `/accounts/me` reads, under a name of the app's own.
+    type Me = Ambient<Caller>;
+
     #[controller(path = "/accounts")]
     #[use_guards(Authn)]
     struct AccountsController;
@@ -553,6 +556,12 @@ mod guards {
         #[get("/me")]
         #[public]
         async fn me(&self, _caller: Ambient<Caller>) -> &'static str {
+            "{}"
+        }
+
+        #[get("/me-aliased")]
+        #[public]
+        async fn me_aliased(&self, _caller: Me) -> &'static str {
             "{}"
         }
 
@@ -737,33 +746,37 @@ mod guards {
     /// A `#[public]` route whose handler needs the principal its chain's guard
     /// attaches admits no caller that guard did not identify: a rejected token
     /// earns its `401`, a caller with none the caller's `401`, and the document
-    /// says both, with the scheme the route requires.
+    /// says both, with the scheme the route requires — read off the parameter's
+    /// type, so an alias of `Ambient` needs it as the name does.
     #[tokio::test]
     async fn a_public_route_needing_its_principal_answers_and_documents_its_401() {
         let app = TestApp::for_module::<AccountsApp>().await.expect("boots");
         let doc = document(&app, "/api-json").await;
 
-        let me = responses(&doc, "/accounts/me");
-        assert_eq!(
-            me["401"]["headers"]["WWW-Authenticate"]["required"], true,
-            "{me}"
-        );
-        assert_eq!(
-            doc["paths"]["/accounts/me"]["get"]["security"],
-            serde_json::json!([{ "bearerAuth": [] }]),
-        );
+        for path in ["/accounts/me", "/accounts/me-aliased"] {
+            let anonymous = app.http().get(path).send().await;
+            anonymous.assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
+            anonymous.assert_header("www-authenticate", "Bearer");
+            let rejected = app
+                .http()
+                .get(path)
+                .header("authorization", "Bearer forged")
+                .send()
+                .await;
+            rejected.assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
+            rejected.assert_header("www-authenticate", r#"Bearer error="invalid_token""#);
 
-        let anonymous = app.http().get("/accounts/me").send().await;
-        anonymous.assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
-        anonymous.assert_header("www-authenticate", "Bearer");
-        let rejected = app
-            .http()
-            .get("/accounts/me")
-            .header("authorization", "Bearer forged")
-            .send()
-            .await;
-        rejected.assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
-        rejected.assert_header("www-authenticate", r#"Bearer error="invalid_token""#);
+            let me = responses(&doc, path);
+            assert_eq!(
+                me["401"]["headers"]["WWW-Authenticate"]["required"], true,
+                "{path}: {me}"
+            );
+            assert_eq!(
+                doc["paths"][path]["get"]["security"],
+                serde_json::json!([{ "bearerAuth": [] }]),
+                "{path}",
+            );
+        }
     }
 
     /// The same on a `#[public]` route whose later guard requires that principal:

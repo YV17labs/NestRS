@@ -161,3 +161,26 @@ probes' included, for the routes that need it alone.
 
 Left: an `Ambient` behind a type alias is not read off its spelling; such a route keeps the old
 answers, the earned `401` and the anonymous `500`.
+
+## 2026-11-11 — an `Ambient` behind an alias needs its principal as the name does
+
+The limit left above, reproduced: a `#[public]` route taking `type Me = Ambient<Caller>` behind
+`AuthnGuard` answered an anonymous caller `500` and its document listed `200 413 500 503`, no
+`401`. `#[routes]` read the `T` of each parameter spelled `Ambient`; the alias was an extractor
+like any other.
+
+- **A route asks each parameter's type** what it reads off the ambient context, through the
+  probe the access graph already asks for a `Scoped<T>` (`ParamProbe`, its `Ambient<T>` arm),
+  so the principal the route needs, its `401` and its document hold under any name.
+- **The edges carrying operations keep reading `Ambient<T>` and `Scoped<T>` by their names**: a
+  GraphQL operation's, a WebSocket message's and an MCP operation's arguments are written into
+  the protocol's own signature before any type is known, so which parameter is the protocol's
+  is the macro's to decide. Every other parameter is asked whether it is one of the two, and an
+  alias of either fails to compile naming the fix, beside the protocol's own refusal of it as an
+  input, where rmcp's alone named `IntoToolRoute`.
+
+Refused: **letting the edges carrying operations take an alias.** A parameter left out of the
+protocol's arguments by its type would need one trait choosing per type between the protocol's
+input and the unit's value: its impl for `Ambient<T>` overlaps a blanket over async-graphql's
+`InputType` or serde's `Deserialize`, which coherence refuses, and it would hand a value to a
+schema the macro has already written.

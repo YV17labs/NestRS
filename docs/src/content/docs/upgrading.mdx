@@ -666,6 +666,8 @@ lists what the boot, a log or the wire shows when one is missed.
    | an `OAuthClientConfig { … }`, `GithubSocialConfig { … }` or `GoogleSocialConfig { … }` literal listing every field (`E0063`) | add `authorization_parameters: AuthorizationParameters::default()`, or end the literal with `..Default::default()` |
    | a social callback strategy of your own reading `provider`, `code`, `state` and the cookie | `AuthnGuard<SocialStrategy<S>>` on the callback route, `SocialStrategy<S>` and the guard in the module's `providers`, and `impl SocialSignIn for S` saying who a `SocialProfile` is — the rest, §4.1.2.1's `error` included, is the strategy's |
    | `jwt.sign(&serde_json::json!({ … }))`, or `sign`/`sign_for` on claims with no `PrincipalIdentity` (`E0277`) | `#[derive(PrincipalIdentity)]` on the claims struct, `#[principal(actor)]` on the field naming the subject: claims with no `sub` field are stamped it. A test forging a token hands it to `app.bearer(&claims)`, which signs what it is given |
+   | claims `sign` or `sign_for` mints naming no `client_id` | `pub client_id: String` on the claims, the client the token is issued to — the one a user signed in through, a machine client's own — set in each literal; a test's claims name one too (`client_id: "e2e".into()`). Not a compile error: `sign` answers a `SignError` naming the claim |
+   | `JwtOptions` built in code with no `issuer` or no `audience` | set both: `options.issuer = Some(…)` and `options.audience = Some(…)`; `JwtService::new` refuses naming each it lacks |
    | `jwt.sign(&claims)?`, `sign_for` or `sign_handshake` in a `Result<_, AuthError>` (`E0277`) | a handler answers `nest_rs::http::Result`, into which `SignError` and `AuthError` each convert on their own status; a service holds `#[from] SignError` in its own error. `TokenError` does already, so `?` needs no `map_err` |
    | `.map_err(\|e\| TokenError::Sign(e.into()))` over `sign_for` or `authorize`, `TokenError::Sign(anyhow!(…))` built | `?` for the first; `TokenError::Sign(SignError::new("…"))` for the second: the variant holds a `SignError` |
    | `.opaque()` over `sign`, `sign_for`, `client.authorize` or `providers.authorize` | delete it — not a compile error: `?` answers the same opaque `500` |
@@ -1395,6 +1397,17 @@ lists what the boot, a log or the wire shows when one is missed.
       worker drain window of `0` or above an hour, a zero connect timeout or
       window, a token lifetime past thirty days, a connection ceiling past a day
       — has to move.
+    - **Every app that authenticates names its issuer and its audience**:
+      `<PREFIX>_AUTHN__ISSUER`, the issuer its tokens name, and
+      `<PREFIX>_AUTHN__AUDIENCE`, its own canonical URI — an app that mints and
+      verifies its own tokens names its origin as both. A resource server under
+      `OAuthResourceModule` reads both off its resource and sets neither, but
+      names its `ISSUER` when it mints access tokens too. A scaffolded app holds
+      them in `apps/<app>/.env` for the development and test profiles alone: add
+      `<PREFIX>_AUTHN__ISSUER=http://localhost:<port>` and
+      `<PREFIX>_AUTHN__AUDIENCE=http://localhost:<port>` beside an app's port when
+      it was scaffolded before 7.0, and `client_id: "dev-token".to_owned()` to the
+      claims its `/auth/dev-token` route builds.
     - **Valkey 9.1, on one server, Sentinel or Cluster** — Redis is no longer a
       supported server, and the scheme of `<PREFIX>_REDIS__URL` declares the
       topology: `rediss://`, `rediss-sentinel://` or `rediss-cluster://` (see
@@ -2430,6 +2443,17 @@ lists what the boot, a log or the wire shows when one is missed.
   token with no `sub` no verifier could attribute. So does a `sub` that is no string
   (`sub: u64`, RFC 7519 §4.1.2), where it minted one a verifier reading a string
   refuses: hold the id as a string, or under another name with `#[principal(actor)]`.
+- **A `JwtService` naming no issuer or no audience** — `<PREFIX>_AUTHN__ISSUER` or
+  `<PREFIX>_AUTHN__AUDIENCE` unset or blank, or a `JwtOptions` built in code without
+  them — fails the boot naming each it lacks, whether the app signs or only verifies,
+  where 6.x minted tokens naming neither and verified a token naming neither (RFC 9068
+  §2.2, §4). Under `OAuthResourceModule` both are read off the resource, and a service
+  there naming no `ISSUER` of its own boots but mints no access token: `sign` and
+  `sign_for` answer a `SignError` naming the variable. `ALLOW_ANY_AUDIENCE` stands in
+  for the audience, and `sign` then answers a `SignError` too: mint with `sign_for`.
+- **`sign` or `sign_for` on claims naming no `client_id`** — absent, `null` or blank —
+  answers a `SignError` naming the claim, where it minted an access token naming no
+  client, which RFC 9068 §2.2 requires.
 - **`sign`, `sign_for` or `sign_handshake` on claims holding a registered claim of
   another JSON type** — `client_id: u64`, `iss: u64`, an `exp` that is a string or
   negative, an `aud` of numbers, an `amr` that is no array of strings, a `scope` that is

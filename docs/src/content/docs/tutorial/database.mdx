@@ -224,8 +224,9 @@ naming every route no guard covers: a route runs a guard, or says
 
 A call needs a bearer token. The auth adapter `nestrs g resource` wrote serves
 one route that mints them —
-signed with the `<PREFIX>_AUTHN__SECRET` it drew into `.env.local`, and
-refusing to boot anywhere but development and test:
+signed with the `<PREFIX>_AUTHN__SECRET` it drew into `.env.local`, issued by
+`blog` to itself (its origin, which `apps/blog/.env` names as both issuer and
+audience), and refusing to boot anywhere but development and test:
 
 ```bash frame="terminal"
 $ TOKEN=$(curl -s -X POST http://localhost:3001/auth/dev-token \

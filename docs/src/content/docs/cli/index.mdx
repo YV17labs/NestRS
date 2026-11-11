@@ -171,11 +171,17 @@ whole HTTP namespace off the `.env` cascade:
 
 ```bash title="apps/api/.env" frame="terminal"
 NESTRS_HTTP__PORT=3002
+NESTRS_AUTHN__ISSUER=http://localhost:3002
+NESTRS_AUTHN__AUDIENCE=http://localhost:3002
 ```
 
-An app's own files are read over the root's under the `development` and `test`
-profiles ([an app's own files](/configuration/env-cascade/#an-apps-own-files));
-a deployment sets the port on the process.
+Beside the port, the app's origin is the issuer and the audience of the tokens
+it mints and verifies once it authenticates — `JwtService` does not start
+without them ([JWT](/security/authentication/jwt/)) — and the lines sit unread
+until then. An app's own files are read over the root's under the
+`development` and `test` profiles
+([an app's own files](/configuration/env-cascade/#an-apps-own-files)); a
+deployment sets all three on the process.
 
 Optional: **`--check`** runs `cargo check` after generation.
 

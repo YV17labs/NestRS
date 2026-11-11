@@ -113,6 +113,12 @@ You need a better-auth server reachable over `https`, and the API's
    unset NESTRS_AUTHN__ISSUER NESTRS_AUTHN__AUDIENCE
    ```
 
+   In a workspace `nestrs new` made, delete the two lines it wrote into the
+   app's own `apps/<app>/.env` too, `<PREFIX>_AUTHN__ISSUER` and
+   `<PREFIX>_AUTHN__AUDIENCE`, both the app's origin: under the development and
+   test profiles that file is read over the root's, so what the `unset` takes
+   off the process comes back from it.
+
    Checkpoint: `curl https://api.example.com/.well-known/oauth-protected-resource`
    names better-auth among its `authorization_servers`.
 

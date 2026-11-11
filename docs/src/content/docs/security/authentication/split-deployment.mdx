@@ -228,11 +228,13 @@ naming the resource in the token request, and the issuer writes it into the
 token's `aud` — the one audience the resource server requires.
 
 Each half holds its own word of that contract. A resource server requires its
-own audience — `<PREFIX>_AUTHN__AUDIENCE`, its canonical URI:
+own audience — `<PREFIX>_AUTHN__AUDIENCE`, its canonical URI — and the issuer
+it trusts, `<PREFIX>_AUTHN__ISSUER`; it does not start without either:
 
 ```bash
 # apps/api, deployed
 NESTRS_AUTHN__AUDIENCE=https://api.example.com
+NESTRS_AUTHN__ISSUER=https://auth.example.com
 ```
 
 The issuer mints each access token for the resource it was asked for, with
@@ -379,9 +381,10 @@ some authorization servers mint an opaque audience by policy — it is the one
 required, and the boot warns naming both variables. `<PREFIX>_AUTHN__ISSUER`
 narrows the accepted issuers to itself, and must be one of them: an issuer the
 document does not advertise would refuse every token, so the boot fails naming
-both variables. An app that also mints access tokens for itself sets it, or
-those tokens carry no `iss` its own verifier accepts; its OAuth transaction
-cookie is checked against what it stamps, and needs nothing.
+both variables. An app that also mints access tokens sets it, or `sign` and
+`sign_for` refuse naming it, since every access token names its issuer
+(RFC 9068 §2.2); its OAuth transaction cookie is checked against what it
+stamps, and needs nothing.
 `ALLOW_ANY_AUDIENCE` beside the module fails the boot, since an
 audience-agnostic verifier protects no resource.
 

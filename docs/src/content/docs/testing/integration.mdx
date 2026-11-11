@@ -69,6 +69,15 @@ root rather than one more test module, and it is why no `common/` folder
 appears above:
 
 ```rust title="crates/nest-rs-authn/tests/integration/main.rs (abridged)"
+pub const ISSUER: &str = "https://auth.example";
+pub const AUDIENCE: &str = "https://api.example";
+
+pub fn named(mut options: JwtOptions) -> JwtOptions {
+    options.issuer = Some(ISSUER.into());
+    options.audience = Some(AUDIENCE.into());
+    options
+}
+
 /// Ed25519 key pair used across nestrs dev and e2e apps.
 pub const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\n…\n";
 pub const DEV_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\n…\n";
@@ -89,7 +98,7 @@ fn into_options_selects_eddsa_from_key_pair() {
     .into_options()
     .expect("options");
     assert!(matches!(options.key, JwtKey::Pem { .. }));
-    JwtService::new(options).expect("EdDSA service builds");
+    JwtService::new(crate::named(options)).expect("EdDSA service builds");
 }
 ```
 

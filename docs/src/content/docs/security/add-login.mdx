@@ -93,12 +93,20 @@ with the email or the password. Note the route is `#[public]` and
 binds a **throttler**, not an auth guard: login is the one route that must
 accept anonymous callers, and rate-limiting is its protection.
 
-For signing to work the app needs a key. The simplest single-app setup is
-a symmetric secret (32 bytes minimum):
+For signing to work the app needs a key, and the issuer and the audience
+every token names (RFC 9068 §2.2) — the app does not start without them. The
+simplest single-app setup is a symmetric secret (32 bytes minimum), the app's
+own origin as both:
 
 ```bash
 export NESTRS_AUTHN__SECRET="$(openssl rand -hex 32)"
+export NESTRS_AUTHN__ISSUER='https://api.example.com'
+export NESTRS_AUTHN__AUDIENCE='https://api.example.com'
 ```
+
+The claims `grant_password` signs name the client the user signed in through
+as their `client_id`, which every access token carries: `sign` refuses claims
+naming none.
 
 <Aside type="tip">
 In production the Publish workspace splits issuing into its own app —

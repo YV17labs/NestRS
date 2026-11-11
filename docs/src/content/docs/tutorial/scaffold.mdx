@@ -144,10 +144,15 @@ pub struct BlogModule;
 
 ```bash title="apps/blog/.env" frame="terminal"
 NESTRS_HTTP__PORT=3001
+NESTRS_AUTHN__ISSUER=http://localhost:3001
+NESTRS_AUTHN__AUDIENCE=http://localhost:3001
 ```
 
 `nestrs new blog` picks the next free port: `3001` beside `hello`'s `3000`,
-and another if other apps already hold it. The workspace's own `.env*`
+and another if other apps already hold it. Its origin is also the issuer and
+the audience of the tokens `blog` mints and accepts once it authenticates, on
+[Secure the API](/tutorial/security/): every token names both, and the app
+does not start without them. The workspace's own `.env*`
 files are shared by every app; `apps/blog/.env` is read over them under the
 `development` and `test` profiles, so a value that is `blog`'s alone lives
 there ([an app's own files](/configuration/env-cascade/#an-apps-own-files)).

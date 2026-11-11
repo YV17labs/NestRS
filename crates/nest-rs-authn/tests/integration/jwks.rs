@@ -79,6 +79,8 @@ static ED25519: LazyLock<Signing> = LazyLock::new(|| {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Claims {
     sub: String,
+    iss: String,
+    aud: String,
     exp: u64,
 }
 
@@ -112,6 +114,8 @@ fn token(key: &EncodingKey, algorithm: Algorithm, kid: Option<&str>) -> String {
         kid,
         &Claims {
             sub: "ada".into(),
+            iss: crate::ISSUER.into(),
+            aud: crate::AUDIENCE.into(),
             exp: get_current_timestamp() + 3600,
         },
     )
@@ -255,6 +259,8 @@ fn config(jwks_uri: String) -> AuthnConfig {
     AuthnConfig {
         jwks_uri: Some(jwks_uri),
         tls: AUTHORITY.client_tls(),
+        issuer: Some(crate::ISSUER.into()),
+        audience: Some(crate::AUDIENCE.into()),
         ..AuthnConfig::default()
     }
 }
@@ -329,8 +335,8 @@ async fn an_issuer_certificate_the_client_does_not_accept_names_the_setting_that
 
     let issuer = Issuer::serving(Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")])).await;
     let trusting_the_system = verifier_with(AuthnConfig {
-        jwks_uri: Some(issuer.uri()),
-        ..AuthnConfig::default()
+        tls: nest_rs_config::ClientTls::default(),
+        ..config(issuer.uri())
     });
     let Err(detail @ AuthError::Unavailable { .. }) = trusting_the_system
         .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))

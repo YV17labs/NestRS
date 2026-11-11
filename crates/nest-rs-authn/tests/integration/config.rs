@@ -44,7 +44,7 @@ fn into_options_selects_eddsa_from_key_pair() {
     .into_options()
     .expect("options");
     assert!(matches!(options.key, JwtKey::Pem { .. }));
-    JwtService::new(options).expect("EdDSA service builds");
+    JwtService::new(crate::named(options)).expect("EdDSA service builds");
 }
 
 #[test]
@@ -444,7 +444,7 @@ fn a_secret_is_held_to_the_size_of_its_algorithms_hash() {
 
         let mut long = nest_rs_authn::JwtOptions::new("x".repeat(minimum));
         long.algorithms = vec![algorithm];
-        JwtService::new(long).expect("a secret of the hash's size is accepted");
+        JwtService::new(crate::named(long)).expect("a secret of the hash's size is accepted");
     }
 }
 
@@ -636,7 +636,7 @@ fn the_jwk_set_and_its_authority_are_read_from_the_environment() {
     };
     assert_eq!(uri, JWKS_URI);
     assert_eq!(tls.authorities_pem(), pem.as_bytes());
-    JwtService::new(options).expect("the authority holds a certificate");
+    JwtService::new(crate::named(options)).expect("the authority holds a certificate");
 }
 
 /// `ALGORITHMS` reads the names RFC 7518 gives them, case and all, and refuses
@@ -713,7 +713,7 @@ fn the_algorithms_set_beside_a_key_must_fit_it() {
     .into_options()
     .expect("options");
     assert_eq!(narrowed.algorithms, vec![Algorithm::EdDSA]);
-    JwtService::new(narrowed).expect("EdDSA fits a JWK Set");
+    JwtService::new(crate::named(narrowed)).expect("EdDSA fits a JWK Set");
 
     let refused = AuthnConfig {
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
@@ -740,9 +740,10 @@ async fn a_secret_signs_with_the_hmac_algorithm_named() {
     struct Claims {
         #[principal(actor)]
         sub: String,
+        client_id: String,
     }
 
-    let jwt = JwtService::new(
+    let jwt = JwtService::new(crate::named(
         AuthnConfig {
             secret: Some("x".repeat(64).into()),
             algorithms: Some(vec![Algorithm::HS512]),
@@ -750,9 +751,14 @@ async fn a_secret_signs_with_the_hmac_algorithm_named() {
         }
         .into_options()
         .expect("options"),
-    )
+    ))
     .expect("a 64-byte secret fits HS512");
-    let token = jwt.sign(&Claims { sub: "ada".into() }).expect("signs");
+    let token = jwt
+        .sign(&Claims {
+            sub: "ada".into(),
+            client_id: "ci".into(),
+        })
+        .expect("signs");
     assert_eq!(
         jsonwebtoken::decode_header(&token).expect("a header").alg,
         jsonwebtoken::Algorithm::HS512

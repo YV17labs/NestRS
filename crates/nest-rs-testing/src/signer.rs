@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use nest_rs_authn::__private::{EphemeralSigningKey, ResourceBinding, sign_unchecked};
+use nest_rs_authn::__private::{EphemeralSigningKey, ResourceBinding, forger, sign_unchecked};
 use nest_rs_authn::{AuthnConfig, JwtOptions, JwtService};
 use nest_rs_core::{Container, Secret};
 use serde::Serialize;
@@ -68,7 +68,7 @@ impl Signer {
             options.issuer = config.issuer.clone();
         }
         let signer = Self {
-            jwt: JwtService::new(options)?,
+            jwt: forger(options)?,
         };
         let probe = sign_unchecked(
             &signer.jwt,

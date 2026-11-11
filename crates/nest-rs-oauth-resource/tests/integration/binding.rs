@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_authn::{AuthnConfig, AuthnModule, JwtOptions, JwtService};
+use nest_rs_authn::{AuthnConfig, AuthnModule, JwtService};
 use nest_rs_config::Namespaced;
 use nest_rs_core::module;
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule};
@@ -42,19 +42,28 @@ fn authn(audience: Option<&str>, issuer: Option<&str>) -> AuthnConfig {
     }
 }
 
-/// A token another holder of the key mints as `iss`, for `aud`.
-fn minted(iss: Option<&str>, aud: &str) -> String {
-    let mut options = JwtOptions::new(SECRET);
-    options.issuer = iss.map(str::to_owned);
-    JwtService::new(options)
-        .expect("issuer")
-        .sign_for(
-            aud,
-            &Claims {
-                sub: "client-1".into(),
-            },
-        )
-        .expect("sign")
+/// A token another holder of the key mints as `iss`, for `aud`, each when it
+/// names one.
+fn minted(iss: Option<&str>, aud: Option<&str>) -> String {
+    let mut claims = serde_json::json!({
+        "sub": "client-1",
+        "client_id": "client-1",
+        "exp": jsonwebtoken::get_current_timestamp() + 3600,
+    });
+    if let Some(iss) = iss {
+        claims["iss"] = iss.into();
+    }
+    if let Some(aud) = aud {
+        claims["aud"] = aud.into();
+    }
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+    header.typ = Some("at+jwt".into());
+    jsonwebtoken::encode(
+        &header,
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()),
+    )
+    .expect("encode")
 }
 
 fn authn_var(key: &str) -> String {
@@ -81,20 +90,21 @@ async fn a_token_is_accepted_only_for_this_resource_from_an_advertised_server() 
     let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
 
     for issuer in TRUSTED {
-        jwt.verify::<Claims>(&minted(Some(issuer), RESOURCE))
+        jwt.verify::<Claims>(&minted(Some(issuer), Some(RESOURCE)))
             .await
             .expect("an advertised server's token for this resource verifies");
     }
     for (label, token) in [
         (
             "another resource",
-            minted(Some(TRUSTED[0]), "https://billing.example.com"),
+            minted(Some(TRUSTED[0]), Some("https://billing.example.com")),
         ),
         (
             "a server this resource does not advertise",
-            minted(Some("https://evil.example.com"), RESOURCE),
+            minted(Some("https://evil.example.com"), Some(RESOURCE)),
         ),
-        ("no issuer", minted(None, RESOURCE)),
+        ("no issuer", minted(None, Some(RESOURCE))),
+        ("no audience", minted(Some(TRUSTED[0]), None)),
     ] {
         assert!(
             jwt.verify::<Claims>(&token).await.is_err(),
@@ -114,11 +124,11 @@ async fn a_set_issuer_among_the_servers_is_the_one_accepted() {
 
     let app = TestApp::for_module::<Narrowed>().await.expect("boots");
     let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
-    jwt.verify::<Claims>(&minted(Some(TRUSTED[1]), RESOURCE))
+    jwt.verify::<Claims>(&minted(Some(TRUSTED[1]), Some(RESOURCE)))
         .await
         .expect("the set issuer verifies");
     assert!(
-        jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), RESOURCE))
+        jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), Some(RESOURCE)))
             .await
             .is_err(),
         "another advertised server is refused once ISSUER names one"
@@ -159,11 +169,11 @@ async fn a_differing_audience_is_the_one_required() {
 
     let app = TestApp::for_module::<Opaque>().await.expect("boots");
     let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
-    jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), "opaque-api"))
+    jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), Some("opaque-api")))
         .await
         .expect("the set audience verifies");
     assert!(
-        jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), RESOURCE))
+        jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), Some(RESOURCE)))
             .await
             .is_err()
     );
@@ -206,13 +216,16 @@ async fn the_module_alone_binds_the_verifier_it_imports() {
         .expect("a resource server with a key boots on its own import");
     let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
 
-    jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), RESOURCE))
+    jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), Some(RESOURCE)))
         .await
         .expect("an advertised server's token for this resource verifies");
     assert!(
-        jwt.verify::<Claims>(&minted(Some(TRUSTED[0]), "https://billing.example.com"))
-            .await
-            .is_err(),
+        jwt.verify::<Claims>(&minted(
+            Some(TRUSTED[0]),
+            Some("https://billing.example.com")
+        ))
+        .await
+        .is_err(),
         "a token for another resource is refused"
     );
 }

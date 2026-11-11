@@ -166,10 +166,14 @@ impl Secrets {
             })
             .collect();
         lines.push(format!(
-            "Set {} (or _FILE) in every deployed environment;",
-            crate::context::var_name(&self.env_prefix, "AUTHN", "SECRET")
+            "Set {} (or _FILE), {} and {} in every deployed environment;",
+            crate::context::var_name(&self.env_prefix, "AUTHN", "SECRET"),
+            crate::context::var_name(&self.env_prefix, "AUTHN", "ISSUER"),
+            crate::context::var_name(&self.env_prefix, "AUTHN", "AUDIENCE"),
         ));
-        lines.push("the boot refuses to start without key material.".to_owned());
+        lines.push(
+            "the boot refuses to start without key material, an issuer or an audience.".to_owned(),
+        );
         lines
     }
 }

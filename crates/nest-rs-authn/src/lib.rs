@@ -138,5 +138,5 @@ pub mod __private {
         Actor, ActorField, ActorRefusal, IdentifierAnswer, IdentifierProbe, ScopeList, Tenant,
         TenantField, TenantRefusal, scope_list,
     };
-    pub use crate::service::sign_unchecked;
+    pub use crate::service::{forger, sign_unchecked};
 }

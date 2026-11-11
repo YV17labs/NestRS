@@ -207,3 +207,48 @@ and the social callback call, minted `client_id` absent. Settled by the owner's 
   confusion RFC 9068 §5 asks an issuer to prevent, where a forgotten field should fail.
 - The same holds for `iss` and `aud`, stamped only when configured: requiring them asks every
   signing deployment for two variables, the owner's call too.
+
+## 2026-11-11 — every token names its client, its issuer and its audience
+
+The 2026-11-07 entry left `client_id`, `iss` and `aud` optional at the signer, each a line in
+every app minting tokens, and the owner's call. Seen run: `sign` minted `{exp, iat, jti, sub}`
+for claims naming no client, a service configured with neither issuer nor audience started and
+minted a token naming neither, and a verifier naming neither accepted a token naming neither.
+Settled by the owner's word of 2026-11-11 (every line `TODO.md` lists, security first), by the
+first value: RFC 9068 is followed, never improvised, and the developer's code is kept easy by
+what the scaffold writes rather than by leaving the claims out.
+
+- **`sign` and `sign_for` refuse claims naming no `client_id`** — absent, `null` or blank — with
+  a `SignError` naming the claim, read off the payload the signer is about to mint: nothing a
+  claims type already says names its client, and RFC 9068 §2.2 requires one. `sign_handshake`
+  names no one, and `sign_unchecked` forges what it is given. The check runs after the
+  subject's, so a claims type naming neither is told of its subject first.
+- **A `JwtService` names an issuer and an audience, or does not start**, whether it signs or
+  only verifies, the refusal naming each setting it lacks; a blank one is unset. §2.2 has
+  every token carry both, and §4 has a resource server refuse one naming another or none. A
+  verifier naming no audience already refused every token carrying one (jsonwebtoken refuses
+  an `aud` it was given none to compare), so once the signer stamps both always, such a
+  verifier would answer `401` to every request: the boot is where to learn it. The check runs
+  last in `JwtService::new`, after the key's own refusals.
+- **A bound service keeps reading both off its resource** (the 2026-10-31 binding): under
+  `OAuthResourceModule` the audience is the resource and the issuers its authorization
+  servers, so a verifier there sets neither and boots. One minting access tokens names its own
+  `ISSUER`, or `sign` and `sign_for` refuse naming it, while its handshakes, which name no
+  access-token issuer, sign as before. `ALLOW_ANY_AUDIENCE` stands in for the audience at the
+  start, and such a service mints with `sign_for` alone: `sign` refuses, its token naming no
+  audience. These two refusals sit at `sign`, not at the boot, since an HMAC secret signs
+  whatever the app means it for, and a resource server sharing one may mint nothing.
+- **The developer writes nothing more**: `nestrs g auth`'s `Claims` holds `client_id: String`,
+  as the demo's does; its development token names its route, `dev-token`; `nestrs new` writes
+  each app's issuer and audience, its own origin, beside its port in `apps/<app>/.env`, read
+  under the development and test profiles, the lines unread until the app authenticates. A
+  deployment sets its own, as it sets the port. A hand-written app learns at boot or at
+  `sign`, never from a client.
+- `nest_rs_authn::__private::forger` builds a suite's signer, held to everything `new` holds
+  but the issuer and the audience: `TestApp::bearer` forges with it what an app must refuse,
+  stamping the app's issuer and audience where it names them.
+- **Refused, standing**: a configured default `client_id` stamped when claims name none (the
+  2026-11-07 entry's reason). **Refused**: an issuer or an audience the framework derives from
+  the listen port when unset — a deployment's origin is its public URL, which no port says, and
+  a default would mint tokens naming `localhost` in production; a `#[principal(client)]` role,
+  an attribute on a field the payload check already reads.

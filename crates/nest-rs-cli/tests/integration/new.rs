@@ -174,7 +174,7 @@ fn new_workspace_greenfield() {
     let module = fs::read_to_string(root.join("apps/hello/src/module.rs")).unwrap();
     assert!(module.contains("HelloHttpModule"));
     assert!(module.contains("features::hello"));
-    assert_the_port_is_the_app_s_own_setting(&root.join("apps/hello"), 3000);
+    assert_the_app_s_own_settings(&root.join("apps/hello"), 3000);
 
     // The service URLs are read in development and test, so `nestrs run db up`
     // and the e2e suites work out of the box; production reads none.
@@ -236,7 +236,7 @@ fn new_app_inside_nestrs_workspace() {
     assert!(!app.join("src/controller.rs").exists());
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
-    assert_the_port_is_the_app_s_own_setting(&app, 3000);
+    assert_the_app_s_own_settings(&app, 3000);
 
     let feature = dir.path().join("crates/features/src/demo_api");
     assert!(feature.join("service.rs").is_file());
@@ -299,7 +299,7 @@ fn new_app_picks_next_http_port() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert_the_port_is_the_app_s_own_setting(&dir.path().join("apps/blog"), 3002);
+    assert_the_app_s_own_settings(&dir.path().join("apps/blog"), 3002);
 }
 
 #[test]
@@ -351,7 +351,7 @@ fn new_workspace_app_scaffold() {
     assert!(!env.contains("NESTRS_HTTP__PORT"));
 
     assert_the_app_s_main_installs_telemetry(&app);
-    assert_the_port_is_the_app_s_own_setting(&app, 3000);
+    assert_the_app_s_own_settings(&app, 3000);
 }
 
 /// `apps.md`: a deployed app exports OTLP, so `main` holds the one line that
@@ -379,17 +379,22 @@ fn assert_the_app_s_main_installs_telemetry(app: &Path) {
 
 /// The port sits in the app's own `.env`, never pinned in code: a pin would cut
 /// the app's whole HTTP namespace off the cascade. The root names no transport,
-/// which its HTTP adapter imports.
+/// which its HTTP adapter imports. Beside it, the issuer and the audience every
+/// token the app mints or verifies names (RFC 9068 §2.2, §4): its own origin,
+/// so an app that grows a guard boots with nothing more to write.
 #[track_caller]
-fn assert_the_port_is_the_app_s_own_setting(app: &Path, port: u16) {
+fn assert_the_app_s_own_settings(app: &Path, port: u16) {
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
     assert!(!module.contains("HttpModule::for_root"), "{module}");
     assert!(!module.contains("HttpConfig"), "{module}");
     let own = fs::read_to_string(app.join(".env")).unwrap();
-    assert!(
-        own.contains(&format!("NESTRS_HTTP__PORT={port}\n")),
-        "{own}"
-    );
+    for setting in [
+        format!("NESTRS_HTTP__PORT={port}\n"),
+        format!("NESTRS_AUTHN__ISSUER=http://localhost:{port}\n"),
+        format!("NESTRS_AUTHN__AUDIENCE=http://localhost:{port}\n"),
+    ] {
+        assert!(own.contains(&setting), "{setting}{own}");
+    }
 }
 
 /// The smoke test boots the narrowest module that serves the greeting, so a

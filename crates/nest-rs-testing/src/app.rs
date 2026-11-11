@@ -274,6 +274,11 @@ mod http {
         ///
         /// let app = TestApp::builder()
         ///     .module::<BlogModule>()
+        /// #   .provide(nest_rs_authn::AuthnConfig {
+        /// #       issuer: Some("https://blog.example".into()),
+        /// #       audience: Some("https://blog.example".into()),
+        /// #       ..Default::default()
+        /// #   })
         ///     .ephemeral_signing_key()
         ///     .build()
         ///     .await?;

@@ -138,10 +138,16 @@ pub struct {{module}};
 "#;
 
 /// The app's own `.env`: what tells it apart from the workspace's other apps,
-/// read over the root's files under a development or test profile.
+/// read over the root's files under a development or test profile — its port,
+/// and the issuer and the audience of the tokens it mints and verifies, its own
+/// origin, which `JwtService` requires once the app authenticates.
 pub(crate) const APP_ENV: &str = r#"# `{{kebab}}`'s own settings, read over the workspace's `.env*` under a
 # declared development or test profile only; a deployment sets its own.
 {{env_prefix}}_HTTP__PORT={{port}}
+# The issuer and the audience every token this app mints names, and every token
+# it verifies must: its own origin, read once the app authenticates.
+{{env_prefix}}_AUTHN__ISSUER=http://localhost:{{port}}
+{{env_prefix}}_AUTHN__AUDIENCE=http://localhost:{{port}}
 "#;
 
 pub(crate) const README: &str = r#"# {{kebab}}

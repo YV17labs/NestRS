@@ -180,6 +180,8 @@ fn pinned_static_files() -> StaticFilesConfig {
 fn pinned_authn() -> AuthnConfig {
     AuthnConfig {
         secret: Some("setups-secret-padded-to-thirty-two".into()),
+        issuer: Some("https://auth.example".into()),
+        audience: Some("https://api.example".into()),
         ..AuthnConfig::default()
     }
 }

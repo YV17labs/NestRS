@@ -118,7 +118,7 @@ page 2 and reads each back. Add two negative paths beside it — the `400` you
 met in [Validate inputs](/tutorial/validation/), and the `401` of a call with
 no token:
 
-```rust title="apps/blog/tests/e2e/posts.rs" {9-14, 19, 45-66}
+```rust title="apps/blog/tests/e2e/posts.rs" {9-15, 20, 46-67}
 use nest_rs::http::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
@@ -130,6 +130,7 @@ use crate::boot;
 fn bearer(app: &nest_rs::testing::TestApp) -> String {
     app.bearer(&Claims {
         sub: Subject::User(Uuid::now_v7()),
+        client_id: "e2e".into(),
         roles: vec![Role::User],
     })
 }

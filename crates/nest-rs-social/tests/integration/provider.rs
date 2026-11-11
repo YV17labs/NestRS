@@ -42,8 +42,10 @@ fn default_authorize_delegates_to_the_configured_client() {
     let provider = StubProvider {
         client: OAuthClient::new(oauth_config()).expect("valid client"),
     };
-    let jwt =
-        JwtService::new(JwtOptions::new("social-int-tests-padded-to-32-bytes")).expect("hmac jwt");
+    let mut options = JwtOptions::new("social-int-tests-padded-to-32-bytes");
+    options.issuer = Some(crate::APP.into());
+    options.audience = Some(crate::APP.into());
+    let jwt = JwtService::new(options).expect("hmac jwt");
 
     let authorization = provider
         .authorize(&jwt, None)

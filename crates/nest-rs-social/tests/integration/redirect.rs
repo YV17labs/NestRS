@@ -40,6 +40,8 @@ impl AuthorizeController {
         HttpModule,
         AuthnModule::for_root(AuthnConfig {
             secret: Some(SECRET.into()),
+            issuer: Some(crate::APP.into()),
+            audience: Some(crate::APP.into()),
             ..AuthnConfig::default()
         }),
         SocialModule,

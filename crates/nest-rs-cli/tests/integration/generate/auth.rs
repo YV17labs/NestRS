@@ -278,6 +278,28 @@ fn generate_auth_claims_name_a_subject_of_either_kind() {
     );
 }
 
+/// RFC 9068 §2.2 requires `client_id` in every access token, and `sign` refuses
+/// claims naming none: the claims hold the client a token was issued to, and
+/// the development token names the route's own.
+#[test]
+fn generate_auth_tokens_name_the_client_they_were_issued_to() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    run_ok(dir.path(), &["g", "auth"]);
+
+    let authn = dir.path().join("crates/features/src/authn");
+    let claims = fs::read_to_string(authn.join("claims.rs")).unwrap();
+    assert!(
+        claims.contains("    pub client_id: String,\n"),
+        "every token names its client:\n{claims}"
+    );
+    let controller = fs::read_to_string(authn.join("http/controller.rs")).unwrap();
+    assert!(
+        controller.contains("client_id: \"dev-token\".to_owned(),"),
+        "the development token names the route's client:\n{controller}"
+    );
+}
+
 /// `.env` is read in every run, so a key set there would sit beside either
 /// secret: the boot refuses an HS256 secret next to EdDSA keys.
 #[test]

@@ -253,6 +253,7 @@ use crate::boot;
 fn caller() -> Claims {
     Claims {
         sub: Subject::User(Uuid::now_v7()),
+        client_id: "e2e".into(),
         roles: vec![Role::User],
     }
 }

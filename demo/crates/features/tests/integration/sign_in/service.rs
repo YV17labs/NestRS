@@ -21,9 +21,17 @@ const SENT_RESOURCE: &str = "https://only-the-caller-knows.example";
 
 const SECRET: &str = "sign-in-grant-test-secret-padded-32";
 
+const ISSUER: &str = "https://auth.example.com";
+
+fn named(mut options: JwtOptions) -> JwtOptions {
+    options.issuer = Some(ISSUER.into());
+    options.audience = Some(ISSUER.into());
+    options
+}
+
 fn sign_in_service() -> SignInService {
     SignInService::new(
-        Arc::new(JwtService::new(JwtOptions::new(SECRET)).expect("jwt service")),
+        Arc::new(JwtService::new(named(JwtOptions::new(SECRET))).expect("jwt service")),
         Arc::new(SocialRegistry::default()),
         Arc::new(features::users::UsersService),
         Arc::new(SignInConfig {
@@ -75,6 +83,8 @@ fn a_first_party_sign_in_is_delegated_every_scope_of_the_policy() {
     imports = [
         AuthnModule::for_root(AuthnConfig {
             secret: Some(SECRET.into()),
+            issuer: Some(ISSUER.into()),
+            audience: Some(ISSUER.into()),
             ..AuthnConfig::default()
         }),
         GithubSocialModule,
@@ -174,11 +184,11 @@ async fn a_sign_in_naming_no_resource_refuses_the_boot_with_its_code() {
 async fn a_social_redirect_that_cannot_be_signed_is_this_servers_own_failure() {
     let app = sign_in_app(vec![registered("ci-runner", &[POSTS_READ.as_str()])])
         .override_value(
-            JwtService::new(JwtOptions::eddsa_verify(
+            JwtService::new(named(JwtOptions::eddsa_verify(
                 "-----BEGIN PUBLIC KEY-----\n\
                  MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=\n\
                  -----END PUBLIC KEY-----\n",
-            ))
+            )))
             .expect("a verify-only jwt service"),
         )
         .build_headless()

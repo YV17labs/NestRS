@@ -238,17 +238,21 @@ mod tests {
     use crate::authz::constants::{POSTS_READ, POSTS_WRITE};
 
     const SECRET: &str = "test-secret-padded-to-thirty-two-b";
+    const ISSUER: &str = "https://auth.example.com";
     const RESOURCE: &str = "https://api.example.com";
     const OTHER_RESOURCE: &str = "https://mcp.example.com";
 
     fn jwt_with_ttl(ttl: Duration) -> JwtService {
         let mut opts = JwtOptions::new(SECRET);
+        opts.issuer = Some(ISSUER.into());
+        opts.audience = Some(ISSUER.into());
         opts.expires_in = ttl;
         JwtService::new(opts).expect("jwt service")
     }
 
     fn verifier(resource: &str) -> JwtService {
         let mut opts = JwtOptions::new(SECRET);
+        opts.issuer = Some(ISSUER.into());
         opts.audience = Some(resource.into());
         JwtService::new(opts).expect("verifier")
     }
@@ -312,8 +316,10 @@ mod tests {
 
     #[test]
     fn issue_surfaces_signing_failure_as_server_error() {
-        let verify_only_svc = JwtService::new(JwtOptions::eddsa_verify(test_ed25519_public_pem()))
-            .expect("verify-only jwt");
+        let mut opts = JwtOptions::eddsa_verify(test_ed25519_public_pem());
+        opts.issuer = Some(ISSUER.into());
+        opts.audience = Some(ISSUER.into());
+        let verify_only_svc = JwtService::new(opts).expect("verify-only jwt");
         let claims = user_claims(vec![Role::User], constants::all());
         let err = issue_with_jwt(&verify_only_svc, RESOURCE, claims)
             .expect_err("sign without key ⇒ Sign(_)");

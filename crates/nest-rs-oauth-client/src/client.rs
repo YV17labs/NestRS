@@ -918,7 +918,10 @@ mod tests {
     }
 
     fn jwt() -> JwtService {
-        JwtService::new(JwtOptions::new("oauth-client-tests-padded-to-32b")).expect("HMAC service")
+        let mut options = JwtOptions::new("oauth-client-tests-padded-to-32b");
+        options.issuer = Some("https://app.example".into());
+        options.audience = Some("https://app.example".into());
+        JwtService::new(options).expect("HMAC service")
     }
 
     fn signed_transaction(jwt: &JwtService, provider: &str, csrf: &str) -> String {

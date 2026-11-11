@@ -22,6 +22,8 @@ fn at_jwt_header(alg: Algorithm) -> Header {
 struct TestClaims {
     #[principal(actor)]
     sub: String,
+    client_id: String,
+    iss: String,
     exp: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     aud: Option<String>,
@@ -33,7 +35,7 @@ fn service(label: &str) -> JwtService {
     // Pad to ≥ 32 bytes for the HS256 min-secret guard; the label keeps each
     // test's secret distinct.
     let secret = format!("{label}-padding-to-thirty-two-bytes-minimum");
-    JwtService::new(JwtOptions::new(secret)).expect("HMAC service")
+    JwtService::new(crate::named(JwtOptions::new(secret))).expect("HMAC service")
 }
 
 /// An `exp` an hour from now, for claims naming their own.
@@ -41,9 +43,18 @@ fn in_an_hour() -> u64 {
     get_current_timestamp() + 3600
 }
 
+/// `claims` addressed to the fixtures' audience, as a token minted by hand
+/// must be to verify.
+fn addressed(mut claims: TestClaims) -> TestClaims {
+    claims.aud = Some(crate::AUDIENCE.into());
+    claims
+}
+
 fn claims(exp: u64, nbf: Option<u64>) -> TestClaims {
     TestClaims {
         sub: "alice".into(),
+        client_id: "ci".into(),
+        iss: crate::ISSUER.into(),
         exp,
         aud: None,
         nbf,
@@ -67,7 +78,7 @@ fn short_hmac_secret_is_rejected_by_the_service_constructor() {
     // A 32-byte secret is accepted.
     let ok = "0123456789abcdef0123456789abcdef"; // exactly 32 bytes
     assert_eq!(ok.len(), 32);
-    JwtService::new(JwtOptions::new(ok)).expect("a 32-byte secret is accepted");
+    JwtService::new(crate::named(JwtOptions::new(ok))).expect("a 32-byte secret is accepted");
 }
 
 /// A key and an algorithm that cannot work together are refused when the
@@ -111,10 +122,10 @@ fn an_algorithm_that_does_not_fit_the_key_is_refused_at_construction() {
         );
     }
     // RFC 7518 §3.2: HS512 takes a key of at least its 64-byte hash.
-    JwtService::new(with(
+    JwtService::new(crate::named(with(
         JwtOptions::new(secret.repeat(2)),
         nest_rs_authn::Algorithm::HS512,
-    ))
+    )))
     .expect("another HMAC algorithm fits an HMAC secret of its hash's size");
 }
 
@@ -163,8 +174,10 @@ async fn invalid_signature_is_rejected() {
 
 #[test]
 fn verify_only_service_cannot_sign() {
-    let jwt =
-        JwtService::new(JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY)).expect("verify-only");
+    let jwt = JwtService::new(crate::named(JwtOptions::eddsa_verify(
+        crate::DEV_PUBLIC_KEY,
+    )))
+    .expect("verify-only");
     let refused = jwt
         .sign(&claims(in_an_hour(), None))
         .expect_err("no key to sign with");
@@ -182,11 +195,12 @@ fn invalid_pem_fails_at_construction() {
 
 #[tokio::test]
 async fn audience_must_match_when_configured() {
-    let mut options = JwtOptions::new("aud-secret-padded-to-thirty-two-bytes");
-    options.audience = Some("api".into());
-    let jwt = JwtService::new(options).expect("service");
+    let jwt = JwtService::new(crate::named(JwtOptions::new(
+        "aud-secret-padded-to-thirty-two-bytes",
+    )))
+    .expect("service");
     let mut ok = claims(in_an_hour(), None);
-    ok.aud = Some("api".into());
+    ok.aud = Some(crate::AUDIENCE.into());
     let token = jwt.sign(&ok).expect("sign");
     assert!(jwt.verify::<TestClaims>(&token).await.is_ok());
 
@@ -203,9 +217,7 @@ async fn audience_must_match_when_configured() {
 async fn audience_omitted_is_rejected_when_configured() {
     // A configured audience is mandatory: a validly-signed token omitting `aud` fails closed.
     let secret = "aud-required-secret-padded-to-32-bytes";
-    let mut options = JwtOptions::new(secret);
-    options.audience = Some("api".into());
-    let jwt = JwtService::new(options).expect("service");
+    let jwt = JwtService::new(crate::named(JwtOptions::new(secret))).expect("service");
 
     // Forged with the raw encoder by another holder of the shared key.
     let omitted = claims(in_an_hour(), None);
@@ -224,11 +236,11 @@ async fn audience_omitted_is_rejected_when_configured() {
     // The signer stamps the configured audience onto claims that leave `aud` unset.
     let token = jwt.sign(&claims(in_an_hour(), None)).expect("sign");
     let round_tripped: TestClaims = jwt.verify(&token).await.expect("stamped aud verifies");
-    assert_eq!(round_tripped.aud.as_deref(), Some("api"));
+    assert_eq!(round_tripped.aud.as_deref(), Some(crate::AUDIENCE));
 
     // An explicit audience in the claims is never overwritten.
     let mut present = claims(in_an_hour(), None);
-    present.aud = Some("api".into());
+    present.aud = Some(crate::AUDIENCE.into());
     let token = jwt.sign(&present).expect("sign");
     assert!(jwt.verify::<TestClaims>(&token).await.is_ok());
 }
@@ -236,14 +248,14 @@ async fn audience_omitted_is_rejected_when_configured() {
 #[tokio::test]
 async fn a_configured_issuer_is_stamped_and_required() {
     let secret = "iss-required-secret-padded-to-32-bytes";
-    let mut options = JwtOptions::new(secret);
-    options.issuer = Some("auth".into());
-    let jwt = JwtService::new(options).expect("service");
+    let jwt = JwtService::new(crate::named(JwtOptions::new(secret))).expect("service");
 
     #[derive(Serialize, Deserialize, PrincipalIdentity)]
     struct IssClaims {
         #[principal(actor)]
         sub: String,
+        client_id: String,
+        aud: String,
         exp: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         iss: Option<String>,
@@ -251,12 +263,14 @@ async fn a_configured_issuer_is_stamped_and_required() {
 
     let minted = IssClaims {
         sub: "alice".into(),
+        client_id: "ci".into(),
+        aud: crate::AUDIENCE.into(),
         exp: in_an_hour(),
         iss: None,
     };
     let token = jwt.sign(&minted).expect("sign");
     let back: IssClaims = jwt.verify(&token).await.expect("stamped iss verifies");
-    assert_eq!(back.iss.as_deref(), Some("auth"));
+    assert_eq!(back.iss.as_deref(), Some(crate::ISSUER));
 
     // The same claims encoded without the stamp are refused.
     let forged = jsonwebtoken::encode(
@@ -304,10 +318,10 @@ async fn unsigned_alg_none_token_is_rejected() {
 
 #[tokio::test]
 async fn eddsa_sign_and_verify_round_trip() {
-    let jwt = JwtService::new(JwtOptions::eddsa(
+    let jwt = JwtService::new(crate::named(JwtOptions::eddsa(
         crate::DEV_PRIVATE_KEY,
         crate::DEV_PUBLIC_KEY,
-    ))
+    )))
     .expect("EdDSA service");
     let token = jwt.sign(&claims(in_an_hour(), None)).expect("sign");
     let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
@@ -340,50 +354,12 @@ fn a_private_key_beside_another_pairs_public_key_is_refused() {
 }
 
 #[tokio::test]
-async fn a_token_for_another_service_is_rejected_when_no_audience_is_configured() {
-    // The confused deputy: with no audience configured, a token the shared
-    // issuer minted for a sibling service is still refused (RFC 7519 §4.1.3).
-    let secret = "no-aud-configured-secret-padded-32b";
-    let jwt = JwtService::new(JwtOptions::new(secret)).expect("service");
-    assert!(
-        JwtOptions::new(secret).audience.is_none(),
-        "the default configures no audience — the path this asserts about",
-    );
-
-    let mut for_someone_else = claims(get_current_timestamp() + 3600, None);
-    for_someone_else.aud = Some("https://billing.example".into());
-    let token = jsonwebtoken::encode(
-        &at_jwt_header(Algorithm::HS256),
-        &for_someone_else,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )
-    .expect("encode");
-
-    assert!(
-        matches!(
-            jwt.verify::<TestClaims>(&token).await,
-            Err(AuthError::InvalidToken)
-        ),
-        "a validly-signed token minted for another audience must not verify here",
-    );
-}
-
-#[tokio::test]
-async fn an_audience_less_token_still_verifies_when_no_audience_is_configured() {
-    // §4.1.3 fires only when the claim is present: no audience configured and
-    // none stamped verifies.
-    let jwt = service("no-aud-anywhere-secret");
-    let token = jwt.sign(&claims(in_an_hour(), None)).expect("sign");
-    let decoded: TestClaims = jwt.verify(&token).await.expect("verify");
-    assert!(decoded.aud.is_none());
-}
-
-#[tokio::test]
 async fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
     // The opt-out is written down and reported once per boot, naming the variable.
     let logs = nest_rs_testing::LogCapture::install();
     let secret = "any-aud-opt-in-secret-padded-32-by";
     let mut options = JwtOptions::new(secret);
+    options.issuer = Some(crate::ISSUER.into());
     options.allow_any_audience = true;
     let jwt = JwtService::new(options).expect("service");
 
@@ -415,8 +391,7 @@ async fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
 
 #[test]
 fn allow_any_audience_beside_a_configured_audience_is_refused() {
-    let mut options = JwtOptions::new("contradiction-secret-padded-to-32b");
-    options.audience = Some("api".into());
+    let mut options = crate::named(JwtOptions::new("contradiction-secret-padded-to-32b"));
     options.allow_any_audience = true;
     let err = match JwtService::new(options) {
         Ok(_) => panic!("a contradictory audience policy must not build"),
@@ -436,8 +411,10 @@ fn allow_any_audience_beside_a_configured_audience_is_refused() {
 /// header parameter … the `typ` value used SHOULD be `at+jwt`."
 #[test]
 fn a_minted_token_carries_the_rfc9068_media_type() {
-    let jwt =
-        JwtService::new(JwtOptions::new("typ-fixture-secret-padded-32-byte")).expect("service");
+    let jwt = JwtService::new(crate::named(JwtOptions::new(
+        "typ-fixture-secret-padded-32-byte",
+    )))
+    .expect("service");
     let token = jwt
         .sign(&claims(get_current_timestamp() + 3600, None))
         .expect("sign");
@@ -467,12 +444,14 @@ async fn a_minted_token_carries_its_issue_time_and_an_identifier_of_its_own() {
     struct OwnClaims {
         #[principal(actor)]
         sub: &'static str,
+        client_id: &'static str,
         exp: u64,
         iat: u64,
         jti: &'static str,
     }
     let own = OwnClaims {
         sub: "alice",
+        client_id: "ci",
         exp: in_an_hour(),
         iat: 7,
         jti: "chosen-by-the-issuer",
@@ -488,11 +467,13 @@ async fn a_minted_token_carries_its_issue_time_and_an_identifier_of_its_own() {
     struct NullClaims {
         #[principal(actor)]
         sub: &'static str,
+        client_id: &'static str,
         exp: u64,
         jti: Option<&'static str>,
     }
     let null = NullClaims {
         sub: "alice",
+        client_id: "ci",
         exp: in_an_hour(),
         jti: None,
     };
@@ -512,7 +493,7 @@ async fn a_minted_token_carries_its_issue_time_and_an_identifier_of_its_own() {
 /// claims naming their own keep it.
 #[tokio::test]
 async fn a_minted_token_expires_its_signer_s_lifetime_after_it_was_issued() {
-    let mut options = JwtOptions::new("exp-stamp-secret-padded-to-32-bytes");
+    let mut options = crate::named(JwtOptions::new("exp-stamp-secret-padded-to-32-bytes"));
     options.expires_in = Duration::from_secs(900);
     let jwt = JwtService::new(options).expect("service");
 
@@ -520,19 +501,26 @@ async fn a_minted_token_expires_its_signer_s_lifetime_after_it_was_issued() {
     struct Anonymous {
         #[principal(actor)]
         sub: &'static str,
+        client_id: &'static str,
     }
     #[derive(Serialize, PrincipalIdentity)]
     struct NullExpiry {
         #[principal(actor)]
         sub: &'static str,
+        client_id: &'static str,
         exp: Option<u64>,
     }
+    let anonymous = Anonymous {
+        sub: "alice",
+        client_id: "ci",
+    };
     for token in [
-        jwt.sign(&Anonymous { sub: "alice" }).expect("sign"),
-        jwt.sign_for("https://api.example", &Anonymous { sub: "alice" })
+        jwt.sign(&anonymous).expect("sign"),
+        jwt.sign_for("https://api.example", &anonymous)
             .expect("sign for a resource"),
         jwt.sign(&NullExpiry {
             sub: "alice",
+            client_id: "ci",
             exp: None,
         })
         .expect("sign"),
@@ -611,14 +599,14 @@ fn payload(token: &str) -> serde_json::Value {
 #[tokio::test]
 async fn a_token_typed_as_anything_else_is_refused() {
     let secret = "typ-fixture-secret-padded-32-byte";
-    let jwt = JwtService::new(JwtOptions::new(secret)).expect("service");
+    let jwt = JwtService::new(crate::named(JwtOptions::new(secret))).expect("service");
 
     for typ in ["JWT", "id_token+jwt", "at+jwtx"] {
         let mut header = Header::new(Algorithm::HS256);
         header.typ = Some(typ.into());
         let token = jsonwebtoken::encode(
             &header,
-            &claims(get_current_timestamp() + 3600, None),
+            &addressed(claims(get_current_timestamp() + 3600, None)),
             &EncodingKey::from_secret(secret.as_bytes()),
         )
         .expect("encode");
@@ -637,14 +625,14 @@ async fn a_token_typed_as_anything_else_is_refused() {
 #[tokio::test]
 async fn the_long_media_type_and_odd_casing_both_verify() {
     let secret = "typ-fixture-secret-padded-32-byte";
-    let jwt = JwtService::new(JwtOptions::new(secret)).expect("service");
+    let jwt = JwtService::new(crate::named(JwtOptions::new(secret))).expect("service");
 
     for typ in ["application/at+jwt", "AT+JWT"] {
         let mut header = Header::new(Algorithm::HS256);
         header.typ = Some(typ.into());
         let token = jsonwebtoken::encode(
             &header,
-            &claims(get_current_timestamp() + 3600, None),
+            &addressed(claims(get_current_timestamp() + 3600, None)),
             &EncodingKey::from_secret(secret.as_bytes()),
         )
         .expect("encode");
@@ -657,13 +645,13 @@ async fn the_long_media_type_and_odd_casing_both_verify() {
 #[tokio::test]
 async fn explicit_typing_can_be_turned_off_for_a_legacy_issuer() {
     let secret = "typ-fixture-secret-padded-32-byte";
-    let mut options = JwtOptions::new(secret);
+    let mut options = crate::named(JwtOptions::new(secret));
     options.explicit_typing = false;
     let jwt = JwtService::new(options).expect("service");
 
     let token = jsonwebtoken::encode(
         &Header::new(Algorithm::HS256),
-        &claims(get_current_timestamp() + 3600, None),
+        &addressed(claims(get_current_timestamp() + 3600, None)),
         &EncodingKey::from_secret(secret.as_bytes()),
     )
     .expect("encode");
@@ -723,7 +711,7 @@ fn an_expiry_past_the_end_of_time_saturates() {
 async fn a_token_signed_for_a_resource_names_it_and_verifies_only_there() {
     let secret = "resource-bound-secret-padded-32-b";
     let with_audience = |audience: &str| {
-        let mut options = JwtOptions::new(secret);
+        let mut options = crate::named(JwtOptions::new(secret));
         options.audience = Some(audience.into());
         JwtService::new(options).expect("service")
     };
@@ -778,13 +766,10 @@ fn signing_for_a_resource_refuses_a_blank_one_and_claims_naming_another() {
 #[tokio::test]
 async fn a_token_signed_for_a_resource_carries_the_signers_stamps() {
     let secret = "resource-stamps-secret-padded-32b";
-    let mut options = JwtOptions::new(secret);
-    options.issuer = Some("https://auth.example".into());
+    let mut options = crate::named(JwtOptions::new(secret));
+    options.audience = Some("https://auth.example".into());
     let issuer = JwtService::new(options).expect("issuer");
-    let mut options = JwtOptions::new(secret);
-    options.audience = Some("https://api.example".into());
-    options.issuer = Some("https://auth.example".into());
-    let api = JwtService::new(options).expect("api");
+    let api = JwtService::new(crate::named(JwtOptions::new(secret))).expect("api");
 
     let token = issuer
         .sign_for("https://api.example", &claims(in_an_hour(), None))
@@ -836,6 +821,7 @@ fn debug_prints_no_key_material_and_no_credential_in_the_jwks_uri() {
 struct NamedByItsActor {
     #[principal(actor)]
     user_id: Option<String>,
+    client_id: &'static str,
 }
 
 /// The claim they carry is theirs: an empty one names no one either.
@@ -844,6 +830,7 @@ struct CarriesItsSub {
     sub: String,
     #[principal(actor)]
     actor: Option<String>,
+    client_id: &'static str,
 }
 
 #[test]
@@ -854,6 +841,7 @@ fn a_sub_the_claims_carry_is_kept_and_an_empty_one_is_the_actors() {
         .sign(&CarriesItsSub {
             sub: "alice".into(),
             actor: Some("bob".into()),
+            client_id: "ci",
         })
         .expect("sign");
     assert_eq!(payload(&kept)["sub"], "alice");
@@ -862,6 +850,7 @@ fn a_sub_the_claims_carry_is_kept_and_an_empty_one_is_the_actors() {
         .sign(&CarriesItsSub {
             sub: String::new(),
             actor: Some("bob".into()),
+            client_id: "ci",
         })
         .expect("sign");
     assert_eq!(payload(&empty)["sub"], "bob");
@@ -870,6 +859,7 @@ fn a_sub_the_claims_carry_is_kept_and_an_empty_one_is_the_actors() {
         jwt.sign(&CarriesItsSub {
             sub: String::new(),
             actor: None,
+            client_id: "ci",
         })
         .is_err()
     );
@@ -884,6 +874,7 @@ fn a_blank_sub_is_the_actors_and_a_blank_actor_names_no_one() {
     let carried = CarriesItsSub {
         sub: "   ".into(),
         actor: Some("bob".into()),
+        client_id: "ci",
     };
     for token in [
         jwt.sign(&carried).expect("sign"),
@@ -896,9 +887,11 @@ fn a_blank_sub_is_the_actors_and_a_blank_actor_names_no_one() {
     let carried_blank = CarriesItsSub {
         sub: "\t ".into(),
         actor: Some("  ".into()),
+        client_id: "ci",
     };
     let actor_blank = NamedByItsActor {
         user_id: Some("  ".into()),
+        client_id: "ci",
     };
     for refused in [
         jwt.sign(&carried_blank),
@@ -924,6 +917,7 @@ struct ShapedSub {
     sub: serde_json::Value,
     #[principal(actor)]
     id: String,
+    client_id: &'static str,
 }
 
 /// RFC 7519 §4.1.2 makes `sub` a string, which RFC 9068 §2.2 requires: a verifier
@@ -950,6 +944,7 @@ async fn a_sub_that_is_no_string_mints_no_token() {
         let claims = ShapedSub {
             sub: shaped.clone(),
             id: "actor-id".into(),
+            client_id: "ci",
         };
         for refused in [
             jwt.sign(&claims),
@@ -975,11 +970,17 @@ fn a_numeric_actor_under_another_name_is_stamped_as_its_string() {
     struct NumberedActor {
         #[principal(actor)]
         user_id: u64,
+        client_id: &'static str,
     }
 
     let jwt = service("numeric-actor");
 
-    let token = jwt.sign(&NumberedActor { user_id: 42 }).expect("sign");
+    let token = jwt
+        .sign(&NumberedActor {
+            user_id: 42,
+            client_id: "ci",
+        })
+        .expect("sign");
 
     assert_eq!(payload(&token)["sub"], "42");
     assert_eq!(payload(&token)["user_id"], 42);
@@ -998,6 +999,7 @@ fn a_claims_type_with_no_sub_field_is_stamped_its_actor_as_sub() {
     let jwt = service("stamped-sub");
     let named = NamedByItsActor {
         user_id: Some("alice".into()),
+        client_id: "ci",
     };
     for token in [
         jwt.sign(&named).expect("sign"),
@@ -1011,9 +1013,13 @@ fn a_claims_type_with_no_sub_field_is_stamped_its_actor_as_sub() {
 #[test]
 fn a_claims_type_naming_no_actor_mints_no_token() {
     let jwt = service("no-subject");
-    let nobody = NamedByItsActor { user_id: None };
+    let nobody = NamedByItsActor {
+        user_id: None,
+        client_id: "ci",
+    };
     let empty = NamedByItsActor {
         user_id: Some(String::new()),
+        client_id: "ci",
     };
     for claims in [nobody, empty] {
         for refused in [
@@ -1081,10 +1087,14 @@ struct CarriesAClaim {
     claim: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Claims naming a client and carrying `claim` as `value`, which may be the
+/// client itself.
 fn carrying(claim: &str, value: serde_json::Value) -> CarriesAClaim {
+    let mut carried = serde_json::Map::from_iter([("client_id".to_owned(), "ci".into())]);
+    carried.insert(claim.to_owned(), value);
     CarriesAClaim {
         sub: "alice".into(),
-        claim: serde_json::Map::from_iter([(claim.to_owned(), value)]),
+        claim: carried,
     }
 }
 
@@ -1203,11 +1213,12 @@ fn a_registered_claim_of_its_json_type_is_kept_as_written() {
 
 /// A registered claim the claims serialize as `null` names nothing, so the
 /// token leaves it out rather than carry a value its verifier reads as none or
-/// refuses.
+/// refuses — `client_id`, which a token cannot leave out, refused with it
+/// (`claims_naming_no_client_mint_no_access_token`).
 #[test]
 fn a_registered_claim_serialized_as_null_is_absent() {
     let jwt = service("registered-null");
-    for claim in ["client_id", "acr", "amr", "auth_time", "scope", "nbf"] {
+    for claim in ["acr", "amr", "auth_time", "scope", "nbf"] {
         let token = jwt
             .sign(&carrying(claim, serde_json::Value::Null))
             .expect("signs");
@@ -1229,4 +1240,240 @@ fn a_handshake_carrying_a_registered_claim_of_another_type_is_refused() {
     );
     let said = nest_rs_core::error_message(&refused.expect_err("minted a numeric `iss`"));
     assert!(said.contains("the claims' `iss` is no "), "{said}");
+}
+
+/// What a service `JwtService::new` should have refused does with a token, for
+/// the failure to show: what it mints, or what it accepts.
+async fn what_it_does(jwt: &JwtService) -> String {
+    #[derive(Serialize, PrincipalIdentity)]
+    struct Named {
+        #[principal(actor)]
+        sub: String,
+        client_id: String,
+    }
+
+    let named = Named {
+        sub: "alice".into(),
+        client_id: "ci".into(),
+    };
+    if let Ok(token) = jwt.sign(&named) {
+        return format!("and minted {}", payload(&token));
+    }
+    let neither = jsonwebtoken::encode(
+        &at_jwt_header(Algorithm::EdDSA),
+        &serde_json::json!({ "sub": "alice", "client_id": "ci", "exp": in_an_hour() }),
+        &EncodingKey::from_ed_pem(crate::DEV_PRIVATE_KEY.as_bytes()).expect("the dev key"),
+    )
+    .expect("encode");
+    match jwt.verify::<serde_json::Value>(&neither).await {
+        Ok(claims) => format!("and accepted a token naming no issuer and no audience: {claims}"),
+        Err(refused) => format!("and refused a token naming neither: {refused:?}"),
+    }
+}
+
+/// RFC 9068 §2.2 has every access token carry `iss` and `aud`, and §4 has a
+/// resource server check both: a service naming no issuer or no audience —
+/// unset or blank — refuses to start, whether it signs or only verifies,
+/// naming the settings it lacks.
+#[tokio::test]
+async fn a_service_naming_no_issuer_or_no_audience_refuses_to_start() {
+    let keys = [
+        (
+            "an HMAC secret",
+            JwtOptions::new("named-secret-padded-to-thirty-two-b"),
+        ),
+        (
+            "an EdDSA pair",
+            JwtOptions::eddsa(crate::DEV_PRIVATE_KEY, crate::DEV_PUBLIC_KEY),
+        ),
+        (
+            "an EdDSA public key",
+            JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY),
+        ),
+        ("a JWK Set", JwtOptions::jwks("https://auth.example/jwks")),
+    ];
+    for (key, options) in keys {
+        for (issuer, audience, lacking) in [
+            (None, None, &["ISSUER", "AUDIENCE"][..]),
+            (Some(crate::ISSUER), None, &["AUDIENCE"][..]),
+            (None, Some(crate::AUDIENCE), &["ISSUER"][..]),
+            (Some(" "), Some(crate::AUDIENCE), &["ISSUER"][..]),
+            (Some(crate::ISSUER), Some(""), &["AUDIENCE"][..]),
+        ] {
+            let mut built = options.clone();
+            built.issuer = issuer.map(str::to_owned);
+            built.audience = audience.map(str::to_owned);
+            let refused = match JwtService::new(built) {
+                Err(refused @ AuthError::Failed { .. }) => nest_rs_core::error_message(&refused),
+                Err(other) => panic!("{key}: refused as {other:?}"),
+                Ok(jwt) => panic!(
+                    "{key} naming the issuer {issuer:?} and the audience {audience:?} started, {}",
+                    what_it_does(&jwt).await
+                ),
+            };
+            assert!(refused.contains("RFC 9068"), "{key}: {refused}");
+            for setting in lacking {
+                assert!(
+                    refused.contains(&nest_rs_config::var_name("authn", setting)),
+                    "{key} names {setting}: {refused}"
+                );
+            }
+            for value in ["auth.example", "api.example"] {
+                assert!(!refused.contains(value), "{key}: {refused}");
+            }
+        }
+        JwtService::new(crate::named(options))
+            .unwrap_or_else(|refused| panic!("{key} naming both: {refused:?}"));
+    }
+}
+
+/// `ALLOW_ANY_AUDIENCE` opts a verifier out of the audience check, so it stands
+/// in for the audience at the start — never for the issuer — and a service it
+/// opens mints no access token for itself, which would name no audience: `sign`
+/// refuses naming the setting, and `sign_for` names the resource.
+#[tokio::test]
+async fn any_audience_stands_in_for_the_audience_of_a_verifier_alone() {
+    let agnostic = |mut options: JwtOptions, issuer: Option<&str>| {
+        options.allow_any_audience = true;
+        options.issuer = issuer.map(str::to_owned);
+        options
+    };
+
+    let refused = match JwtService::new(agnostic(
+        JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY),
+        None,
+    )) {
+        Err(refused @ AuthError::Failed { .. }) => nest_rs_core::error_message(&refused),
+        Err(other) => panic!("refused as {other:?}"),
+        Ok(jwt) => panic!(
+            "a verifier naming no issuer started, {}",
+            what_it_does(&jwt).await
+        ),
+    };
+    assert!(
+        refused.contains(&nest_rs_config::var_name("authn", "ISSUER")),
+        "{refused}"
+    );
+    JwtService::new(agnostic(
+        JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY),
+        Some(crate::ISSUER),
+    ))
+    .unwrap_or_else(|refused| panic!("a verifier naming its issuer: {refused:?}"));
+
+    #[derive(Serialize, PrincipalIdentity)]
+    struct Named {
+        #[principal(actor)]
+        sub: String,
+        client_id: String,
+    }
+    let named = Named {
+        sub: "alice".into(),
+        client_id: "ci".into(),
+    };
+    for (key, options) in [
+        (
+            "an HMAC secret",
+            JwtOptions::new("agnostic-secret-padded-to-thirty-tw"),
+        ),
+        (
+            "an EdDSA pair",
+            JwtOptions::eddsa(crate::DEV_PRIVATE_KEY, crate::DEV_PUBLIC_KEY),
+        ),
+    ] {
+        let jwt = JwtService::new(agnostic(options, Some(crate::ISSUER)))
+            .unwrap_or_else(|refused| panic!("{key}: {refused:?}"));
+        let refused = match jwt.sign(&named) {
+            Ok(token) => panic!(
+                "{key} allowing any audience minted for itself: {}",
+                payload(&token)
+            ),
+            Err(refused) => nest_rs_core::error_message(&refused),
+        };
+        assert!(
+            refused.contains(&nest_rs_config::var_name("authn", "AUDIENCE")),
+            "{key}: {refused}"
+        );
+        let token = jwt.sign_for(crate::AUDIENCE, &named).expect("sign for");
+        assert_eq!(payload(&token)["aud"], crate::AUDIENCE, "{key}");
+        assert_eq!(payload(&token)["iss"], crate::ISSUER, "{key}");
+    }
+}
+
+/// RFC 9068 §2.2 requires `client_id` in a JWT access token, and nothing a
+/// claims type already says names one: claims naming none — absent, `null` or
+/// blank — mint no access token, on `sign` or `sign_for`, the refusal naming
+/// the claim.
+#[test]
+fn claims_naming_no_client_mint_no_access_token() {
+    #[derive(Serialize, PrincipalIdentity)]
+    struct NoClient {
+        #[principal(actor)]
+        sub: String,
+    }
+
+    #[derive(Serialize, PrincipalIdentity)]
+    struct Client {
+        #[principal(actor)]
+        sub: String,
+        client_id: Option<String>,
+    }
+
+    let jwt = service("no-client");
+    let mut minted = vec![(
+        "absent",
+        jwt.sign(&NoClient {
+            sub: "alice".into(),
+        }),
+        jwt.sign_for(
+            crate::AUDIENCE,
+            &NoClient {
+                sub: "alice".into(),
+            },
+        ),
+    )];
+    for (label, client_id) in [("null", None), ("empty", Some("")), ("blank", Some(" \t"))] {
+        let claims = Client {
+            sub: "alice".into(),
+            client_id: client_id.map(str::to_owned),
+        };
+        minted.push((
+            label,
+            jwt.sign(&claims),
+            jwt.sign_for(crate::AUDIENCE, &claims),
+        ));
+    }
+    for (label, signed, signed_for) in minted {
+        for (method, result) in [("sign", signed), ("sign_for", signed_for)] {
+            let refused = match result {
+                Ok(token) => panic!(
+                    "`{method}` minted an access token whose `client_id` is {label}: {}",
+                    payload(&token)
+                ),
+                Err(refused) => nest_rs_core::error_message(&refused),
+            };
+            assert!(
+                refused.contains("`client_id`") && refused.contains("RFC 9068 §2.2"),
+                "{method}, {label}: {refused}"
+            );
+        }
+    }
+
+    let named = Client {
+        sub: "alice".into(),
+        client_id: Some("ci".into()),
+    };
+    for token in [
+        jwt.sign(&named).expect("sign"),
+        jwt.sign_for(crate::AUDIENCE, &named).expect("sign for"),
+    ] {
+        assert_eq!(payload(&token)["client_id"], "ci");
+    }
+    let forged = sign_unchecked(
+        &jwt,
+        &NoClient {
+            sub: "alice".into(),
+        },
+    )
+    .expect("a suite forges it");
+    assert!(payload(&forged).get("client_id").is_none());
 }

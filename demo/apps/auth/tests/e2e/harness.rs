@@ -88,6 +88,7 @@ pub(crate) fn resource_server_verifier(app: &TestApp, resource: &str) -> JwtServ
             .clone()
             .expect("the issuer's public key, which every resource server verifies with"),
     );
+    options.issuer = issuer.issuer.clone();
     options.audience = Some(resource.into());
     JwtService::new(options).expect("the issuer's public key parses")
 }

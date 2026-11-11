@@ -21,7 +21,20 @@ mod principal_identity;
 mod service;
 mod strategies;
 
+use nest_rs_authn::JwtOptions;
 use nest_rs_http::{HeaderName, HeaderValue, Request};
+
+/// The issuer and the audience every fixture service names: `JwtService::new`
+/// requires both (RFC 9068 §2.2, §4).
+pub const ISSUER: &str = "https://auth.example";
+pub const AUDIENCE: &str = "https://api.example";
+
+/// `options` naming [`ISSUER`] and [`AUDIENCE`].
+pub fn named(mut options: JwtOptions) -> JwtOptions {
+    options.issuer = Some(ISSUER.into());
+    options.audience = Some(AUDIENCE.into());
+    options
+}
 
 /// Ed25519 key pair used across nestrs dev and e2e apps.
 pub const DEV_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEYTRN4vmCuIfaUslO5G9pKyxkDJn3q3t9WDHo2FCfw3\n-----END PRIVATE KEY-----\n";

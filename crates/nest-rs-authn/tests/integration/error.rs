@@ -162,8 +162,10 @@ mod signing {
     impl Default for VerifyOnly {
         fn default() -> Self {
             Self {
-                jwt: JwtService::new(JwtOptions::jwks("https://issuer.example/jwks"))
-                    .expect("a JWK Set service"),
+                jwt: JwtService::new(crate::named(JwtOptions::jwks(
+                    "https://issuer.example/jwks",
+                )))
+                .expect("a JWK Set service"),
             }
         }
     }

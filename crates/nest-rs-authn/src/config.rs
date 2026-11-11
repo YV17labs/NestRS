@@ -85,15 +85,18 @@ pub struct AuthnConfig {
     /// it mints for another resource names that resource instead
     /// ([`JwtService::sign_for`](crate::JwtService::sign_for)).
     ///
-    /// Unset, a token whose `aud` does not name this app is still refused
-    /// (RFC 7519 §4.1.3); set, a token with no `aud` is refused too. Under
-    /// `OAuthResourceModule`, unset is the resource it serves. The opt-out is
-    /// [`allow_any_audience`](Self::allow_any_audience), and only that.
+    /// Required: RFC 9068 §2.2 has every access token carry an `aud` and §4 a
+    /// resource server refuse one naming another or none, so unset or blank,
+    /// the boot refuses. Under `OAuthResourceModule`, unset is the resource it
+    /// serves. The opt-out is [`allow_any_audience`](Self::allow_any_audience),
+    /// and only that.
     pub audience: Option<String>,
     /// The `iss` every token this app mints carries and every token it
-    /// verifies must name (key `ISSUER`). Omitted ⇒ no issuer check — but
-    /// under `OAuthResourceModule` a token's `iss` must be one of its
-    /// authorization servers (RFC 9068 §4), and a set one must be among them.
+    /// verifies must name (key `ISSUER`). Required, as RFC 9068 §2.2 and §4
+    /// have every access token carry it and a resource server check it: unset
+    /// or blank, the boot refuses — but under `OAuthResourceModule`, where a
+    /// token's `iss` must be one of its authorization servers and a set one
+    /// must be among them, and unset, the app mints no access token.
     pub issuer: Option<String>,
     /// Token lifetime (key `EXPIRES_IN_SECS`, whole seconds; default an hour),
     /// at least 1 second and at most thirty days.
@@ -104,7 +107,9 @@ pub struct AuthnConfig {
     ///
     /// Restores the confused deputy, so it is refused beside
     /// [`audience`](Self::audience) and beside `OAuthResourceModule`, and
-    /// reports itself at `warn` once per boot.
+    /// reports itself at `warn` once per boot. It stands in for the audience
+    /// the boot requires, so the app mints no token for itself, only for a
+    /// resource it names ([`JwtService::sign_for`](crate::JwtService::sign_for)).
     pub allow_any_audience: bool,
     /// RFC 9068 explicit typing — stamp `typ: at+jwt` when minting and refuse a
     /// token typed anything else when verifying. Defaults to **on**: §4 states

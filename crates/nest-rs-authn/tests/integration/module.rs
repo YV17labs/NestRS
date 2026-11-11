@@ -16,12 +16,22 @@ const PINNED_ISSUER: &str = "pinned-through-for-root";
 struct Claims {
     #[principal(actor)]
     sub: String,
+    client_id: String,
+}
+
+/// The claims of `user-1`'s token, issued to the client `ci`.
+fn user_1() -> Claims {
+    Claims {
+        sub: "user-1".into(),
+        client_id: "ci".into(),
+    }
 }
 
 fn pinned() -> AuthnSetup {
     AuthnModule::for_root(AuthnConfig {
         secret: Some("test-secret-padded-to-thirty-two-b".into()),
         issuer: Some(PINNED_ISSUER.into()),
+        audience: Some(crate::AUDIENCE.into()),
         ..AuthnConfig::default()
     })
 }
@@ -50,11 +60,7 @@ async fn for_root_pins_the_config_and_provides_a_service_built_from_it() {
         .get()
         .expect("for_root queues the JwtService factory");
 
-    let token = jwt
-        .sign(&Claims {
-            sub: "user-1".into(),
-        })
-        .expect("the pinned secret signs");
+    let token = jwt.sign(&user_1()).expect("the pinned secret signs");
     let verified: Claims = jwt
         .verify(&token)
         .await
@@ -86,19 +92,26 @@ const SECRET: &str = "binding-secret-padded-to-thirty-2";
 })])]
 struct BoundAuthnHost;
 
-/// A token a sibling issuer on the same key mints as `iss`, for `aud`.
+/// A token a sibling issuer on the same key mints as `iss`, when it names one,
+/// for `aud`.
 fn minted(iss: Option<&str>, aud: &str) -> String {
-    let mut options = nest_rs_authn::JwtOptions::new(SECRET);
-    options.issuer = iss.map(str::to_owned);
-    nest_rs_authn::JwtService::new(options)
-        .expect("issuer")
-        .sign_for(
-            aud,
-            &Claims {
-                sub: "user-1".into(),
-            },
-        )
-        .expect("sign")
+    let mut claims = serde_json::json!({
+        "sub": "user-1",
+        "client_id": "ci",
+        "aud": aud,
+        "exp": jsonwebtoken::get_current_timestamp() + 3600,
+    });
+    if let Some(iss) = iss {
+        claims["iss"] = iss.into();
+    }
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+    header.typ = Some("at+jwt".into());
+    jsonwebtoken::encode(
+        &header,
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()),
+    )
+    .expect("encode")
 }
 
 /// RFC 9068 §4: with a resource binding in the container, the verifier the
@@ -149,25 +162,6 @@ async fn a_resource_binding_is_the_audience_and_the_issuers_a_token_must_name() 
     }
 }
 
-/// Without a binding the module builds what the config says, as before.
-#[tokio::test]
-async fn without_a_binding_the_config_alone_decides() {
-    let app = App::builder()
-        .module::<BoundAuthnHost>()
-        .build()
-        .await
-        .expect("boots");
-    let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
-    let token = jwt
-        .sign(&Claims {
-            sub: "user-1".into(),
-        })
-        .expect("sign");
-    jwt.verify::<Claims>(&token)
-        .await
-        .expect("no audience and no issuer configured, none required");
-}
-
 /// A handshake is this service's own: a binding never widens what it meets,
 /// so the client half of an app serving a resource keeps its transactions
 /// with no issuer configured.
@@ -198,10 +192,10 @@ async fn a_bound_service_still_verifies_its_own_handshakes() {
             },
         )
         .expect("sign");
-    let back: Claims = jwt
+    let back: serde_json::Value = jwt
         .verify_handshake("oauth-tx", &transaction)
         .expect("its own handshake verifies");
-    assert_eq!(back.sub, "state");
+    assert_eq!(back["sub"], "state");
     assert!(
         jwt.verify::<Claims>(&transaction).await.is_err(),
         "and is never an access token"
@@ -238,4 +232,70 @@ async fn a_jwt_service_no_import_provides_is_refused_naming_the_authn_module() {
             .is_some_and(|remedy| remedy.contains("nest_rs::authn::AuthnModule")),
         "{missing}"
     );
+}
+
+/// RFC 9068 §4 has a resource server check every token's `iss` and `aud`, and
+/// §2.2 has every token minted carry both: a service with neither to check or
+/// stamp does not boot, the refusal naming both settings.
+#[tokio::test]
+async fn a_service_naming_no_issuer_and_no_audience_does_not_boot() {
+    let refused = match App::builder().module::<BoundAuthnHost>().build().await {
+        Err(refused) => format!("{refused:#}"),
+        Ok(app) => {
+            let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
+            let minted = jwt.sign(&user_1());
+            panic!(
+                "booted, and minted {:?}",
+                minted.map(|token| claims_of(&token))
+            )
+        }
+    };
+    for setting in ["ISSUER", "AUDIENCE"] {
+        assert!(
+            refused.contains(&nest_rs_config::var_name("authn", setting)),
+            "{refused}"
+        );
+    }
+}
+
+/// A bound service reads what it checks off the resource, so it boots naming no
+/// issuer of its own — and then has none to stamp: it mints no access token,
+/// naming the setting, while its handshakes stand.
+#[tokio::test]
+async fn a_bound_service_naming_no_issuer_of_its_own_mints_no_access_token() {
+    let app = App::builder()
+        .provide(nest_rs_authn::__private::ResourceBinding {
+            audience: RESOURCE.into(),
+            issuers: TRUSTED.iter().map(|&issuer| issuer.to_owned()).collect(),
+        })
+        .module::<BoundAuthnHost>()
+        .build()
+        .await
+        .expect("the bound module boots");
+    let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
+    let claims = user_1();
+    for (method, minted) in [
+        ("sign", jwt.sign(&claims)),
+        ("sign_for", jwt.sign_for("https://billing.example", &claims)),
+    ] {
+        let refused = match minted {
+            Ok(token) => panic!("`{method}` minted {}", claims_of(&token)),
+            Err(refused) => nest_rs_core::error_message(&refused),
+        };
+        assert!(
+            refused.contains(&nest_rs_config::var_name("authn", "ISSUER")),
+            "{method}: {refused}"
+        );
+    }
+}
+
+/// The claims `token` carries, read without verifying it.
+fn claims_of(token: &str) -> serde_json::Value {
+    let payload = token.split('.').nth(1).expect("a JWT has a payload");
+    let decoded = base64::Engine::decode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        payload.as_bytes(),
+    )
+    .expect("base64url payload");
+    serde_json::from_slice(&decoded).expect("json claims")
 }

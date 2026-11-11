@@ -176,8 +176,10 @@ async fn a_callback_refuses_a_state_that_does_not_match_the_transaction() {
 async fn a_callback_reports_a_transaction_cookie_that_does_not_verify() {
     // On this path no guard emits the `warn`, and `JwtService` logs its reason at `debug`.
     let logs = LogCapture::install();
-    let attacker = JwtService::new(JwtOptions::new("attacker-secret-padded-to-32-byt"))
-        .expect("HMAC JwtService");
+    let attacker = JwtService::new(crate::named(JwtOptions::new(
+        "attacker-secret-padded-to-32-byt",
+    )))
+    .expect("HMAC JwtService");
     let forged = sign_unchecked(
         &attacker,
         &serde_json::json!({

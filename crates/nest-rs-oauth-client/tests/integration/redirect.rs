@@ -39,9 +39,9 @@ impl OAuthController {
     #[get("/authorize/verify-only")]
     #[public]
     async fn verify_only(&self) -> Result<AuthorizationRedirect> {
-        let verify_only = JwtService::new(nest_rs_authn::JwtOptions::jwks(
+        let verify_only = JwtService::new(crate::named(nest_rs_authn::JwtOptions::jwks(
             "https://issuer.example/jwks",
-        ))
+        )))
         .expect("a JWK Set service");
         Ok(self
             .client
@@ -54,6 +54,8 @@ impl OAuthController {
         HttpModule,
         AuthnModule::for_root(AuthnConfig {
             secret: Some(crate::SECRET.into()),
+            issuer: Some(crate::APP.into()),
+            audience: Some(crate::APP.into()),
             ..AuthnConfig::default()
         }),
         OAuthClientModule::for_root(valid_config()),

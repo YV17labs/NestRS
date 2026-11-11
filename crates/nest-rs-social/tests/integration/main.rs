@@ -28,6 +28,9 @@ use nest_rs_social::{
 
 const KEY: &str = "callback-stub";
 const SECRET: &str = "social-strategy-secret-padded-32b";
+/// The issuer and the audience of the app signing users in, which its
+/// `JwtService` requires.
+const APP: &str = "https://app.example";
 const CODE: &str = "the-code-never-logged";
 const MCP: &str = "https://mcp.example.com/mcp";
 

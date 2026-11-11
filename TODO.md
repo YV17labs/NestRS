@@ -162,17 +162,6 @@ keeps on purpose is §5's.
   idle timeout counting the client's messages alone, owned by the mount in place
   of rmcp's (`SessionConfig::keep_alive` off). *read*
 
-**Auth**
-- A token `sign` mints carries `client_id` only when the claims name one,
-  and `iss` and `aud` only when configured, though RFC 9068 §2.2 requires
-  all three; the
-  `nestrs g auth` claims and dev token name no client. Close: `sign`
-  refusing claims naming no `client_id`, and a signing `JwtService`
-  refusing to start without an issuer and an audience — each a line in
-  every app minting tokens (a client in its claims literal, two
-  variables), which the developer-first rule weighs: the owner's call.
-  *read*
-
 **Data, queue, storage, health**
 - Postgres's certificate is checked against the public authorities sqlx
   compiles in (webpki-roots) beside whatever root is named, the URL's

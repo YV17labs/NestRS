@@ -160,10 +160,10 @@ mod tests {
             )],
         );
         let config = GithubSocialConfig::from_env(&env, complete()).expect("the variable reads");
-        let jwt = nest_rs_authn::JwtService::new(nest_rs_authn::JwtOptions::new(
-            "a-secret-padded-to-thirty-two-bytes",
-        ))
-        .expect("a signer");
+        let mut options = nest_rs_authn::JwtOptions::new("a-secret-padded-to-thirty-two-bytes");
+        options.issuer = Some("https://app.example".into());
+        options.audience = Some("https://app.example".into());
+        let jwt = nest_rs_authn::JwtService::new(options).expect("a signer");
 
         let client =
             nest_rs_oauth_client::OAuthClient::new(config.oauth2_config().expect("composes"))

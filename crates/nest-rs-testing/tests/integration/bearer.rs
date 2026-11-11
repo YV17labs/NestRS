@@ -41,15 +41,20 @@ const ISSUER: &str = "https://auth.example.com";
 /// The public half of an Ed25519 pair whose private half the test never holds.
 const PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHfPOjd2Y3m1BLM5nBJBMZFAlfWt69WL1NY8XyYeGfeo=\n-----END PUBLIC KEY-----\n";
 
+/// `key` for a resource server's own audience, from one issuer.
+fn named(key: AuthnConfig) -> AuthnConfig {
+    AuthnConfig {
+        audience: Some(AUDIENCE.into()),
+        issuer: Some(ISSUER.into()),
+        ..key
+    }
+}
+
 /// A resource server verifying `key`, for its own audience, from one issuer.
 async fn verifying(key: AuthnConfig) -> TestApp {
     TestApp::builder()
         .module::<ResourceModule>()
-        .provide(AuthnConfig {
-            audience: Some(AUDIENCE.into()),
-            issuer: Some(ISSUER.into()),
-            ..key
-        })
+        .provide(named(key))
         .ephemeral_signing_key()
         .build()
         .await
@@ -146,6 +151,7 @@ async fn an_app_that_signs_signs_with_the_tests_key() {
 async fn an_app_whose_configuration_names_no_key_verifies_the_tests_alone() {
     let app = TestApp::builder()
         .module::<ResourceModule>()
+        .provide(named(AuthnConfig::default()))
         .ephemeral_signing_key()
         .build()
         .await
@@ -283,9 +289,12 @@ async fn an_app_verifying_no_token_refuses_a_key_of_the_tests() {
 async fn an_app_whose_verifier_was_seeded_refuses_a_key_of_the_tests() {
     let Err(refused) = TestApp::builder()
         .module::<ResourceModule>()
-        .provide(
-            JwtService::new(JwtOptions::eddsa_verify(PUBLIC_KEY)).expect("the public key parses"),
-        )
+        .provide({
+            let mut options = JwtOptions::eddsa_verify(PUBLIC_KEY);
+            options.audience = Some(AUDIENCE.into());
+            options.issuer = Some(ISSUER.into());
+            JwtService::new(options).expect("the public key parses")
+        })
         .ephemeral_signing_key()
         .build()
         .await
@@ -304,10 +313,10 @@ async fn an_app_whose_verifier_was_seeded_refuses_a_key_of_the_tests() {
 async fn an_app_booted_without_a_key_of_the_tests_signs_no_bearer() {
     let app = TestApp::builder()
         .module::<ResourceModule>()
-        .provide(AuthnConfig {
+        .provide(named(AuthnConfig {
             public_key: Some(PUBLIC_KEY.into()),
             ..AuthnConfig::default()
-        })
+        }))
         .build()
         .await
         .expect("the app boots verifying its configured key");
@@ -318,11 +327,10 @@ async fn an_app_booted_without_a_key_of_the_tests_signs_no_bearer() {
 async fn a_socket_app_signs_as_the_in_process_one_does() {
     let app = TestApp::builder()
         .module::<ResourceModule>()
-        .provide(AuthnConfig {
+        .provide(named(AuthnConfig {
             public_key: Some(PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
             ..AuthnConfig::default()
-        })
+        }))
         .ephemeral_signing_key()
         .build_ws()
         .await

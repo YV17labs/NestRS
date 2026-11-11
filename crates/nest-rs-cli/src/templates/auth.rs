@@ -78,8 +78,10 @@ impl fmt::Display for Subject {
 
 /// The JWT payload this app verifies. Every field is read from the token, so
 /// whatever mints those tokens has to put them there; a token without a `sub`
-/// is refused. `exp` is the signer's: `JwtService` stamps it, and the verifier
-/// refuses a token past it.
+/// or a `client_id` is refused, and `JwtService::sign` mints none without
+/// either (RFC 9068 §2.2). `exp`, `iss` and `aud` are the signer's: `JwtService`
+/// stamps them, and the verifier refuses a token past its `exp`, or from
+/// another issuer, or for another audience.
 // `PrincipalIdentity` makes the claims the principal: the authentication guard
 // puts `sub` on the request span as `actor_id`, so every downstream event —
 // denials included — is attributable, and attaches the claims for the rest of
@@ -90,6 +92,9 @@ impl fmt::Display for Subject {
 pub struct Claims {
     #[principal(actor)]
     pub sub: Subject,
+    /// The client the token was issued to: the app a user signed in through,
+    /// or the client acting on its own behalf.
+    pub client_id: String,
     pub roles: Vec<Role>,
 }
 
@@ -146,8 +151,9 @@ pub use module::AuthnHttpModule;
 
 /// The route the tutorial `curl`s. `#[public]`: the environment check stands in
 /// for the credential this route deliberately does not have. Only the handler
-/// is the app's: it builds the app's own `Claims`, and answers RFC 6749 §5.1's
-/// response, which the framework renders.
+/// is the app's: it builds the app's own `Claims`, issued to the route itself
+/// as their client, and answers RFC 6749 §5.1's response, which the framework
+/// renders.
 pub(crate) const AUTHN_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::authn::{DevelopmentOnlyGuard, JwtService};
@@ -182,6 +188,7 @@ impl DevTokenController {
         let DevTokenDto { sub, roles } = body.0;
         let claims = Claims {
             sub: Subject::User(sub.unwrap_or_else(Uuid::now_v7)),
+            client_id: "dev-token".to_owned(),
             roles: if roles.is_empty() { vec![Role::User] } else { roles },
         };
         Ok(AccessTokenResponse::bearer(
@@ -336,6 +343,10 @@ pub(crate) const ENV_AUTHN: &str = r#"
 # app, `{{env_prefix}}_AUTHN__PUBLIC_KEY` alone on the resource servers — each inline, or as
 # a path in its `_FILE` form. A secret beside either key fails the boot, so
 # switching to EdDSA means deleting the secret from `.env.local` and `.env.test`.
+# Every token names its issuer and its audience, so an app missing either does
+# not boot: each app's own `.env` sets `{{env_prefix}}_AUTHN__ISSUER` and
+# `{{env_prefix}}_AUTHN__AUDIENCE` to its origin under the development and test profiles,
+# and a deployment sets its own.
 # (A config pinned in code stops these files being read for the namespace; the
 # boot names each key it then ignores.)
 "#;

@@ -86,8 +86,10 @@ mod tests {
             tls: nest_rs_config::ClientTls::default(),
         })
         .expect("a valid client");
-        let jwt = JwtService::new(JwtOptions::new("test-secret-padded-to-thirty-two-b"))
-            .expect("an HMAC JwtService");
+        let mut options = JwtOptions::new("test-secret-padded-to-thirty-two-b");
+        options.issuer = Some("https://app.example".into());
+        options.audience = Some("https://app.example".into());
+        let jwt = JwtService::new(options).expect("an HMAC JwtService");
         client
             .authorize(&jwt, "provider", None)
             .expect("the transaction signs")

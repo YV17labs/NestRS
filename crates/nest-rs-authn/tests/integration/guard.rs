@@ -1791,6 +1791,8 @@ mod sender_constrained {
     #[module(
         imports = [HttpModule, nest_rs_authn::AuthnModule::for_root(nest_rs_authn::AuthnConfig {
             secret: Some(SECRET.into()),
+            issuer: Some(crate::ISSUER.into()),
+            audience: Some(crate::AUDIENCE.into()),
             ..nest_rs_authn::AuthnConfig::default()
         })],
         providers = [JwtStrategy<Claims>, Authenticated, ProfileController],

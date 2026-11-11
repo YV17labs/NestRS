@@ -81,7 +81,7 @@ impl<'a> FromRequest<'a> for Multipart {
         };
         let boundary = boundary_of(&media).map_err(MultipartError::from)?;
         Ok(Self {
-            parts: multer::Multipart::new(body.take()?.into_stream(), boundary.into_owned()),
+            parts: multer::Multipart::new(body.take()?.into_stream(), boundary),
         })
     }
 }

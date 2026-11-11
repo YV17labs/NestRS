@@ -76,22 +76,18 @@ impl<'a> Iterator for Parameters<'a> {
     type Item = Result<Parameter<'a>, Unparsed>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut rest = self.rest?;
-        let read = loop {
-            rest = rest.trim_start_matches(OWS);
-            if rest.is_empty() {
-                self.rest = None;
-                return None;
-            }
-            let Some(after) = rest.strip_prefix(';') else {
-                break Err(Unparsed);
-            };
-            rest = after.trim_start_matches(OWS);
-            if !(rest.is_empty() || rest.starts_with(';')) {
-                break parameter(rest);
-            }
+        // Past the end or a refusal nothing is read.
+        let rest = self.rest.take()?.trim_start_matches(OWS);
+        // An empty parameter (`;;`) is legal and carries nothing.
+        let text = match rest.strip_prefix(';') {
+            Some(after) => after.trim_start_matches([' ', '\t', ';']),
+            None if rest.is_empty() => return None,
+            None => return Some(Err(Unparsed)),
         };
-        // Past a refusal nothing is read.
+        if text.is_empty() {
+            return None;
+        }
+        let read = parameter(text);
         self.rest = read.as_ref().ok().map(|&(_, rest)| rest);
         Some(read.map(|(parameter, _)| parameter))
     }
@@ -99,34 +95,32 @@ impl<'a> Iterator for Parameters<'a> {
 
 /// The parameter `text` starts with, and what follows it.
 fn parameter(text: &str) -> Result<(Parameter<'_>, &str), Unparsed> {
-    let (name, rest) = text.split_at(token_len(text));
+    let (name, rest) = token(text)?;
     let rest = rest.strip_prefix('=').ok_or(Unparsed)?;
-    if name.is_empty() {
-        return Err(Unparsed);
-    }
     let (value, rest) = match rest.strip_prefix('"') {
         Some(quoted) => quoted_string(quoted)?,
-        None => {
-            let (token, rest) = rest.split_at(token_len(rest));
-            if token.is_empty() {
-                return Err(Unparsed);
-            }
-            (Cow::Borrowed(token), rest)
-        }
+        None => token(rest).map(|(token, rest)| (Cow::Borrowed(token), rest))?,
     };
     Ok((Parameter { name, value }, rest))
 }
 
-/// How many of `text`'s first bytes are `tchar`s (RFC 9110 §5.6.2).
-fn token_len(text: &str) -> usize {
-    text.bytes()
+/// The `token` `text` starts with (RFC 9110 §5.6.2), and what follows it.
+fn token(text: &str) -> Result<(&str, &str), Unparsed> {
+    let len = text
+        .bytes()
         .take_while(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(byte))
-        .count()
+        .count();
+    match text.split_at(len) {
+        ("", _) => Err(Unparsed),
+        read => Ok(read),
+    }
 }
 
 /// The `quoted-string` whose opening quote precedes `quoted`, unquoted, and
 /// what follows its closing quote (RFC 9110 §5.6.4): borrowed unless a
-/// quoted-pair escapes a character.
+/// quoted-pair escapes a character. `qdtext` and a quoted-pair's character are
+/// `HTAB`, `SP`, a `VCHAR` or `obs-text` (RFC 5234 §B.1, RFC 9110 §5.5), `qdtext`
+/// neither `"` nor `\`.
 fn quoted_string(quoted: &str) -> Result<(Cow<'_, str>, &str), Unparsed> {
     let mut unescaped: Option<String> = None;
     let mut chars = quoted.char_indices();
@@ -137,20 +131,15 @@ fn quoted_string(quoted: &str) -> Result<(Cow<'_, str>, &str), Unparsed> {
                 return Ok((value, &quoted[at + 1..]));
             }
             '\\' => {
-                let (_, escaped) = chars.next().ok_or(Unparsed)?;
-                if !(escaped == '\t' || escaped == ' ' || is_visible_or_obs(escaped)) {
+                let Some((_, escaped @ ('\t' | ' ' | '!'..='~' | '\u{80}'..))) = chars.next()
+                else {
                     return Err(Unparsed);
-                }
+                };
                 unescaped
                     .get_or_insert_with(|| quoted[..at].to_owned())
                     .push(escaped);
             }
-            '\t' | ' ' | '!' | '#'..='[' | ']'..='~' => {
-                if let Some(unescaped) = &mut unescaped {
-                    unescaped.push(char);
-                }
-            }
-            char if !char.is_ascii() => {
+            '\t' | ' ' | '!' | '#'..='[' | ']'..='~' | '\u{80}'.. => {
                 if let Some(unescaped) = &mut unescaped {
                     unescaped.push(char);
                 }
@@ -159,11 +148,6 @@ fn quoted_string(quoted: &str) -> Result<(Cow<'_, str>, &str), Unparsed> {
         }
     }
     Err(Unparsed)
-}
-
-/// A `VCHAR` or `obs-text` (RFC 5234 §B.1, RFC 9110 §5.5).
-fn is_visible_or_obs(char: char) -> bool {
-    char.is_ascii_graphic() || !char.is_ascii()
 }
 
 #[cfg(test)]

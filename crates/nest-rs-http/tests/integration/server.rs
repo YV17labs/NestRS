@@ -245,23 +245,11 @@ async fn an_http2_header_list_past_16_kib_answers_431_on_its_stream_alone() {
         .expect("the HTTP/2 preface is accepted");
     let connection = tokio::spawn(connection);
     let asked = |filler: usize| {
-        let client = client.clone();
-        async move {
-            let request = http::Request::get(format!("http://127.0.0.1:{port}/server/ping"))
-                .header("x-filler", "a".repeat(filler))
-                .body(())
-                .expect("a request");
-            let (response, _) = client
-                .ready()
-                .await
-                .expect("a stream can open")
-                .send_request(request, true)
-                .expect("sent");
-            tokio::time::timeout(PATIENCE, response)
-                .await
-                .expect("the stream ends")
-                .expect("answered")
-        }
+        let request = http::Request::get(format!("http://127.0.0.1:{port}/server/ping"))
+            .header("x-filler", "a".repeat(filler))
+            .body(())
+            .expect("a request");
+        h2_answer(&client, request)
     };
 
     let refused = asked(17 * 1024).await;
@@ -309,18 +297,27 @@ async fn a_request_target_past_the_head_s_bound_is_refused_before_any_route() {
     ))
     .body(())
     .expect("a request");
+    assert_eq!(h2_answer(&client, request).await.status(), 431);
+    cancel.cancel();
+}
+
+/// The answer to `request`, sent bodiless on a new stream of `client`'s
+/// connection, within [`PATIENCE`].
+async fn h2_answer(
+    client: &h2::client::SendRequest<Bytes>,
+    request: http::Request<()>,
+) -> http::Response<h2::RecvStream> {
     let (response, _) = client
+        .clone()
         .ready()
         .await
         .expect("a stream can open")
         .send_request(request, true)
         .expect("sent");
-    let response = tokio::time::timeout(PATIENCE, response)
+    tokio::time::timeout(PATIENCE, response)
         .await
         .expect("the stream ends")
-        .expect("answered");
-    assert_eq!(response.status(), 431);
-    cancel.cancel();
+        .expect("answered")
 }
 
 /// A head the transport wrote alone: no layer stamped it, and it carries no

@@ -50,8 +50,8 @@ pub trait ResolvesProvider {
     fn provider() -> (TypeId, &'static str);
 }
 
-/// A handler parameter's type, held so the compiler can be asked whether it
-/// resolves a provider.
+/// A handler parameter's type, held so the compiler can be asked what it is: an
+/// extractor resolving a provider, an [`Ambient`], or neither.
 pub struct ParamProbe<T>(PhantomData<fn() -> T>);
 
 impl<T> ParamProbe<T> {

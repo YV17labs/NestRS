@@ -79,9 +79,9 @@ That is the whole interface — the harness globs `sut/*/provider.toml`.
   publication**. Published runs happen on a dedicated Linux host.
 - **Docker mode**: each SUT ships a `Dockerfile` (the deployable
   artifact — also what makes image size and cold start comparable).
-  CI's `Bench` workflow builds each one on a release branch's change to
-  `sut/`; the devcontainer has no Docker daemon to run them, and the
-  docker-mode runner comes with the first published run.
+  The Dockerfiles are authored but not yet exercised in the
+  devcontainer (no Docker daemon inside); the docker-mode runner comes
+  with the first published run.
 - Load generator is **oha** (Rust). For published numbers, cross-check
   with **k6** (Go, neutral) so the tool choice isn't an attack surface.
 - One known asymmetry accepted for now: under `taskset -c 0`, tokio

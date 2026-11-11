@@ -132,14 +132,12 @@ each on one server, the dev container's: a backend's other shapes run by hand
 `demo.yml` runs the demo's own recipes — `just lint` with the tree's `nestrs
 lint`, every suite, and `just chart`, the chart's render cases — on a change to
 what its build or its services read: its tree, the framework it builds on by path,
-the dev container files the services start from; on a release branch and a tag it
-builds the image the chart deploys. `docs.yml` builds the site on a change to
-`docs/` and deploys it from `main` alone. The benchmarks are a developer's, on
-their host: no workflow lints, audits or runs them, and `bench.yml` builds each
-contestant's image on a release branch's change to the bench's own tree alone, so
-a framework change never turns it red. **What no other job compiles, a release
-branch compiles once**: an image, or a target no other job builds
-(`framework.yml`'s `windows`). **A workflow skips only what no build
+the dev container files the services start from. `docs.yml` builds the site on a
+change to `docs/` and deploys it from `main` alone. **A check earns a runner only
+by keeping the product from regressing, and a new check is a step of an existing
+job before it is a job**: the benchmarks, an image and a platform the product
+does not claim are a developer's, on their host — no workflow builds, lints,
+audits or runs them. **A workflow skips only what no build
 or test reads**: a file under a crate's `src/` is compiled whatever its
 extension, and a docs page a test reads is listed in `framework.yml`'s paths.
 The cargo cache is saved by `main` and `release/**` alone.

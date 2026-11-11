@@ -59,18 +59,8 @@ mutual TLS, are dev container environments of their own (`CLAUDE.md`, *Testing*)
   Figures are relative, never for publication.
 - **The first CI run after the push** is the only proof of a fresh
   `create-bucket.sh`, the dev-services action's `/etc/hosts` mapping, the
-  default stacks on x86_64, and of four jobs no run has started yet:
-  `Demo`'s `chart` (the render cases, seen green on the host) and `image`
-  (the demo's image), `Bench`'s `image` for each contestant, whose two
-  NestJS images were never built anywhere, and `Framework`'s `windows`, the
-  one proof that the `not(unix)` branches (`way_down.rs`, `material.rs`,
-  `static-files`' `disk.rs`) and the C of `aws-lc-sys` and `zstd-sys`
-  compile for Windows. Sooner, for the Rust half: `cargo check --target
-  x86_64-pc-windows-msvc` of `nest-rs-core` (every feature) and
-  `nest-rs-config` (its defaults) on any host holding that target's
-  standard library; `nest-rs-static-files` reaches the C through
-  `nest-rs-http`, so it needs a C cross compiler. Nothing runs or tests on
-  Windows.
+  default stacks on x86_64, and the chart's render cases as a step of
+  `Demo`'s `lint` job (seen green on the host).
 - **Postgres mutual TLS never ran live**: `nest-rs-seaorm`'s two `mutual_tls`
   tests. Close: open the `postgres-mutual-tls` dev container environment, set
   `postgres := "mutual-tls"` in `test.just`, `just test e2e`.
@@ -286,6 +276,12 @@ What remains:
   unit. *read*
 
 **Docs, bench, tooling**
+- Windows is not claimed, and nothing builds it: the `not(unix)` branches
+  (`way_down.rs`, `material.rs`, `static-files`' `disk.rs`) and the C of
+  `aws-lc-sys` and `zstd-sys` were never compiled for it, and CI holds no
+  Windows job (`decisions/ci-on-change.md`, 2026-11-11). Close, if Windows is
+  ever claimed: `cargo check --target x86_64-pc-windows-msvc` on a host holding
+  that target and a C cross compiler. *read*
 - The benchmark figures are 4.0.0's, dated as such on every page. Close: the
   runbook in `bench/` on a dedicated Linux host. *read*
 - 48 docs pages still exceed the ~300-line budget of `docs/STYLE.md`, the

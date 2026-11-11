@@ -30,7 +30,7 @@ shared Secret handed `auth`'s registered clients to four apps that never read th
   app on an `existingSecret`, still publishes a checksum of that secret alone
   (`TODO.md`).
 - **The render cases are a script** (`demo/charts/demo/ci/render.sh`) over `helm
-  template` and `yq`, run by `nestrs run chart` and by `demo.yml`'s `chart` job.
+  template` and `yq`, run by `nestrs run chart` and by a step of `demo.yml`'s `lint` job.
 
 **Refused:**
 

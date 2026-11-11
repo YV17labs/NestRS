@@ -113,26 +113,18 @@ until a bump or an `ignore` with its reason settles it.
 runs it on any checkout, and the pull request's job reads a merge commit's
 first parent, which a dispatched run does not have.
 
-## 2026-11-08 — an image builds where a release is cut, and the bench's on its own change
+## 2026-11-11 — the vital minimum: no bench, image or Windows job
 
-`demo/Dockerfile` had failed for three months before a release check built it, on
-2026-11-05, and the bench's Rust contestant's as long: nothing builds a Dockerfile
-between two runs. The owner's word of 2026-11-07 asked for what `TODO.md` lists closed, this
-among it; each image is now built, never pushed.
+The second pass (B-230, 2026-11-08) added `bench.yml`, a `demo.yml` `image` job on
+release branches and tags, and a `framework.yml` `windows` job, to close `TODO.md`
+lines that asked for proof of the Dockerfiles and of Windows. The owner, on
+2026-11-11: "on doit économiser la CI … c'est le minimum vital". All three are
+removed; the chart's render cases, cheap and holding what the demo deploys, stay as
+a step of `demo.yml`'s `lint` job rather than a job of their own.
 
-- `demo.yml`'s `image` job builds the demo's image on a release branch's push and a
-  tag's, a tag reading no `paths`; its other jobs skip a tag, whose commit was checked
-  on its way there. A cold release build of five binaries, about 25 runner minutes,
-  so a pull request and `main` do not pay it.
-- `bench.yml` builds each contestant's image on a release branch's push touching
-  `bench/sut/` (or `.dockerignore`), and on nothing else.
-
-**Refused:**
-
-- **The bench's images on a framework change or a tag**: the 2026-10-08 refusal
-  stands — a bench lagging the framework is met at its next change, never as a red
-  release. A bench change answers for its own Dockerfile.
-- **The images on every pull request**: a cold release build per push, for a file
-  that changes a few times a release.
-- **A layer cache in the Actions cache**: it needs an action exposing the runtime
-  token to the build, for minutes a release branch spends a few times a release.
+**Refused, again:** the benchmarks in CI, any image build (the demo's, a
+contestant's) and a platform the product does not claim (Windows). Each costs
+runner minutes on every push it runs on and turns nothing red that a product
+defect would; a Dockerfile is built when its owner runs it (`bench/RUNBOOK.md`, the
+release check), and Windows stays a limit named in `TODO.md`. A new check is a step
+of an existing job before it is a job of its own.

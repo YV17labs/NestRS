@@ -240,8 +240,8 @@ pub fn carries(cx: &UnitContext<'_>, type_id: TypeId) -> bool {
 }
 
 /// Withhold from the reads of the unit `cx` describes what its guards attached
-/// and its request carried: no mask shapes its reply. With nothing attached and
-/// nothing carried it reads none anyway, and nothing is marked.
+/// and its request carried: its posture names no subject. With nothing attached
+/// and nothing carried it reads none anyway, and nothing is marked.
 pub fn withhold_from_reads(cx: &mut UnitContext<'_>) {
     if !cx.pending.is_empty() || carries_ambient() {
         cx.attach(UnmaskedReply);

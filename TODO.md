@@ -118,8 +118,10 @@ the row (`#[expose(nullable)]` or an `Option`), a grant withholding any other
 fails `build()`, the row answers only the caller whose ability judged it (a
 job's, inside a job and on a push alone), a refused row answers its key in a
 GraphQL mutation's reply alone, a `#[field_resolver]` under a row that answers no
-one refuses before it runs, and a dispatched method answering a `Model` does not
-compile (`mask-provenance.md`, 2026-11-08). What remains:
+one refuses before it runs, a posture naming an entity or a `#[subject]` opens
+its unit's reads, and a dispatched method answering a `Model` does not compile
+(`mask-provenance.md`, `unmasked-reply-withholds-the-ability.md`, 2026-11-08).
+What remains:
 
 - **A `#[public]` GraphQL field whose own guard attaches the ability**, its
   request carrying none, answers no wire row: the rows its body builds are judged
@@ -129,14 +131,6 @@ compile (`mask-provenance.md`, 2026-11-08). What remains:
   unaffected. Close: nest-rs-graphql resolving a root field's answer under the
   ability its unit attached (a wrapper `OutputType` installing it), as MCP writes
   a tool's answer inside its site. *seen* (`gate::public::a_subscription_whose_own_guard_attaches_its_ability_streams_no_row`)
-- **A unit gated on a `#[subject]` reads under no ability**, as a bare
-  `#[public]` does: `unmasked` was its one opening and nothing replaced it, so a
-  capability-gated body reading the caller's rows through `Repo` reads none. No
-  demo body reads so. Close: a subject's posture opening its unit's reads, each
-  row being judged where it is built, with a dated entry in
-  `unmasked-reply-withholds-the-ability.md`. *seen* (the seaorm e2e's WS message
-  and MCP tool under `#[public(Read, Inspection)]` read `ability=false` at
-  `c43aaaa21`; their fixtures now name an entity)
 
 ## 4. Known gaps by area
 
@@ -309,7 +303,7 @@ compile (`mask-provenance.md`, 2026-11-08). What remains:
   ports 5432, 6379 and 9000 are free, or a CI job running it, at the minutes it
   costs. *read*
 - The names the retired reply mask left on internal seams read as what they now
-  mean, a posture naming no entity's read: `UnmaskedReply`, the HTTP guard
+  mean, a posture naming no subject: `UnmaskedReply`, the HTTP guard
   stage's `StageKind::Route { unmasked }`, `RouteGuards::masked` and
   `HttpRouteMeta::masked`, and about
   150 internal comments saying "mask" for the judged row (the

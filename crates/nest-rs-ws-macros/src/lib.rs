@@ -52,16 +52,18 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// A handler a guard identifying its caller covers — the gateway's, the app's pool,
 /// its own — needs no access posture; `#[authorize(Action, Subject)]` adds the gate
-/// and the mask, `#[public]` says a caller with no credential is admitted, reading
-/// nothing a grant guards, and `#[public(Action, Subject)]` says it and names what
-/// that caller reads, with the same gate and mask. The boot refuses a message no
+/// and opens the message's reads to the caller's ability, `#[public]` says a caller
+/// with no credential is admitted, reading nothing a grant guards, and
+/// `#[public(Action, Subject)]` says it and names what that caller reads, with the
+/// same gate. Each wire row a reply carries was judged for its caller where it was
+/// built. The boot refuses a message no
 /// such guard covers that says none of them, a gateway running no such guard at its
 /// upgrade with no `#[public]` message, and a `#[public]` behind an upgrade that
 /// identifies its caller. Each message runs as a site of the pipeline, in order:
 /// the guard stage (the app's pool, the message's guards, the class gate the
 /// posture emits), the exception filters and the interceptors (the message's
-/// and the gateway's beside the app's), the data pipes, the argument pipes, the
-/// call, and the reply mask.
+/// and the gateway's beside the app's), the data pipes, the argument pipes and the
+/// call.
 ///
 /// `#[use_guards(...)]` beside a handler binds for that message, deduped
 /// against the app's pool: the gateway's guards run at the upgrade.

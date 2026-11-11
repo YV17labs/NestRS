@@ -120,7 +120,7 @@ For an answer that is a **capability** rather than a row — a presigned URL, a
 computed report — the posture names the capability itself: a subject
 [`#[subject]`](/security/authorization/policies/#subjects-no-table-holds)
 declares, which no table holds. On such a subject `#[authorize]` runs the same class
-gate and opens no read, since its answer is no row:
+gate, and the tool reads under the caller's ability as one naming an entity does:
 
 ```rust title="crates/features/src/audio/mcp/tool.rs"
     #[tool(description = "Report whether an uploaded file has been transcoded.")]

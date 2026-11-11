@@ -514,8 +514,8 @@ the caller:
   it is built, a column its grant withholds reading `null`.
 - `#[authorize(Action, Subject)]` on a `#[subject]` — the same gate, with its
   scope challenge, on a capability no table holds (`#[subject] pub struct
-  Exporting;`, granted with `ab.can(Action::Manage, Exporting)`), and no read:
-  the answer is no row.
+  Exporting;`, granted with `ab.can(Action::Manage, Exporting)`), reading under
+  the caller's ability as an entity's posture does.
 - `#[public(Action, Subject)]` — the same arguments and the same gate, on the
   ability a caller with no credential has: `define_visitor`'s, or
   `define`'s for a valid token. It is what a visitor's read says.
@@ -537,7 +537,8 @@ the `#[subject]` it writes beside the service, and an operation that declares a
 bare `#[public]` answers no entity data. Before an operation serves real rows, it
 declares `#[authorize]` on the entity they come from, or `#[public(Read, Entity)]`
 where a visitor reads them — one gated on the port's `#[subject]` re-points its
-posture to the entity, since a subject opens no read — and its edge is wired: the
+posture to the entity, so a caller holding no grant on its rows is refused rather
+than handed an empty answer — and its edge is wired: the
 guards on the struct, and the edge's authz module imported in that adapter's
 `module.rs`:
 

@@ -9,7 +9,7 @@
 //!
 //! A rule names a [`Subject`]: an entity, or a capability no table holds that
 //! [`#[subject]`](macro@subject) declares, which a rule grants whole and a posture
-//! gates, opening no read.
+//! gates. Either posture opens its unit's reads to the caller's ability.
 //!
 //! `AbilityGuard` is the one guard, answering all four edges; each binding's
 //! feature turns it on.

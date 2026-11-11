@@ -460,8 +460,8 @@ pub trait Creatable: CrudService {
     /// persists — so a value the grants leave undecided is refused, never
     /// guessed. A caller no row could pass for — no `Create` grant, a denial no
     /// `when` narrows ([`Ability::can_class`]), or a request holding no ability,
-    /// as on a route no mask shapes — is refused the same way before the hook
-    /// runs or the insert is sent.
+    /// as on a route whose posture names no subject — is refused the same way
+    /// before the hook runs or the insert is sent.
     ///
     /// A `Create` grant's `.fields` limits what the input sets, never what a pin,
     /// a default or a hook fills, nor the key: a column no grant permits is
@@ -1168,8 +1168,8 @@ mod tests {
         assert_eq!(written.body, Set(row.body));
     }
 
-    /// A request no ability reaches — a route no mask shapes — is refused as one
-    /// its ability bars, on a pool no statement can reach.
+    /// A request no ability reaches — a route whose posture names no subject —
+    /// is refused as one its ability bars, on a pool no statement can reach.
     #[tokio::test]
     async fn a_create_in_a_request_holding_no_ability_runs_no_statement() {
         use nest_rs_database::__private::with_request_executor;

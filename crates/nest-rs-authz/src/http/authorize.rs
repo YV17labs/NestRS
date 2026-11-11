@@ -1,5 +1,5 @@
 //! [`Authorize<A, S>`] — the route-level class gate for action `A` on
-//! subject `S`, and the type that opens the route's reads.
+//! subject `S`, which opens the route's reads to the caller's ability.
 
 use std::marker::PhantomData;
 
@@ -10,9 +10,10 @@ use crate::{ActionMarker, Subject};
 /// Enforcement plumbing for action `A` on subject `S`. A route whose posture
 /// names it, through `#[authorize(A, S)]` or `#[public(A, S)]`, runs
 /// [`class_gate`](crate::class_gate) with its guards, before any interceptor or
-/// filter the route declares, and reads under the ability they attached when `S`
-/// is an entity. Class-level only — the per-row filter and the judgement each
-/// wire row passes where it is built enforce conditions.
+/// filter the route declares, and reads under the ability they attached, an
+/// entity's posture and a `#[subject]`'s alike. Class-level only — the per-row
+/// filter and the judgement each wire row passes where it is built enforce
+/// conditions.
 ///
 /// # Don't write this — write `#[authorize(Action, Entity)]`
 ///
@@ -139,10 +140,11 @@ use crate::{ActionMarker, Subject};
 /// ```
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
-/// The class gate a posture declares, run with the route's guards. An entity's
-/// opens the route's reads to the ability they attached; a subject no table holds
-/// opens none, so the route reads as one no posture names. Nothing reshapes the
-/// reply: each wire row it carries was judged where it was built.
+/// The class gate a posture declares, run with the route's guards. Nothing
+/// reshapes the reply: each wire row it carries was judged where it was built. An
+/// entity's posture documents its reply's nullable properties as a grant's to
+/// withhold, and an `#[sse]` route refuses it; a subject no table holds arms no
+/// `capture`.
 impl<A, S> RouteResponseShaper for Authorize<A, S>
 where
     A: ActionMarker,

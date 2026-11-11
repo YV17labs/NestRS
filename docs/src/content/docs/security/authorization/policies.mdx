@@ -92,9 +92,11 @@ and every operation that exercises it declares the posture on it —
 a GraphQL field, a WebSocket message or an MCP tool alike. It is the
 same [class gate](/security/authorization/#one-class-gate-on-every-edge)
 as on an entity, with the same refusals and the same RFC 6750 scope
-challenge, and it opens **no read**: the subject has no model, so the
-reply goes out as written. A unit gated this way withholds the ability
-from its reads, on every edge, as every unit naming no entity does.
+challenge. The subject has no model, so the reply goes out as written, and
+the unit reads under the caller's ability as one naming an entity does: what
+its body reads through `Repo` is filtered by the caller's grants, and each wire
+row it answers is judged for that caller where it is built. A visitor's reads
+stay closed there, since a capability names no rows a visitor may read.
 
 The type system keeps the two kinds apart. `when` and `fields` narrow an
 entity's rows and columns, so a subject no table holds refuses them; so

@@ -178,11 +178,11 @@ run inside the unit, so a denied unit never touches the data layer and opens
 no transaction at all.
 
 **The ability** is what `AbilityGuard` attaches (`cx.attach`): ambient for the
-rest of the unit once its guard stage passed. A route whose posture names no
-entity's read, an `#[sse]` stream and a route gated on a `#[subject]` among them,
-runs under the `UnmaskedReply` marker its guard stage attaches, as a WS connection
-hook does, and `current_ability` withholds the ability there, so a read no posture
-named fails closed, as a write does before its hook — and `nest-rs-http` knows
+rest of the unit once its guard stage passed. A unit whose posture names no
+subject — a bare `#[public]`, one stating none — runs under the `UnmaskedReply`
+marker its guard stage attaches, as a WS connection hook does, and
+`current_ability` withholds the ability there, so a read no posture named fails
+closed, as a write does before its hook — and `nest-rs-http` knows
 nothing of authz or the ORM
 (`.claude/decisions/unmasked-reply-withholds-the-ability.md`). A job withholds
 nothing: `Repo` reads no ability there as system work, wider than the one it holds.
@@ -337,14 +337,15 @@ key alone in a GraphQL mutation's reply, which names the row it wrote, and
 holding one fails the whole reply closed, which a `Repo` read never hands it. Held by `nest-rs-authz`'s
 `judged` suites and `nest-rs-seaorm`'s `expose/dto.rs`.
 
-`#[authorize(Action, Entity)]` or `#[public(Action, Entity)]` beside the
+`#[authorize(Action, Subject)]` or `#[public(Action, Subject)]` beside the
 operation is the arming declaration on every edge: the decorator emits the gate,
-and the unit reads under the caller's ability; a unit declaring neither withholds
-the ability from its reads. A site gated on `Manage` holds a row to every concrete
+and the unit reads under the caller's ability, an entity's posture and a
+`#[subject]`'s alike, a visitor's where it names an entity; a unit declaring
+neither withholds the ability from its reads. A site gated on `Manage` holds a row to every concrete
 action where it reads (`condition_for`, `can`), and its reply shows what the
 caller may `Read` (`.claude/decisions/denial-holds-whatever-the-token.md`). **The
 gate is one function**, `class_gate`, on every edge; a subject `#[subject]`
-declares has no rows, so its posture gates and opens no read. A subscription's
+declares has no rows, so its posture licenses no visitor's read. A subscription's
 items are pushes: what its stream builds as the socket polls it is judged for the
 subscriber, and an item a refusal makes — a row, a list's, or one inside an
 `Option` or a `Result` — leaves the stream; an object of the body's own holding one

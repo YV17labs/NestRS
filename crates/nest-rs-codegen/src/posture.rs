@@ -115,8 +115,8 @@ pub enum Posture {
     Authorize(PostureGate),
     /// `#[public]` — a caller with no credential is admitted, and guards bound
     /// beside the operation still run. Naming a subject (`#[public(Action,
-    /// Subject)]`) gates and masks as `#[authorize]` does, on the ability that
-    /// caller has; bare, it reads nothing a grant guards.
+    /// Subject)]`) gates and opens the unit's reads as `#[authorize]` does, on
+    /// the ability that caller has; bare, it reads nothing a grant guards.
     Public(Option<PostureGate>),
     /// Neither: the guards covering the operation decide, and the boot refuses
     /// one no guard covers.
@@ -156,21 +156,19 @@ impl Posture {
     }
 
     /// Whether what the unit's reads run under is withheld from them, as a
-    /// `bool` expression: true where the posture names no entity's read. An
-    /// entity opens the unit's reads, and a `#[subject]` has no rows to read,
-    /// which only its type says.
+    /// `bool` expression: true where the posture names no subject. One naming an
+    /// entity or a `#[subject]` opens the unit's reads to the caller's ability,
+    /// since each row the unit answers is judged for that caller where it is built.
     pub fn withheld(&self) -> TokenStream {
-        withheld(self.gate().map(|gate| &gate.entity))
+        withheld(self.gate().is_some())
     }
 }
 
-/// [`Posture::withheld`], for an edge parsing its own posture: `named` is the
-/// subject it names.
-pub fn withheld(named: Option<impl quote::ToTokens>) -> TokenStream {
-    match named {
-        None => quote!(true),
-        Some(subject) => quote!(!<#subject as ::nest_rs_authz::Subject>::__ROWS),
-    }
+/// [`Posture::withheld`], for an edge parsing its own posture: `named` is whether
+/// it names a subject.
+pub fn withheld(named: bool) -> TokenStream {
+    let withheld = !named;
+    quote!(#withheld)
 }
 
 /// The refusal of `unmasked`, which nothing reads any more: every wire row a
@@ -434,7 +432,7 @@ mod tests {
     // Spelled through the shared expression, so a posture and an edge parsing its
     // own say one thing.
     #[test]
-    fn what_a_posture_withholds_is_read_off_what_it_names() {
+    fn a_posture_naming_a_subject_opens_its_reads_and_any_other_withholds_them() {
         let withheld_by = |tokens| {
             RULES
                 .take(&mut method(tokens))
@@ -453,14 +451,22 @@ mod tests {
         ] {
             assert_eq!(withheld_by(silent), "true");
         }
-        assert!(
-            withheld_by(quote!(
+        for named in [
+            quote!(
                 #[public(Read, posts::Entity)]
                 async fn feed(&self) {}
-            ))
-            .contains("__ROWS"),
-            "whether a named subject opens the unit's reads is its type's to say"
-        );
+            ),
+            quote!(
+                #[authorize(Manage, Exporting)]
+                async fn export(&self) {}
+            ),
+        ] {
+            assert_eq!(
+                withheld_by(named),
+                "false",
+                "an entity and a capability open the unit's reads alike"
+            );
+        }
     }
 
     #[test]

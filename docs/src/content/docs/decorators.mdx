@@ -64,7 +64,7 @@ host or a worker's impl block, and a method one of its handlers.
 | `#[meta]` | host or method | Declares typed metadata, the method's over its host's (repeatable); read back by a layer through `cx.reflector()` | [Execution context](/fundamentals/execution-context/#read-what-the-site-declared) |
 | `#[public]` | method | Access posture: the unit admits a caller with no credential — guards relax; bare it reads nothing a grant guards, and `#[public(Action, Subject)]` gates and reads on that caller's ability, as `#[authorize]` does; refused at boot where the request's guards would turn one away | [Public reads](/security/authorization/public-reads/) |
 | `#[authorize]` | method | Access posture: gates the unit by ability (`Action`, `Subject`) and, on an entity, opens its reads under the caller's ability, each wire row judged for that caller; `bind = Service` also loads the row an id names into an `Authorized<Action, E>` parameter, on a route, a GraphQL operation or an MCP `#[resource]` | [Authorization](/security/authorization/), [Route model binding](/security/authorization/by-id-binding/) |
-| `#[subject]` | unit struct | Declares a capability no table holds as an authorization subject: a rule grants it whole, a posture naming it gates on every edge and opens no read | [Policies](/security/authorization/policies/#subjects-no-table-holds) |
+| `#[subject]` | unit struct | Declares a capability no table holds as an authorization subject: a rule grants it whole, a posture naming it gates on every edge and opens the unit's reads to the caller's ability | [Policies](/security/authorization/policies/#subjects-no-table-holds) |
 
 ## Authentication
 

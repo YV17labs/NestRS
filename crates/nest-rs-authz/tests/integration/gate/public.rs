@@ -276,7 +276,7 @@ impl ArticlesResolver {
         stream::once(async { reads_under_an_ability() })
     }
 
-    /// A field no mask reaches, below an operation naming its read.
+    /// A field no posture reaches, below an operation naming its read.
     #[field_resolver]
     async fn nested_read(&self, parent: &Article) -> GqlResult<bool> {
         let _ = parent;
@@ -381,14 +381,14 @@ async fn a_route_a_visitors_grant_does_not_reach_is_forbidden() {
 }
 
 #[tokio::test]
-async fn a_route_naming_a_capability_gates_and_arms_no_mask() {
+async fn a_route_naming_a_capability_gates_a_visitor_and_names_no_read_of_its() {
     let app = app().await;
     let answer = app.http().get("/articles/browsing").send().await.0;
     assert_eq!(answer.status(), StatusCode::OK);
     assert_eq!(
         body(answer).await,
         json!(false),
-        "a capability has no rows, so what a route reads stays withheld",
+        "a capability names no rows, so what a visitor reads there stays withheld",
     );
 }
 
@@ -461,7 +461,7 @@ async fn an_operation_a_visitors_grant_does_not_reach_answers_forbidden() {
 }
 
 #[tokio::test]
-async fn an_operation_naming_a_capability_gates_and_arms_no_mask() {
+async fn an_operation_naming_a_capability_gates_a_visitor_and_names_no_read_of_its() {
     let answer = query(&app().await, "", "{ browsing }").await;
     assert_eq!(answer["data"]["browsing"], false, "{answer}");
 }
@@ -474,7 +474,7 @@ async fn a_field_below_a_public_operation_reads_nothing_for_a_visitor() {
     let visitor = query(&app, "", document).await;
     assert_eq!(
         visitor["data"]["feed"][0]["nestedRead"], false,
-        "no mask reaches a nested field, so a visitor's rules read nothing there: {visitor}",
+        "no posture reaches a nested field, so a visitor's rules read nothing there: {visitor}",
     );
 
     let caller = app
@@ -704,7 +704,7 @@ async fn a_message_a_visitors_grant_does_not_reach_answers_forbidden() {
 }
 
 #[tokio::test]
-async fn a_message_naming_a_capability_gates_and_arms_no_mask() {
+async fn a_message_naming_a_capability_gates_a_visitor_and_names_no_read_of_its() {
     assert_eq!(message("browsing").await["data"], false);
 }
 

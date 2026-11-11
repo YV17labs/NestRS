@@ -112,3 +112,28 @@ seam no app writes. What changes is only why a posture on an entity opens its un
 each row the unit answers is judged for its caller where it is built, whatever shape
 carries it. A hook writing through `Repo` stays barred, and a hand-written `ServerHandler`
 answers wire rows its body builds, judged as every other.
+
+## 2026-11-08 — a `#[subject]`'s posture opens its unit's reads
+
+The entry above kept a `#[subject]`'s posture withholding the ability once `unmasked`, its
+one opening, was gone. Its reason went with the reply mask: no mask could shape what such a
+unit answered, so its reads stayed closed. Every row a unit answers is now filtered in SQL
+under the caller's grants and judged for that caller where it is built, whatever the
+posture, which is why an entity's posture opens its reads; the same holds of a
+capability's. Seen red under a guard granting `Read` on a capability and on an entity:
+`#[authorize(Read, Inspection)]` read `ability=false` where `#[authorize(Read,
+member::Entity)]` read `true`, on HTTP, GraphQL, WS and MCP alike.
+
+**Decided: a posture naming a subject — an entity or a `#[subject]` — opens its unit's
+reads to the caller's ability, on every edge.** A capability-gated body reading the
+caller's rows through `Repo` reads what that caller may, with no spelling to add; the
+fixtures that had moved to an entity's posture to keep their reads (`nest-rs-seaorm`'s
+WS and MCP e2e) name their capability again. Two things stay withheld: a visitor's reads
+under a capability, since only an entity's posture names what a visitor reads
+(`VisitorReadNamed`), and every unit whose posture names nothing — a bare `#[public]`, a
+covered unit stating none, a connection hook. On HTTP the route's stage keeps the ability
+where its posture names a subject or a shaper is armed on it.
+
+**Refused:** naming the entity a capability-gated body reads beside its posture, a second
+posture attribute for one concern, and keeping the withholding with a key to lift it, a
+spelling with nothing left to switch off.

@@ -1,7 +1,8 @@
 //! Covers `src/subject.rs` — a subject no table holds, declared with
 //! `#[subject]`: `#[authorize(Manage, Exporting)]` runs the class gate on every
-//! edge, with its refusals and RFC 6750 §3.1's scope challenge, and arms no
-//! mask, so a reply no entity could reconcile goes out as written.
+//! edge, with its refusals and RFC 6750 §3.1's scope challenge, a reply no entity
+//! could reconcile goes out as written, and the unit reads under the caller's
+//! ability, as one naming an entity does.
 
 use std::sync::Arc;
 
@@ -83,8 +84,7 @@ impl Guard for Grants {
 
 impl GuardFor<HttpView> for Grants {}
 
-/// What the export route answers: no entity's row, which a mask armed on one
-/// could only fail closed on.
+/// What the export route answers: no entity's row.
 #[derive(serde::Serialize, schemars::JsonSchema)]
 struct Queued {
     queued: bool,
@@ -106,8 +106,7 @@ impl ExportsController {
         })
     }
 
-    /// The opening on a capability: it reads the caller's grant, and shapes
-    /// nothing.
+    /// The opening on a capability: it reads the caller's grant.
     #[get("/catalog")]
     #[public(Read, Exporting)]
     async fn catalog(&self) -> String {
@@ -117,16 +116,21 @@ impl ExportsController {
     #[sse("/progress")]
     #[authorize(Manage, Exporting)]
     async fn progress(&self) -> SseStream {
-        SseStream::new(stream::iter([
-            SseEvent::message("done").event_type("export")
-        ]))
+        SseStream::new(stream::once(async {
+            SseEvent::message(format!(
+                "done, reads scoped: {}",
+                current_ability().is_some()
+            ))
+            .event_type("export")
+        }))
     }
 }
 
-/// A GraphQL answer with no serde impl: a gate-only posture asks nothing of it.
+/// A GraphQL answer with no serde impl: a capability's posture asks nothing of it.
 #[derive(SimpleObject)]
 struct ExportStatus {
     running: bool,
+    reads_scoped: bool,
 }
 
 #[resolver]
@@ -137,8 +141,20 @@ impl ExportsResolver {
     #[query]
     #[authorize(Manage, Exporting)]
     async fn export_status(&self) -> GqlResult<ExportStatus> {
-        Ok(ExportStatus { running: true })
+        Ok(ExportStatus {
+            running: true,
+            reads_scoped: current_ability().is_some(),
+        })
     }
+}
+
+/// What a tool and a message answer: the export started, and whether the unit's
+/// reads run under the caller's ability.
+fn started() -> String {
+    format!(
+        "export started, reads scoped: {}",
+        current_ability().is_some()
+    )
 }
 
 #[mcp(path = "/mcp")]
@@ -151,7 +167,7 @@ impl ExportsTool {
     #[tool]
     #[authorize(Manage, Exporting)]
     async fn run_export(&self) -> Result<String, McpError> {
-        Ok("export started".to_owned())
+        Ok(started())
     }
 
     /// Read one export.
@@ -171,7 +187,7 @@ impl ExportsGateway {
     #[subscribe_message("run")]
     #[authorize(Manage, Exporting)]
     async fn run(&self) -> Result<String, WsError> {
-        Ok("export started".to_owned())
+        Ok(started())
     }
 }
 
@@ -228,7 +244,7 @@ async fn answers(grant: &str) -> Answers {
         app.http()
             .post("/graphql")
             .header(GRANT, grant)
-            .body_json(&serde_json::json!({ "query": "{ exportStatus { running } }" }))
+            .body_json(&serde_json::json!({ "query": "{ exportStatus { running readsScoped } }" }))
             .send()
             .await
             .json()
@@ -286,7 +302,7 @@ async fn body(response: nest_rs_http::Response) -> String {
 }
 
 #[tokio::test]
-async fn a_granted_caller_runs_the_capability_on_every_edge_and_no_mask_touches_the_reply() {
+async fn a_granted_caller_runs_the_capability_on_every_edge_reading_under_its_ability() {
     let Answers {
         http,
         sse,
@@ -298,23 +314,30 @@ async fn a_granted_caller_runs_the_capability_on_every_edge_and_no_mask_touches_
     assert_eq!(http.status(), StatusCode::OK);
     let reply: serde_json::Value =
         serde_json::from_str(&body(http).await).expect("the route's JSON");
+    let started = "export started, reads scoped: true";
     assert_eq!(
-        reply,
-        serde_json::json!({ "queued": true, "reads_scoped": false }),
-        "the reply goes out as written, and a route no mask shapes withholds the ability \
-         from its reads",
+        serde_json::json!({
+            "http": reply,
+            "graphql": graphql["data"]["exportStatus"],
+            "mcp": mcp.contains(started),
+            "ws": ws["data"],
+        }),
+        serde_json::json!({
+            "http": { "queued": true, "reads_scoped": true },
+            "graphql": { "running": true, "readsScoped": true },
+            "mcp": true,
+            "ws": started,
+        }),
+        "each reply goes out as written, and each unit reads under the caller's ability: \
+         {mcp}",
     );
 
     assert_eq!(sse.status(), StatusCode::OK, "the gate admits the stream");
     let events = body(sse).await;
-    assert!(events.contains("event: export"), "{events}");
-
-    assert_eq!(
-        graphql["data"]["exportStatus"]["running"], true,
-        "GraphQL: {graphql}"
+    assert!(
+        events.contains("event: export") && events.contains("done, reads scoped: true"),
+        "the stream reads under the caller's ability once its route returned: {events}"
     );
-    assert!(mcp.contains("export started"), "MCP: {mcp}");
-    assert_eq!(ws["data"], "export started", "WS: {ws}");
 }
 
 #[tokio::test]
@@ -398,7 +421,7 @@ async fn a_token_without_the_scope_is_challenged_for_it_on_every_edge() {
 }
 
 #[tokio::test]
-async fn a_public_route_naming_the_capability_admits_a_grant_and_shapes_nothing() {
+async fn a_public_route_naming_the_capability_admits_a_grant_and_refuses_any_other() {
     let app = app().await;
     let read = |grant: &'static str| {
         app.http()

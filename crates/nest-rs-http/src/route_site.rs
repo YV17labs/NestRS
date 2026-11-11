@@ -129,11 +129,12 @@ pub struct RouteGuards {
     /// The posture's class gates, selected by type off what the route
     /// declares.
     pub gates: Vec<GateFn>,
-    /// The route's posture names a subject, so a gate is its posture's;
-    /// elsewhere a gate can only come from a parameter's type, and the boot
-    /// refuses it.
+    /// The route's posture names a subject, so a gate is its posture's and its
+    /// reads keep the ability its guards attached; elsewhere a gate can only come
+    /// from a parameter's type, and the boot refuses it.
     pub authorized: bool,
-    /// Whether a response shaper masks the route's reply.
+    /// Whether a response shaper is armed on the route: a posture's on an entity,
+    /// or one a parameter's type declares.
     pub masked: bool,
     /// The route answers `#[sse]`, an event stream no shaper reconciles.
     pub stream: bool,
@@ -188,22 +189,32 @@ pub fn route_guard_stage(
     log_effective_chain(&label, "guards", &chain);
     let public = handler.posture() == Posture::Public;
     let needed = NeededPrincipal::of(public, &declared.ambient, &chain);
-    stage(chain, needed, declared.gates, declared.masked)
+    let reads_opened = declared.authorized || declared.masked;
+    stage(chain, needed, declared.gates, reads_opened)
 }
 
 /// The stage running `chain`, refusing a caller it admitted without the
-/// `needed` principal, then `gates`, or `None` when it runs nothing.
+/// `needed` principal, then `gates`, or `None` when it runs nothing; the
+/// route's reads keep what its guards attached only where `reads_opened` — its
+/// posture names a subject, or a shaper reconciles its reply.
 fn stage(
     chain: Vec<ResolvedLayer<dyn Guard>>,
     needed: Option<NeededPrincipal>,
     gates: Vec<GateFn>,
-    masked: bool,
+    reads_opened: bool,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
     if chain.is_empty() && gates.is_empty() {
         return Ok(None);
     }
     Ok(Some(Arc::new(
-        HttpGuardStage::new(chain, gates, StageKind::Route { unmasked: !masked })?.needing(needed),
+        HttpGuardStage::new(
+            chain,
+            gates,
+            StageKind::Route {
+                unmasked: !reads_opened,
+            },
+        )?
+        .needing(needed),
     )))
 }
 

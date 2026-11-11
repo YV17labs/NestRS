@@ -3,9 +3,9 @@
 use sea_orm::{EntityTrait, IdenStatic};
 
 /// What a rule names and a posture gates: a SeaORM entity, whose rows a rule
-/// filters and a posture opens to the unit's reads, or a subject `#[subject]`
-/// declares — a capability no table holds, which a rule grants whole and a
-/// posture gates, opening no read.
+/// filters, or a subject `#[subject]` declares — a capability no table holds,
+/// which a rule grants whole. Either posture opens its unit's reads to the
+/// caller's ability; a visitor's, only an entity's names.
 ///
 /// ```
 /// use std::any::TypeId;
@@ -32,8 +32,8 @@ use sea_orm::{EntityTrait, IdenStatic};
     note = "a posture names a SeaORM entity, whose rows its unit reads, or a capability no table holds, declared with `#[subject]` on a unit struct: `#[subject] pub struct Exporting;`"
 )]
 pub trait Subject: 'static {
-    /// Whether the subject has rows a posture opens to its unit's reads: `false`
-    /// for a `#[subject]`, whose posture withholds the unit's reads.
+    /// Whether a table holds the subject's rows: `false` for a `#[subject]`, whose
+    /// posture licenses no visitor's read and arms no route's `capture`.
     #[doc(hidden)]
     const __ROWS: bool = true;
 

@@ -56,10 +56,11 @@ pub trait RouteResponseShaper {
         ) -> std::result::Result<(), nest_rs_core::Failure>,
     > = None;
 
-    /// Whether a route declaring this type has its reply shaped. `false` for a
-    /// type that only declares [`GATE`](Self::GATE) — a posture on a subject
-    /// with no rows — so the route reads as one no shaper arms, its reads
-    /// withheld the ability its guards attached, and `capture` never runs.
+    /// Whether a route declaring this type arms its `capture`, and its document
+    /// says a nullable property of its reply reads `null` where a grant withholds
+    /// it. `false` for a type that only declares [`GATE`](Self::GATE) — a posture
+    /// on a subject with no rows — whose `capture` never runs and which an
+    /// `#[sse]` route may declare.
     const SHAPES: bool = true;
 
     /// Snapshot what the shaper needs off the request before the handler takes

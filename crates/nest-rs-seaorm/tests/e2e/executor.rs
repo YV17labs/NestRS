@@ -1,7 +1,7 @@
 //! What a unit's continuation runs on: a streaming body a mutating route
 //! returns reads on the pool once the route's transaction has committed, under
-//! the caller's ability; an `#[sse]` stream, which no mask shapes, reads
-//! nothing scoped; a listener with no commit to wait for runs at once, in a
+//! the caller's ability; an `#[sse]` stream whose posture names no subject
+//! reads nothing scoped; a listener with no commit to wait for runs at once, in a
 //! unit of its own beside the transaction the caller opened itself.
 
 use nest_rs_authz::AbilityGuard;
@@ -128,7 +128,7 @@ impl ItemsController {
     }
 
     /// Streams how many rows the caller may read, counted once the stream is
-    /// polled: an `#[sse]` route takes no mask, so its stream reads under
+    /// polled: a bare `#[public]` names no subject, so its stream reads under
     /// none.
     #[sse("/events")]
     #[public]
@@ -186,9 +186,9 @@ async fn a_streaming_body_reads_on_the_pool_after_the_commit_under_the_callers_a
     );
 }
 
-/// The visitor may read the published row, through a route a mask shapes; a
-/// stream no mask shapes is handed no ability, so the read finds nothing
-/// rather than rows nothing would filter.
+/// The visitor may read the published row, through a route naming that read; a
+/// stream whose posture names no subject is handed no ability, so the read finds
+/// nothing rather than rows nothing would filter.
 #[tokio::test]
 async fn an_sse_streams_repo_read_fails_closed() {
     let conn = crate::harness::connect().await;

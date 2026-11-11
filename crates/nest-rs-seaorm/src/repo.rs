@@ -447,8 +447,8 @@ impl<E: EntityTrait> Repo<E> {
     ///
     /// Runs [`ActiveModelBehavior`] — see `scoped_save` — but for a caller no
     /// row could pass for (no grant, a denial no `when` narrows, or a request
-    /// holding no ability, as on a route no mask shapes), who gets the same
-    /// error before any hook runs.
+    /// holding no ability, as on a route whose posture names no subject), who
+    /// gets the same error before any hook runs.
     ///
     /// A grant's `.fields` limits what `active` sets, its hook's stamps aside: a
     /// column no grant permits is [`DbErr::AccessDenied`] naming it, before any hook
@@ -1282,9 +1282,9 @@ mod tests {
         );
     }
 
-    /// A request no ability reaches — a route no mask shapes, whose ability
-    /// `UnmaskedReply` withholds — is barred like one its ability bars, saying
-    /// why once; the pool dials nothing, so a statement sent would fail otherwise.
+    /// A request no ability reaches — a route whose posture names no subject,
+    /// whose ability `UnmaskedReply` withholds — is barred like one its ability
+    /// bars, saying why once; the pool dials nothing, so a statement sent would fail otherwise.
     #[tokio::test]
     async fn a_save_in_a_request_holding_no_ability_runs_no_hook_and_sends_nothing() {
         let logs = nest_rs_testing::LogCapture::install();

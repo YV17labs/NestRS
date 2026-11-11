@@ -23,7 +23,8 @@ use crate::{Ability, AbilityBuilder, AbilityFactory, MalformedRuleError};
 /// route.
 ///
 /// The ability is attached for the rest of the request: on every edge, the reads
-/// it scopes run where the unit's response mask arms them, and nowhere else.
+/// it scopes run where the unit's posture names a subject, and nowhere else, and
+/// each wire row the unit answers is judged under it where it is built.
 ///
 /// `AuthzGuard` is not a framework type: an app aliases it once at its authz
 /// module root, `pub type AuthzGuard = AbilityGuard<AuthzAbility>;`.

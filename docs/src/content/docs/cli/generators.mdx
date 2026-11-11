@@ -225,8 +225,9 @@ A port with an entity but no service gates on that entity instead. The file is
 `subject.rs` whatever the port's name, so `subject` is one of the words
 [no module takes](/architecture/#what-a-folder-may-not-be-called).
 
-A subject masks nothing, so an operation that starts answering with rows is
-re-gated on their entity, `#[authorize(Read, PostEntity)]`. `g entity posts`
+An operation that starts answering with rows is re-gated on their entity,
+`#[authorize(Read, PostEntity)]`, so a caller holding no grant on them is refused
+rather than handed an empty answer. `g entity posts`
 does it: the entity's wire type takes the subject's name, so the run retires
 `subject.rs` and its two lines in `mod.rs`, and gates on `crate::posts::Entity`
 each operation `g graphql` and `g mcp` gated on `Post`, in the same

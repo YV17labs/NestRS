@@ -162,7 +162,7 @@ A route declaring `#[authorize(Action, Entity)]` on an entity answers wire rows 
 per caller, and the published schema says exactly what any of them can hold: every key
 required, a column a grant may withhold nullable. The response description says so,
 since a nullable property reads `null` for a caller whose grant withholds it. A
-`#[subject]`'s posture gates and opens no read, so its route documents a plain
+`#[subject]`'s posture names no row type, so its route documents a plain
 response.
 
 ## Tags

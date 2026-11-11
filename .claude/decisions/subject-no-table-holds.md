@@ -74,3 +74,13 @@ stand: an entity-gated stream would run with no mask
 The hand-written `Authorize<A, S>` above is gone (`route-posture-declared.md`, this
 date): `#[public(Action, Subject)]` reads the grant, gates alone on a capability, and
 the unit's reads stay withheld, on every edge where only a route's were.
+
+## 2026-11-08 — a capability's posture opens its unit's reads
+
+The two entries above kept a capability-gated unit's reads withheld, since no mask could
+shape what it answered. The reply mask is gone: every row a unit answers is filtered in
+SQL under the caller's grants and judged for that caller where it is built, so a posture
+on a capability now opens its unit's reads to the caller's ability, as one on an entity
+does, on every edge (`unmasked-reply-withholds-the-ability.md`, this date, with the red
+runs). A visitor's reads stay withheld there: a capability names no rows a visitor may
+read. The `#[sse]` refusal of an entity's posture stands, by the same type.

@@ -184,7 +184,7 @@ impl AmbientValue for RefusalMark {
 /// [`Guard::check`], in order, then refuse a caller they admitted without the
 /// `needed` principal, then the posture's class `gate`, leaving what they
 /// attached on `cx` for the pipeline to install once its guard stage passed,
-/// `withheld` from the unit's reads where no mask shapes its reply. The first
+/// `withheld` from the unit's reads where its posture names no subject. The first
 /// refusal stops them.
 pub async fn check_guards(
     chain: &[ResolvedLayer<dyn Guard>],

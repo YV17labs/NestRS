@@ -70,7 +70,7 @@ pub(crate) fn carried(cx: &UnitContext<'_>) -> Option<Arc<Ability>> {
 
 /// The [`Ability`] the running unit's reads run under, or `None` outside a
 /// request, in a request that runs no authorization, on a unit whose posture
-/// names no entity's read, and for a visitor anywhere but a unit naming what it
+/// names no subject, and for a visitor anywhere but a unit naming the entity it
 /// reads: there the ability the guard attached is withheld, so a read no posture
 /// named fails closed. A job withholds nothing: `None` there reads as system
 /// work, wider than what it holds.

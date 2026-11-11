@@ -108,12 +108,12 @@ depths cooperate:
   connection carries it into every message. A connection hook names no read,
   so it stays off a hook's reads.
 
-A handler's reads see it where its posture names what it reads:
-`#[authorize(Action, Entity)]` or `#[public(Action, Entity)]`, each row the
-answer carries judged for the caller as it is built. **Anywhere else it is
-withheld**, a bare `#[public]`, a unit stating no posture, a `#[subject]`'s, a
-stream: `current_ability()` answers `None` and the reads fail closed, since no
-posture named them. A visitor's ability is read
+A handler's reads see it where its posture names a subject:
+`#[authorize(Action, Subject)]` or `#[public(Action, Subject)]`, an entity or a
+capability `#[subject]` declares, each row the answer carries judged for the
+caller as it is built. **Anywhere else it is withheld**, a bare `#[public]`, a
+unit stating no posture: `current_ability()` answers `None` and the reads fail
+closed, since no posture named them. A visitor's ability is read
 only inside a unit naming its read, so a nested GraphQL field and a relation's
 batch read nothing for one.
 

@@ -1,8 +1,9 @@
 //! `src/repo.rs`'s saves and `src/service.rs`'s create under a route gated on a
-//! `#[subject]`: no mask shapes its reply, so `UnmaskedReply` withholds the
-//! ability its guard attached, and no row could pass their scope. They answer
-//! that before the entity's `before_save` runs or a statement is sent, on a pool
-//! that dials nothing, where a statement sent would answer its connection error.
+//! `#[subject]`: the unit reads under the ability its guard attached, which grants
+//! the capability and nothing on the entity, so no row could pass their scope.
+//! They answer that before the entity's `before_save` runs or a statement is sent,
+//! on a pool that dials nothing, where a statement sent would answer its connection
+//! error.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

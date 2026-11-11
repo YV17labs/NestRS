@@ -151,7 +151,9 @@ framework's do.
 The subject need not be a table. A capability — may transcode, may export —
 is a [subject `#[subject]` declares](/security/authorization/policies/#subjects-no-table-holds):
 `#[authorize(Manage, Transcoding)]` runs this same gate, scope challenge
-included, and opens no read, since there is no row to read.
+included, and the unit reads under the caller's ability as one naming an entity
+does, each row it answers judged for that caller. A visitor's reads stay closed
+there: a capability names no rows a visitor may read.
 
 ## Three places the framework reads it
 

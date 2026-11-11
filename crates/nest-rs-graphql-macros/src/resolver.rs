@@ -1296,7 +1296,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 let entity = authz_entity(spec);
                 quote!(::nest_rs_authz::class_gate::<#action, #entity>)
             });
-            let withheld = withheld(authorize_spec.as_ref().map(authz_entity));
+            let withheld = withheld(authorize_spec.is_some());
             let chain_site = if is_entity {
                 ChainSite::Entity
             } else {

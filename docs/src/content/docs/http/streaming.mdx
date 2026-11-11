@@ -43,10 +43,11 @@ the stream calls reads on the **pool**, never on the route's transaction —
 that one has settled by the time the body is written — so a read in the stream
 of a `POST` sees what the route committed.
 
-A route whose posture names no entity withholds the ability, so a scoped read
+A route whose posture names no subject withholds the ability, so a scoped read
 there fails closed rather than answering rows no posture declared. An `#[sse]`
-stream is one — a posture naming an entity is refused there — so what it emits comes from
-reads that need no scope.
+stream gated on a capability reads under the caller's ability, in its handler and
+in the stream, and each wire row it emits is judged for that caller where it is
+built; a posture naming an entity is refused there.
 
 ## Server-Sent Events
 
@@ -169,10 +170,9 @@ response.extensions_mut().insert(OpenEndedBody);
 
 Gate a stream on a **capability**: `#[authorize(Manage, Transcoding)]`, on a
 subject [`#[subject]`](/security/authorization/policies/#subjects-no-table-holds)
-declares, runs the class gate and opens no read. An entity's posture would open
-reads whose wire rows the stream writes after the route's unit ended, where no
-ability is left to judge them, so `#[authorize]` naming an entity on an `#[sse]`
-route is a compile error saying so, decided by the subject's type.
+declares, runs the class gate and opens the stream's reads to the caller's
+ability. `#[authorize]` naming an entity on an `#[sse]` route is a compile error,
+decided by the subject's type.
 
 ## Limits
 

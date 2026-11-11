@@ -106,8 +106,8 @@ pub struct FieldGuards {
     /// The field as a chain's log line and a refusal name it
     /// (`query listUsers`, `UsersResolver.posts`).
     pub label: &'static str,
-    /// The posture withholds the ability from the field's reads: no mask shapes
-    /// its answer.
+    /// The posture names no subject, so the ability is withheld from the field's
+    /// reads.
     pub withheld: bool,
     /// The posture declares a class gate, which reads the ability a guard attached.
     pub class_gated: bool,

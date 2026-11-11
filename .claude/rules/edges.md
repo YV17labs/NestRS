@@ -164,13 +164,14 @@ guard, filter or interceptor loop of its own.
    when `S` has rows. One refusal reads one sentence on every edge (RFC 6750 §3.1's
    for a scope) and files one `warn`; an edge renders the `Denial` it carries.
 7. **Each wire row judged where it is built**, never by an edge reading its reply
-   back (`data-layer.md`, *The wire row*): an entity's posture opens the unit's
-   reads, a `#[subject]`'s none, and each row the answer carries answers the caller
+   back (`data-layer.md`, *The wire row*): a posture naming a subject, an entity or
+   a `#[subject]`, opens the unit's reads to the caller's ability — a visitor's
+   where it names an entity — and each row the answer carries answers the caller
    whose ability judged it and no one else, whatever shape holds it — the edge
    writes a row its grants refuse as its own `FORBIDDEN`. **A unit whose posture
-   names no entity's read withholds the ability from its reads, on every edge**
-   (`UnmaskedReply`): a bare `#[public]`, a covered unit stating none, a
-   `#[subject]`'s, a route, a stream, a WS connection hook. A hand-written MCP
+   names no subject withholds the ability from its reads, on every edge**
+   (`UnmaskedReply`): a bare `#[public]`, a covered unit stating none, a WS
+   connection hook. A hand-written MCP
    `ServerHandler`, which declares no unit and writes no posture, reads under a
    principal's ability, a visitor's reading nothing. It is attached only where
    there is something to withhold, so a site running no guard with none at its

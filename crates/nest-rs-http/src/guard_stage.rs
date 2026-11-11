@@ -109,10 +109,10 @@ pub(crate) struct HttpGuardStage {
 /// What a stage does beside its guards once they passed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StageKind {
-    /// A route; `unmasked` when no response mask shapes its reply, so the
-    /// reads a mask would scope are withheld from it.
+    /// A route; `unmasked` when neither its posture names a subject nor a shaper
+    /// is armed on it, so its reads are withheld what its guards attached.
     Route {
-        /// No response shaper masks the route's reply.
+        /// The route's reads are withheld what its guards attached.
         unmasked: bool,
     },
     /// A self-mount's request: what the guards attached is also kept on the

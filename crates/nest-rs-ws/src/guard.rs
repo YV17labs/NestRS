@@ -42,8 +42,8 @@ pub struct MessageGuards {
     pub force: Vec<TypeId>,
     /// The class gate the message's posture declares.
     pub gate: Option<ClassGate>,
-    /// The posture withholds the ability from the message's reads: no mask
-    /// shapes its reply.
+    /// The posture names no subject, so the ability is withheld from the
+    /// message's reads.
     pub withheld: bool,
     /// What the message's `Ambient<T>` parameters read, by type.
     pub ambient: Vec<TypeId>,

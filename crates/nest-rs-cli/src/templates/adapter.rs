@@ -76,14 +76,16 @@ pub(crate) const ROWS_AS_JSON: &str =
     "    // An answer made of its rows returns the `#[expose]`d wire type wrapped in
     // `Json<...>`, each row judged for the caller where it is built.";
 
-/// The note above a single operation gated on the port's `#[subject]`, which
-/// opens no read: rows wait for the posture on their entity.
+/// The note above a single operation gated on the port's `#[subject]`: rows wait
+/// for the posture on their entity, which refuses a caller holding no grant on
+/// them.
 pub(crate) const GATED_ON_SUBJECT: &str =
-    "    // Gated on {{entity}}, this port's #[subject]: a capability no table holds, so
-    // the posture opens no read. It answers FORBIDDEN until AuthzAbility grants
+    "    // Gated on {{entity}}, this port's #[subject]: a capability no table holds. It
+    // answers FORBIDDEN until AuthzAbility grants
     // `ab.can(nest_rs::authz::Action::Read, crate::{{snake}}::{{entity}})`. Before it
     // answers with an entity's rows, it is re-gated on that entity,
-    // `#[authorize(Read, {{entity}}Entity)]`, the posture that opens their read.";
+    // `#[authorize(Read, {{entity}}Entity)]`, so a caller holding no grant on them is
+    // refused rather than handed an empty answer.";
 
 /// The GraphQL adapter for a port with no `CrudService`: guarded like its
 /// `#[crud]` twin, its operation gated on `{{subject}}` — the port's entity, or
@@ -320,7 +322,8 @@ pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!   return the `#[expose]`d wire type (`Json<T>`), each row judged for the
 //!   caller where it is built.
 //! * `#[authorize(Action, Subject)]` on a `#[subject]` — the same gate on a
-//!   capability no table holds, and no read: the answer is no row.
+//!   capability no table holds, and reads under the caller's ability, as an
+//!   entity's does.
 //!
 //! `#[public]` admits a caller with no credential, so it belongs on an endpoint
 //! `McpAccess::Public` opens, where every operation states its posture; behind

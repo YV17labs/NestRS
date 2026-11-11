@@ -138,8 +138,8 @@ pub struct OperationGuards {
     pub force: Vec<TypeId>,
     /// Which router serves the operation.
     pub kind: McpOperationKind,
-    /// The posture withholds the ability from the operation's reads: no mask
-    /// shapes its answer.
+    /// The posture names no subject, so the ability is withheld from the
+    /// operation's reads.
     pub withheld: bool,
     /// The posture declares a class gate, which reads the ability a guard attached.
     pub class_gated: bool,

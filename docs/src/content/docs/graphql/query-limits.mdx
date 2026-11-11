@@ -146,6 +146,13 @@ fragment and once per variable, in time linear in the document:
 - **A fragment no operation spreads** is refused unread, in validation's words:
   async-graphql's rules would otherwise recurse through it, and a long enough
   chain of them overflows the stack.
+- **A document rewritten as GraphQL collects it**
+  ([where a failed field's `null` lands](/graphql/errors/#where-a-failed-fields-null-lands))
+  copies a condition on a union once per member, or copies merged into a field per
+  type, each copy around the next: 434 bytes nesting ten such conditions would add
+  millions of fields. What the rewrite copies, past what it takes out, is held to
+  the same limits as it writes it: its fields to `max_complexity`, their arguments'
+  text to twice what the request may carry.
 
 A document past a limit answers as one past `max_complexity` does:
 
@@ -308,6 +315,11 @@ right behaviour for anti-DoS.
   schema scores under one each — `#[expose(complexity = 0)]`, a literal pinning a
   parent over its children, a `first: 1` relation — can be refused for its repeats
   where its score alone would pass. Raise `max_complexity`, which holds both.
+- **A rewrite counts its copies, though one runs.** Copies merged into a field per
+  type, or a union's condition copied per member, each count, where a value runs
+  its own type's alone; and the rewrite is counted at its largest, before a merge
+  inside a copy per type folds a repeat away. Such a document can be refused below
+  what runs: select the field once per type yourself.
 - **One unused fragment at a time.** A document holding several, or another
   validation error beside one, reads the first in its text alone, where validation
   would have listed them all.

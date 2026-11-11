@@ -293,7 +293,12 @@ path); a GraphQL document whose copies merge one field per type a position may h
 whose condition on a union is rewritten per member, scoring each copy, so
 complexity counts more than runs for such a document alone, never less
 (`graphql-transactions.md`, 2026-11-11; closing it: scoring the rewritten
-document per type, which async-graphql's visitor does not do); the demo chart's `checksum/secret`, one sum over every Secret the
+document per type, which async-graphql's visitor does not do), and the rewrite's
+own count of what it copies, held to `max_complexity` at its largest, counting
+copies a merge inside a copy per type then folds into one, so such a document can
+be refused a field per fold below the limit (closing it: a separate bound on the
+work, twice the limit and the document, with the limit read on the finished
+rewrite); the demo chart's `checksum/secret`, one sum over every Secret the
 chart writes, which an install handing the chart one weak secret and nothing
 else (every other app on an `existingSecret`) publishes unsalted to whoever
 reads its pods (closing it: a salt kept in the cluster, which `helm

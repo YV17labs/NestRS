@@ -1435,7 +1435,10 @@ lists what the boot, a log or the wire shows when one is missed.
   copy's cells and lost the other's.
 - **A GraphQL type condition on a union spread where a member of it is resolved**,
   `{ user { ... on SearchResult { ... on User { name } } } }` with `SearchResult` a union
-  holding `User`, answers the member's fields, where it answered `{}`.
+  holding `User`, answers the member's fields, where it answered `{}`. Spread where a
+  member is resolved among types the union does not hold, it is copied once per member,
+  and nested deep enough reads `Query is too complex.` once its copies would pass
+  `max_complexity`.
 - **A GraphQL document selecting one key twice at one place with different fields or
   arguments under different type conditions**, `{ a: user { id } ... on Query { a: org {
   id } } }`, reads an `INVALID_ARGUMENT` refusal at the copy that differs and runs

@@ -36,6 +36,7 @@ use async_graphql::parser::types::{
 use async_graphql::registry::{MetaType, Registry};
 use async_graphql::{Name, Pos, Positioned, ServerError, Value, Variables};
 
+use crate::document_cost::DocumentLimits;
 use crate::field_collection::{self, engine_applies};
 use crate::operation_units::{RECURSIVE_DEPTH, is_skipped};
 
@@ -52,21 +53,24 @@ impl OwnKey {
     /// `document`, its operation `operation` selects, collected as GraphQL §6.3.2
     /// reads it ([`field_collection::collected`]), with every selection set that could
     /// answer no key given one; `None` when it stands as sent. `registry` holds the
-    /// schema's types, and `variables` what `@skip` and `@include` read. Read once
-    /// the document's cost was counted, which bounds what each fragment expands to.
+    /// schema's types, `variables` what `@skip` and `@include` read, and `limits` what
+    /// collecting it may add. Read once the document's cost was counted, which bounds
+    /// what each fragment expands to.
     ///
     /// # Errors
     ///
     /// The refusal [`field_collection::collected`] answers: a response key whose
-    /// copies no one field answers.
+    /// copies no one field answers, or a rewrite past `limits`.
     pub(crate) fn give(
         &self,
         document: &ExecutableDocument,
         operation: &OperationDefinition,
         registry: &Registry,
         variables: &Variables,
+        limits: DocumentLimits,
     ) -> Result<Option<ExecutableDocument>, ServerError> {
-        let collected = field_collection::collected(document, operation, registry, variables)?;
+        let collected =
+            field_collection::collected(document, operation, registry, variables, limits)?;
         let (read, chosen) = collected
             .as_ref()
             .and_then(|rewritten| {
@@ -552,7 +556,13 @@ mod tests {
         let variables = Variables::from_json(variables);
         let own_key = OwnKey::default();
         own_key
-            .give(&document, &operation.node, &registry(), &variables)
+            .give(
+                &document,
+                &operation.node,
+                &registry(),
+                &variables,
+                DocumentLimits::UNBOUNDED,
+            )
             .unwrap_or_else(|refusal| panic!("{text}: {}", refusal.message))
             .and_then(|given| {
                 let key = own_key.0.get()?;
@@ -718,6 +728,7 @@ mod tests {
                         &operation.node,
                         &registry(),
                         &Variables::default(),
+                        DocumentLimits::UNBOUNDED,
                     )
                     .expect("nothing refused");
                 own_key
@@ -776,6 +787,7 @@ mod tests {
             &operation.node,
             &Registry::default(),
             &Variables::default(),
+            DocumentLimits::UNBOUNDED,
         );
         assert!(matches!(given, Ok(None)));
     }
@@ -795,8 +807,13 @@ mod tests {
         let parsing = thread_cpu_time() - started;
         let (_, operation) = selected_operation(&document, None).expect("one operation");
         let started = thread_cpu_time();
-        let given =
-            OwnKey::default().give(&document, &operation.node, &registry, &Variables::default());
+        let given = OwnKey::default().give(
+            &document,
+            &operation.node,
+            &registry,
+            &Variables::default(),
+            DocumentLimits::UNBOUNDED,
+        );
         let past = thread_cpu_time() - started;
         assert!(matches!(given, Ok(None)), "no object repeats");
         assert!(past < parsing, "parsed in {parsing:?}, then {past:?}");

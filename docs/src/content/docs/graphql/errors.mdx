@@ -384,8 +384,12 @@ even under different type conditions, where async-graphql's validation does not
 compare them: the operation runs nothing and answers one `INVALID_ARGUMENT` error at
 the copy that differs, `the operation selects "a" more than once at one place with
 different fields or arguments`. Complexity and depth count the document that runs,
-copies merged counting once ([query limits](/graphql/query-limits/#complexity)). A
-document needing none of this pays one read of its selections.
+copies merged counting once ([query limits](/graphql/query-limits/#complexity)), and
+what the rewrite copies is held to the same limits as it writes it
+([what fragments and variables multiply](/graphql/query-limits/#what-fragments-and-variables-multiply)).
+A fragment validation would refuse otherwise once inlined — on a type the schema lacks,
+carrying a directive, spread where it can never apply — is left as you sent it, so its
+refusal names it. A document needing none of this pays one read of its selections.
 
 ## Multiple errors in one response
 

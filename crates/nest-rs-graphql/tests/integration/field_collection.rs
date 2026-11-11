@@ -461,6 +461,35 @@ async fn copies_naming_different_fields_under_different_conditions_are_refused()
     );
 }
 
+/// Where one type's copies of a key merge into a field per type, every other type's
+/// copies of it are compared too: copies naming different fields are refused whichever
+/// type's they are, as validation refuses them standing alone.
+#[tokio::test]
+async fn copies_merged_per_type_name_one_field_for_every_type() {
+    let app = boot::<CellModule>().await;
+    let alone = query(&app, "{ nodes { ... on Leaf { g: fine g: leaf } } }").await;
+    assert_eq!(alone["data"], Value::Null, "{alone}");
+    let answer = query(
+        &app,
+        "{ nodes { ... on Cell { g: grid { fine } } ... on Cell { g: grid { inner { fine } } } \
+           ... on Leaf { g: fine g: leaf } } }",
+    )
+    .await;
+    assert_eq!(answer["data"], Value::Null, "{answer}");
+    let said = |answer: &Value| -> Vec<Value> {
+        answer["errors"]
+            .as_array()
+            .map(|errors| {
+                errors
+                    .iter()
+                    .map(|error| error["message"].clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(said(&answer), said(&alone), "{answer}");
+}
+
 /// GraphQL §6.3.2 *DoesFragmentTypeApply* applies a condition on a union to a value
 /// of any member of it, wherever it is resolved, where async-graphql 7.2.1
 /// (`Fields::add_set`) applies it only where that union is the type resolved.
@@ -579,6 +608,76 @@ async fn a_rewritten_document_says_what_validation_says_of_the_one_sent() {
         "The recursion depth of the query cannot be greater than `32`",
         "a cycle is refused as sent: {answer}"
     );
+}
+
+/// A fragment validation would read otherwise inlined — carrying a directive, on a
+/// type the schema lacks or no object, interface or union, spread where no value its
+/// parent holds can be its type — leaves the document as sent, and validation says of
+/// it what it says of the one sent: the fragment by its name, where it is defined.
+#[tokio::test]
+async fn a_fragment_validation_refuses_is_judged_as_sent() {
+    let app = boot::<CellModule>().await;
+    for (document, said) in [
+        (
+            "{ cell { ...E } }\nfragment E on Either @skip(if: true) { ... on Cell { fine } }",
+            vec![(
+                r#"Directive "skip" may not be used on "FRAGMENT_DEFINITION""#,
+                json!([{ "line": 2, "column": 22 }]),
+            )],
+        ),
+        (
+            "{ cell { ... on Either { ... on Cell { fine } } ...F } }\n\
+             fragment F on Stone { stone }",
+            vec![(
+                r#"Fragment "F" cannot be spread here as objects of type "Cell" can never be of type "Stone""#,
+                json!([{ "line": 1, "column": 49 }]),
+            )],
+        ),
+        (
+            "{ cell { ... on Either { ... on Cell { fine } } ...F } }\n\
+             fragment F on Nowhere { fine }",
+            vec![(
+                r#"Unknown type "Nowhere""#,
+                json!([{ "line": 2, "column": 1 }]),
+            )],
+        ),
+        (
+            "{ cell { ... on Either { ... on Cell { fine } } ...F } }\n\
+             fragment F on Int { fine }",
+            vec![
+                (
+                    r#"Fragment "F" cannot condition non composite type "Int""#,
+                    json!([{ "line": 2, "column": 1 }]),
+                ),
+                (
+                    r#"Unknown field "fine" on type "Int"."#,
+                    json!([{ "line": 2, "column": 21 }]),
+                ),
+                (
+                    r#"Fragment "F" cannot be spread here as objects of type "Cell" can never be of type "Int""#,
+                    json!([{ "line": 1, "column": 49 }]),
+                ),
+            ],
+        ),
+    ] {
+        let answer = query(&app, document).await;
+        assert_eq!(answer["data"], Value::Null, "{document}: {answer}");
+        let said_back: Vec<(&str, Value)> = answer["errors"]
+            .as_array()
+            .map(|errors| {
+                errors
+                    .iter()
+                    .map(|error| {
+                        (
+                            error["message"].as_str().unwrap_or_default(),
+                            error["locations"].clone(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(said_back, said, "{document}: {answer}");
+    }
 }
 
 /// What a rewrite moves or leaves out keeps the variables it reads: no variable is

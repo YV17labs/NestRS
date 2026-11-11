@@ -86,12 +86,13 @@ impl Extension for RequestExtension {
         // read expands, and copies no one field answers are refused once validation
         // passed.
         let mut uncollected = None;
+        let limits = self.limits();
         let read = match request.parsed_query() {
             Ok(document) => match document_cost::refusal(
                 document,
                 operation.as_deref(),
                 &variables,
-                self.limits(),
+                limits,
                 registry,
             ) {
                 Some(refusal) => Err(refusal),
@@ -101,13 +102,14 @@ impl Extension for RequestExtension {
                         // field once.
                         let read = match &own_key {
                             Some(own_key) => {
-                                own_key.give(document, &selected.node, registry, &variables)
+                                own_key.give(document, &selected.node, registry, &variables, limits)
                             }
                             None => field_collection::collected(
                                 document,
                                 &selected.node,
                                 registry,
                                 &variables,
+                                limits,
                             ),
                         };
                         read.unwrap_or_else(|refusal| {

@@ -24,6 +24,14 @@
 //! Complexity and depth count what runs. Copies naming different fields or
 //! arguments, which no one field answers, are refused, as is a copy the rewrite
 //! could not merge.
+//!
+//! What the rewrite copies is held to what a document may add, as what its fragments
+//! repeat is (`document_cost.rs`): copies per member of a union or per type of a
+//! position, nested, grow as their count to the power of the nesting, so the fields
+//! the rewrite writes past those it replaces count against `max_complexity`, and the
+//! text of their arguments against what a request's arguments may copy, refused as
+//! too complex before it copies past either. A fragment validation would read
+//! otherwise once inlined is not inlined, and its document stands as sent.
 
 use std::collections::{HashMap, HashSet};
 
@@ -35,12 +43,15 @@ use async_graphql::parser::types::{
 use async_graphql::registry::{MetaField, MetaType, MetaTypeName, Registry};
 use async_graphql::{Name, Pos, Positioned, ServerError, Variables};
 
+use crate::document_cost::{DocumentLimits, TOO_COMPLEX, text_weight};
 use crate::operation_units::{RECURSIVE_DEPTH, is_condition, is_skipped};
 
 /// `document`, its operation `operation` collected as §6.3.2 reads it; `None` when
 /// async-graphql answers it so as it stands, or when it cannot be rewritten, which
 /// only a document validation refuses comes to. `registry` holds the schema's
-/// types, and `variables` what `@skip` and `@include` read.
+/// types, `variables` what `@skip` and `@include` read, and `limits` what the
+/// rewrite may add: fields, as `repeated_selections` counts them, and the text of
+/// their arguments, as `copied_bytes` does.
 ///
 /// # Errors
 ///
@@ -48,12 +59,14 @@ use crate::operation_units::{RECURSIVE_DEPTH, is_condition, is_skipped};
 /// copy that differs: copies naming different fields or arguments, at a mutation's
 /// root or where a list of lists stands, and, in a document that could not be
 /// rewritten, a mutation's root field selected twice or a list of lists selected
-/// twice otherwise.
+/// twice otherwise. async-graphql's refusal of a document past `max_complexity`,
+/// for a rewrite that would write past `limits`.
 pub(crate) fn collected(
     document: &ExecutableDocument,
     operation: &OperationDefinition,
     registry: &Registry,
     variables: &Variables,
+    limits: DocumentLimits,
 ) -> Result<Option<ExecutableDocument>, ServerError> {
     let Some(root) = root_type(registry, operation.ty) else {
         return Ok(None);
@@ -66,6 +79,10 @@ pub(crate) fn collected(
         registry,
         variables,
         drawn: 0,
+        room: Room(Weight {
+            fields: limits.repeated_selections,
+            bytes: limits.copied_bytes,
+        }),
     };
     let Some(rewritten) = collection.rewrite(document, operation, root)? else {
         return match uncollected(fragments, operation, root, registry, variables) {
@@ -912,6 +929,107 @@ fn by_key<'a>(fields: Vec<&'a Positioned<Field>>) -> IndexMap<&'a str, Vec<&'a P
     keys
 }
 
+/// What part of a document holds that a copy of it copies: its fields, and the text
+/// of the arguments they and its fragments' directives pass.
+#[derive(Clone, Copy, Default)]
+struct Weight {
+    fields: usize,
+    bytes: usize,
+}
+
+impl Weight {
+    fn add(&mut self, other: Self) {
+        self.fields = self.fields.saturating_add(other.fields);
+        self.bytes = self.bytes.saturating_add(other.bytes);
+    }
+
+    /// What `set` weighs.
+    fn of_set(set: &SelectionSet) -> Self {
+        let mut weight = Self::default();
+        for selection in &set.items {
+            weight.add(Self::of(&selection.node));
+        }
+        weight
+    }
+
+    /// What `selection` weighs, all it holds included.
+    fn of(selection: &Selection) -> Self {
+        match selection {
+            Selection::Field(field) => Self::of_field(&field.node),
+            Selection::InlineFragment(fragment) => {
+                let mut weight = Self::of_directives(&fragment.node.directives);
+                weight.add(Self::of_set(&fragment.node.selection_set.node));
+                weight
+            }
+            Selection::FragmentSpread(spread) => Self::of_directives(&spread.node.directives),
+        }
+    }
+
+    /// What `field` weighs, its selections included.
+    fn of_field(field: &Field) -> Self {
+        let mut weight = Self::of_field_alone(field);
+        weight.add(Self::of_set(&field.selection_set.node));
+        weight
+    }
+
+    /// What `field` weighs without its selections.
+    fn of_field_alone(field: &Field) -> Self {
+        let passed = field.arguments.iter().fold(0_usize, |bytes, (_, value)| {
+            bytes.saturating_add(text_weight(&value.node))
+        });
+        Self {
+            fields: 1,
+            bytes: passed.saturating_add(arguments_weight(&field.directives)),
+        }
+    }
+
+    /// What `directives` weigh.
+    fn of_directives(directives: &[Positioned<Directive>]) -> Self {
+        Self {
+            fields: 0,
+            bytes: arguments_weight(directives),
+        }
+    }
+}
+
+/// The text of the arguments `directives` pass.
+fn arguments_weight(directives: &[Positioned<Directive>]) -> usize {
+    directives
+        .iter()
+        .flat_map(|directive| &directive.node.arguments)
+        .fold(0, |bytes, (_, value)| {
+            bytes.saturating_add(text_weight(&value.node))
+        })
+}
+
+/// What a rewrite may still add to the document it was handed.
+struct Room(Weight);
+
+impl Room {
+    /// Take `weight` out of what is left, before writing what weighs it.
+    ///
+    /// # Errors
+    ///
+    /// async-graphql's refusal of a document past `max_complexity`, once less is left.
+    fn spend(&mut self, weight: Weight) -> Result<(), ServerError> {
+        match (
+            self.0.fields.checked_sub(weight.fields),
+            self.0.bytes.checked_sub(weight.bytes),
+        ) {
+            (Some(fields), Some(bytes)) => {
+                self.0 = Weight { fields, bytes };
+                Ok(())
+            }
+            _ => Err(ServerError::new(TOO_COMPLEX, None)),
+        }
+    }
+
+    /// Give back what a selection leaving the document weighed.
+    fn free(&mut self, weight: Weight) {
+        self.0.add(weight);
+    }
+}
+
 /// One field a place collects: where it stands, by the index of each selection down
 /// from the place's set through inline fragments, and the type it is selected on.
 struct Occurrence {
@@ -936,6 +1054,8 @@ struct Collection<'a> {
     registry: &'a Registry,
     variables: &'a Variables,
     drawn: usize,
+    /// What it may still add, what it took out given back before it copies.
+    room: Room,
 }
 
 impl Collection<'_> {
@@ -948,9 +1068,12 @@ impl Collection<'_> {
         }
     }
 
-    /// `document` with `operation`, selecting on `root`, collected; `None` when its
-    /// spreads cannot be inlined: a fragment validation does not know, a cycle, or a
-    /// nesting async-graphql refuses.
+    /// `document` with `operation`, selecting on `root`, collected; `None` when one
+    /// of its spreads cannot be inlined ([`inline`]).
+    ///
+    /// # Errors
+    ///
+    /// Copies of a key no one field answers, or a rewrite past its room.
     fn rewrite(
         &mut self,
         document: &ExecutableDocument,
@@ -960,7 +1083,9 @@ impl Collection<'_> {
         let mut inlined = HashSet::new();
         let Some(mut set) = inline(
             &document.fragments,
+            self.registry,
             &operation.selection_set,
+            Some(root),
             &mut Vec::new(),
             &mut inlined,
             0,
@@ -968,7 +1093,7 @@ impl Collection<'_> {
             return Ok(None);
         };
         self.merge(&mut set, root, operation.ty == OperationType::Mutation, 0)?;
-        self.conditions(&mut set.node, root, &[(root, root)], 0);
+        self.conditions(&mut set.node, root, &[(root, root)], 0)?;
         Ok(Some(with_operation(document, operation, set, &inlined)))
     }
 
@@ -994,7 +1119,7 @@ impl Collection<'_> {
             for merge in merges {
                 match merge {
                     Merge::InPlace(copies) => self.merge_in_place(set, copies),
-                    Merge::PerType(copies) => added.extend(self.merge_per_type(set, copies)),
+                    Merge::PerType(copies) => added.extend(self.merge_per_type(set, copies)?),
                 }
             }
             added.sort_by_key(|(after, _)| *after);
@@ -1057,6 +1182,9 @@ impl Collection<'_> {
         let mut merges = Vec::new();
         'keys: for (key, mut groups) in keys {
             let mut owed = false;
+            // The first copy naming another field or other arguments than its type's
+            // first: wherever it stands, a key owing a merge is then no one field.
+            let mut unlike_at: Option<Pos> = None;
             for (concrete, group) in &groups {
                 let fields: Vec<&Positioned<Field>> = group
                     .iter()
@@ -1078,27 +1206,30 @@ impl Collection<'_> {
                         .filter(|field| seen.insert(field.pos))
                         .collect()
                 };
-                let needed = match root {
-                    true => group.len() > 1,
-                    false => {
-                        distinct.len() > 1
-                            && declared(registry, concrete, &distinct[0].node.name.node)
-                                .and_then(|declared| copies.unjoined_below(&distinct, declared, 0))
-                                .is_some()
-                    }
-                };
-                if needed {
-                    if let Some(other) = distinct[1..]
-                        .iter()
-                        .find(|field| !same_field(&distinct[0].node, &field.node))
-                    {
-                        return Err(unlike(&key, other.pos));
-                    }
-                    owed = true;
+                if let Some(other) = distinct[1..]
+                    .iter()
+                    .find(|field| !same_field(&distinct[0].node, &field.node))
+                {
+                    unlike_at = Some(unlike_at.map_or(other.pos, |at| at.min(other.pos)));
                 }
+                owed = owed
+                    || match root {
+                        true => group.len() > 1,
+                        false => {
+                            distinct.len() > 1
+                                && declared(registry, concrete, &distinct[0].node.name.node)
+                                    .and_then(|declared| {
+                                        copies.unjoined_below(&distinct, declared, 0)
+                                    })
+                                    .is_some()
+                        }
+                    };
             }
             if !owed {
                 continue;
+            }
+            if let Some(at) = unlike_at {
+                return Err(unlike(&key, at));
             }
             let uniform = groups.len() == concretes.len()
                 && groups.windows(2).all(|pair| {
@@ -1122,6 +1253,7 @@ impl Collection<'_> {
     /// first: each other's selections appended to it, under a condition on its own
     /// type where that is not the first's, and the copy left as the `@skip` and
     /// `@include` it carried; a copy one fragment spread again repeats goes whole.
+    /// What leaves the document is given back to the room.
     fn merge_in_place(&mut self, set: &mut Positioned<SelectionSet>, copies: Vec<Occurrence>) {
         let registry = self.registry;
         let Some((first, others)) = copies.split_first() else {
@@ -1136,10 +1268,12 @@ impl Collection<'_> {
                 continue;
             };
             if !seen.insert(other.pos) {
+                self.room.free(Weight::of_field(&taken.node));
                 continue;
             }
+            self.room.free(Weight::of_field_alone(&taken.node));
             let source_ty = field_type(registry, &other.on, &taken.node.name.node);
-            moved.extend(self.carried(taken, source_ty, target_ty));
+            moved.extend(carried(taken.node.selection_set, source_ty, target_ty));
         }
         let drawn = self.draw();
         if let Some(target) = field_at(&mut set.node, &first.path) {
@@ -1151,20 +1285,35 @@ impl Collection<'_> {
     /// Merge each possible type's copies into one field under a condition on that
     /// type, every copy left as the `@skip` and `@include` it carried; what it
     /// returns goes after the selection holding the type's first copy, by its index.
+    /// Every copy leaves its place, so what they weigh is given back before any is
+    /// copied, and each type's field spends what it copies.
+    ///
+    /// # Errors
+    ///
+    /// A merge past the room.
     fn merge_per_type(
         &mut self,
         set: &mut Positioned<SelectionSet>,
         copies: Vec<(String, Vec<Occurrence>)>,
-    ) -> Vec<(usize, Positioned<Selection>)> {
+    ) -> Result<Vec<(usize, Positioned<Selection>)>, ServerError> {
         let registry = self.registry;
+        let mut leaving = HashSet::new();
+        for occurrence in copies.iter().flat_map(|(_, group)| group) {
+            if leaving.insert(occurrence.path.as_slice())
+                && let Some(copy) = selection_field(&set.node, &occurrence.path)
+            {
+                self.room.free(Weight::of_field(&copy.node));
+            }
+        }
         let mut built = Vec::new();
         for (concrete, group) in &copies {
             let Some(first) = group.first() else {
                 continue;
             };
-            let Some(field) = selection_field(&set.node, &first.path).cloned() else {
+            let Some(field) = selection_field(&set.node, &first.path) else {
                 continue;
             };
+            self.room.spend(Weight::of_field_alone(&field.node))?;
             let target_ty = field_type(registry, concrete, &field.node.name.node);
             let mut items = Vec::new();
             let mut seen = HashSet::new();
@@ -1172,16 +1321,26 @@ impl Collection<'_> {
                 if !seen.insert(occurrence.pos) {
                     continue;
                 }
-                let Some(copy) = selection_field(&set.node, &occurrence.path).cloned() else {
+                let Some(copy) = selection_field(&set.node, &occurrence.path) else {
                     continue;
                 };
+                let below = &copy.node.selection_set;
+                self.room.spend(Weight::of_set(&below.node))?;
                 let source_ty = field_type(registry, &occurrence.on, &copy.node.name.node);
-                items.extend(self.carried(copy, source_ty, target_ty));
+                items.extend(carried(below.clone(), source_ty, target_ty));
             }
-            let mut merged = field;
-            merged.node.selection_set = Positioned::new(SelectionSet { items }, self.draw());
-            let at = merged.pos;
-            let items = vec![Positioned::new(Selection::Field(merged), at)];
+            let at = field.pos;
+            let merged = Field {
+                alias: field.node.alias.clone(),
+                name: field.node.name.clone(),
+                arguments: field.node.arguments.clone(),
+                directives: field.node.directives.clone(),
+                selection_set: Positioned::new(SelectionSet { items }, self.draw()),
+            };
+            let items = vec![Positioned::new(
+                Selection::Field(Positioned::new(merged, at)),
+                at,
+            )];
             let wrapped = Positioned::new(SelectionSet { items }, self.draw());
             built.push((
                 first.path[0],
@@ -1193,25 +1352,7 @@ impl Collection<'_> {
                 take_field(&mut set.node, &occurrence.path);
             }
         }
-        built
-    }
-
-    /// The selections of `copy`, to stand in a field of `target` type: as they are
-    /// where `copy`'s own type is the same, under a condition on it otherwise.
-    fn carried(
-        &mut self,
-        copy: Positioned<Field>,
-        source: Option<&str>,
-        target: Option<&str>,
-    ) -> Vec<Positioned<Selection>> {
-        let set = copy.node.selection_set;
-        match source {
-            Some(source) if Some(source) != target && !set.node.items.is_empty() => {
-                let at = set.pos;
-                vec![inline_fragment(Some(source), Vec::new(), set, at)]
-            }
-            _ => set.node.items,
-        }
+        Ok(built)
     }
 
     /// Rewrite, in `set`, selected on `parent`, each condition on a union that no
@@ -1219,15 +1360,19 @@ impl Collection<'_> {
     /// it: under no condition where each is a member, so the set's own type resolves
     /// it, and under a condition on each member otherwise; what applies to none stays
     /// under the union's condition, which runs nothing there. Then the same below.
+    ///
+    /// # Errors
+    ///
+    /// A rewrite past the room.
     fn conditions(
         &mut self,
         set: &mut SelectionSet,
         parent: &str,
         reaching: &[(&str, &str)],
         depth: usize,
-    ) {
+    ) -> Result<(), ServerError> {
         if depth > RECURSIVE_DEPTH {
-            return;
+            return Ok(());
         }
         let registry = self.registry;
         let mut index = 0;
@@ -1245,7 +1390,8 @@ impl Collection<'_> {
                     .filter(|condition| diverges(registry, condition, reaching))
                     .map(|condition| {
                         self.for_members(&set.items[index], &condition, parent, reaching)
-                    }),
+                    })
+                    .transpose()?,
                 _ => None,
             };
             if let Some(replacement) = rewritten {
@@ -1253,14 +1399,15 @@ impl Collection<'_> {
                 set.items.splice(index..=index, replacement);
                 // The rewritten selections apply as §6.3.2 reads, and are read below.
                 for at in index..index + added {
-                    self.conditions_of(&mut set.items[at], parent, reaching, depth);
+                    self.conditions_of(&mut set.items[at], parent, reaching, depth)?;
                 }
                 index += added;
                 continue;
             }
-            self.conditions_of(&mut set.items[index], parent, reaching, depth);
+            self.conditions_of(&mut set.items[index], parent, reaching, depth)?;
             index += 1;
         }
+        Ok(())
     }
 
     /// The conditions below `selection`, selected on `parent` for the values
@@ -1271,21 +1418,21 @@ impl Collection<'_> {
         parent: &str,
         reaching: &[(&str, &str)],
         depth: usize,
-    ) {
+    ) -> Result<(), ServerError> {
         let registry = self.registry;
         match &mut selection.node {
             Selection::Field(field) => {
                 if field.node.selection_set.node.items.is_empty() {
-                    return;
+                    return Ok(());
                 }
                 let Some(ty) = field_type(registry, parent, &field.node.name.node) else {
-                    return;
+                    return Ok(());
                 };
                 let below: Vec<(&str, &str)> = possible(registry, ty)
                     .into_iter()
                     .map(|concrete| (concrete, ty))
                     .collect();
-                self.conditions(&mut field.node.selection_set.node, ty, &below, depth + 1);
+                self.conditions(&mut field.node.selection_set.node, ty, &below, depth + 1)
             }
             Selection::InlineFragment(fragment) => match &fragment.node.type_condition {
                 Some(condition) => {
@@ -1297,19 +1444,20 @@ impl Collection<'_> {
                                 .map(|resolving| (concrete, resolving))
                         })
                         .collect();
-                    if !below.is_empty() {
-                        // `below` borrows the registry's names, never the condition.
-                        let condition = registry
-                            .types
-                            .get_key_value(condition.as_str())
-                            .map_or("", |(name, _)| name.as_str());
-                        self.conditions(
-                            &mut fragment.node.selection_set.node,
-                            condition,
-                            &below,
-                            depth + 1,
-                        );
+                    if below.is_empty() {
+                        return Ok(());
                     }
+                    // `below` borrows the registry's names, never the condition.
+                    let condition = registry
+                        .types
+                        .get_key_value(condition.as_str())
+                        .map_or("", |(name, _)| name.as_str());
+                    self.conditions(
+                        &mut fragment.node.selection_set.node,
+                        condition,
+                        &below,
+                        depth + 1,
+                    )
                 }
                 None => self.conditions(
                     &mut fragment.node.selection_set.node,
@@ -1318,23 +1466,29 @@ impl Collection<'_> {
                     depth + 1,
                 ),
             },
-            Selection::FragmentSpread(_) => {}
+            Selection::FragmentSpread(_) => Ok(()),
         }
     }
 
     /// What stands for the condition on the union `union` of `selection`, at a set
-    /// selected on `parent` for the values `reaching`.
+    /// selected on `parent` for the values `reaching`. The condition leaves its place,
+    /// so what it weighs is given back before any of it is copied.
+    ///
+    /// # Errors
+    ///
+    /// Copies past the room.
     fn for_members(
         &mut self,
         selection: &Positioned<Selection>,
         union: &str,
         parent: &str,
         reaching: &[(&str, &str)],
-    ) -> Vec<Positioned<Selection>> {
+    ) -> Result<Vec<Positioned<Selection>>, ServerError> {
         let registry = self.registry;
         let Selection::InlineFragment(fragment) = &selection.node else {
-            return vec![selection.clone()];
+            return Ok(vec![selection.clone()]);
         };
+        self.room.free(Weight::of(&selection.node));
         let at = selection.pos;
         let directives = &fragment.node.directives;
         let set = &fragment.node.selection_set;
@@ -1353,7 +1507,12 @@ impl Collection<'_> {
                 .collect(),
         };
         for (condition, within) in &live_sets {
-            let live = kept(&set.node, &|on| overlaps(registry, on, within));
+            let live = kept(
+                &set.node,
+                &|on| overlaps(registry, on, within),
+                &mut self.room,
+            )?;
+            self.room.spend(Weight::of_directives(directives))?;
             rewritten.push(inline_fragment(
                 *condition,
                 directives.clone(),
@@ -1365,84 +1524,134 @@ impl Collection<'_> {
             .iter()
             .flat_map(|(_, within)| within.iter().copied())
             .collect();
-        let residue = left(&set.node, &|on| overlaps(registry, on, &within));
+        let residue = left(
+            &set.node,
+            &|on| overlaps(registry, on, &within),
+            &mut self.room,
+        )?;
         if !residue.items.is_empty() {
-            let mut kept_under_union = fragment.clone();
-            kept_under_union.node.selection_set = Positioned::new(residue, set.pos);
-            rewritten.push(Positioned::new(
-                Selection::InlineFragment(kept_under_union),
-                at,
-            ));
+            self.room.spend(Weight::of_directives(directives))?;
+            rewritten.push(with_set(selection, fragment, residue));
         }
-        rewritten
+        Ok(rewritten)
+    }
+}
+
+/// The selections of a copy's `set`, to stand in a field of `target` type: as they
+/// are where the copy's own type, `source`, is the same, under a condition on it
+/// otherwise.
+fn carried(
+    set: Positioned<SelectionSet>,
+    source: Option<&str>,
+    target: Option<&str>,
+) -> Vec<Positioned<Selection>> {
+    match source {
+        Some(source) if Some(source) != target && !set.node.items.is_empty() => {
+            let at = set.pos;
+            vec![inline_fragment(Some(source), Vec::new(), set, at)]
+        }
+        _ => set.node.items,
     }
 }
 
 /// What of `set`, the selections of a condition on a union, stands where `live` says
 /// of a condition's type: `__typename`, the conditions on a type `live` admits, and
-/// what a selection with no condition holds of them, its directives kept.
-fn kept(set: &SelectionSet, live: &dyn Fn(&str) -> bool) -> SelectionSet {
+/// what a selection with no condition holds of them, its directives kept. Each copy
+/// spends what it weighs of `room`.
+///
+/// # Errors
+///
+/// A copy past the room.
+fn kept(
+    set: &SelectionSet,
+    live: &dyn Fn(&str) -> bool,
+    room: &mut Room,
+) -> Result<SelectionSet, ServerError> {
     let mut items = Vec::new();
     for selection in &set.items {
         match &selection.node {
             Selection::Field(field) if field.node.name.node == "__typename" => {
+                room.spend(Weight::of(&selection.node))?;
                 items.push(selection.clone());
             }
             Selection::Field(_) | Selection::FragmentSpread(_) => {}
             Selection::InlineFragment(fragment) => match &fragment.node.type_condition {
                 Some(condition) => {
                     if live(&condition.node.on.node) {
+                        room.spend(Weight::of(&selection.node))?;
                         items.push(selection.clone());
                     }
                 }
                 None => {
-                    let below = kept(&fragment.node.selection_set.node, live);
+                    let below = kept(&fragment.node.selection_set.node, live, room)?;
                     if !below.items.is_empty() || !fragment.node.directives.is_empty() {
+                        room.spend(Weight::of_directives(&fragment.node.directives))?;
                         items.push(with_set(selection, fragment, below));
                     }
                 }
             },
         }
     }
-    SelectionSet { items }
+    Ok(SelectionSet { items })
 }
 
 /// What of `set` [`kept`] leaves nowhere `live` admits: every field but
 /// `__typename`, which a union declares none of, and the conditions on a type it
-/// does not admit, each where it was written.
-fn left(set: &SelectionSet, live: &dyn Fn(&str) -> bool) -> SelectionSet {
+/// does not admit, each where it was written. Each copy spends what it weighs of
+/// `room`.
+///
+/// # Errors
+///
+/// A copy past the room.
+fn left(
+    set: &SelectionSet,
+    live: &dyn Fn(&str) -> bool,
+    room: &mut Room,
+) -> Result<SelectionSet, ServerError> {
     let mut items = Vec::new();
     for selection in &set.items {
         match &selection.node {
             Selection::Field(field) if field.node.name.node == "__typename" => {}
-            Selection::Field(_) | Selection::FragmentSpread(_) => items.push(selection.clone()),
+            Selection::Field(_) | Selection::FragmentSpread(_) => {
+                room.spend(Weight::of(&selection.node))?;
+                items.push(selection.clone());
+            }
             Selection::InlineFragment(fragment) => match &fragment.node.type_condition {
                 Some(condition) => {
                     if !live(&condition.node.on.node) {
+                        room.spend(Weight::of(&selection.node))?;
                         items.push(selection.clone());
                     }
                 }
                 None => {
-                    let below = left(&fragment.node.selection_set.node, live);
+                    let below = left(&fragment.node.selection_set.node, live, room)?;
                     if !below.items.is_empty() {
+                        room.spend(Weight::of_directives(&fragment.node.directives))?;
                         items.push(with_set(selection, fragment, below));
                     }
                 }
             },
         }
     }
-    SelectionSet { items }
+    Ok(SelectionSet { items })
 }
 
-/// `selection`, the inline fragment `fragment`, holding `items` instead.
+/// `selection`, the inline fragment `fragment`, holding `items` instead, nothing it
+/// held copied.
 fn with_set(
     selection: &Positioned<Selection>,
     fragment: &Positioned<InlineFragment>,
     items: SelectionSet,
 ) -> Positioned<Selection> {
-    let mut rewritten = fragment.clone();
-    rewritten.node.selection_set = Positioned::new(items, fragment.node.selection_set.pos);
-    Positioned::new(Selection::InlineFragment(rewritten), selection.pos)
+    let rewritten = InlineFragment {
+        type_condition: fragment.node.type_condition.clone(),
+        directives: fragment.node.directives.clone(),
+        selection_set: Positioned::new(items, fragment.node.selection_set.pos),
+    };
+    Positioned::new(
+        Selection::InlineFragment(Positioned::new(rewritten, fragment.pos)),
+        selection.pos,
+    )
 }
 
 /// An inline fragment at `at` holding `set`, carrying `directives`, under a
@@ -1654,13 +1863,20 @@ fn prune(set: &mut SelectionSet) {
     });
 }
 
-/// `set`, each fragment spread in it inlined under the type condition its fragment
-/// names and the directives the spread carries, `inlined` naming each; `None` for a
-/// spread of a fragment the document does not define, a cycle, or a nesting past
-/// [`RECURSIVE_DEPTH`], which async-graphql refuses before validation.
+/// `set`, selected on `on` where the schema names it, each fragment spread in it
+/// inlined under the type condition its fragment names and the directives the spread
+/// carries, `inlined` naming each, each selection copied once;
+/// `None` for a spread async-graphql refuses before validation — of a fragment the
+/// document does not define, in a cycle, nested past [`RECURSIVE_DEPTH`] — or one
+/// validation reads otherwise once inlined, naming the fragment or placing it where
+/// it is defined, as a spread's refusal does: a fragment carrying a directive, one on
+/// a type the schema lacks or on no object, interface or union, and a spread where no
+/// value of `on` can be of its fragment's type.
 fn inline<'d>(
     fragments: &'d HashMap<Name, Positioned<FragmentDefinition>>,
+    registry: &Registry,
     set: &Positioned<SelectionSet>,
+    on: Option<&str>,
     expanding: &mut Vec<&'d str>,
     inlined: &mut HashSet<&'d str>,
     depth: usize,
@@ -1672,40 +1888,74 @@ fn inline<'d>(
     for selection in &set.node.items {
         let rewritten = match &selection.node {
             Selection::Field(field) => {
-                let mut field = field.clone();
-                if !field.node.selection_set.node.items.is_empty() {
-                    field.node.selection_set = inline(
+                let (node, at) = (&field.node, field.pos);
+                let selection_set = match node.selection_set.node.items.is_empty() {
+                    true => node.selection_set.clone(),
+                    false => inline(
                         fragments,
-                        &field.node.selection_set,
+                        registry,
+                        &node.selection_set,
+                        on.and_then(|on| field_type(registry, on, &node.name.node)),
                         expanding,
                         inlined,
                         depth + 1,
-                    )?;
-                }
-                Selection::Field(field)
+                    )?,
+                };
+                let field = Field {
+                    alias: node.alias.clone(),
+                    name: node.name.clone(),
+                    arguments: node.arguments.clone(),
+                    directives: node.directives.clone(),
+                    selection_set,
+                };
+                Selection::Field(Positioned::new(field, at))
             }
             Selection::InlineFragment(fragment) => {
-                let mut fragment = fragment.clone();
-                fragment.node.selection_set = inline(
-                    fragments,
-                    &fragment.node.selection_set,
-                    expanding,
-                    inlined,
-                    depth + 1,
-                )?;
-                Selection::InlineFragment(fragment)
+                let (node, at) = (&fragment.node, fragment.pos);
+                let within = node
+                    .type_condition
+                    .as_ref()
+                    .map_or(on, |condition| Some(condition.node.on.node.as_str()));
+                let fragment = InlineFragment {
+                    type_condition: node.type_condition.clone(),
+                    directives: node.directives.clone(),
+                    selection_set: inline(
+                        fragments,
+                        registry,
+                        &node.selection_set,
+                        within,
+                        expanding,
+                        inlined,
+                        depth + 1,
+                    )?,
+                };
+                Selection::InlineFragment(Positioned::new(fragment, at))
             }
             Selection::FragmentSpread(spread) => {
                 let (name, definition) =
                     fragments.get_key_value(spread.node.fragment_name.node.as_str())?;
                 let name = name.as_str();
-                if expanding.contains(&name) {
+                let condition = definition.node.type_condition.node.on.node.as_str();
+                let spreadable = on
+                    .filter(|on| registry.types.contains_key(*on))
+                    .is_none_or(|on| overlaps(registry, condition, &possible(registry, on)));
+                let composite = registry
+                    .types
+                    .get(condition)
+                    .is_some_and(MetaType::is_composite);
+                if expanding.contains(&name)
+                    || !definition.node.directives.is_empty()
+                    || !composite
+                    || !spreadable
+                {
                     return None;
                 }
                 expanding.push(name);
                 let selections = inline(
                     fragments,
+                    registry,
                     &definition.node.selection_set,
+                    Some(condition),
                     expanding,
                     inlined,
                     depth + 1,
@@ -1729,8 +1979,7 @@ fn inline<'d>(
 
 /// `document` with `operation`'s selections `set`, and without the fragments it
 /// `inlined` no other operation spreads: what validation still reads of one is what
-/// each spread inlined, under its condition. A fragment carrying a directive stays,
-/// for validation to read it.
+/// each spread inlined, under its condition.
 fn with_operation(
     document: &ExecutableDocument,
     operation: &OperationDefinition,
@@ -1762,10 +2011,8 @@ fn with_operation(
     let fragments = document
         .fragments
         .iter()
-        .filter(|(name, fragment)| {
-            !inlined.contains(name.as_str())
-                || spread_elsewhere.contains(name.as_str())
-                || !fragment.node.directives.is_empty()
+        .filter(|(name, _)| {
+            !inlined.contains(name.as_str()) || spread_elsewhere.contains(name.as_str())
         })
         .map(|(name, fragment)| (name.clone(), fragment.clone()))
         .collect();
@@ -1826,8 +2073,18 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::config::GraphqlConfig;
+    use crate::document_cost::TOO_COMPLEX;
     use crate::operation_units::selected_operation;
     use crate::testing::thread_cpu_time;
+
+    /// What a deployment left at its defaults lets collecting a document add.
+    fn deployed() -> DocumentLimits {
+        DocumentLimits {
+            repeated_selections: GraphqlConfig::default().repeated_selections(),
+            ..DocumentLimits::UNBOUNDED
+        }
+    }
 
     #[derive(SimpleObject)]
     struct Fine {
@@ -1937,8 +2194,14 @@ mod tests {
         let document = parse_query(text).expect("the document parses");
         let (_, operation) = selected_operation(&document, name).expect("an operation");
         let variables = Variables::from_json(variables);
-        let rewritten = collected(&document, &operation.node, &registry(), &variables)
-            .map_err(|refusal| refusal.message)?;
+        let rewritten = collected(
+            &document,
+            &operation.node,
+            &registry(),
+            &variables,
+            deployed(),
+        )
+        .map_err(|refusal| refusal.message)?;
         Ok(rewritten.map(|rewritten| {
             let chosen = chosen(&rewritten, &operation.node).expect("the operation");
             let mut text = String::new();
@@ -2173,6 +2436,11 @@ mod tests {
                 "{ g: grid { fine } ... on Query { g: fine { fine } } }",
                 "g",
             ),
+            (
+                "{ node { ... on Fine { g: grid { fine } } ... on Fine { g: grid { inner { fine } } } \
+                 ... on Third { g: fine g: grid { fine } } } }",
+                "g",
+            ),
         ] {
             assert_eq!(
                 collected_as(document, None, json!({})),
@@ -2190,6 +2458,7 @@ mod tests {
             &operation.node,
             &registry(),
             &Variables::default(),
+            deployed(),
         )
         .expect_err("refused");
         assert_eq!(refused.locations, [Pos { line: 4, column: 5 }]);
@@ -2278,8 +2547,7 @@ mod tests {
     }
 
     /// A fragment the operation alone spreads leaves the document once inlined; one
-    /// another operation spreads stays, and so does one carrying a directive, for
-    /// validation to read.
+    /// another operation spreads stays, for validation to read.
     #[test]
     fn a_fragment_leaves_the_document_once_nothing_spreads_it() {
         assert_eq!(
@@ -2297,13 +2565,23 @@ mod tests {
                 "{ fine { ... { ... on Fine { fine } } } } fragment E".to_owned()
             ))
         );
-        assert_eq!(
-            rewritten(
-                "{ fine { ...E } } fragment E on Either @skip(if: true) { ... on Fine { fine } }"
-            )
-            .as_deref(),
-            Some("{ fine { ... { ... on Fine { fine } } } } fragment E")
-        );
+    }
+
+    /// A fragment validation refuses otherwise once inlined — carrying a directive, on
+    /// a type the schema lacks or no object, interface or union, spread where no value
+    /// it may hold can be its type — is not inlined: the document stands as sent, and
+    /// validation says of it what it says of the one sent.
+    #[test]
+    fn a_fragment_validation_reads_otherwise_inlined_stands_as_sent() {
+        for document in [
+            "{ fine { ...E } } fragment E on Either @skip(if: true) { ... on Fine { fine } }",
+            "{ fine { ... on Either { ... on Fine { fine } } ...F } } fragment F on Other { other }",
+            "{ fine { ... on Either { ... on Fine { fine } } ...F } } fragment F on Nowhere { fine }",
+            "{ fine { ... on Either { ... on Fine { fine } } ...F } } fragment F on Int { fine }",
+            "{ fine { ... on Either { ... on Fine { fine } } } ...F } fragment F on Other { other }",
+        ] {
+            assert_eq!(rewritten(document), None, "{document}");
+        }
     }
 
     /// A document whose spreads cannot be inlined is validation's to refuse: it
@@ -2339,7 +2617,13 @@ mod tests {
         let (_, operation) = selected_operation(&document, None).expect("one operation");
         let registry = Registry::default();
         assert!(matches!(
-            collected(&document, &operation.node, &registry, &Variables::default()),
+            collected(
+                &document,
+                &operation.node,
+                &registry,
+                &Variables::default(),
+                deployed()
+            ),
             Ok(None)
         ));
         let glance = Glance::of(
@@ -2371,7 +2655,13 @@ mod tests {
         let (_, operation) = selected_operation(&document, None).expect("one operation");
         let (registry, variables) = (registry(), Variables::default());
         let started = thread_cpu_time();
-        let collected = collected(&document, &operation.node, &registry, &variables);
+        let collected = collected(
+            &document,
+            &operation.node,
+            &registry,
+            &variables,
+            deployed(),
+        );
         let past = thread_cpu_time() - started;
         assert!(matches!(collected, Ok(None)), "every copy alike");
         assert!(past < parsing, "parsed in {parsing:?}, then {past:?}");
@@ -2390,9 +2680,296 @@ mod tests {
         let (_, operation) = selected_operation(&document, None).expect("one operation");
         let (registry, variables) = (registry(), Variables::default());
         let started = thread_cpu_time();
-        let collected = collected(&document, &operation.node, &registry, &variables);
+        let collected = collected(
+            &document,
+            &operation.node,
+            &registry,
+            &variables,
+            deployed(),
+        );
         let past = thread_cpu_time() - started;
         assert!(matches!(collected, Ok(Some(_))), "the copies merge");
         assert!(past < parsing * 4, "parsed in {parsing:?}, then {past:?}");
+    }
+
+    /// A schema whose positions nest: `Tile`, an interface every object here
+    /// implements, four of them members of the union `Paint`, each answering a tile and
+    /// a list of lists of tiles.
+    mod nesting {
+        use async_graphql::parser::types::{Selection, SelectionSet};
+        use async_graphql::registry::{MetaTypeName, Registry};
+        use async_graphql::{Interface, Object, OutputType, Union};
+
+        use crate::operation_units::RECURSIVE_DEPTH;
+
+        macro_rules! tiles {
+            ($($name:ident),*) => {$(
+                pub(super) struct $name;
+
+                #[Object]
+                impl $name {
+                    async fn next(&self, #[graphql(name = "s")] _s: Option<String>) -> Tile {
+                        Tile::Bare(Bare)
+                    }
+
+                    async fn x(&self) -> i32 {
+                        1
+                    }
+
+                    async fn grid(&self) -> Vec<Vec<Tile>> {
+                        Vec::new()
+                    }
+                }
+            )*};
+        }
+
+        tiles!(Red, Green, Blue, Gold, Bare);
+
+        #[derive(Interface)]
+        #[graphql(
+            field(name = "next", ty = "Tile", arg(name = "s", ty = "Option<String>")),
+            field(name = "x", ty = "i32"),
+            field(name = "grid", ty = "Vec<Vec<Tile>>")
+        )]
+        pub(super) enum Tile {
+            Red(Red),
+            Green(Green),
+            Blue(Blue),
+            Gold(Gold),
+            Bare(Bare),
+        }
+
+        #[derive(Union)]
+        pub(super) enum Paint {
+            Red(Red),
+            Green(Green),
+            Blue(Blue),
+            Gold(Gold),
+        }
+
+        pub(super) struct Query;
+
+        #[Object]
+        impl Query {
+            async fn tile(&self) -> Tile {
+                Tile::Bare(Bare)
+            }
+
+            async fn paint(&self) -> Option<Paint> {
+                None
+            }
+        }
+
+        pub(super) fn registry() -> Registry {
+            let mut registry = Registry::default();
+            let root = Query::create_type_info(&mut registry);
+            registry.query_type = MetaTypeName::concrete_typename(&root).to_owned();
+            registry
+        }
+
+        /// The most [`painted`] levels async-graphql runs: each nests three sets.
+        pub(super) const PAINTED_AT_THE_BOUND: usize = (RECURSIVE_DEPTH - 1) / 3;
+
+        /// The most [`merged`] levels async-graphql runs: each nests one set, and the
+        /// last four below it.
+        pub(super) const MERGED_AT_THE_BOUND: usize = RECURSIVE_DEPTH - 4;
+
+        /// `levels` conditions on `Paint` nested at a tile's position, each holding a
+        /// condition on `Tile` selecting the next tile: `Bare` being no member, each is
+        /// rewritten once per member, around the one below it.
+        pub(super) fn painted(levels: usize) -> String {
+            nested(levels, |inner| {
+                format!("... on Paint {{ ... on Tile {{ next {{ {inner} }} }} }}")
+            })
+        }
+
+        /// `levels` copies of `g` nested at a tile's position, a `Red`'s selecting
+        /// otherwise below a list of lists: merged into a field per possible type, each
+        /// holding its own copy of the one below it.
+        pub(super) fn merged(levels: usize) -> String {
+            nested(levels, |inner| {
+                format!(
+                    "x grid {{ x }} g: next {{ {inner} }} \
+                     ... on Red {{ g: next {{ grid {{ next {{ x }} }} }} }}"
+                )
+            })
+        }
+
+        fn nested(levels: usize, level: impl Fn(&str) -> String) -> String {
+            let inner = (0..levels).fold("x".to_owned(), |inner, _| level(&inner));
+            format!("{{ tile {{ {inner} }} }}")
+        }
+
+        /// The fields `set` holds, through its inline fragments.
+        pub(super) fn fields(set: &SelectionSet) -> usize {
+            set.items
+                .iter()
+                .map(|selection| match &selection.node {
+                    Selection::Field(field) => 1 + fields(&field.node.selection_set.node),
+                    Selection::InlineFragment(fragment) => {
+                        fields(&fragment.node.selection_set.node)
+                    }
+                    Selection::FragmentSpread(_) => 0,
+                })
+                .sum()
+        }
+    }
+
+    /// What collecting `text` against [`nesting`] answers within `limits`: the
+    /// fields its rewrite adds, or the refusal.
+    fn added_within(text: &str, limits: DocumentLimits) -> Result<Option<usize>, String> {
+        let document = parse_query(text).expect("the document parses");
+        let (_, operation) = selected_operation(&document, None).expect("one operation");
+        let registry = nesting::registry();
+        let rewritten = collected(
+            &document,
+            &operation.node,
+            &registry,
+            &Variables::default(),
+            limits,
+        )
+        .map_err(|refusal| refusal.message)?;
+        Ok(rewritten.map(|rewritten| {
+            let chosen = chosen(&rewritten, &operation.node).expect("the operation");
+            nesting::fields(&chosen.selection_set.node)
+                - nesting::fields(&operation.node.selection_set.node)
+        }))
+    }
+
+    /// A rewrite spends of what a document may add each field it writes, before
+    /// writing it, and gets back each one it takes out: one that only adds, as copies
+    /// per member do, is refused exactly where it would hold more fields past the
+    /// document it was handed than the limit, and so where that document would score
+    /// past what `max_complexity` admits.
+    #[test]
+    fn a_rewrite_spends_the_fields_it_adds() {
+        let text = nesting::painted(3);
+        let added = added_within(&text, DocumentLimits::UNBOUNDED)
+            .expect("no limit")
+            .expect("rewritten");
+        let within = |fields| DocumentLimits {
+            repeated_selections: fields,
+            ..DocumentLimits::UNBOUNDED
+        };
+        assert_eq!(added_within(&text, within(added)), Ok(Some(added)));
+        assert_eq!(
+            added_within(&text, within(added - 1)),
+            Err(TOO_COMPLEX.to_owned())
+        );
+    }
+
+    /// What reading a document of `fields` fields costs this thread: parsing it.
+    fn parsing(fields: usize) -> std::time::Duration {
+        let text = format!("{{ {}}}", "x ".repeat(fields));
+        let started = thread_cpu_time();
+        parse_query(&text).expect("the document parses");
+        thread_cpu_time() - started
+    }
+
+    /// A condition on a union copied once per member, each copy around the one below
+    /// it, grows as the members' count to the power of its nesting: nested to the
+    /// recursion bound, 434 bytes, it would add millions of fields, and is refused
+    /// once it would add more than a deployment's `max_complexity`, before it writes
+    /// more, in less than parsing twice that many fields takes.
+    #[test]
+    fn copies_per_member_nested_are_refused_past_what_a_document_may_add() {
+        let text = nesting::painted(nesting::PAINTED_AT_THE_BOUND);
+        let started = thread_cpu_time();
+        let collected = added_within(&text, deployed());
+        let refusing = thread_cpu_time() - started;
+        assert_eq!(collected, Err(TOO_COMPLEX.to_owned()), "{text}");
+        let reading = parsing(2 * deployed().repeated_selections);
+        assert!(
+            refusing < reading,
+            "refused in {refusing:?}, read in {reading:?}"
+        );
+    }
+
+    /// Copies merged one field per type, each holding a copy of the one below it, grow
+    /// as the types' count to the power of their nesting: nested to the recursion
+    /// bound, they are refused once they would add more than a deployment's
+    /// `max_complexity`, before they write more, in less than parsing twice that many
+    /// fields takes.
+    #[test]
+    fn copies_per_type_nested_are_refused_past_what_a_document_may_add() {
+        let text = nesting::merged(nesting::MERGED_AT_THE_BOUND);
+        let started = thread_cpu_time();
+        let collected = added_within(&text, deployed());
+        let refusing = thread_cpu_time() - started;
+        assert_eq!(collected, Err(TOO_COMPLEX.to_owned()), "{text}");
+        let reading = parsing(2 * deployed().repeated_selections);
+        assert!(
+            refusing < reading,
+            "refused in {refusing:?}, read in {reading:?}"
+        );
+    }
+
+    #[nest_rs_core::module]
+    struct Headless;
+
+    /// A schema holds what collecting a document adds to its own limits: through the
+    /// request extension, copies per member nested to the recursion bound answer
+    /// async-graphql's refusal of a document past `max_complexity`, before anything
+    /// runs, in less than parsing twice the fields they may add takes.
+    #[tokio::test]
+    async fn a_schema_holds_a_rewrite_to_its_limits() {
+        use crate::loader::LoaderSeeds;
+        use crate::request_extension::RequestExtensionFactory;
+
+        let app = nest_rs_testing::TestApp::builder()
+            .module::<Headless>()
+            .build_headless()
+            .await
+            .expect("an empty app boots");
+        let loaders = LoaderSeeds::new(app.container().clone(), nest_rs_http::DetachedWork::new())
+            .expect("sealed");
+        let config = GraphqlConfig::default();
+        let schema = Schema::build(
+            nesting::Query,
+            async_graphql::EmptyMutation,
+            EmptySubscription,
+        )
+        .extension(RequestExtensionFactory::new(
+            std::sync::Arc::new(loaders),
+            &config,
+        ))
+        .finish();
+        let text = nesting::painted(nesting::PAINTED_AT_THE_BOUND);
+        let started = thread_cpu_time();
+        let response = schema.execute(text.as_str()).await;
+        let refusing = thread_cpu_time() - started;
+        let said: Vec<&str> = response
+            .errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect();
+        assert_eq!(said, [TOO_COMPLEX], "{response:?}");
+        let reading = parsing(2 * config.repeated_selections());
+        assert!(
+            refusing < reading,
+            "refused in {refusing:?}, read in {reading:?}"
+        );
+    }
+
+    /// What a rewrite copies of its fields' arguments is held to what a document's
+    /// arguments may copy: a long one copied once per member is refused past it.
+    #[test]
+    fn the_arguments_a_rewrite_copies_are_held_to_what_a_document_may_copy() {
+        let long = "s".repeat(1_000);
+        let text = format!(
+            r#"{{ tile {{ ... on Paint {{ ... on Tile {{ next(s: "{long}") {{ x }} }} }} }} }}"#
+        );
+        let within = |bytes| DocumentLimits {
+            copied_bytes: bytes,
+            ..DocumentLimits::UNBOUNDED
+        };
+        assert!(
+            matches!(added_within(&text, within(4 * long.len())), Ok(Some(_))),
+            "a copy for each of four members"
+        );
+        assert_eq!(
+            added_within(&text, within(2 * long.len())),
+            Err(TOO_COMPLEX.to_owned())
+        );
     }
 }

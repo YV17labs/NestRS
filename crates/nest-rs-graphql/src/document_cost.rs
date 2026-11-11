@@ -42,21 +42,34 @@ use async_graphql_value::Value as Written;
 use crate::operation_units::{RECURSIVE_DEPTH, is_condition, is_skipped, selected_operation};
 
 /// async-graphql's (`7.2.1`) refusal of a document past `max_complexity`, which a
-/// document past a limit here answers word for word.
-const TOO_COMPLEX: &str = "Query is too complex.";
+/// document past a limit here, or collecting it past one
+/// ([`crate::field_collection`]), answers word for word.
+pub(crate) const TOO_COMPLEX: &str = "Query is too complex.";
 
 /// What a document may add to its text.
 #[derive(Clone, Copy)]
 pub(crate) struct DocumentLimits {
-    /// What spreading a fragment again may add, in selections.
+    /// What spreading a fragment again may add, in selections, and what collecting the
+    /// document as GraphQL §6.3.2 reads it may write past what it replaces, in fields.
     pub(crate) repeated_selections: usize,
     /// What the arguments it runs may copy, and what its repeated keys may scan, each
     /// on its own, a step of a scan counting as a byte: as its fragments expand them
-    /// and its variables fill them.
+    /// and its variables fill them. Collecting it may write as much again, in the
+    /// arguments it copies.
     pub(crate) copied_bytes: usize,
     /// What the arguments of the fields a list stands above may copy, which each of
     /// its rows copies again; `usize::MAX` when off.
     pub(crate) list_argument_bytes: usize,
+}
+
+#[cfg(test)]
+impl DocumentLimits {
+    /// No limit, for a test whose subject is none of them.
+    pub(crate) const UNBOUNDED: Self = Self {
+        repeated_selections: usize::MAX,
+        copied_bytes: usize::MAX,
+        list_argument_bytes: usize::MAX,
+    };
 }
 
 /// The refusal of `document`, should it cost past `limits`, nest past what
@@ -496,6 +509,12 @@ fn weight_of(value: &Written, references: &HashMap<&str, usize>) -> usize {
             )
         }),
     }
+}
+
+/// What `value`, as a document writes it, weighs as text, a variable weighing what its
+/// name stands for in the document alone: what copying the text copies.
+pub(crate) fn text_weight(value: &Written) -> usize {
+    weight_of(value, &HashMap::new())
 }
 
 /// What one reference to each variable costs: what its value weighs, and the steps

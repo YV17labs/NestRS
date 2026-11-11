@@ -510,6 +510,12 @@ fn null_where_required(ty: &Type, value: &Value) -> Option<Option<String>> {
     })
 }
 
+/// Whether `directive` is `@skip` or `@include`, which decide whether a selection
+/// runs.
+pub(crate) fn is_condition(directive: &Positioned<Directive>) -> bool {
+    matches!(directive.node.name.node.as_str(), "skip" | "include")
+}
+
 /// Whether `directives` leave their selection out, as async-graphql (`7.2.1`)
 /// decides it where the rule is private (`schema.rs`,
 /// `remove_skipped_selection`): `@skip` and `@include`, each `if` read in
@@ -553,10 +559,12 @@ fn subscription_root_refusal(root: &SelectionSet) -> Option<ServerError> {
                 return Some((said.to_owned(), selection.pos));
             };
             let key = field.node.response_key().node.as_str();
-            let directed = field.node.directives.iter().find_map(|directive| {
-                let name = directive.node.name.node.as_str();
-                matches!(name, "skip" | "include").then_some(name)
-            });
+            let directed = field
+                .node
+                .directives
+                .iter()
+                .find(|directive| is_condition(directive))
+                .map(|directive| directive.node.name.node.as_str());
             let said = match (directed, opened) {
                 (Some(directive), _) => {
                     format!(r#"the subscription selects "{key}" under "@{directive}" at its root"#)

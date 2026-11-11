@@ -35,7 +35,7 @@ use async_graphql::parser::types::{
 use async_graphql::registry::{MetaField, MetaType, MetaTypeName, Registry};
 use async_graphql::{Name, Pos, Positioned, ServerError, Variables};
 
-use crate::operation_units::{RECURSIVE_DEPTH, is_skipped};
+use crate::operation_units::{RECURSIVE_DEPTH, is_condition, is_skipped};
 
 /// `document`, its operation `operation` collected as §6.3.2 reads it; `None` when
 /// async-graphql answers it so as it stands, or when it cannot be rewritten, which
@@ -73,7 +73,7 @@ pub(crate) fn collected(
             None => Ok(None),
         };
     };
-    let Some((_, chosen)) = chosen(&rewritten, operation) else {
+    let Some(chosen) = chosen(&rewritten, operation) else {
         return Ok(None);
     };
     match uncollected(&rewritten.fragments, chosen, root, registry, variables) {
@@ -150,7 +150,7 @@ struct Glancing<'a> {
     below: Vec<&'a Positioned<SelectionSet>>,
     /// The fragments being expanded: a cycle, which validation refuses, ends there.
     expanding: Vec<&'a str>,
-    /// The fields' sets read so far.
+    /// The fields' sets read so far, in a document holding a fragment.
     walked: HashSet<Pos>,
     /// A wide set's keys, looked up rather than scanned for.
     wide: HashSet<&'a str>,
@@ -192,7 +192,8 @@ impl<'a> Glancing<'a> {
         let read = self.below.len();
         for at in below..read {
             let field_set = self.below[at];
-            if self.walked.insert(field_set.pos) {
+            // Only a fragment spread again reaches a set twice.
+            if self.fragments.is_empty() || self.walked.insert(field_set.pos) {
                 self.set(&field_set.node, depth + 1);
             }
         }
@@ -303,18 +304,18 @@ fn unlike(key: &str, at: Pos) -> ServerError {
 }
 
 /// The operation of `document` that is `operation`, found again in its copy by
-/// where its selections open, and the name it is declared under.
+/// where its selections open.
 pub(crate) fn chosen<'d>(
     document: &'d ExecutableDocument,
     operation: &OperationDefinition,
-) -> Option<(Option<&'d Name>, &'d OperationDefinition)> {
+) -> Option<&'d OperationDefinition> {
     let at = operation.selection_set.pos;
     match &document.operations {
-        DocumentOperations::Single(single) => Some((None, &single.node)),
+        DocumentOperations::Single(single) => Some(&single.node),
         DocumentOperations::Multiple(operations) => operations
-            .iter()
-            .find(|(_, candidate)| candidate.node.selection_set.pos == at)
-            .map(|(name, candidate)| (Some(name), &candidate.node)),
+            .values()
+            .map(|candidate| &candidate.node)
+            .find(|candidate| candidate.selection_set.pos == at),
     }
 }
 
@@ -380,6 +381,11 @@ fn declared<'r>(registry: &'r Registry, on: &str, name: &str) -> Option<&'r Meta
     registry.types.get(on)?.field_by_name(name)
 }
 
+/// The named type field `name` of `on` answers, when the schema declares it.
+pub(crate) fn field_type<'r>(registry: &'r Registry, on: &str, name: &str) -> Option<&'r str> {
+    declared(registry, on, name).map(|declared| MetaTypeName::concrete_typename(&declared.ty))
+}
+
 /// Whether `ty`, a field's declared type, holds a list inside a list.
 fn nests_lists(ty: &str) -> bool {
     let (mut ty, mut lists) = (ty, 0);
@@ -425,12 +431,6 @@ fn alike_directives(a: &[Positioned<Directive>], b: &[Positioned<Directive>]) ->
     }
 }
 
-/// Whether `directive` is `@skip` or `@include`, which decide whether a selection
-/// runs.
-fn is_condition(directive: &Positioned<Directive>) -> bool {
-    matches!(directive.node.name.node.as_str(), "skip" | "include")
-}
-
 /// The selections of `set` that `@skip` and `@include` leave in.
 fn running<'s>(
     set: &'s SelectionSet,
@@ -439,22 +439,6 @@ fn running<'s>(
     set.items
         .iter()
         .filter(move |selection| !is_skipped(selection.node.directives(), variables))
-}
-
-/// Whether two selections of `set`, or of a set within `depth` sets of it, name one
-/// object's response key, in a document holding no fragment. Each key is looked up,
-/// never scanned for: this runs before validation scores a document, whose width
-/// the body cap alone holds.
-pub(crate) fn repeats_below(set: &SelectionSet, depth: usize) -> bool {
-    let mut keys: HashSet<&str> = HashSet::new();
-    depth > 0
-        && set.items.iter().any(|selection| match &selection.node {
-            Selection::Field(field) if !field.node.selection_set.node.items.is_empty() => {
-                !keys.insert(field.node.response_key().node.as_str())
-                    || repeats_below(&field.node.selection_set.node, depth - 1)
-            }
-            _ => false,
-        })
 }
 
 /// A mutation's root selections, read before validation: each fragment is
@@ -580,10 +564,9 @@ impl<'a> Divergence<'a> {
                 if below.node.items.is_empty() || !self.walked.insert(below.pos) {
                     return false;
                 }
-                let Some(declared) = declared(registry, parent, &field.node.name.node) else {
+                let Some(ty) = field_type(registry, parent, &field.node.name.node) else {
                     return false;
                 };
-                let ty = MetaTypeName::concrete_typename(&declared.ty);
                 let reaching: Vec<_> = possible(registry, ty)
                     .into_iter()
                     .map(|concrete| (concrete, ty))
@@ -737,7 +720,7 @@ impl<'a> Copies<'a> {
             }
             for (key, group) in by_key(fields) {
                 let first = group[0];
-                let Some(below) = declared(registry, concrete, &first.node.name.node) else {
+                let Some(declared) = declared(registry, concrete, &first.node.name.node) else {
                     // `__typename`, or a field validation refuses.
                     continue;
                 };
@@ -751,36 +734,50 @@ impl<'a> Copies<'a> {
                         unlike: true,
                     });
                 }
-                let otherwise = group[1..]
-                    .iter()
-                    .find(|copy| !self.alike_fields(&first.node, &copy.node, depth));
-                if nests_lists(&below.ty)
-                    && let Some(otherwise) = otherwise
-                {
-                    return Some(Unjoined {
-                        key,
-                        at: otherwise.pos,
-                        unlike: false,
-                    });
-                }
-                let sets: Vec<_> = match otherwise {
-                    Some(_) => group
-                        .iter()
-                        .map(|copy| &copy.node.selection_set)
-                        .filter(|set| !set.node.items.is_empty())
-                        .collect(),
-                    None => vec![&first.node.selection_set],
-                };
-                if sets.iter().all(|set| set.node.items.is_empty()) {
-                    continue;
-                }
-                let below = MetaTypeName::concrete_typename(&below.ty);
-                if let Some(found) = self.unjoined(&sets, below, depth + 1) {
+                if let Some(found) = self.unjoined_below(&group, declared, depth) {
                     return Some(found);
                 }
             }
         }
         None
+    }
+
+    /// What `group`, copies of one key the first of which names the field
+    /// `declared`, answers otherwise than §6.3.2 merges it: the first copy selecting
+    /// otherwise than the first where that field answers a list of lists, or else the
+    /// first key below them [`Self::unjoined`] finds.
+    fn unjoined_below(
+        &mut self,
+        group: &[&'a Positioned<Field>],
+        declared: &'a MetaField,
+        depth: usize,
+    ) -> Option<Unjoined<'a>> {
+        let (&first, others) = group.split_first()?;
+        let otherwise = others
+            .iter()
+            .find(|copy| !self.alike_fields(&first.node, &copy.node, depth));
+        if nests_lists(&declared.ty)
+            && let Some(otherwise) = otherwise
+        {
+            return Some(Unjoined {
+                key: first.node.response_key().node.as_str(),
+                at: otherwise.pos,
+                unlike: false,
+            });
+        }
+        let sets: Vec<_> = match otherwise {
+            Some(_) => group
+                .iter()
+                .map(|copy| &copy.node.selection_set)
+                .filter(|set| !set.node.items.is_empty())
+                .collect(),
+            None => vec![&first.node.selection_set],
+        };
+        if sets.iter().all(|set| set.node.items.is_empty()) {
+            return None;
+        }
+        let below = MetaTypeName::concrete_typename(&declared.ty);
+        self.unjoined(&sets, below, depth + 1)
     }
 
     /// The fields `set` selects of a value of type `concrete`, through its
@@ -1016,7 +1013,7 @@ impl Collection<'_> {
         fields_below(&set.node, ty, self.registry, &mut Vec::new(), &mut below);
         for (path, field_ty) in below {
             if let Some(field) = field_at(&mut set.node, &path) {
-                self.merge(&mut field.selection_set, &field_ty, false, depth + 1)?;
+                self.merge(&mut field.selection_set, field_ty, false, depth + 1)?;
             }
         }
         Ok(())
@@ -1045,22 +1042,22 @@ impl Collection<'_> {
             );
             per_type.push((concrete, found));
         }
-        let mut keys: IndexMap<Name, Vec<(&str, Vec<&Occurrence>)>> = IndexMap::new();
-        for (concrete, found) in &per_type {
-            let mut by_key: IndexMap<&Name, Vec<&Occurrence>> = IndexMap::new();
+        let mut keys: IndexMap<Name, Vec<(&str, Vec<Occurrence>)>> = IndexMap::new();
+        for (concrete, found) in per_type {
             for occurrence in found {
-                by_key.entry(&occurrence.key).or_default().push(occurrence);
-            }
-            for (key, group) in by_key {
-                keys.entry(key.clone()).or_default().push((concrete, group));
+                let groups = keys.entry(occurrence.key.clone()).or_default();
+                match groups.last_mut() {
+                    Some((last, group)) if *last == concrete => group.push(occurrence),
+                    _ => groups.push((concrete, vec![occurrence])),
+                }
             }
         }
         let no_fragments = HashMap::new();
         let mut copies = Copies::new(&no_fragments, registry, self.variables);
         let mut merges = Vec::new();
-        'keys: for (key, groups) in &keys {
+        'keys: for (key, mut groups) in keys {
             let mut owed = false;
-            for (concrete, group) in groups {
+            for (concrete, group) in &groups {
                 let fields: Vec<&Positioned<Field>> = group
                     .iter()
                     .filter_map(|occurrence| selection_field(&set.node, &occurrence.path))
@@ -1083,14 +1080,19 @@ impl Collection<'_> {
                 };
                 let needed = match root {
                     true => group.len() > 1,
-                    false => distinct.len() > 1 && needs_merge(&mut copies, concrete, &distinct),
+                    false => {
+                        distinct.len() > 1
+                            && declared(registry, concrete, &distinct[0].node.name.node)
+                                .and_then(|declared| copies.unjoined_below(&distinct, declared, 0))
+                                .is_some()
+                    }
                 };
                 if needed {
                     if let Some(other) = distinct[1..]
                         .iter()
                         .find(|field| !same_field(&distinct[0].node, &field.node))
                     {
-                        return Err(unlike(key, other.pos));
+                        return Err(unlike(&key, other.pos));
                     }
                     owed = true;
                 }
@@ -1100,31 +1102,15 @@ impl Collection<'_> {
             }
             let uniform = groups.len() == concretes.len()
                 && groups.windows(2).all(|pair| {
-                    let paths = |group: &[&Occurrence]| -> Vec<Vec<usize>> {
-                        group
-                            .iter()
-                            .map(|occurrence| occurrence.path.clone())
-                            .collect()
-                    };
-                    paths(&pair[0].1) == paths(&pair[1].1)
+                    let (a, b) = (&pair[0].1, &pair[1].1);
+                    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.path == b.path)
                 });
-            let own = |group: &[&Occurrence]| -> Vec<Occurrence> {
-                group
-                    .iter()
-                    .map(|occurrence| Occurrence {
-                        path: occurrence.path.clone(),
-                        pos: occurrence.pos,
-                        key: occurrence.key.clone(),
-                        on: occurrence.on.clone(),
-                    })
-                    .collect()
-            };
             merges.push(match uniform {
-                true => Merge::InPlace(own(&groups[0].1)),
+                true => Merge::InPlace(groups.swap_remove(0).1),
                 false => Merge::PerType(
                     groups
-                        .iter()
-                        .map(|(concrete, group)| ((*concrete).to_owned(), own(group)))
+                        .into_iter()
+                        .map(|(concrete, group)| (concrete.to_owned(), group))
                         .collect(),
                 ),
             });
@@ -1141,7 +1127,8 @@ impl Collection<'_> {
         let Some((first, others)) = copies.split_first() else {
             return;
         };
-        let target_ty = field_type(registry, &first.on, &set.node, &first.path);
+        let target_ty = selection_field(&set.node, &first.path)
+            .and_then(|field| field_type(registry, &first.on, &field.node.name.node));
         let mut seen = HashSet::from([first.pos]);
         let mut moved = Vec::new();
         for other in others {
@@ -1151,9 +1138,8 @@ impl Collection<'_> {
             if !seen.insert(other.pos) {
                 continue;
             }
-            let source_ty = declared(registry, &other.on, &taken.node.name.node)
-                .map(|field| MetaTypeName::concrete_typename(&field.ty).to_owned());
-            moved.extend(self.carried(taken, source_ty.as_deref(), target_ty.as_deref()));
+            let source_ty = field_type(registry, &other.on, &taken.node.name.node);
+            moved.extend(self.carried(taken, source_ty, target_ty));
         }
         let drawn = self.draw();
         if let Some(target) = field_at(&mut set.node, &first.path) {
@@ -1179,8 +1165,7 @@ impl Collection<'_> {
             let Some(field) = selection_field(&set.node, &first.path).cloned() else {
                 continue;
             };
-            let target_ty = declared(registry, concrete, &field.node.name.node)
-                .map(|declared| MetaTypeName::concrete_typename(&declared.ty).to_owned());
+            let target_ty = field_type(registry, concrete, &field.node.name.node);
             let mut items = Vec::new();
             let mut seen = HashSet::new();
             for occurrence in group {
@@ -1190,32 +1175,17 @@ impl Collection<'_> {
                 let Some(copy) = selection_field(&set.node, &occurrence.path).cloned() else {
                     continue;
                 };
-                let source_ty = declared(registry, &occurrence.on, &copy.node.name.node)
-                    .map(|declared| MetaTypeName::concrete_typename(&declared.ty).to_owned());
-                items.extend(self.carried(copy, source_ty.as_deref(), target_ty.as_deref()));
+                let source_ty = field_type(registry, &occurrence.on, &copy.node.name.node);
+                items.extend(self.carried(copy, source_ty, target_ty));
             }
             let mut merged = field;
             merged.node.selection_set = Positioned::new(SelectionSet { items }, self.draw());
             let at = merged.pos;
-            let condition = Positioned::new(
-                TypeCondition {
-                    on: Positioned::new(Name::new(concrete), at),
-                },
-                at,
-            );
-            let wrapper = InlineFragment {
-                type_condition: Some(condition),
-                directives: Vec::new(),
-                selection_set: Positioned::new(
-                    SelectionSet {
-                        items: vec![Positioned::new(Selection::Field(merged), at)],
-                    },
-                    self.draw(),
-                ),
-            };
+            let items = vec![Positioned::new(Selection::Field(merged), at)];
+            let wrapped = Positioned::new(SelectionSet { items }, self.draw());
             built.push((
                 first.path[0],
-                Positioned::new(Selection::InlineFragment(Positioned::new(wrapper, at)), at),
+                inline_fragment(Some(concrete), Vec::new(), wrapped, at),
             ));
         }
         for (_, group) in &copies {
@@ -1238,21 +1208,7 @@ impl Collection<'_> {
         match source {
             Some(source) if Some(source) != target && !set.node.items.is_empty() => {
                 let at = set.pos;
-                let condition = Positioned::new(
-                    TypeCondition {
-                        on: Positioned::new(Name::new(source), at),
-                    },
-                    at,
-                );
-                let wrapper = InlineFragment {
-                    type_condition: Some(condition),
-                    directives: Vec::new(),
-                    selection_set: set,
-                };
-                vec![Positioned::new(
-                    Selection::InlineFragment(Positioned::new(wrapper, at)),
-                    at,
-                )]
+                vec![inline_fragment(Some(source), Vec::new(), set, at)]
             }
             _ => set.node.items,
         }
@@ -1322,10 +1278,9 @@ impl Collection<'_> {
                 if field.node.selection_set.node.items.is_empty() {
                     return;
                 }
-                let Some(declared) = declared(registry, parent, &field.node.name.node) else {
+                let Some(ty) = field_type(registry, parent, &field.node.name.node) else {
                     return;
                 };
-                let ty = MetaTypeName::concrete_typename(&declared.ty);
                 let below: Vec<(&str, &str)> = possible(registry, ty)
                     .into_iter()
                     .map(|concrete| (concrete, ty))
@@ -1399,23 +1354,10 @@ impl Collection<'_> {
         };
         for (condition, within) in &live_sets {
             let live = kept(&set.node, &|on| overlaps(registry, on, within));
-            let type_condition = condition.map(|member| {
-                Positioned::new(
-                    TypeCondition {
-                        on: Positioned::new(Name::new(member), at),
-                    },
-                    at,
-                )
-            });
-            rewritten.push(Positioned::new(
-                Selection::InlineFragment(Positioned::new(
-                    InlineFragment {
-                        type_condition,
-                        directives: directives.clone(),
-                        selection_set: Positioned::new(live, set.pos),
-                    },
-                    at,
-                )),
+            rewritten.push(inline_fragment(
+                *condition,
+                directives.clone(),
+                Positioned::new(live, set.pos),
                 at,
             ));
         }
@@ -1503,6 +1445,30 @@ fn with_set(
     Positioned::new(Selection::InlineFragment(rewritten), selection.pos)
 }
 
+/// An inline fragment at `at` holding `set`, carrying `directives`, under a
+/// condition on `on` when one is named.
+fn inline_fragment(
+    on: Option<&str>,
+    directives: Vec<Positioned<Directive>>,
+    set: Positioned<SelectionSet>,
+    at: Pos,
+) -> Positioned<Selection> {
+    let type_condition = on.map(|on| {
+        Positioned::new(
+            TypeCondition {
+                on: Positioned::new(Name::new(on), at),
+            },
+            at,
+        )
+    });
+    let fragment = InlineFragment {
+        type_condition,
+        directives,
+        selection_set: set,
+    };
+    Positioned::new(Selection::InlineFragment(Positioned::new(fragment, at)), at)
+}
+
 /// Whether `field`, selected on `on`, is one the schema declares there with every
 /// argument it passes, selecting below it exactly where its type is an object, an
 /// interface or a union: a copy the merge may stand for, since what validation
@@ -1519,41 +1485,6 @@ fn well_declared(registry: &Registry, on: &str, field: &Field) -> bool {
                 .iter()
                 .all(|(name, _)| declared.args.contains_key(name.node.as_str()))
     })
-}
-
-/// Whether the copies `distinct`, of a value of `concrete`, must merge for §6.3.2's
-/// answer: they answer a list of lists and select otherwise, or such copies stand
-/// below them.
-fn needs_merge<'a>(
-    copies: &mut Copies<'a>,
-    concrete: &'a str,
-    distinct: &[&'a Positioned<Field>],
-) -> bool {
-    let registry = copies.registry;
-    let Some(first) = distinct.first() else {
-        return false;
-    };
-    let Some(declared) = declared(registry, concrete, &first.node.name.node) else {
-        return false;
-    };
-    let otherwise = distinct[1..]
-        .iter()
-        .any(|copy| !copies.alike_fields(&first.node, &copy.node, 0));
-    if otherwise && nests_lists(&declared.ty) {
-        return true;
-    }
-    let sets: Vec<_> = match otherwise {
-        true => distinct
-            .iter()
-            .map(|copy| &copy.node.selection_set)
-            .filter(|set| !set.node.items.is_empty())
-            .collect(),
-        false => vec![&first.node.selection_set],
-    };
-    !sets.iter().all(|set| set.node.items.is_empty())
-        && copies
-            .unjoined(&sets, MetaTypeName::concrete_typename(&declared.ty), 1)
-            .is_some()
 }
 
 /// Each field `set`, selected on `on`, holds for a value of `concrete` that runs,
@@ -1617,12 +1548,12 @@ fn occurrences(
 
 /// Each field `set`, selected on `on`, holds through its inline fragments with a
 /// selection set of its own, by its path, with the type it declares.
-fn fields_below(
+fn fields_below<'r>(
     set: &SelectionSet,
     on: &str,
-    registry: &Registry,
+    registry: &'r Registry,
     path: &mut Vec<usize>,
-    below: &mut Vec<(Vec<usize>, String)>,
+    below: &mut Vec<(Vec<usize>, &'r str)>,
 ) {
     if path.len() > RECURSIVE_DEPTH {
         return;
@@ -1631,8 +1562,7 @@ fn fields_below(
         path.push(index);
         match &selection.node {
             Selection::Field(field) if !field.node.selection_set.node.items.is_empty() => {
-                if let Some(declared) = declared(registry, on, &field.node.name.node) {
-                    let ty = MetaTypeName::concrete_typename(&declared.ty).to_owned();
+                if let Some(ty) = field_type(registry, on, &field.node.name.node) {
                     below.push((path.clone(), ty));
                 }
             }
@@ -1648,13 +1578,6 @@ fn fields_below(
         }
         path.pop();
     }
-}
-
-/// The named type the field at `path` in `set`, selected on `on`, declares.
-fn field_type(registry: &Registry, on: &str, set: &SelectionSet, path: &[usize]) -> Option<String> {
-    let field = selection_field(set, path)?;
-    let declared = declared(registry, on, &field.node.name.node)?;
-    Some(MetaTypeName::concrete_typename(&declared.ty).to_owned())
 }
 
 /// The field at `path` in `set`, through its inline fragments.
@@ -2017,7 +1940,7 @@ mod tests {
         let rewritten = collected(&document, &operation.node, &registry(), &variables)
             .map_err(|refusal| refusal.message)?;
         Ok(rewritten.map(|rewritten| {
-            let (_, chosen) = chosen(&rewritten, &operation.node).expect("the operation");
+            let chosen = chosen(&rewritten, &operation.node).expect("the operation");
             let mut text = String::new();
             write_set(&mut text, &chosen.selection_set.node);
             let mut kept: Vec<&str> = rewritten.fragments.keys().map(Name::as_str).collect();

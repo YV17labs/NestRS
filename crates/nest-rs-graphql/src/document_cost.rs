@@ -39,7 +39,7 @@ use async_graphql::registry::{MetaTypeName, Registry};
 use async_graphql::{Name, Pos, Positioned, ServerError, Value, Variables};
 use async_graphql_value::Value as Written;
 
-use crate::operation_units::{RECURSIVE_DEPTH, is_skipped, selected_operation};
+use crate::operation_units::{RECURSIVE_DEPTH, is_condition, is_skipped, selected_operation};
 
 /// async-graphql's (`7.2.1`) refusal of a document past `max_complexity`, which a
 /// document past a limit here answers word for word.
@@ -415,9 +415,7 @@ impl<'d> Rows<'_, 'd> {
                             let read = field
                                 .directives
                                 .iter()
-                                .filter(|directive| {
-                                    !matches!(directive.node.name.node.as_str(), "skip" | "include")
-                                })
+                                .filter(|directive| !is_condition(directive))
                                 .flat_map(|directive| &directive.node.arguments);
                             copies(self.references, field.arguments.iter().chain(read))
                         }

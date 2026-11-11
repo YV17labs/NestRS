@@ -33,10 +33,10 @@ use async_graphql::parser::types::{
     DocumentOperations, ExecutableDocument, Field, FragmentDefinition, OperationDefinition,
     OperationType, Selection, SelectionSet,
 };
-use async_graphql::registry::{MetaType, MetaTypeName, Registry};
+use async_graphql::registry::{MetaType, Registry};
 use async_graphql::{Name, Pos, Positioned, ServerError, Value, Variables};
 
-use crate::field_collection::{self, engine_applies, repeats_below};
+use crate::field_collection::{self, engine_applies};
 use crate::operation_units::{RECURSIVE_DEPTH, is_skipped};
 
 /// What the key a request's document gives its objects starts with, sixteen hex
@@ -70,7 +70,7 @@ impl OwnKey {
         let (read, chosen) = collected
             .as_ref()
             .and_then(|rewritten| {
-                Some((rewritten, field_collection::chosen(rewritten, operation)?.1))
+                Some((rewritten, field_collection::chosen(rewritten, operation)?))
             })
             .unwrap_or((document, operation));
         let sets = {
@@ -265,7 +265,8 @@ impl<'a> Marks<'a> {
                 _ => {}
             }
             self.walked.insert(below.pos, repeated);
-            let Some(ty) = self.field_type(composite.on, &composite.field.node.name.node) else {
+            let name = &composite.field.node.name.node;
+            let Some(ty) = field_collection::field_type(self.registry, composite.on, name) else {
                 // A field the schema does not declare is validation's to refuse.
                 continue;
             };
@@ -432,12 +433,6 @@ impl<'a> Marks<'a> {
         self.selects.insert(read_as, read);
         read
     }
-
-    /// The named type field `name` of `on` answers.
-    fn field_type(&self, on: &str, name: &str) -> Option<&'a str> {
-        let declared = self.registry.types.get(on)?.field_by_name(name)?;
-        Some(MetaTypeName::concrete_typename(&declared.ty))
-    }
 }
 
 /// A key for one request: the process's secret hash keys over a count of the keys
@@ -453,6 +448,22 @@ fn drawn_key() -> Name {
     static DRAWN: AtomicU64 = AtomicU64::new(0);
     let drawn = SEED.hash_one(DRAWN.fetch_add(1, Ordering::Relaxed));
     Name::new(format!("{KEY}_{drawn:016x}"))
+}
+
+/// Whether two selections of `set`, or of a set within `depth` sets of it, name one
+/// object's response key, in a document holding no fragment. Each key is looked up,
+/// never scanned for: this runs before validation scores a document, whose width
+/// the body cap alone holds.
+fn repeats_below(set: &SelectionSet, depth: usize) -> bool {
+    let mut keys: HashSet<&str> = HashSet::new();
+    depth > 0
+        && set.items.iter().any(|selection| match &selection.node {
+            Selection::Field(field) if !field.node.selection_set.node.items.is_empty() => {
+                !keys.insert(field.node.response_key().node.as_str())
+                    || repeats_below(&field.node.selection_set.node, depth - 1)
+            }
+            _ => false,
+        })
 }
 
 /// Whether `set` holds a directive or a fragment within `depth` sets of it: the one
@@ -471,6 +482,7 @@ fn directed(set: &SelectionSet, depth: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use async_graphql::parser::parse_query;
+    use async_graphql::registry::MetaTypeName;
     use async_graphql::{Interface, Object, OutputType, SimpleObject, Union};
     use serde_json::json;
 

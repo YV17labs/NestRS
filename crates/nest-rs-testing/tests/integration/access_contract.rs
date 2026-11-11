@@ -668,8 +668,7 @@ impl ShelvedBookResolver {
     }
 
     #[field_resolver]
-    async fn shelved(&self, parent: &Book, shelf: &Shelf<Archive>) -> String {
-        let _ = shelf;
+    async fn shelved(&self, parent: &Book, _shelf: &Shelf<Archive>) -> String {
         parent.title.clone()
     }
 }

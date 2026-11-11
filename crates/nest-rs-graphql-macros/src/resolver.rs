@@ -23,8 +23,8 @@ use nest_rs_codegen::__private::{
     forwarded_idents, from_container_method, guard_capability_bounds, handler_const, host_meta_fn,
     host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, injected_remedies_fn, injects_impls,
-    interceptor_specs, key_as_written, layer_deps, no_row_answered, no_tail_decoded,
-    normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
+    interceptor_specs, key_as_written, layer_deps, mixed_site_ident, no_row_answered,
+    no_tail_decoded, normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
     reject_meta_on_operations, return_type, scoped_specs, shared_receiver, site_items, site_ref,
     spelled, tail_param, take_posture, takes_value, type_label, unit_of_work_required,
     unknown_argument, validate_argument, withheld,
@@ -1817,7 +1817,7 @@ fn field_method(
     let mut tail: Vec<(Ident, Type, TailParam)> = Vec::new();
     let mut injected: Vec<Type> = Vec::new();
     let mut loaders: Vec<Type> = Vec::new();
-    for (arg, ident) in rest.iter().copied().zip(&rest_idents) {
+    for (position, (arg, ident)) in rest.iter().copied().zip(&rest_idents).enumerate() {
         let FnArg::Typed(pt) = arg else { continue };
         // Before the injected-dep arm, which would ask the container for a `Context`.
         if ctx_ident_of(arg).is_some() {
@@ -1831,7 +1831,9 @@ fn field_method(
         }
         if let Type::Reference(reference) = &*pt.ty {
             let dep_ty = &*reference.elem;
-            let dep = format_ident!("__dep_{}", ident);
+            // By position: a parameter's own name may lead with `_`, which
+            // `__dep_` would join into a name the developer's build warns on.
+            let dep = mixed_site_ident(&format!("__nestrs_dep_{position}"));
             if let Some(loader) = loader_read_by(&pt.ty) {
                 dep_bindings.push(quote! {
                     let #dep = ::nest_rs_graphql::__private::seeded_loader::<#loader>(__ctx)?;

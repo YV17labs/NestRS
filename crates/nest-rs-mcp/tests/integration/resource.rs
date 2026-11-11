@@ -463,6 +463,50 @@ impl TagsHost {
 #[module(imports = [crate::open_mcp()], providers = [TagsHost])]
 struct TagsModule;
 
+const DRAFTS: &str = "/mcp/drafts";
+
+#[mcp(path = "/mcp/drafts")]
+#[derive(Clone, Default)]
+struct DraftsHost;
+
+#[tools]
+impl DraftsHost {
+    /// A draft, read off a variable its body leaves unused.
+    #[resource(template = "draft://{_id}")]
+    #[public]
+    async fn draft(&self, _id: u32) -> Result<String, McpError> {
+        Ok("a draft".to_owned())
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [DraftsHost])]
+struct DraftsModule;
+
+/// A parameter named to say its body leaves it unused binds its variable as any
+/// other, and the expansion binding it names nothing the developer's build
+/// warns on.
+#[tokio::test]
+async fn a_variable_its_body_leaves_unused_is_read_as_any_other() {
+    let app = TestApp::for_module::<DraftsModule>()
+        .await
+        .expect("a host reading a variable named `_id` boots");
+    let session = open_session(app.http(), DRAFTS, None).await;
+    let body = call_method(
+        app.http(),
+        DRAFTS,
+        &session,
+        None,
+        "resources/read",
+        json!({ "uri": "draft://7" }),
+    )
+    .await;
+    assert_eq!(
+        result(&body)["result"]["contents"][0]["text"],
+        "a draft",
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn a_template_variable_breaking_its_rules_is_refused_before_the_body() {
     let app = TestApp::for_module::<TagsModule>()

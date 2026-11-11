@@ -390,7 +390,9 @@ pub(crate) fn read_arm(
     let idents: Vec<syn::Ident> = decl
         .variables
         .iter()
-        .map(|arg| format_ident!("__nestrs_var_{}", arg.ident))
+        // By position: a variable's own name may lead with `_`, which
+        // `__nestrs_var_` would join into a name the developer's build warns on.
+        .map(|arg| format_ident!("__nestrs_var_{}", arg.index))
         .collect();
     let parsed = decl.variables.iter().map(|VariableArg { ty, index, .. }| {
         quote_spanned! {ty.span()=> __nestrs_read.variable::<#ty>(#index)?}

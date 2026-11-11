@@ -150,7 +150,8 @@ impl Secrets {
     /// The closing lines: each file's secret or the setting that kept it out,
     /// then what a deployment owes. Never a value.
     pub(super) fn lines(&self) -> Vec<String> {
-        let namespace = crate::context::var_name(&self.env_prefix, "AUTHN", "");
+        let authn = |key| crate::context::var_name(&self.env_prefix, "AUTHN", key);
+        let namespace = authn("");
         let mut lines: Vec<String> = self
             .files
             .iter()
@@ -167,9 +168,9 @@ impl Secrets {
             .collect();
         lines.push(format!(
             "Set {} (or _FILE), {} and {} in every deployed environment;",
-            crate::context::var_name(&self.env_prefix, "AUTHN", "SECRET"),
-            crate::context::var_name(&self.env_prefix, "AUTHN", "ISSUER"),
-            crate::context::var_name(&self.env_prefix, "AUTHN", "AUDIENCE"),
+            authn("SECRET"),
+            authn("ISSUER"),
+            authn("AUDIENCE"),
         ));
         lines.push(
             "the boot refuses to start without key material, an issuer or an audience.".to_owned(),

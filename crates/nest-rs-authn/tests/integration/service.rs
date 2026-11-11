@@ -9,14 +9,7 @@ use nest_rs_authn::__private::sign_unchecked;
 use nest_rs_authn::{AuthError, JwtOptions, JwtService, PrincipalIdentity};
 use serde::{Deserialize, Serialize};
 
-/// The header a conformant issuer stamps (RFC 9068 §2.1). Fixtures below mint
-/// tokens by hand to exercise *other* checks; without this they would all be
-/// refused by the `typ` check instead, which is not what any of them asserts.
-fn at_jwt_header(alg: Algorithm) -> Header {
-    let mut header = Header::new(alg);
-    header.typ = Some("at+jwt".into());
-    header
-}
+use crate::{at_jwt_header, payload};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, PrincipalIdentity)]
 struct TestClaims {
@@ -584,13 +577,6 @@ fn a_handshake_naming_no_exp_is_refused_rather_than_given_the_access_token_lifet
         .verify_handshake("oauth-tx", &token)
         .expect("and verifies");
     assert_eq!(back["exp"].as_u64(), Some(ten_minutes), "{back}");
-}
-
-/// The claims `token` carries, read without verifying it.
-fn payload(token: &str) -> serde_json::Value {
-    let encoded = token.split('.').nth(1).expect("a compact JWS");
-    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).expect("base64url"))
-        .expect("a JSON payload")
 }
 
 /// RFC 9068 §4: the resource server "MUST verify that the `typ` header value is

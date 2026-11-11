@@ -67,15 +67,8 @@ async fn for_root_pins_the_config_and_provides_a_service_built_from_it() {
         .expect("and verifies through the same key");
     assert_eq!(verified.sub, "user-1");
 
-    let payload = token.split('.').nth(1).expect("a JWT has a payload");
-    let decoded = base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        payload.as_bytes(),
-    )
-    .expect("base64url payload");
-    let claims: serde_json::Value = serde_json::from_slice(&decoded).expect("json claims");
     assert_eq!(
-        claims.get("iss").and_then(|v| v.as_str()),
+        crate::payload(&token).get("iss").and_then(|v| v.as_str()),
         Some(PINNED_ISSUER),
         "the issuer the seam pinned is the one the service stamps",
     );
@@ -104,10 +97,8 @@ fn minted(iss: Option<&str>, aud: &str) -> String {
     if let Some(iss) = iss {
         claims["iss"] = iss.into();
     }
-    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    header.typ = Some("at+jwt".into());
     jsonwebtoken::encode(
-        &header,
+        &crate::at_jwt_header(jsonwebtoken::Algorithm::HS256),
         &claims,
         &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()),
     )
@@ -246,7 +237,7 @@ async fn a_service_naming_no_issuer_and_no_audience_does_not_boot() {
             let minted = jwt.sign(&user_1());
             panic!(
                 "booted, and minted {:?}",
-                minted.map(|token| claims_of(&token))
+                minted.map(|token| crate::payload(&token))
             )
         }
     };
@@ -279,7 +270,7 @@ async fn a_bound_service_naming_no_issuer_of_its_own_mints_no_access_token() {
         ("sign_for", jwt.sign_for("https://billing.example", &claims)),
     ] {
         let refused = match minted {
-            Ok(token) => panic!("`{method}` minted {}", claims_of(&token)),
+            Ok(token) => panic!("`{method}` minted {}", crate::payload(&token)),
             Err(refused) => nest_rs_core::error_message(&refused),
         };
         assert!(
@@ -287,15 +278,4 @@ async fn a_bound_service_naming_no_issuer_of_its_own_mints_no_access_token() {
             "{method}: {refused}"
         );
     }
-}
-
-/// The claims `token` carries, read without verifying it.
-fn claims_of(token: &str) -> serde_json::Value {
-    let payload = token.split('.').nth(1).expect("a JWT has a payload");
-    let decoded = base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        payload.as_bytes(),
-    )
-    .expect("base64url payload");
-    serde_json::from_slice(&decoded).expect("json claims")
 }

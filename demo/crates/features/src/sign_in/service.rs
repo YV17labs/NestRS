@@ -242,17 +242,20 @@ mod tests {
     const RESOURCE: &str = "https://api.example.com";
     const OTHER_RESOURCE: &str = "https://mcp.example.com";
 
-    fn jwt_with_ttl(ttl: Duration) -> JwtService {
-        let mut opts = JwtOptions::new(SECRET);
+    fn named(mut opts: JwtOptions) -> JwtOptions {
         opts.issuer = Some(ISSUER.into());
         opts.audience = Some(ISSUER.into());
+        opts
+    }
+
+    fn jwt_with_ttl(ttl: Duration) -> JwtService {
+        let mut opts = named(JwtOptions::new(SECRET));
         opts.expires_in = ttl;
         JwtService::new(opts).expect("jwt service")
     }
 
     fn verifier(resource: &str) -> JwtService {
-        let mut opts = JwtOptions::new(SECRET);
-        opts.issuer = Some(ISSUER.into());
+        let mut opts = named(JwtOptions::new(SECRET));
         opts.audience = Some(resource.into());
         JwtService::new(opts).expect("verifier")
     }
@@ -316,10 +319,9 @@ mod tests {
 
     #[test]
     fn issue_surfaces_signing_failure_as_server_error() {
-        let mut opts = JwtOptions::eddsa_verify(test_ed25519_public_pem());
-        opts.issuer = Some(ISSUER.into());
-        opts.audience = Some(ISSUER.into());
-        let verify_only_svc = JwtService::new(opts).expect("verify-only jwt");
+        let verify_only_svc =
+            JwtService::new(named(JwtOptions::eddsa_verify(test_ed25519_public_pem())))
+                .expect("verify-only jwt");
         let claims = user_claims(vec![Role::User], constants::all());
         let err = issue_with_jwt(&verify_only_svc, RESOURCE, claims)
             .expect_err("sign without key ⇒ Sign(_)");

@@ -435,7 +435,7 @@ impl JwtService {
         options.audience = options
             .audience
             .filter(|audience| !audience.trim().is_empty());
-        let issuers = bound.map_or_else(|| options.issuer.iter().cloned().collect(), <[_]>::to_vec);
+        let issuers = bound.unwrap_or(options.issuer.as_slice());
         // The ranges the variables are held to, held again here: a `JwtOptions`
         // built in code reaches this constructor without a config read, and an
         // unbounded lifetime or leeway overflows the arithmetic below it.
@@ -513,7 +513,7 @@ impl JwtService {
                     }),
                     Verifier::Static {
                         key: DecodingKey::from_secret(bytes),
-                        validation: validation(&options, signing, &issuers),
+                        validation: validation(&options, signing, issuers),
                         handshake: validation(&options, signing, options.issuer.as_slice()),
                     },
                 )
@@ -555,7 +555,7 @@ impl JwtService {
                     signer,
                     Verifier::Static {
                         key: decoding,
-                        validation: validation(&options, signing, &issuers),
+                        validation: validation(&options, signing, issuers),
                         handshake: validation(&options, signing, options.issuer.as_slice()),
                     },
                 )
@@ -566,14 +566,14 @@ impl JwtService {
                     set: Jwks::new(uri, tls, &algorithms)?,
                     validations: algorithms
                         .iter()
-                        .map(|algorithm| (*algorithm, validation(&options, *algorithm, &issuers)))
+                        .map(|algorithm| (*algorithm, validation(&options, *algorithm, issuers)))
                         .collect(),
                 },
             ),
         };
 
         if matches!(holds, Holds::Rfc9068) {
-            names_what_it_checks(&options, &issuers)?;
+            names_what_it_checks(&options, issuers)?;
         }
         Ok(Self {
             signer,
@@ -957,10 +957,12 @@ fn names(payload: &Map<String, Value>, claim: &str) -> bool {
 /// has a resource server check both, and §2.2 has every access token carry
 /// both. [`JwtOptions::allow_any_audience`] stands in for the audience.
 fn names_what_it_checks(options: &JwtOptions, issuers: &[String]) -> Result<(), AuthError> {
-    let lacking: Vec<(&str, nest_rs_config::Field)> = [
-        (issuers.is_empty()).then_some(("issuer", AuthnConfig::ISSUER)),
+    let lacking: Vec<_> = [
+        issuers
+            .is_empty()
+            .then_some(("no issuer", AuthnConfig::ISSUER)),
         (options.audience.is_none() && !options.allow_any_audience)
-            .then_some(("audience", AuthnConfig::AUDIENCE)),
+            .then_some(("no audience", AuthnConfig::AUDIENCE)),
     ]
     .into_iter()
     .flatten()
@@ -970,7 +972,7 @@ fn names_what_it_checks(options: &JwtOptions, issuers: &[String]) -> Result<(), 
     }
     let named = lacking
         .iter()
-        .map(|(what, _)| format!("no {what}"))
+        .map(|(what, _)| *what)
         .collect::<Vec<_>>()
         .join(" and ");
     let settings = lacking

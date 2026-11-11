@@ -88,10 +88,8 @@ async fn a_token_naming_another_or_no_issuer_or_audience_is_refused() {
         JwtService::new(crate::named(JwtOptions::new(SECRET))).expect("jwt"),
     ));
     let minted = |claims: serde_json::Value| {
-        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-        header.typ = Some("at+jwt".into());
         let token = jsonwebtoken::encode(
-            &header,
+            &crate::at_jwt_header(jsonwebtoken::Algorithm::HS256),
             &claims,
             &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()),
         )

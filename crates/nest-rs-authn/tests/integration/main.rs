@@ -21,6 +21,9 @@ mod principal_identity;
 mod service;
 mod strategies;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use jsonwebtoken::{Algorithm, Header};
 use nest_rs_authn::JwtOptions;
 use nest_rs_http::{HeaderName, HeaderValue, Request};
 
@@ -34,6 +37,22 @@ pub fn named(mut options: JwtOptions) -> JwtOptions {
     options.issuer = Some(ISSUER.into());
     options.audience = Some(AUDIENCE.into());
     options
+}
+
+/// The header a conformant issuer stamps (RFC 9068 §2.1). Fixtures mint
+/// tokens by hand to exercise *other* checks; without this they would all be
+/// refused by the `typ` check instead, which is not what any of them asserts.
+pub fn at_jwt_header(alg: Algorithm) -> Header {
+    let mut header = Header::new(alg);
+    header.typ = Some("at+jwt".into());
+    header
+}
+
+/// The claims `token` carries, read without verifying it.
+pub fn payload(token: &str) -> serde_json::Value {
+    let encoded = token.split('.').nth(1).expect("a compact JWS");
+    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).expect("base64url"))
+        .expect("a JSON payload")
 }
 
 /// Ed25519 key pair used across nestrs dev and e2e apps.

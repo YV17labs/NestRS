@@ -142,9 +142,9 @@ impl AmbientValue for Deadline {
 /// ability its guards attached is withheld from its reads, which no posture named,
 /// so such a unit reads nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UnmaskedReply;
+pub struct ReadsWithheld;
 
-impl AmbientValue for UnmaskedReply {}
+impl AmbientValue for ReadsWithheld {}
 
 /// A value as the map holds it.
 type Erased = Arc<dyn Any + Send + Sync>;

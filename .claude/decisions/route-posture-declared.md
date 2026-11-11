@@ -306,3 +306,9 @@ for its caller where it was built, and `Json` answers one its grants refuse `403
 body fills from a row's columns is the body's visible line, as it is on every edge; the
 document's `masked` flag stays what it reads, an entity's posture, and says that a nullable
 property reads `null` where the caller's grants withhold it.
+
+## 2026-11-11 — the document's flag is `names_an_entity`
+
+The flag the entry above kept as `masked` reads the same posture under the word for what it
+records, `names_an_entity` (`unmasked-reply-withholds-the-ability.md`, this date): the route's
+posture names an entity, a subject a table holds.

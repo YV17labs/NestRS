@@ -556,7 +556,7 @@ fn operation_object(
     let succeeded = status.map_or(COMPUTED_STATUS_DESCRIPTION, reason_phrase);
     ok.insert(
         "description".into(),
-        json!(match (route.masked(), schema.is_some()) {
+        json!(match (route.names_an_entity(), schema.is_some()) {
             (true, true) => format!(
                 "{succeeded} — field-level authorization applies: a nullable property reads \
                  `null` where the caller's ability withholds it.",
@@ -830,7 +830,7 @@ fn edge_statuses(
     // An ability that does not grant the action is refused where the posture's
     // class gate runs, or a bound subject's load, and a row it may not read
     // refuses the reply.
-    if route.masked() || edge_answers.origin_refused {
+    if route.names_an_entity() || edge_answers.origin_refused {
         out.insert(403);
     }
     // Off the path, not `path_params`: a bound route can 404 and has none. A
@@ -1238,7 +1238,7 @@ mod tests {
             response: None,
             response_content_type: None,
             error_responses: &[],
-            masked: false,
+            names_an_entity: false,
             path_params: &[],
             query_params: &[],
             header_params: &[],
@@ -1497,17 +1497,17 @@ mod tests {
     }
 
     #[test]
-    fn a_masked_route_documents_the_403_its_ability_can_be_refused() {
+    fn a_route_naming_an_entity_documents_the_403_its_ability_can_be_refused() {
         let mut g = generator();
         let mut r = route("show", "/users/{id}");
-        r.masked = true;
+        r.names_an_entity = true;
         let op = operation(&r, "/users/{id}", &mut g, &[401, 503], None);
         assert_eq!(op["responses"]["403"]["description"], "Forbidden", "{op}");
 
-        let unmasked = operation(&route("me", "/me"), "/me", &mut g, &[401, 503], None);
+        let bare = operation(&route("me", "/me"), "/me", &mut g, &[401, 503], None);
         assert!(
-            unmasked["responses"].get("403").is_none(),
-            "no guard declares it and no posture reads an ability: {unmasked}",
+            bare["responses"].get("403").is_none(),
+            "no guard declares it and no posture reads an ability: {bare}",
         );
     }
 
@@ -1829,11 +1829,11 @@ mod tests {
     }
 
     #[test]
-    fn a_masked_route_publishes_its_schema_and_flags_the_field_set() {
+    fn a_route_naming_an_entity_publishes_its_schema_and_flags_the_field_set() {
         let mut g = generator();
         let mut r = route("list_users", "/users");
         r.response = Some(schema_for_dummy);
-        r.masked = true;
+        r.names_an_entity = true;
         let op = operation(&r, "/users", &mut g, &[], None);
         assert!(
             op["responses"]["200"]["content"]["application/json"]["schema"].is_object(),
@@ -1850,11 +1850,11 @@ mod tests {
     }
 
     #[test]
-    fn a_masked_bodyless_response_keeps_the_plain_description() {
+    fn a_bodyless_route_naming_an_entity_keeps_the_plain_description() {
         let mut g = generator();
         let mut r = route("delete_user", "/users/{id}");
         r.response = Some(schema_for_dummy);
-        r.masked = true;
+        r.names_an_entity = true;
         r.success_status = Some(204);
         let op = operation(&r, "/users/{id}", &mut g, &[], None);
         assert_eq!(op["responses"]["204"]["description"], "No Content");

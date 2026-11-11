@@ -244,7 +244,7 @@ pub mod __private {
         HostLayers, HostRequires, ModuleDescriptor, ProviderDescriptor, reachable_providers,
     };
     pub use crate::ambient::{
-        Pending, UnmaskedReply, attached, install_pending, with_ambient_from,
+        Pending, ReadsWithheld, attached, install_pending, with_ambient_from,
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{

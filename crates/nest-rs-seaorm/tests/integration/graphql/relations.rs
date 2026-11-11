@@ -511,10 +511,10 @@ async fn a_scalar_a_body_reads_off_a_loaded_row_holds_what_the_grant_reads() {
     assert_eq!(read, json!({ "data": { "leadEmail": SECRET_EMAIL } }));
 }
 
-/// Every shape the reply mask could not read — a scalar a body builds, a scalar or a
-/// map column of an object, a flatten beside a field answering its type, a column
-/// renamed onto its resolver's name — holds the row as judged, so none ships what
-/// the grant withholds.
+/// Every shape holding a row — a scalar a body builds, a scalar or a map column of
+/// an object, a flatten beside a field answering its type, a column renamed onto
+/// its resolver's name — holds it as judged, so none ships what the grant
+/// withholds.
 #[tokio::test]
 async fn no_shape_holding_a_row_ships_what_its_grant_withholds() {
     let app = library().await;

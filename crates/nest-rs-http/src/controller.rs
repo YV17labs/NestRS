@@ -80,7 +80,7 @@ impl RequestBodyMeta {
 /// #   response: None,
 /// #   response_content_type: None,
 /// #   error_responses: &[],
-/// #   masked: false,
+/// #   names_an_entity: false,
 /// #   path_params: &[],
 /// #   query_params: &[],
 /// #   header_params: &[],
@@ -120,7 +120,7 @@ pub struct HttpRouteParts {
     pub response: Option<SchemaFn>,
     pub response_content_type: Option<&'static str>,
     pub error_responses: &'static [(u16, SchemaFn)],
-    pub masked: bool,
+    pub names_an_entity: bool,
     pub path_params: &'static [SchemaFn],
     pub query_params: &'static [SchemaFn],
     pub header_params: &'static [SchemaFn],
@@ -244,11 +244,12 @@ impl HttpRouteMeta {
         self.parts.error_responses
     }
 
-    /// The route's posture names an entity (`Authorize<_, _>`), so it reads under
-    /// the caller's ability and a nullable property of
-    /// [`response`](Self::response) reads `null` where that ability withholds it.
-    pub fn masked(&self) -> bool {
-        self.parts.masked
+    /// The route's posture names an entity, a subject a table holds
+    /// (`Authorize<_, _>` on one), so it reads under the caller's ability, and a
+    /// nullable property of [`response`](Self::response) reads `null` where that
+    /// ability withholds it; a posture on a `#[subject]` reads `false`.
+    pub fn names_an_entity(&self) -> bool {
+        self.parts.names_an_entity
     }
 
     /// Schema builders for the handler's `Path<T>` extractor components, in
@@ -564,7 +565,7 @@ mod tests {
             response: None,
             response_content_type: None,
             error_responses: &[],
-            masked: false,
+            names_an_entity: false,
             path_params: &[],
             query_params: &[],
             header_params: &[],
@@ -617,7 +618,7 @@ mod tests {
             response: Some(schema),
             response_content_type: Some("text/plain"),
             error_responses: &[(503, schema)],
-            masked: true,
+            names_an_entity: true,
             path_params: &[schema],
             query_params: &[schema, schema],
             header_params: &[schema, schema, schema],
@@ -646,7 +647,7 @@ mod tests {
         assert!(route.response().is_some());
         assert_eq!(route.response_content_type(), Some("text/plain"));
         assert_eq!(route.error_responses()[0].0, 503);
-        assert!(route.masked());
+        assert!(route.names_an_entity());
         assert_eq!(route.path_params().len(), 1);
         assert_eq!(route.query_params().len(), 2);
         assert_eq!(route.header_params().len(), 3);

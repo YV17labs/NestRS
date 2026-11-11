@@ -403,7 +403,7 @@ mod tests {
         );
         assert!(
             __shaper_of!(GatesOnly).is_none(),
-            "nothing shapes its route, so the route reads as unmasked"
+            "nothing shapes its route, so its record names no entity"
         );
         assert!(__shaper_of!(Gated).is_some(), "a type shapes by default");
     }

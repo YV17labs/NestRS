@@ -170,7 +170,7 @@ guard, filter or interceptor loop of its own.
    whose ability judged it and no one else, whatever shape holds it — the edge
    writes a row its grants refuse as its own `FORBIDDEN`. **A unit whose posture
    names no subject withholds the ability from its reads, on every edge**
-   (`UnmaskedReply`): a bare `#[public]`, a covered unit stating none, a WS
+   (`ReadsWithheld`): a bare `#[public]`, a covered unit stating none, a WS
    connection hook. A hand-written MCP
    `ServerHandler`, which declares no unit and writes no posture, reads under a
    principal's ability, a visitor's reading nothing. It is attached only where

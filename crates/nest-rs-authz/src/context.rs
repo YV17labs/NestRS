@@ -4,7 +4,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use nest_rs_core::__private::UnmaskedReply;
+use nest_rs_core::__private::ReadsWithheld;
 use nest_rs_core::{AmbientValue, Continuation, UnitContext};
 use nest_rs_database::__private::installed_scope;
 use nest_rs_database::{ExecutorScope, current_executor_scope};
@@ -82,7 +82,7 @@ pub(crate) fn carried(cx: &UnitContext<'_>) -> Option<Arc<Ability>> {
 /// work, wider than what it holds.
 pub fn current_ability() -> Option<Arc<Ability>> {
     let held = installed()?;
-    let withheld = nest_rs_core::ambient::<UnmaskedReply>().is_some()
+    let withheld = nest_rs_core::ambient::<ReadsWithheld>().is_some()
         || (held.is_visitor() && nest_rs_core::ambient::<VisitorReadNamed>().is_none());
     (!withheld || current_executor_scope() == Some(ExecutorScope::Job)).then_some(held)
 }
@@ -90,11 +90,11 @@ pub fn current_ability() -> Option<Arc<Ability>> {
 /// Whether [`current_ability`] answers none because of a visitor's ability the
 /// running unit holds off the unit naming its read: a nested GraphQL field, a
 /// relation's batch. A unit whose own posture names no read says so by
-/// [`UnmaskedReply`], and a line there has a posture to ask for.
+/// [`ReadsWithheld`], and a line there has a posture to ask for.
 pub fn visitors_read_unnamed() -> bool {
     installed().is_some_and(|held| held.is_visitor())
         && nest_rs_core::ambient::<VisitorReadNamed>().is_none()
-        && nest_rs_core::ambient::<UnmaskedReply>().is_none()
+        && nest_rs_core::ambient::<ReadsWithheld>().is_none()
 }
 
 /// Ambient on a unit whose `#[public(Action, Entity)]` admitted a visitor: what
@@ -435,16 +435,16 @@ mod tests {
     async fn a_job_a_withholding_units_task_opens_reads_under_what_the_task_carries() {
         let capture = || async { RequestContinuation::capture(Continuation::Task) };
 
-        let unmasked = with_request_executor(
+        let withheld = with_request_executor(
             Arc::new(Handle),
             install_ability(
                 reading(),
-                nest_rs_core::with_ambient(Arc::new(UnmaskedReply), capture()),
+                nest_rs_core::with_ambient(Arc::new(ReadsWithheld), capture()),
             ),
         )
         .await;
         assert_eq!(
-            a_tasks_job_reads_widgets(unmasked).await,
+            a_tasks_job_reads_widgets(withheld).await,
             Some(true),
             "none in a job reads as system work, wider than the unit it came off",
         );
@@ -462,14 +462,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_capture_re_entered_where_no_mask_shapes_the_reply_reads_nothing() {
+    async fn a_capture_re_entered_where_its_reads_are_withheld_reads_nothing() {
         let captured = a_readers_commit().await;
         let read = with_request_executor(
             Arc::new(Handle),
             install_ability(
                 reading(),
                 nest_rs_core::with_ambient(
-                    Arc::new(UnmaskedReply),
+                    Arc::new(ReadsWithheld),
                     captured.scope(async { reads_widgets() }),
                 ),
             ),

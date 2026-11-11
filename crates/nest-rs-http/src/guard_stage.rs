@@ -109,11 +109,11 @@ pub(crate) struct HttpGuardStage {
 /// What a stage does beside its guards once they passed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StageKind {
-    /// A route; `unmasked` when neither its posture names a subject nor a shaper
-    /// is armed on it, so its reads are withheld what its guards attached.
+    /// A route.
     Route {
-        /// The route's reads are withheld what its guards attached.
-        unmasked: bool,
+        /// Neither its posture names a subject nor a shaper is armed on it, so
+        /// its reads are withheld what its guards attached.
+        withheld: bool,
     },
     /// A self-mount's request: what the guards attached is also kept on the
     /// request, for the units the mount runs off its task.
@@ -197,8 +197,8 @@ impl HttpGuardStage {
     /// What the stage records once its guards passed.
     fn passed(&self, cx: &mut UnitContext<'_>) {
         match self.kind {
-            StageKind::Route { unmasked: true } => withhold_from_reads(cx),
-            StageKind::Route { unmasked: false } => {}
+            StageKind::Route { withheld: true } => withhold_from_reads(cx),
+            StageKind::Route { withheld: false } => {}
             StageKind::SelfMount => {
                 let mut pending = pending_of(cx).clone();
                 // A unit the mount carries off its task marks the request's
@@ -760,7 +760,7 @@ mod tests {
     fn a_stage_declares_what_each_guard_does_in_ascending_order() {
         let mut guards = chain(Witness);
         guards.extend(chain(Busy));
-        let stage = HttpGuardStage::new(guards, Vec::new(), StageKind::Route { unmasked: true })
+        let stage = HttpGuardStage::new(guards, Vec::new(), StageKind::Route { withheld: true })
             .expect("a guard declaring errors composes");
         assert_eq!(statuses(&stage, false), [401, 403, 403, 503]);
         assert_eq!(statuses(&stage, true), [403, 503]);
@@ -796,7 +796,7 @@ mod tests {
         let stage = HttpGuardStage::new(
             chain(ChallengesBasic),
             vec![admit],
-            StageKind::Route { unmasked: true },
+            StageKind::Route { withheld: true },
         )
         .expect("a guard declaring errors composes");
 
@@ -815,7 +815,7 @@ mod tests {
     fn a_stage_running_a_class_gate_declares_what_the_gate_refuses() {
         let admit: GateFn = |_| Ok(());
         let stage =
-            HttpGuardStage::new(Vec::new(), vec![admit], StageKind::Route { unmasked: true })
+            HttpGuardStage::new(Vec::new(), vec![admit], StageKind::Route { withheld: true })
                 .expect("a stage with no guard declares nothing");
         assert_eq!(
             statuses(&stage, false),
@@ -954,7 +954,7 @@ mod tests {
             crate::endpoint_fn(|_req: Request| async { Ok(Response::builder().body("reached")) });
         let guarded = guarded(
             chain(StoreDown),
-            StageKind::Route { unmasked: false },
+            StageKind::Route { withheld: false },
             inner,
         );
 
@@ -1067,7 +1067,7 @@ mod tests {
     /// endpoint answering `400 invalid_client`, a status no denial has.
     #[tokio::test]
     async fn a_guard_refusing_in_its_own_words_is_answered_with_them() {
-        for kind in [StageKind::Route { unmasked: false }, StageKind::SelfMount] {
+        for kind in [StageKind::Route { withheld: false }, StageKind::SelfMount] {
             for status in [StatusCode::BAD_REQUEST, StatusCode::SERVICE_UNAVAILABLE] {
                 let refused = guarded(chain(OwnWords(status)), kind, unreached())
                     .call(Request::builder().finish())
@@ -1093,7 +1093,7 @@ mod tests {
     async fn a_refusal_written_as_a_success_is_rendered_as_its_denial() {
         let refused = guarded(
             chain(OwnWords(StatusCode::OK)),
-            StageKind::Route { unmasked: false },
+            StageKind::Route { withheld: false },
             unreached(),
         )
         .call(Request::builder().finish())
@@ -1112,7 +1112,7 @@ mod tests {
     async fn an_answer_a_guard_that_admitted_left_is_never_served() {
         let mut guards = chain(AdmitsAnswering);
         guards.extend(chain(Refusing));
-        let refused = guarded(guards, StageKind::Route { unmasked: false }, unreached())
+        let refused = guarded(guards, StageKind::Route { withheld: false }, unreached())
             .call(Request::builder().finish())
             .await
             .expect("answers");
@@ -1120,7 +1120,7 @@ mod tests {
 
         let admitted = guarded(
             chain(AdmitsAnswering),
-            StageKind::Route { unmasked: false },
+            StageKind::Route { withheld: false },
             unreached(),
         )
         .call(Request::builder().finish())
@@ -1133,14 +1133,14 @@ mod tests {
         );
     }
 
-    /// Whether what an unmasked route runs after `chain` sees the marker.
+    /// Whether what a withholding route runs after `chain` sees the marker.
     async fn withheld(chain: Vec<ResolvedLayer<dyn Guard>>, req: Request) -> bool {
         let rest = crate::endpoint_fn(|_req| async {
             let marked =
-                nest_rs_core::ambient::<nest_rs_core::__private::UnmaskedReply>().is_some();
+                nest_rs_core::ambient::<nest_rs_core::__private::ReadsWithheld>().is_some();
             Ok(Response::builder().body(if marked { "withheld" } else { "bare" }))
         });
-        let answer = guarded(chain, StageKind::Route { unmasked: true }, rest)
+        let answer = guarded(chain, StageKind::Route { withheld: true }, rest)
             .call(req)
             .await
             .expect("answers");
@@ -1148,7 +1148,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unmasked_route_marks_only_a_unit_carrying_something_to_withhold() {
+    async fn a_withholding_route_marks_only_a_unit_carrying_something_to_withhold() {
         assert!(
             !withheld(chain(Admitting), Request::builder().finish()).await,
             "its guard attached nothing",
@@ -1224,7 +1224,7 @@ mod tests {
 
     #[test]
     fn a_guard_declaring_a_status_outside_the_errors_is_refused_at_every_site() {
-        for kind in [StageKind::Route { unmasked: true }, StageKind::SelfMount] {
+        for kind in [StageKind::Route { withheld: true }, StageKind::SelfMount] {
             for outside in [&[100_u16][..], &[200], &[302], &[399], &[600], &[403, 204]] {
                 for declared in [
                     Declares {

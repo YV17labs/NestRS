@@ -137,3 +137,41 @@ where its posture names a subject or a shaper is armed on it.
 **Refused:** naming the entity a capability-gated body reads beside its posture, a second
 posture attribute for one concern, and keeping the withholding with a key to lift it, a
 spelling with nothing left to switch off.
+
+## 2026-11-11 — the marker is `ReadsWithheld`, and a route's record `names_an_entity`
+
+The owner's word of 2026-11-11 (carry out every line `TODO.md` lists). The 2026-11-08
+entry kept the marker's name though no reply mask is left to be without: `UnmaskedReply`
+read as a mask's absence where it means a unit whose reads no posture opened. **The marker
+is `ReadsWithheld`**, read off the function attaching it, `withhold_from_reads`, and the
+`withheld` flag every in-band edge's guard stage and codegen's posture already carry; HTTP's
+route stage says it the same way, `StageKind::Route { withheld }`. What a route's record says
+of an entity's posture, which `masked` named, is `names_an_entity`
+(`HttpRouteMeta::names_an_entity()`, and `RouteGuards`' field): the posture names an entity,
+a subject a table holds — `Authorize`'s `SHAPES` reads the subject's `__ROWS` — so its reads
+keep the ability, a stream refuses it, and its document says a nullable property reads
+`null` where a grant withholds it and lists the `403` its ability can answer. Nothing moved
+but the names.
+
+The set: what a unit's posture opens to its reads — `withheld` (the in-band stage, codegen's
+`Posture::withheld`, HTTP's route stage), `withhold_from_reads`, `ReadsWithheld`, and authz's
+`VisitorReadNamed`, a visitor's read a posture named; beside it, what a route's record says
+its posture declares, a predicate on the route, `public` and `names_an_entity`, as
+`RouteGuards` says `authorized` (a posture naming a subject) beside `names_an_entity` (an
+entity). The next member: a marker withholding reads is `…Withheld` after what it withholds
+from, one licensing them `…Named` after whose read a posture named, and a fact a route's
+posture declares is the verb it performs, phrased on the route.
+
+**Refused:** `AbilityWithheld`, since core knows no ability, only that no posture opened the
+unit's reads; `rows_judged` for the route's flag, since each wire row is judged for its caller
+wherever it is built, whatever the posture: a route under `#[authorize(Read, Browsing)]`
+answering an entity's rows replies judged rows exactly as one under that entity's posture,
+and records `false` — the flag says what the posture names, not what the reply carries;
+`shaped` or `shaper_armed`, since authorization's shaper reshapes nothing now and every reader
+of the flag reads it as authorization; `judged` alone, since every guarded route judges its
+caller; and `reads_opened` for the stage's field, the opposite polarity of the `withheld` the
+in-band edges spell.
+
+A capability's route answering an entity's rows is judged as every other, but its document
+states no field a grant withholds: the sentence keys on this flag. Written in `TODO.md`, with
+what closing it takes.

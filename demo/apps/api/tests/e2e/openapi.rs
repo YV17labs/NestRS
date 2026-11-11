@@ -67,7 +67,7 @@ async fn openapi_document_describes_the_routes() {
             .as_str()
             .expect("a description")
             .contains("ability"),
-        "a masked response says its field set is ability-dependent: {list_ok}",
+        "a route whose posture names an entity says its field set is ability-dependent: {list_ok}",
     );
 
     let created = &doc["paths"]["/orgs"]["post"]["responses"]["201"];

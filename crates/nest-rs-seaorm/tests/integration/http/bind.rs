@@ -174,13 +174,13 @@ async fn an_id_that_is_not_v7_is_refused_before_anything_is_read() {
 }
 
 #[tokio::test]
-async fn a_bound_route_is_documented_as_masked() {
+async fn a_bound_route_is_documented_as_naming_an_entity() {
     let app = app().await;
     let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
 
     let route = &controllers[0].meta.routes()[0];
 
-    assert!(route.masked(), "the posture arms the route's shaper");
+    assert!(route.names_an_entity(), "a bound posture names its entity");
     assert!(
         route.path_params().is_empty(),
         "the subject's id is no `Path<T>` the document types"

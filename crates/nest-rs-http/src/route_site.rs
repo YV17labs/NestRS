@@ -101,7 +101,7 @@ fn hand_route_guard_stage(
             force: Vec::new(),
             gates: Vec::new(),
             authorized: false,
-            masked: false,
+            names_an_entity: false,
             stream: false,
             ambient: Vec::new(),
         },
@@ -133,9 +133,10 @@ pub struct RouteGuards {
     /// reads keep the ability its guards attached; elsewhere a gate can only come
     /// from a parameter's type, and the boot refuses it.
     pub authorized: bool,
-    /// Whether a response shaper is armed on the route: a posture's on an entity,
-    /// or one a parameter's type declares.
-    pub masked: bool,
+    /// The route's posture names an entity, a subject a table holds, so its
+    /// reads keep the ability and a stream refuses it: a response shaper is armed
+    /// on it, a posture's on an entity, or one a parameter's type declares.
+    pub names_an_entity: bool,
     /// The route answers `#[sse]`, an event stream no shaper reconciles.
     pub stream: bool,
     /// What the handler's `Ambient<T>` parameters read, by type: on a
@@ -162,11 +163,12 @@ pub fn route_guard_stage(
              `#[public(Action, Subject)]` where a caller with no credential is admitted"
         );
     }
-    if declared.stream && declared.masked {
+    if declared.stream && declared.names_an_entity {
         anyhow::bail!(
             "{label} is an `#[sse]` route a parameter's type arms a response shaper on: a shaper \
              reconciles a body, and an event stream is none, so it would go out as written while \
-             the document says it is masked — take that parameter off the stream"
+             the document says field-level authorization applies to it — take that parameter off \
+             the stream"
         );
     }
     let host = resolve_scoped(container, &declared.host, LayerSite::Host, &label)
@@ -189,32 +191,25 @@ pub fn route_guard_stage(
     log_effective_chain(&label, "guards", &chain);
     let public = handler.posture() == Posture::Public;
     let needed = NeededPrincipal::of(public, &declared.ambient, &chain);
-    let reads_opened = declared.authorized || declared.masked;
-    stage(chain, needed, declared.gates, reads_opened)
+    let withheld = !declared.authorized && !declared.names_an_entity;
+    stage(chain, needed, declared.gates, withheld)
 }
 
 /// The stage running `chain`, refusing a caller it admitted without the
 /// `needed` principal, then `gates`, or `None` when it runs nothing; the
-/// route's reads keep what its guards attached only where `reads_opened` — its
-/// posture names a subject, or a shaper reconciles its reply.
+/// route's reads are withheld what its guards attached where `withheld` — its
+/// posture names no subject, and no shaper reconciles its reply.
 fn stage(
     chain: Vec<ResolvedLayer<dyn Guard>>,
     needed: Option<NeededPrincipal>,
     gates: Vec<GateFn>,
-    reads_opened: bool,
+    withheld: bool,
 ) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
     if chain.is_empty() && gates.is_empty() {
         return Ok(None);
     }
     Ok(Some(Arc::new(
-        HttpGuardStage::new(
-            chain,
-            gates,
-            StageKind::Route {
-                unmasked: !reads_opened,
-            },
-        )?
-        .needing(needed),
+        HttpGuardStage::new(chain, gates, StageKind::Route { withheld })?.needing(needed),
     )))
 }
 

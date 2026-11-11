@@ -18,7 +18,6 @@ use sea_orm::entity::prelude::*;
 mod booking {
     use super::*;
 
-    // A `graphql` exposure requires `Serialize`: masking reconstructs from it.
     #[expose(name = "Booking", service = BookingsService, graphql)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "bookings")]

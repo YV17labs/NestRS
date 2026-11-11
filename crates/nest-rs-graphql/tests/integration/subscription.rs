@@ -3,7 +3,7 @@
 //! socket-lifetime ceiling that bounds it.
 //!
 //! Posture *per item* is tested in `nest-rs-authz`'s
-//! `tests/integration/graphql/mask.rs`, where the entity fixtures live.
+//! `tests/integration/judged.rs`, where the entity fixtures live.
 
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, OnceLock};

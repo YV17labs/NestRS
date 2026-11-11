@@ -185,7 +185,7 @@ no transaction at all.
 
 **The ability** is what `AbilityGuard` attaches (`cx.attach`): ambient for the
 rest of the unit once its guard stage passed. A unit whose posture names no
-subject — a bare `#[public]`, one stating none — runs under the `UnmaskedReply`
+subject — a bare `#[public]`, one stating none — runs under the `ReadsWithheld`
 marker its guard stage attaches, as a WS connection hook does, and
 `current_ability` withholds the ability there, so a read no posture named fails
 closed, as a write does before its hook — and `nest-rs-http` knows

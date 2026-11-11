@@ -77,8 +77,26 @@ its unit's reads, and a dispatched method answering a `Model` does not compile
 (`mask-provenance.md`, `unmasked-reply-withholds-the-ability.md`, 2026-11-08). A
 GraphQL root field's answer resolves under the ability its own unit judged its rows
 by, one its own guards attached included — its field resolvers, its batches and a
-subscription's items with it (2026-11-11). Nothing of it remains open here; what it
-keeps on purpose is §5's.
+subscription's items with it (2026-11-11). One thing remains open, what a route's
+document says of it; what it keeps on purpose is §5's.
+
+- A route whose posture names a `#[subject]` and answers an entity's exposed rows
+  is judged as every other, but its OpenAPI document says nothing of it: the
+  `200`'s "field-level authorization applies: a nullable property reads `null`
+  where the caller's ability withholds it" keys on
+  `HttpRouteMeta::names_an_entity()` (`nest-rs-openapi`'s `operation_object`),
+  which such a route records `false`. Seen 2026-11-11 on the record: under
+  `#[authorize(Read, Browsing)]` and `#[authorize(Read, article::Entity)]`, two
+  routes answering `Json(rows())` to one caller replied the same judged rows,
+  `body` and `published` `null`, and recorded `false` and `true` (a test the
+  review of the rename ran and did not keep; `nest-rs-authz`'s
+  `a_route_naming_the_capability_records_that_it_names_no_entity` pins the
+  `false`); the document's sentence keyed on it is read off the code. Close: the
+  sentence said where the row is rather than where the posture is — on each
+  nullable property an `#[expose]`d type's schema may withhold, so it holds on
+  every route, every edge's schema and every shape carrying the row — and the
+  route's own sentence dropped; a document change, the demo's `openapi.json`
+  regenerated. *read*
 
 ## 3. Known gaps by area
 
@@ -212,17 +230,6 @@ keeps on purpose is §5's.
   reaches no docker. Close: a by-hand `docker compose up` on a machine whose
   ports 5432, 6379 and 9000 are free, or a CI job running it, at the minutes it
   costs. *read*
-- The names the retired reply mask left on internal seams read as what they now
-  mean, a posture naming no subject: `UnmaskedReply`, the HTTP guard
-  stage's `StageKind::Route { unmasked }`, `RouteGuards::masked` and
-  `HttpRouteMeta::masked`, and the names and comments of tests saying "mask"
-  for the judged row (about 30 lines, in the crates' suites and unit tests; the
-  docs site, every comment in the crates' sources, their descriptions and
-  manifest comments, the refusal sentences, the errors a client reads and the
-  CLI's templates no longer do). Close: one rename with its naming set stated, across
-  `nest-rs-core`, `nest-rs-http`, `nest-rs-http-macros`, `nest-rs-authz`,
-  `nest-rs-openapi` and the rules naming them, a tier-2 move but for
-  `HttpRouteMeta::masked`, public.
 
 ## 4. Additive features for 7.x (no caller yet)
 

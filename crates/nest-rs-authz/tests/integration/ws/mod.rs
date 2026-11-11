@@ -1,8 +1,8 @@
 //! Mirror tests for `src/ws/` — only compiled when the `ws` feature is on.
 //!
 //! A gateway is `Gated`, so these suites install the ambient ability with
-//! [`install_ability`] and drive `Gateway::dispatch` directly — the class gate,
-//! the handler's own call and its mask; on a socket the gate runs in a
+//! [`install_ability`] and drive `Gateway::dispatch` directly — the class gate
+//! and the handler's own call; on a socket the gate runs in a
 //! message's guard stage, so the gate's suites also send their messages over a
 //! real upgrade whose guard attached the ability ([`RoleUpgrade`]).
 

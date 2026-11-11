@@ -1,7 +1,7 @@
 //! Covers `src/graphql/bind.rs`: the service `bind = Service` loads through is
 //! inside the access contract the boot checks, as a route's is, and an
 //! operation its guards attached no ability to answers opaquely, the remedy on
-//! the operator's line. A visitor's `#[public(A, bind = S)]` loads and masks by
+//! the operator's line. A visitor's `#[public(A, bind = S)]` loads and judges by
 //! its grant, as `#[authorize]`'s does a principal's.
 
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read, Update};
@@ -328,7 +328,7 @@ impl CrudService for VisitedService {
         Ok(Access::Found(note::Model {
             id,
             title: Some("seen".to_owned()),
-            body: Some("masked away".to_owned()),
+            body: Some("withheld".to_owned()),
         }))
     }
 }

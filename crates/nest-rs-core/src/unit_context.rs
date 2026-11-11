@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::time::Instant;
 
-use crate::ambient::{AmbientValue, Pending, UnmaskedReply, carries_ambient};
+use crate::ambient::{AmbientValue, Pending, ReadsWithheld, carries_ambient};
 use crate::edge::Edge;
 use crate::error::MissingAmbientError;
 use crate::handler::{Handler, Reflector};
@@ -244,7 +244,7 @@ pub fn carries(cx: &UnitContext<'_>, type_id: TypeId) -> bool {
 /// and nothing carried it reads none anyway, and nothing is marked.
 pub fn withhold_from_reads(cx: &mut UnitContext<'_>) {
     if !cx.pending.is_empty() || carries_ambient() {
-        cx.attach(UnmaskedReply);
+        cx.attach(ReadsWithheld);
     }
 }
 

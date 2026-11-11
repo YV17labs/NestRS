@@ -7,12 +7,14 @@
 use std::sync::Arc;
 
 use nest_rs_authz::{Ability, AbilityBuilder, Action, Manage, Read, current_ability, subject};
-use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
+use nest_rs_core::{Discovery, Layer, UnitContext, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, Scope};
 use nest_rs_http::futures_util::stream;
-use nest_rs_http::{HttpView, Json, SseEvent, SseStream, StatusCode, controller, header, routes};
+use nest_rs_http::{
+    HttpControllerMeta, HttpView, Json, SseEvent, SseStream, StatusCode, controller, header, routes,
+};
 use nest_rs_mcp::{McpError, mcp, tools};
 use nest_rs_testing::TestApp;
 use nest_rs_testing::mcp::{call_method_with, call_tool_as, open_session_with};
@@ -434,6 +436,25 @@ async fn a_public_route_naming_the_capability_admits_a_grant_and_refuses_any_oth
     assert_eq!(granted.status(), StatusCode::OK);
     assert_eq!(body(granted).await, "catalog");
     assert_eq!(read("none").await.0.status(), StatusCode::FORBIDDEN);
+}
+
+/// A route's record says its posture names no entity: a capability's is no
+/// table's, so its document says no property reads `null` by a grant.
+#[tokio::test]
+async fn a_route_naming_the_capability_records_that_it_names_no_entity() {
+    let app = app().await;
+    let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
+    let mut recorded: Vec<(&str, bool)> = controllers
+        .iter()
+        .flat_map(|found| found.meta.routes())
+        .map(|route| (route.handler(), route.names_an_entity()))
+        .collect();
+    recorded.sort_unstable();
+
+    assert_eq!(
+        recorded,
+        [("catalog", false), ("progress", false), ("run", false)]
+    );
 }
 
 #[tokio::test]

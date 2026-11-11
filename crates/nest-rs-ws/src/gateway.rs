@@ -815,7 +815,7 @@ async fn under_connection<F: Future<Output = ()> + Send>(
     // A hook states no posture naming what it reads, so the ability the upgrade
     // attached stays off its reads, as on any such unit.
     let body = nest_rs_core::with_ambient(
-        Arc::new(nest_rs_core::__private::UnmaskedReply),
+        Arc::new(nest_rs_core::__private::ReadsWithheld),
         nest_rs_core::panic::contain(hook),
     )
     .map(HookEnd::from);

@@ -157,8 +157,7 @@ async fn a_merged_endpoint_still_row_filters_the_tool_body() {
     );
     assert!(
         body.contains("structuredContent"),
-        "…and the rows travel as structured content (SEP-2106), which is what \
-         `#[authorize]`'s response mask has a shape to work on — a hand-joined \
-         string would ship the same rows past an inert mask: {body}",
+        "…and the rows travel as structured content (SEP-2106), the shape the \
+         tool's output schema declares, never a hand-joined string: {body}",
     );
 }

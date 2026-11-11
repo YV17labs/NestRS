@@ -1,6 +1,6 @@
 //! Builder-level invariants exercised through the crate's public API: denial
 //! overrides grant, multiple grants compose into an OR'd pre-filter, `fields()`
-//! narrows masking, and a `RuleSpec` commits even if its terminal call is
+//! narrows the field set, and a `RuleSpec` commits even if its terminal call is
 //! omitted (the `Drop` impl is the commit point).
 
 use std::any::TypeId;

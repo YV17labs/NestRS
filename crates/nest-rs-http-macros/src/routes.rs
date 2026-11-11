@@ -731,8 +731,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         // alias documents both; a type no expression can name, or an `#[sse]`
         // stream, is not probed.
         let answered = answer_type(&method.sig.output).filter(|_| !is_sse);
-        // Kept under a posture naming an entity, recorded as `masked`: its nullable
-        // properties read `null` where a grant withholds them.
+        // Kept under a posture naming an entity, recorded as `names_an_entity`:
+        // its nullable properties read `null` where a grant withholds them.
         let response = match (&api.response, answered) {
             (Some(ty), _) => quote! {
                 ::core::option::Option::Some(::nest_rs_http::__private::schema_of::<#ty> as ::nest_rs_http::SchemaFn)
@@ -776,7 +776,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             (None, None, Some(ty)) => quote! { ::nest_rs_http::__media_of!(#ty) },
             (None, None, None) => quote! { ::core::option::Option::None },
         };
-        let masked = quote! { #shaper_selection.is_some() };
+        let names_an_entity = quote! { ::core::option::Option::is_some(&#shaper_selection) };
 
         let path_param_tys = path_param_types(&inputs);
         let path_params = if path_param_tys.is_empty() {
@@ -850,7 +850,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 response: #response,
                 response_content_type: #response_content_type,
                 error_responses: #error_responses,
-                masked: #masked,
+                names_an_entity: #names_an_entity,
                 path_params: #path_params,
                 query_params: #query_params,
                 header_params: #header_params,
@@ -1427,7 +1427,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
                     force: #force_guard_typeids,
                     gates: #gate_selection,
                     authorized: #authorized,
-                    masked: ::core::option::Option::is_some(&#shaper_selection),
+                    names_an_entity: ::core::option::Option::is_some(&#shaper_selection),
                     stream: #is_sse,
                     ambient: #ambient,
                 }

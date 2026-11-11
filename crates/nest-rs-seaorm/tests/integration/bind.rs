@@ -80,7 +80,7 @@ impl CrudService for NotesService {
             FOUND => Ok(Access::Found(note::Model {
                 id,
                 title: Some("seen".to_owned()),
-                body: Some("masked away".to_owned()),
+                body: Some("withheld".to_owned()),
             })),
             DENIED => Ok(Access::Denied),
             FAILING => Err(DbErr::Custom("connection to db.internal refused".to_owned()).into()),
@@ -242,7 +242,7 @@ fn not_found(answer: &Value) {
 }
 
 #[tokio::test]
-async fn a_row_the_load_finds_arrives_loaded_and_its_reply_is_masked() {
+async fn a_row_the_load_finds_arrives_loaded_and_judged_for_its_caller() {
     let _serial = SERIAL.lock().await;
     let app = app().await;
     for uri in [format!("note://{FOUND}"), format!("written://{FOUND}")] {
@@ -256,7 +256,7 @@ async fn a_row_the_load_finds_arrives_loaded_and_its_reply_is_masked() {
         assert_eq!(
             note["body"],
             Value::Null,
-            "the mask strips what no grant reads: {note}"
+            "a column no grant reads is no value in the judged row: {note}"
         );
     }
 }
@@ -383,7 +383,7 @@ struct VisitedTools;
 
 #[tools]
 impl VisitedTools {
-    /// A note a caller with no credential reads, loaded and masked by its grant.
+    /// A note a caller with no credential reads, loaded and judged by its grant.
     #[resource(template = "note://{id}")]
     #[public(Read, bind = NotesService)]
     #[use_guards(VisitorGuard)]
@@ -439,6 +439,6 @@ async fn a_resource_bound_for_a_visitor_loads_and_answers_by_its_grant() {
     assert_eq!(
         note["body"],
         Value::Null,
-        "the mask strips what the visitor's grant does not read: {note}"
+        "a column the visitor's grant does not read is no value in the judged row: {note}"
     );
 }

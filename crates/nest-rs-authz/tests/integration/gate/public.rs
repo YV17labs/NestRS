@@ -308,7 +308,7 @@ impl ArticlesResolver {
         Ok(rows())
     }
 
-    /// Each item is masked as a row: a draft dropped, a published one its title.
+    /// Each item is judged as a row: a draft dropped, a published one its title.
     #[subscription]
     #[public(Read, article::Entity)]
     #[use_guards(AuthzGuard)]
@@ -420,10 +420,10 @@ async fn a_route_naming_its_read_answers_a_visitor_by_its_grant_and_a_token_by_d
     assert_eq!(read[2]["body"], "body 3", "{read}");
 }
 
-/// What a route's document reads: `#[public(...)]` is public and masked, its gate
-/// answering `403` and no `401`, as the parameter it replaces did.
+/// What a route's document reads: `#[public(...)]` is public and names an entity,
+/// its gate answering `403` and no `401`, as the parameter it replaces did.
 #[tokio::test]
-async fn a_route_naming_its_read_documents_a_public_masked_operation() {
+async fn a_route_naming_its_read_documents_a_public_operation_on_an_entity() {
     let app = app().await;
     let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
     let feed = controllers
@@ -431,7 +431,7 @@ async fn a_route_naming_its_read_documents_a_public_masked_operation() {
         .flat_map(|found| found.meta.routes())
         .find(|route| route.handler() == "feed")
         .expect("the route is discovered");
-    assert!(feed.public() && feed.masked());
+    assert!(feed.public() && feed.names_an_entity());
     let statuses: Vec<u16> = route_denials(app.container(), feed)
         .expect("the site composed")
         .into_iter()
@@ -512,7 +512,7 @@ async fn an_operation_naming_its_read_answers_a_visitor_by_its_grant_and_a_token
 }
 
 #[tokio::test]
-async fn an_operation_leaving_the_mask_to_its_body_still_reads_under_the_visitors_rules() {
+async fn an_operation_answering_what_its_body_built_still_reads_under_the_visitors_rules() {
     let answer = query(&app().await, "", "{ feedByHand }").await;
     assert_eq!(answer["data"]["feedByHand"], true, "{answer}");
 }
@@ -803,9 +803,9 @@ async fn read_in_a_stream(ability: Ability, carried: Option<Arc<Caller>>) -> Val
     item["data"]["streamReads"].clone()
 }
 
-/// The item a stream yields is the mask's and what its body reads is not: a visitor's
-/// reads there stay closed, and a caller a token backs reads under what its request
-/// carried, the mask reaching none of what it derives from those rows.
+/// An item a stream yields is judged where it is built, and what its body reads is
+/// not: a visitor's reads there stay closed, and a caller a token backs reads under
+/// what its request carried, a value derived from those rows judged by nothing.
 #[tokio::test]
 async fn a_streams_own_reads_are_closed_to_a_visitor_and_open_to_a_caller() {
     let mut visitor = AbilityBuilder::new();
@@ -908,7 +908,7 @@ async fn a_message_naming_its_read_answers_a_visitor_by_its_grant() {
 /// The gate alone admits the read as the site does, so a handler a test calls on
 /// its own reads what it would read on a socket.
 #[tokio::test]
-async fn a_message_dispatched_on_its_own_masks_by_the_visitors_grant_too() {
+async fn a_message_dispatched_on_its_own_judges_by_the_visitors_grant_too() {
     let mut visitor = AbilityBuilder::new();
     visitor
         .can(Action::Read, article::Entity)
@@ -1084,7 +1084,7 @@ async fn a_resource_naming_its_read_answers_a_visitor_by_its_grant() {
 }
 
 #[tokio::test]
-async fn a_prompt_and_a_listing_leaving_the_mask_to_their_body_read_under_the_visitors_rules() {
+async fn a_prompt_and_a_listing_answering_what_their_body_built_read_under_the_visitors_rules() {
     let app = mcp_app().await;
     let client = app.http();
     let session = open_session(client, MCP_PATH, None).await;

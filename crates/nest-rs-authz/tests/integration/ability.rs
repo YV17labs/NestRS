@@ -104,7 +104,7 @@ fn permitted_fields_restricts_to_listed_columns() {
         FieldSet::Only(cols) => {
             assert!(cols.contains("id"));
             assert!(cols.contains("name"));
-            assert!(!cols.contains("secret"), "secret must be masked");
+            assert!(!cols.contains("secret"), "secret must be withheld");
         }
         _ => panic!("expected a restricted field set"),
     }

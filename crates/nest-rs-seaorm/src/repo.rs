@@ -1279,7 +1279,7 @@ mod tests {
     }
 
     /// A request no ability reaches — a route whose posture names no subject,
-    /// whose ability `UnmaskedReply` withholds — is barred like one its ability
+    /// whose ability `ReadsWithheld` withholds — is barred like one its ability
     /// bars, saying why once; the pool dials nothing, so a statement sent would fail otherwise.
     #[tokio::test]
     async fn a_save_in_a_request_holding_no_ability_runs_no_hook_and_sends_nothing() {

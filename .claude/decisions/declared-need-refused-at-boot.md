@@ -153,3 +153,56 @@ is declared and checked at boot instead: a `&DataLoader<L>` parameter (its owner
 reached), `Ambient<T>` (a guard attaching it), `Scoped<T>` (its provider inside the
 access contract). The docs teach only those. **Refused:** a token scan of bodies, for
 the reason above.
+
+## 2026-11-11 — a named instance's resource names its module: its type carries the line
+
+The owner's word of 2026-11-11 (carry out every line `TODO.md` lists). The refusal above,
+*a remedy per named instance through the `TypeId` table*, held: a remedy filed by key
+cannot name `RedisConnection<Cache>`, whose key is the app's type. Its closing, the probe
+at the inject site, is built. A provider injecting the cache's connection with nothing
+opening it read the kernel's sentence, naming the instance and no module; a controller
+injecting it, a `Scoped<RedisConnection<Cache>>` handler parameter and a provider
+injecting `RedisQueueProducer<Cache>` read the same, and the producer's default instance
+too, no remedy having been filed for it.
+
+**The type carries its line**: `nest_rs_core::CarriesRemedy`, one associated function
+answering the sentence, implemented by `RedisConnection<I>` and `RedisQueueProducer<I>`
+for every instance — "Import `nest_rs::redis::RedisModule::<Cache>`, which opens the Redis
+connection every binding of the `cache` instance shares." Each `#[inject]` field, required
+or optional, and each handler parameter resolving a provider asks
+`__private::RemedyProbe` through autoref, as a parameter asks `ParamProbe`; `Scoped<T>`
+carries `T`'s. `Discoverable::injected_remedies` (a default method) hands the answers to
+the descriptor, an app-wide pool forwards its layers', and the access graph reads them
+where it writes `MissingDependencyError` or `AccessGraphError`, before the registry. The
+read runs only on a refusal, so the hot path and the boot that succeeds pay nothing; the
+expansion grows by one statement per `#[inject]` field and per such parameter.
+
+- **The registry stays, for the keys a crate can name.** A key reached where no type is in
+  hand — a pool's layer list is generic, a hand-written `Discoverable` returns `TypeId`s —
+  is answered by its `DependencyRemedy` and by nothing else, so the probe cannot replace
+  it. One key keeps one remedy: the default connection's entry moved to the type, which
+  answers every instance.
+- **`remedy` is `Option<Cow<'static, str>>`** on both errors, and `with_remedy` takes
+  `impl Into<Cow<'static, str>>`: a named instance's sentence is built, and leaking it into
+  a `&'static str` per key was refused.
+- **A handler parameter's dependency is named by its short name**, `RedisConnection<Cache>`,
+  where `Scoped<T>`'s label was `type_name::<T>()`, a path (the naming rule: a Rust type
+  reads by its short name).
+- **What the kernel's sentence keeps**: a named instance's config injected by hand,
+  `Instanced<Cache, RedisConfig>`, is no resource, and `Instanced<I, T>` is also the type
+  an app seeds its own values under, whose fix is the seed; the sentence names both, the
+  import first.
+
+**Refused:**
+
+- **The probe filing its answer into the registry** (an `inventory` entry per `#[inject]`
+  field): a static constructor per field of the binary, run at every start, for a line
+  read only on a refusal.
+- **A family remedy the resource's crate files and `#[instance]` completes**: neither can
+  name the other's type, so nothing monomorphizes `RedisConnection<Cache>` but the code
+  naming it, which is the declaration the probe reads.
+- **Matching a remedy on the dependency's label**: a label is the spelling, and an alias
+  or a path would read none.
+- **A kernel helper spelling an instance's typed import** for every resource: Redis's
+  connection and producer are its two callers, in one crate; it moves to the kernel with
+  a third.

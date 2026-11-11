@@ -22,7 +22,7 @@ use nest_rs_codegen::__private::{
     delegated_attrs, exception_filter_specs, force_guard_typeids, forwarded_arg_idents,
     forwarded_idents, from_container_method, guard_capability_bounds, handler_const, host_meta_fn,
     host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
-    injected_names_with_layers, injected_optional_fns, injected_per_request_method, injects_impls,
+    injected_names_with_layers, injected_optional_fns, injected_remedies_fn, injects_impls,
     interceptor_specs, key_as_written, layer_deps, no_row_answered, no_tail_decoded,
     normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
     reject_meta_on_operations, return_type, scoped_specs, shared_receiver, site_items, site_ref,
@@ -128,6 +128,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
         dep_names,
         opt_keys,
         opt_names,
+        remedies,
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
@@ -142,6 +143,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
     let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
+    let injected_remedies = injected_remedies_fn(&remedies);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
     let interceptor_specs = interceptor_specs(&interceptors);
     let exception_filter_specs = exception_filter_specs(&exception_filters);
@@ -191,6 +193,8 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
             }
 
             #injected_optional
+
+            #injected_remedies
 
             #[doc(hidden)]
             pub fn __nestrs_resolver_guard_specs()
@@ -1579,10 +1583,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     );
     layers.keys.extend(field_layers.keys);
     layers.labels.extend(field_layers.labels);
-    let injected_methods = injected_methods_with_layers(&self_ty, &layers);
     // A provider a `Scoped<T>` parameter resolves per request is checked like
     // an `#[inject]`ed one.
-    let injected_per_request = injected_per_request_method(
+    let injected_methods = injected_methods_with_layers(
+        &self_ty,
+        &layers,
         scoped_params
             .iter()
             .map(|(cfgs, item)| Conditional { cfgs, item }),
@@ -1650,7 +1655,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         impl ::nest_rs_core::Discoverable for #self_ty {
             #injected_methods
 
-            #injected_per_request
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,

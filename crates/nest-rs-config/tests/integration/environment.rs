@@ -77,6 +77,7 @@ async fn an_app_loading_no_config_is_told_what_registers_the_environment() {
     assert!(unmet.dependency.ends_with("Environment"), "{unmet:?}");
     let remedy = unmet
         .remedy
+        .as_deref()
         .unwrap_or_else(|| panic!("the crate owning `Environment` names a remedy: {refused:#}"));
     assert!(
         remedy.contains("first config the boot loads")

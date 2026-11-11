@@ -254,3 +254,10 @@ against `App::builder()`, the one boot left.
 **2026-11-04 — `Config::defaults` is gone.** The hook the entry above names left
 with the second base (`undeclared-environment-is-production.md`, its entry of this
 date): every instance overlays its environment on `Default`.
+
+**2026-11-11 — a refusal names the instance's import.** A provider injecting a named
+instance's resource that no import opens is told `RedisModule::<Cache>`, as the default
+instance's is told `RedisModule`: the resource's type carries the line
+(`nest_rs_core::CarriesRemedy`), read off each `#[inject]` field and handler parameter
+declaring it (`declared-need-refused-at-boot.md`, its entry of this date). A resource of
+a package opened per instance implements it the same way.

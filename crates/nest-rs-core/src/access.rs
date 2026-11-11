@@ -10,6 +10,7 @@
 //! an unchecked escape hatch.
 
 use std::any::TypeId;
+use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use crate::error::{
     ScopedLayerError, UnbuiltCause, UngatedDiscoveryError,
 };
 use crate::host_runtime::runtime_modules;
+use crate::remedy::remedy_for;
 
 pub(crate) use self::__private::{HostLayers, HostRequires, ModuleDescriptor, ProviderDescriptor};
 
@@ -33,6 +35,7 @@ pub(crate) mod __private {
     use std::any::TypeId;
 
     use super::ReachableProviders;
+    use crate::InjectedRemedy;
 
     /// The reachability set of exactly `types`, for a test that builds its
     /// container by hand and seeds the set it means.
@@ -74,6 +77,10 @@ pub(crate) mod __private {
         /// ([`Discoverable::injected_per_request`](crate::Discoverable::injected_per_request)):
         /// checked like [`injects`](Self::injects), never for scope.
         pub injects_per_request: fn() -> Vec<(TypeId, &'static str)>,
+        /// The remedy each dependency's type carries, by its key
+        /// ([`Discoverable::injected_remedies`](crate::Discoverable::injected_remedies)):
+        /// read only where the boot refuses one.
+        pub inject_remedies: fn() -> Vec<InjectedRemedy>,
     }
 
     /// The layers one provider-hosted dispatch site binds — a `#[process]`
@@ -114,56 +121,9 @@ pub(crate) mod __private {
     }
 }
 
-/// The line to add when a provider depends on `key` and no module the app
-/// imports provides it — submitted by the crate owning `key`'s type, so the
-/// boot's [`MissingDependencyError`] names the module that binds it instead of
-/// the kernel's generic remedy, as does [`AccessGraphError`] when no module the
-/// app reaches lists the key. Text only: it mounts nothing, so it is no discovery
-/// to gate.
-///
-/// A port names its first-party binding for its trait object, and an adapter
-/// the module opening its resource:
-///
-/// ```
-/// use std::any::TypeId;
-/// use std::sync::Arc;
-///
-/// pub trait Mailer: Send + Sync {}
-///
-/// nest_rs_core::inventory::submit! {
-///     nest_rs_core::DependencyRemedy::new(
-///         TypeId::of::<Arc<dyn Mailer>>,
-///         "Import exactly one mailer binding — `acme::SmtpMailerModule` sends over SMTP.",
-///     )
-/// }
-/// ```
-///
-/// One key takes one remedy, its owning crate's.
-pub struct DependencyRemedy {
-    key: fn() -> TypeId,
-    remedy: &'static str,
-}
-
-impl DependencyRemedy {
-    /// `remedy` for the container key `key` — `TypeId::of::<Arc<dyn Port>>`
-    /// for a trait object, the type itself otherwise.
-    pub const fn new(key: fn() -> TypeId, remedy: &'static str) -> Self {
-        Self { key, remedy }
-    }
-}
-
 inventory::collect!(ModuleDescriptor);
 inventory::collect!(HostLayers);
 inventory::collect!(HostRequires);
-inventory::collect!(DependencyRemedy);
-
-/// The remedy the crate owning `key`'s type names for it, read off the registry
-/// where a refusal is written.
-pub(crate) fn remedy_for(key: TypeId) -> Option<&'static str> {
-    inventory::iter::<DependencyRemedy>()
-        .find(|entry| (entry.key)() == key)
-        .map(|entry| entry.remedy)
-}
 
 /// Every module `module` imports: those its `imports = [...]` names, in order,
 /// then what each of its providers' decorators brings.
@@ -496,7 +456,7 @@ pub(crate) fn validate_access_graph(
                 let owner = reached_listings
                     .get(&dep)
                     .map(|listing| (listing, None))
-                    .or_else(|| owners.get(&dep).map(|owner| (owner, remedy_for(dep))));
+                    .or_else(|| owners.get(&dep).map(|owner| (owner, remedy(p, dep))));
                 if let Some((&(dependency, owner), remedy)) = owner {
                     return Err(AccessGraphError {
                         module: desc.name,
@@ -516,13 +476,23 @@ pub(crate) fn validate_access_graph(
                     module: desc.name,
                     consumer: p.name,
                     dependency: name,
-                    remedy: remedy_for(dep),
+                    remedy: remedy(p, dep),
                 }
                 .into());
             }
         }
     }
     Ok(())
+}
+
+/// The line to add for `key`, which `provider` depends on: what its type
+/// carries where `provider` declares it, else what its crate filed.
+fn remedy(provider: &ProviderDescriptor, key: TypeId) -> Option<Cow<'static, str>> {
+    (provider.inject_remedies)()
+        .into_iter()
+        .find(|(carried, _)| *carried == key)
+        .map(|(_, remedy)| remedy())
+        .or_else(|| remedy_for(key).map(Cow::Borrowed))
 }
 
 /// The provider and the module of each key `modules` declare. First listing
@@ -1080,6 +1050,10 @@ mod tests {
         Vec::new()
     }
 
+    fn no_remedies() -> Vec<crate::InjectedRemedy> {
+        Vec::new()
+    }
+
     fn provides_only_itself() -> Vec<(TypeId, &'static str)> {
         Vec::new()
     }
@@ -1106,6 +1080,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         }
@@ -1153,6 +1128,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_per_request: no_per_request,
+                    inject_remedies: no_remedies,
                     also_provides: provides_only_itself,
                 },
                 ProviderDescriptor {
@@ -1164,6 +1140,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_per_request: no_per_request,
+                    inject_remedies: no_remedies,
                     also_provides: provides_only_itself,
                 },
             ],
@@ -1196,6 +1173,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1233,6 +1211,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1288,6 +1267,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1335,6 +1315,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1376,6 +1357,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1426,6 +1408,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1452,6 +1435,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1478,6 +1462,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1525,6 +1510,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1572,6 +1558,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_per_request: no_per_request,
+                    inject_remedies: no_remedies,
                     also_provides: provides_only_itself,
                 },
                 ProviderDescriptor {
@@ -1583,6 +1570,7 @@ mod tests {
                     injects_optional: injects_zdb,
                     inject_optional_names: no_names,
                     injects_per_request: no_per_request,
+                    inject_remedies: no_remedies,
                     also_provides: provides_only_itself,
                 },
                 ProviderDescriptor {
@@ -1594,6 +1582,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_per_request: no_per_request,
+                    inject_remedies: no_remedies,
                     also_provides: provides_only_itself,
                 },
             ],
@@ -1634,6 +1623,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_per_request: no_per_request,
+                    inject_remedies: no_remedies,
                     also_provides: provides_only_itself,
                 },
                 ProviderDescriptor {
@@ -1645,6 +1635,7 @@ mod tests {
                     injects_optional: no_deps,
                     inject_optional_names: no_names,
                     injects_per_request: no_per_request,
+                    inject_remedies: no_remedies,
                     also_provides: also_its_own_type,
                 },
             ],
@@ -1672,6 +1663,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1688,6 +1680,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };
@@ -1704,6 +1697,7 @@ mod tests {
                 injects_optional: no_deps,
                 inject_optional_names: no_names,
                 injects_per_request: no_per_request,
+                inject_remedies: no_remedies,
                 also_provides: provides_only_itself,
             }],
         };

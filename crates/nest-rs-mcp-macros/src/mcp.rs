@@ -12,8 +12,8 @@ use nest_rs_codegen::__private::{
     HostMount, InjectableBody, MCP_GRAMMAR, MountPath, VersionedEdge, build_injectable_body,
     exception_filter_specs, from_container_method, guard_capability_bounds, host_meta_fn,
     host_runtime_entry, injected_keys_with_layers, injected_names_with_layers,
-    injected_optional_method, injected_optional_names_method, interceptor_specs, layer_deps,
-    reject_path, scoped_specs,
+    injected_optional_method, injected_optional_names_method, injected_remedies_fn,
+    interceptor_specs, layer_deps, reject_path, scoped_specs,
 };
 
 use crate::mcp_impl::Role;
@@ -88,6 +88,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         dep_names,
         opt_keys,
         opt_names,
+        remedies,
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return refused_beside(err, item),
@@ -104,6 +105,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     let injected_names = injected_names_with_layers(&dep_names, &layers);
     let injected_optional = injected_optional_method(&opt_keys);
     let injected_optional_names = injected_optional_names_method(&opt_names);
+    let injected_remedies = injected_remedies_fn(&remedies);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
     let interceptor_specs = interceptor_specs(&interceptors);
     let exception_filter_specs = exception_filter_specs(&exception_filters);
@@ -134,6 +136,8 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
             #from_container
 
             #host_meta
+
+            #injected_remedies
 
             /// Host-scope `#[use_guards(...)]`, read by the impl half when it
             /// composes an operation's guard stage.
@@ -191,6 +195,13 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                 // host that writes rmcp by hand.
                 use ::nest_rs_mcp::__private::DefaultOperationLayers as _;
                 <Self>::__nestrs_mcp_injected_per_request()
+            }
+
+            fn injected_remedies() -> ::std::vec::Vec<::nest_rs_core::InjectedRemedy> {
+                use ::nest_rs_mcp::__private::DefaultOperationLayers as _;
+                let mut __remedies = <Self>::__nestrs_injected_remedies();
+                __remedies.extend(<Self>::__nestrs_mcp_injected_remedies());
+                __remedies
             }
 
             fn register(

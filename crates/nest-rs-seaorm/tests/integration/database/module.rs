@@ -322,7 +322,11 @@ async fn a_crud_host_with_no_unit_of_work_binding_is_refused_at_boot_naming_it()
         ),
     ] {
         assert_eq!(
-            (missing.consumer, missing.dependency, missing.remedy),
+            (
+                missing.consumer,
+                missing.dependency,
+                missing.remedy.as_deref()
+            ),
             (
                 host,
                 "dyn UnitOfWork",
@@ -406,7 +410,11 @@ struct SheetsModule;
 async fn the_service_an_exposed_entity_names_is_refused_with_no_binding() {
     let missing = unmet_dependency::<SheetsModule>().await;
     assert_eq!(
-        (missing.consumer, missing.dependency, missing.remedy),
+        (
+            missing.consumer,
+            missing.dependency,
+            missing.remedy.as_deref()
+        ),
         (
             "SheetsService",
             "dyn UnitOfWork",

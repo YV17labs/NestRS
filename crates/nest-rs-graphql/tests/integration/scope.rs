@@ -247,10 +247,9 @@ mod access_contract {
             .downcast::<MissingDependencyError>()
             .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
         assert_eq!(missing.consumer, "UnprovidedResolver");
-        assert!(
-            missing.dependency.ends_with("::Unprovided"),
-            "{}",
-            missing.dependency,
+        assert_eq!(
+            missing.dependency, "Unprovided",
+            "a refusal names a type by its short name, never its path"
         );
     }
 

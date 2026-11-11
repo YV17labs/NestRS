@@ -559,6 +559,7 @@ async fn a_provider_injecting_a_pool_no_module_opens_is_refused_naming_the_modul
     assert!(
         missing
             .remedy
+            .as_deref()
             .is_some_and(|remedy| remedy.contains("`nest_rs::seaorm::SeaOrmModule`")),
         "{missing}"
     );

@@ -35,7 +35,11 @@ async fn a_producer_no_backend_binds_is_refused_naming_the_first_party_binding()
         .downcast::<MissingDependencyError>()
         .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
     assert_eq!(
-        (missing.consumer, missing.dependency, missing.remedy),
+        (
+            missing.consumer,
+            missing.dependency,
+            missing.remedy.as_deref()
+        ),
         ("Pusher", "Jobs", Some(BACKEND_REMEDY)),
     );
 }
@@ -69,7 +73,7 @@ async fn a_provider_injecting_the_backend_contract_is_pointed_at_the_handle() {
         (violation.consumer, violation.dependency),
         ("ContractPusher", "dyn JobProducer")
     );
-    let remedy = violation.remedy.unwrap_or_default();
+    let remedy = violation.remedy.as_deref().unwrap_or_default();
     assert!(
         remedy.contains("Arc<nest_rs::queue::Jobs>"),
         "the refusal names the handle to inject: {remedy}"

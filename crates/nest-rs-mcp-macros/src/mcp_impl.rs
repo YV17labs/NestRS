@@ -31,9 +31,9 @@ use nest_rs_codegen::__private::{
     cfg_attrs, concrete_signature, force_guard_typeids, forwarded_arg_idents, generic_args,
     guard_capability_bounds, handler_const, handler_ref, impl_self_ident, layer_deps,
     no_row_answered, no_tail_decoded, normalize_forwarded_args, nth_generic_type,
-    one_role_per_method, piped_input, reject_meta_on_operations, return_type, scoped_specs,
-    shared_receiver, site_const_ident, site_items, site_ref, tail_param, ungrouped_expr,
-    unit_of_work_required, validate_argument,
+    one_role_per_method, per_request_remedy, piped_input, reject_meta_on_operations, return_type,
+    scoped_specs, shared_receiver, site_const_ident, site_items, site_ref, tail_param,
+    ungrouped_expr, unit_of_work_required, validate_argument,
 };
 use nest_rs_codegen::snake_case;
 
@@ -1222,27 +1222,37 @@ fn operation_sites(self_ty: &Type, base: &syn::Ident, operations: &Operations) -
             });
         }
     });
-    let probes = operations.all().flat_map(|op| {
-        // The bound service resolves per call, so the boot checks its provider
-        // as it checks a `Scoped<T>` parameter's.
-        let bound = op.bound.as_ref().map(|bound| -> Type {
-            let service = &bound.service;
-            syn::parse_quote!(::nest_rs_core::Scoped<#service>)
-        });
-        op.tail
-            .iter()
-            .filter(|arg| arg.kind == TailParam::Scoped)
-            .map(|TailArg { ty, .. }| ty.clone())
-            .chain(bound)
-            .map(move |ty| {
-                let cfgs = &op.cfgs;
-                quote! {
-                    #(#cfgs)*
-                    let () = __nestrs_resolved.extend(
-                        (&&::nest_rs_core::__private::ParamProbe::<#ty>::new()).resolved_provider(),
-                    );
-                }
-            })
+    // The bound service resolves per call, so the boot checks its provider as
+    // it checks a `Scoped<T>` parameter's.
+    let per_request: Vec<(&[TokenStream2], Type)> = operations
+        .all()
+        .flat_map(|op| {
+            let bound = op.bound.as_ref().map(|bound| -> Type {
+                let service = &bound.service;
+                syn::parse_quote!(::nest_rs_core::Scoped<#service>)
+            });
+            op.tail
+                .iter()
+                .filter(|arg| arg.kind == TailParam::Scoped)
+                .map(|TailArg { ty, .. }| ty.clone())
+                .chain(bound)
+                .map(move |ty| (op.cfgs.as_slice(), ty))
+        })
+        .collect();
+    let probes = per_request.iter().map(|(cfgs, ty)| {
+        quote! {
+            #(#cfgs)*
+            let () = __nestrs_resolved.extend(
+                (&&::nest_rs_core::__private::ParamProbe::<#ty>::new()).resolved_provider(),
+            );
+        }
+    });
+    let remedy_asks = per_request.iter().map(|(cfgs, ty)| {
+        let remedy = per_request_remedy(ty);
+        quote! {
+            #(#cfgs)*
+            let () = __nestrs_remedies.extend(#remedy);
+        }
     });
     let bound_checks = operations.resources.iter().filter_map(|op| {
         let resource::BoundSubject {
@@ -1289,6 +1299,26 @@ fn operation_sites(self_ty: &Type, base: &syn::Ident, operations: &Operations) -
                 let mut __nestrs_resolved = ::std::vec::Vec::new();
                 #(#probes)*
                 __nestrs_resolved
+            }
+
+            /// The remedy each `Scoped<T>` parameter carries for the provider
+            /// it resolves, asked of the parameter's type, for the access graph.
+            #[doc(hidden)]
+            pub fn __nestrs_mcp_injected_remedies()
+                -> ::std::vec::Vec<::nest_rs_core::InjectedRemedy>
+            {
+                #[allow(
+                    unused_imports,
+                    reason = "the probes' arms are in scope for autoref, which no lint sees"
+                )]
+                use ::nest_rs_core::__private::{
+                    ParamProbeFallback as _, ParamProbeResolves as _, RemedyProbeCarries as _,
+                    RemedyProbeFallback as _,
+                };
+                #[allow(unused_mut, reason = "an operation may take no `Scoped<T>`")]
+                let mut __nestrs_remedies = ::std::vec::Vec::new();
+                #(#remedy_asks)*
+                __nestrs_remedies
             }
         }
     }

@@ -2,10 +2,12 @@
 //! the one type every edge reads.
 
 use std::any::{TypeId, type_name};
+use std::borrow::Cow;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::ResolvesProvider;
+use crate::type_name::short_static;
+use crate::{CarriesRemedy, ResolvesProvider};
 
 /// A handler's parameter resolving a provider of type `T` from the running
 /// unit's `RequestScope` — above all an
@@ -47,7 +49,13 @@ impl<T> Deref for Scoped<T> {
 
 impl<T: 'static> ResolvesProvider for Scoped<T> {
     fn provider() -> (TypeId, &'static str) {
-        (TypeId::of::<T>(), type_name::<T>())
+        (TypeId::of::<T>(), short_static(type_name::<T>()))
+    }
+}
+
+impl<T: CarriesRemedy> CarriesRemedy for Scoped<T> {
+    fn remedy() -> Cow<'static, str> {
+        T::remedy()
     }
 }
 
@@ -83,9 +91,41 @@ mod tests {
     #[test]
     fn the_impl_half_probe_reads_the_provider_it_resolves() {
         let resolved = probe!(Scoped<Marker>);
-        assert_eq!(resolved.map(|(id, _)| id), Some(TypeId::of::<Marker>()));
-        assert!(resolved.is_some_and(|(_, label)| label.ends_with("Marker")));
+        assert_eq!(
+            resolved,
+            Some((TypeId::of::<Marker>(), "Marker")),
+            "named as a refusal names a type, by its short name"
+        );
         assert_eq!(probe!(Arc<Marker>), None);
         assert_eq!(probe!(&Scoped<Marker>), None, "a borrow resolves nothing");
+    }
+
+    struct Opened;
+
+    impl CarriesRemedy for Opened {
+        fn remedy() -> Cow<'static, str> {
+            "Import the module opening it.".into()
+        }
+    }
+
+    /// The remedy probe every impl half asks per parameter, at the reference
+    /// depth its expansion calls it.
+    macro_rules! remedy {
+        ($ty:ty) => {
+            (&&crate::__private::RemedyProbe::<$ty>::new())
+                .carried_remedy()
+                .map(|remedy| remedy())
+        };
+    }
+
+    #[test]
+    fn a_parameter_carries_the_remedy_of_the_provider_it_resolves() {
+        use crate::__private::{RemedyProbeCarries as _, RemedyProbeFallback as _};
+
+        assert_eq!(
+            remedy!(Scoped<Opened>),
+            Some(Cow::Borrowed("Import the module opening it."))
+        );
+        assert_eq!(remedy!(Scoped<Marker>), None);
     }
 }

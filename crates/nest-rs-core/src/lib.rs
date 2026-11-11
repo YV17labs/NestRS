@@ -19,7 +19,8 @@
 //! before any transport starts: [`AccessGraphError`] when a provider reaches
 //! across a module boundary no `import` covers, [`MissingDependencyError`] when
 //! no module provides a dependency — each naming the line to add when the crate
-//! owning its type submits a [`DependencyRemedy`] — [`BudgetPastNetError`] when a resource's
+//! owning its type submits a [`DependencyRemedy`], or the type carries one
+//! ([`CarriesRemedy`]) — [`BudgetPastNetError`] when a resource's
 //! [`Budget`] reaches past a [`Net`] that waits on it. The layers a site
 //! binds — `#[use_guards]`, `#[use_pipes]`, `#[use_interceptors]`,
 //! `#[use_exception_filters]` — are checked the same way.
@@ -154,6 +155,7 @@ mod probe_runtime;
 mod problem;
 mod process_start;
 mod proof;
+mod remedy;
 mod request_scope;
 mod row_probe;
 mod scope;
@@ -173,7 +175,7 @@ mod unit_context;
 mod way_down;
 mod wiring;
 
-pub use access::{Composition, DependencyRemedy, ProviderOrder, ReachableProviders};
+pub use access::{Composition, ProviderOrder, ReachableProviders};
 pub use ambient::{Ambient, AmbientValue, Continuation, Deadline, ambient, with_ambient};
 pub use app::{App, AppBuilder, BootStep};
 pub use app_identity::AppIdentity;
@@ -220,6 +222,7 @@ pub use outcome::{Failure, Outcome, Settled};
 pub use param::ResolvesProvider;
 pub use problem::{Code, Problem, ToProblem, code};
 pub use proof::{Attempt, Proving, Unproved, prove};
+pub use remedy::{CarriesRemedy, DependencyRemedy, InjectedRemedy};
 pub use request_scope::{
     RequestContinuation, RequestScope, TaskContext, current_request_scope, with_request_scope,
 };
@@ -302,6 +305,7 @@ pub mod __private {
     pub use crate::probe_runtime::ProbeRuntime;
     pub use crate::problem::__private::{Withheld, retry_after_secs, withheld};
     pub use crate::process_start::ProcessStart;
+    pub use crate::remedy::{RemedyProbe, RemedyProbeCarries, RemedyProbeFallback};
     pub use crate::request_scope::__private::{RequestScopes, nested_continuation};
     pub use crate::request_scope::AnswerContext;
     pub use crate::row_probe::{CrossesAWire, RowProbe, RowProbeFallback};

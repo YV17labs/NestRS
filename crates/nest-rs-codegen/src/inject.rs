@@ -28,6 +28,10 @@ pub struct InjectableBody {
     pub opt_keys: Vec<TokenStream2>,
     /// Human-readable label for each entry in `opt_keys`, in the same order.
     pub opt_names: Vec<TokenStream2>,
+    /// Per `#[inject]` field, required or optional, the remedy its type
+    /// carries beside its key, asked of `RemedyProbe` — an
+    /// `Option<nest_rs_core::InjectedRemedy>` expression.
+    pub remedies: Vec<TokenStream2>,
 }
 
 /// Strip `#[inject]` attributes from `item`'s fields and build its
@@ -45,6 +49,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             dep_names: Vec::new(),
             opt_keys: Vec::new(),
             opt_names: Vec::new(),
+            remedies: Vec::new(),
         }),
         Fields::Named(fields) => {
             let mut has_inject = false;
@@ -53,6 +58,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             let mut dep_names = Vec::new();
             let mut opt_keys = Vec::new();
             let mut opt_names = Vec::new();
+            let mut remedies = Vec::new();
 
             for field in fields.named.iter_mut() {
                 #[expect(
@@ -101,16 +107,18 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                     };
                     let label = type_label(arc_inner_ty);
                     opt_names.push(quote! { #label });
-                    if matches!(arc_inner_ty, syn::Type::TraitObject(_)) {
+                    let key = if matches!(arc_inner_ty, syn::Type::TraitObject(_)) {
                         field_inits.push(quote! {
                             #field_name: container.get_dyn::<#arc_inner_ty>()
                         });
                         // `provide_dyn` keys by `Arc<dyn Trait>` = `opt_inner`.
-                        opt_keys.push(quote! { ::core::any::TypeId::of::<#opt_inner>() });
+                        quote! { ::core::any::TypeId::of::<#opt_inner>() }
                     } else {
                         field_inits.push(quote! { #field_name: container.get() });
-                        opt_keys.push(quote! { ::core::any::TypeId::of::<#arc_inner_ty>() });
-                    }
+                        quote! { ::core::any::TypeId::of::<#arc_inner_ty>() }
+                    };
+                    remedies.push(carried_remedy(arc_inner_ty, &key));
+                    opt_keys.push(key);
                     continue;
                 }
 
@@ -128,19 +136,21 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 let label = type_label(inner_ty);
                 dep_names.push(quote! { #label });
 
-                if matches!(inner_ty, syn::Type::TraitObject(_)) {
+                let key = if matches!(inner_ty, syn::Type::TraitObject(_)) {
                     field_inits.push(quote! {
                         #field_name: container.get_dyn::<#inner_ty>().expect(#msg)
                     });
                     // `provide_dyn` keys by `Arc<dyn Trait>` = `field_ty`.
-                    dep_keys.push(quote! { ::core::any::TypeId::of::<#field_ty>() });
+                    quote! { ::core::any::TypeId::of::<#field_ty>() }
                 } else {
                     field_inits.push(quote! {
                         #field_name: container.get().expect(#msg)
                     });
                     // `get()` keys by the type inside `Arc<…>`.
-                    dep_keys.push(quote! { ::core::any::TypeId::of::<#inner_ty>() });
-                }
+                    quote! { ::core::any::TypeId::of::<#inner_ty>() }
+                };
+                remedies.push(carried_remedy(inner_ty, &key));
+                dep_keys.push(key);
             }
 
             // A struct with no field is built as written, never asked for a
@@ -156,12 +166,24 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                 dep_names,
                 opt_keys,
                 opt_names,
+                remedies,
             })
         }
         Fields::Unnamed(_) => Err(syn::Error::new_spanned(
             &item.fields,
             "#[injectable] does not support tuple structs",
         )),
+    }
+}
+
+/// The remedy the dependency `ty`, held under `key`, carries — asked of
+/// `RemedyProbe` at the autoref depth its unit tests pin, so a type carrying
+/// none answers `None`.
+fn carried_remedy(ty: &Type, key: &TokenStream2) -> TokenStream2 {
+    quote! {
+        (&&::nest_rs_core::__private::RemedyProbe::<#ty>::new())
+            .carried_remedy()
+            .map(|__remedy| (#key, __remedy))
     }
 }
 
@@ -505,14 +527,28 @@ pub fn injected_optional_fns(
 /// take the struct's `__nestrs_injected()` / `__nestrs_injected_names()` and
 /// extend each with the per-route / per-message layers; the optional
 /// dependencies come from the struct's [`injected_optional_fns`] as they are.
+/// Beside them, `injected_per_request`, the provider each of the handlers'
+/// `params` resolves per request, and `injected_remedies`: the struct's
+/// [`injected_remedies_fn`], then the remedy each parameter carries.
 ///
 /// One function over one [`LayerDeps`], so a key never goes without its label.
-pub fn injected_methods_with_layers(
+pub fn injected_methods_with_layers<'a>(
     self_ty: &impl quote::ToTokens,
     layers: &LayerDeps,
+    params: impl IntoIterator<Item = Conditional<'a, Type>>,
 ) -> TokenStream2 {
     let keys = &layers.keys;
     let labels = &layers.labels;
+    let params = per_request_params(params);
+    let injected_per_request = injected_per_request_method(&params);
+    let asks = params.iter().map(|(cfgs, ty)| {
+        let remedy = per_request_remedy(ty);
+        quote! {
+            #(#cfgs)*
+            let () = __nestrs_remedies.extend(#remedy);
+        }
+    });
+    let remedies = remedies_body(quote! { <#self_ty>::__nestrs_injected_remedies() }, asks);
     quote! {
         fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
             let mut __keys = <#self_ty>::__nestrs_injected();
@@ -535,7 +571,98 @@ pub fn injected_methods_with_layers(
         fn injected_optional_names() -> ::std::vec::Vec<&'static str> {
             <#self_ty>::__nestrs_injected_optional_names()
         }
+
+        #injected_per_request
+
+        fn injected_remedies() -> ::std::vec::Vec<::nest_rs_core::InjectedRemedy> {
+            #remedies
+        }
     }
+}
+
+/// The inherent `__nestrs_injected_remedies()` an edge's struct half emits
+/// beside `__nestrs_injected()`: the remedy each `#[inject]` field's type
+/// carries ([`InjectableBody::remedies`]), read back by its impl half through
+/// [`injected_methods_with_layers`].
+pub fn injected_remedies_fn(remedies: &[TokenStream2]) -> TokenStream2 {
+    let body = remedies_body(quote! { ::std::vec::Vec::new() }, field_asks(remedies));
+    quote! {
+        #[doc(hidden)]
+        pub fn __nestrs_injected_remedies() -> ::std::vec::Vec<::nest_rs_core::InjectedRemedy> {
+            #body
+        }
+    }
+}
+
+/// `Discoverable::injected_remedies` for a provider whose own decorator emits
+/// the trait: the remedy each `#[inject]` field's type carries. Nothing is
+/// emitted for a provider injecting nothing, which keeps the trait's empty
+/// default.
+pub fn injected_remedies_method(remedies: &[TokenStream2]) -> TokenStream2 {
+    if remedies.is_empty() {
+        return quote! {};
+    }
+    let body = remedies_body(quote! { ::std::vec::Vec::new() }, field_asks(remedies));
+    quote! {
+        fn injected_remedies() -> ::std::vec::Vec<::nest_rs_core::InjectedRemedy> {
+            #body
+        }
+    }
+}
+
+/// One statement per field's remedy, extending what [`remedies_body`] collects.
+fn field_asks(remedies: &[TokenStream2]) -> impl Iterator<Item = TokenStream2> + '_ {
+    remedies.iter().map(|remedy| {
+        quote! { let () = __nestrs_remedies.extend(#remedy); }
+    })
+}
+
+/// An `injected_remedies` body: `start`, then what each of `asks` extends it
+/// with, each a statement so a parameter's `#[cfg]`s can sit on it.
+fn remedies_body(start: TokenStream2, asks: impl Iterator<Item = TokenStream2>) -> TokenStream2 {
+    quote! {
+        #[allow(
+            unused_imports,
+            reason = "the probes' arms are in scope for autoref, which no lint sees"
+        )]
+        use ::nest_rs_core::__private::{
+            ParamProbeFallback as _, ParamProbeResolves as _, RemedyProbeCarries as _,
+            RemedyProbeFallback as _,
+        };
+        #[allow(unused_mut, reason = "a host may declare no dependency carrying a remedy")]
+        let mut __nestrs_remedies: ::std::vec::Vec<::nest_rs_core::InjectedRemedy> = #start;
+        #(#asks)*
+        __nestrs_remedies
+    }
+}
+
+/// The remedy a handler's parameter of type `ty` carries for the provider it
+/// resolves per request, beside that provider's key — `None` for a parameter
+/// resolving none or carrying none. A `Scoped<T>` carries `T`'s.
+pub fn per_request_remedy(ty: &impl ToTokens) -> TokenStream2 {
+    quote! {
+        (&&::nest_rs_core::__private::ParamProbe::<#ty>::new())
+            .resolved_provider()
+            .zip((&&::nest_rs_core::__private::RemedyProbe::<#ty>::new()).carried_remedy())
+            .map(|((__key, _), __remedy)| (__key, __remedy))
+    }
+}
+
+/// Each parameter type once per set of `#[cfg]`s, its lifetimes read as
+/// `'static`: a probe in a method body names no lifetime of the signature it
+/// was read off, and a provider's key is `'static` anyway.
+fn per_request_params<'a>(
+    params: impl IntoIterator<Item = Conditional<'a, Type>>,
+) -> Vec<(&'a [TokenStream2], TokenStream2)> {
+    let mut seen = HashSet::new();
+    params
+        .into_iter()
+        .filter_map(|Conditional { cfgs, item }| {
+            let ty = lifetimes_static(item.to_token_stream());
+            seen.insert(format!("{} {ty}", quote!(#(#cfgs)*)))
+                .then_some((cfgs, ty))
+        })
+        .collect()
 }
 
 /// `Discoverable::injected_per_request` for an impl half whose dispatched
@@ -544,28 +671,19 @@ pub fn injected_methods_with_layers(
 /// depth its unit tests pin — so the providers they resolve per request join
 /// the access graph, each under its method's `#[cfg]`s. Nothing is emitted when
 /// no method takes a parameter, which keeps the trait's empty default.
-pub fn injected_per_request_method<'a>(
-    params: impl IntoIterator<Item = Conditional<'a, Type>>,
-) -> TokenStream2 {
-    let mut seen = HashSet::new();
-    let probes: Vec<TokenStream2> = params
-        .into_iter()
-        .filter_map(|Conditional { cfgs, item }| {
-            let ty = lifetimes_static(item.to_token_stream());
-            seen.insert(format!("{} {ty}", quote!(#(#cfgs)*))).then(|| {
-                quote! {
-                    #(#cfgs)*
-                    let () = __nestrs_resolved.extend(
-                        (&&::nest_rs_core::__private::ParamProbe::<#ty>::new())
-                            .resolved_provider(),
-                    );
-                }
-            })
-        })
-        .collect();
-    if probes.is_empty() {
+fn injected_per_request_method(params: &[(&[TokenStream2], TokenStream2)]) -> TokenStream2 {
+    if params.is_empty() {
         return quote! {};
     }
+    let probes = params.iter().map(|(cfgs, ty)| {
+        quote! {
+            #(#cfgs)*
+            let () = __nestrs_resolved.extend(
+                (&&::nest_rs_core::__private::ParamProbe::<#ty>::new())
+                    .resolved_provider(),
+            );
+        }
+    });
     quote! {
         fn injected_per_request() -> ::std::vec::Vec<(::core::any::TypeId, &'static str)> {
             #[allow(
@@ -807,7 +925,7 @@ mod tests {
         let scoped: Type = parse_quote!(Scoped<Cart>);
         let json: Type = parse_quote!(Json<Order>);
         let gated = [quote!(#[cfg(feature = "carts")])];
-        let emitted = injected_per_request_method([
+        let emitted = injected_per_request_method(&per_request_params([
             Conditional::from(&scoped),
             Conditional::from(&json),
             Conditional::from(&scoped),
@@ -815,7 +933,7 @@ mod tests {
                 cfgs: &gated,
                 item: &scoped,
             },
-        ])
+        ]))
         .to_string();
         assert_eq!(
             emitted.matches("ParamProbe :: < Scoped < Cart >").count(),
@@ -827,9 +945,78 @@ mod tests {
             "{emitted}"
         );
         assert!(
-            injected_per_request_method(std::iter::empty()).is_empty(),
+            injected_per_request_method(&[]).is_empty(),
             "no parameter keeps the trait's default",
         );
+    }
+
+    /// Every `#[inject]` field, required or optional, concrete or a trait
+    /// object, asks the probe of the type it holds, under the key it is held by.
+    #[test]
+    fn each_injected_field_asks_the_remedy_its_type_carries_under_its_key() {
+        let mut host: ItemStruct = parse_quote! {
+            pub struct Reads {
+                #[inject]
+                cache: Arc<RedisConnection<Cache>>,
+                #[inject]
+                mailer: Arc<dyn Mailer>,
+                #[inject]
+                audit: Option<Arc<Audit>>,
+                #[inject]
+                port: Option<Arc<dyn Port>>,
+            }
+        };
+        let body = build_injectable_body(&mut host).expect("four injected fields");
+        let asked: Vec<String> = body.remedies.iter().map(ToString::to_string).collect();
+        let probe_and_key = |probe: TokenStream2, key: TokenStream2| {
+            let probe = quote!(RemedyProbe::<#probe>).to_string();
+            let key = quote!(::core::any::TypeId::of::<#key>()).to_string();
+            asked
+                .iter()
+                .any(|ask| ask.contains(&probe) && ask.contains(&key))
+        };
+        assert_eq!(asked.len(), 4, "{asked:#?}");
+        assert!(probe_and_key(
+            quote!(RedisConnection<Cache>),
+            quote!(RedisConnection<Cache>)
+        ));
+        assert!(probe_and_key(quote!(dyn Mailer), quote!(Arc<dyn Mailer>)));
+        assert!(probe_and_key(quote!(Audit), quote!(Audit)));
+        assert!(probe_and_key(quote!(dyn Port), quote!(Arc<dyn Port>)));
+    }
+
+    /// An impl half's remedies are its struct half's, then each parameter's,
+    /// under the method's `#[cfg]`s; a provider injecting nothing emits none.
+    #[test]
+    fn an_impl_half_reads_its_struct_halfs_remedies_and_asks_each_parameter() {
+        let scoped: Type = parse_quote!(Scoped<RedisConnection<Cache>>);
+        let gated = [quote!(#[cfg(feature = "cache")])];
+        let emitted = injected_methods_with_layers(
+            &quote!(CacheController),
+            &layer_deps(std::iter::empty::<&Type>()),
+            [Conditional {
+                cfgs: &gated,
+                item: &scoped,
+            }],
+        )
+        .to_string();
+        assert!(
+            emitted.contains("< CacheController > :: __nestrs_injected_remedies ()"),
+            "{emitted}"
+        );
+        assert!(
+            emitted.contains(
+                "# [cfg (feature = \"cache\")] let () = __nestrs_remedies . extend ((&& :: \
+                 nest_rs_core :: __private :: ParamProbe :: < Scoped < RedisConnection < Cache > \
+                 > > :: new ())"
+            ),
+            "{emitted}"
+        );
+        assert!(
+            emitted.contains("RemedyProbe :: < Scoped < RedisConnection < Cache > > >"),
+            "{emitted}"
+        );
+        assert!(injected_remedies_method(&[]).is_empty());
     }
 
     fn refusal(mut item: ItemStruct) -> String {

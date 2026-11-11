@@ -2,13 +2,14 @@
 //! registry is shared across a test binary, so the graphs below use disjoint types.
 
 use std::any::TypeId;
+use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use nest_rs_core::{
-    AccessGraphError, App, ContainerBuilder, Discoverable, DynamicModule, MissingDependencyError,
-    Module, ProviderCycleError, ProviderScope, ReachableProviders, Registering, ResolvesProvider,
-    ScopeViolationError, injectable, module,
+    AccessGraphError, App, CarriesRemedy, ContainerBuilder, Discoverable, DynamicModule, Instance,
+    MissingDependencyError, Module, ProviderCycleError, ProviderScope, ReachableProviders,
+    Registering, ResolvesProvider, ScopeViolationError, Unnamed, injectable, instance, module,
 };
 
 use crate::refused_boot;
@@ -944,7 +945,7 @@ async fn a_missing_dependency_whose_crate_names_a_remedy_is_refused_with_that_li
         .downcast::<MissingDependencyError>()
         .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
     assert_eq!(missing.consumer, "RemediedConsumer");
-    assert_eq!(missing.remedy, Some(REMEDIED_REMEDY));
+    assert_eq!(missing.remedy.as_deref(), Some(REMEDIED_REMEDY));
     let said = missing.to_string();
     assert!(
         said.ends_with(&format!(
@@ -1030,6 +1031,106 @@ async fn following_that_refusal_boots() {
         .build()
         .await
         .unwrap_or_else(|refused| panic!("the import is the fix: {refused:#}"));
+}
+
+/// The instance a pool below is opened for.
+#[instance]
+struct Ledgers;
+
+/// A key generic over an instance, as a resource opened per instance is: its
+/// type names the module opening the app's own instance.
+#[injectable]
+struct InstancePool<I: Instance = Unnamed> {
+    instance: PhantomData<fn() -> I>,
+}
+
+impl<I: Instance> Default for InstancePool<I> {
+    fn default() -> Self {
+        Self {
+            instance: PhantomData,
+        }
+    }
+}
+
+impl<I: Instance> CarriesRemedy for InstancePool<I> {
+    fn remedy() -> Cow<'static, str> {
+        format!("Import the pool of the `{}` instance.", I::NAME).into()
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct ReadsTheLedgersPool {
+    #[inject]
+    pool: Arc<InstancePool<Ledgers>>,
+}
+
+#[module(providers = [ReadsTheLedgersPool])]
+struct NoLedgersPoolModule;
+
+#[tokio::test]
+async fn a_missing_dependency_whose_type_carries_a_remedy_is_refused_with_that_line() {
+    let refused = refused_boot::<NoLedgersPoolModule>().await;
+    let missing = refused
+        .downcast::<MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(
+        (missing.consumer, missing.remedy.as_deref()),
+        (
+            "ReadsTheLedgersPool",
+            Some("Import the pool of the `ledgers` instance.")
+        ),
+    );
+    assert!(
+        missing.to_string().ends_with(
+            "which no module this app imports provides. Import the pool of the `ledgers` \
+             instance."
+        ),
+        "{missing}"
+    );
+}
+
+/// The instance of the pool another binary opens: its key is listed here, the
+/// ledgers' is not.
+#[instance]
+struct Journals;
+
+/// Another binary's: a module this app does not reach lists the pool.
+#[module(providers = [InstancePool<Journals>])]
+struct JournalsPoolElsewhere;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct ReadsTheJournalsPool {
+    #[inject]
+    pool: Arc<InstancePool<Journals>>,
+}
+
+#[module(providers = [ReadsTheJournalsPool])]
+struct ReadsAnotherBinarysPoolModule;
+
+/// What another binary lists is out of reach, and the remedy the type carries
+/// is said in place of importing that binary's module.
+#[tokio::test]
+async fn a_key_only_modules_out_of_reach_list_is_refused_with_the_line_its_type_carries() {
+    let refused = refused_boot::<ReadsAnotherBinarysPoolModule>().await;
+    let violation = refused
+        .downcast::<AccessGraphError>()
+        .unwrap_or_else(|refused| panic!("not the access violation: {refused:#}"));
+    assert_eq!(
+        (violation.owner, violation.remedy.as_deref()),
+        (
+            "JournalsPoolElsewhere",
+            Some("Import the pool of the `journals` instance.")
+        ),
+    );
+    assert!(!violation.to_string().contains("— add `"), "{violation}");
 }
 
 /// Registers the key by hand, which only other binaries' modules list here.

@@ -12,8 +12,9 @@ use nest_rs_codegen::__private::versioning;
 use nest_rs_codegen::__private::{
     InjectableBody, MountPath, RoutePath, build_injectable_body, exception_filter_specs,
     from_container_method, guard_capability_bounds, host_meta_fn, injected_keys_with_layers,
-    injected_names_with_layers, injected_optional_fns, injects_impls, interceptor_specs,
-    layer_deps, missing_argument, refuse_rust_deprecated, reject_path, scoped_specs,
+    injected_names_with_layers, injected_optional_fns, injected_remedies_fn, injects_impls,
+    interceptor_specs, layer_deps, missing_argument, refuse_rust_deprecated, reject_path,
+    scoped_specs,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -56,6 +57,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         dep_names,
         opt_keys,
         opt_names,
+        remedies,
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
@@ -74,6 +76,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
     let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
+    let injected_remedies = injected_remedies_fn(&remedies);
 
     let interceptor_specs = interceptor_specs(&interceptors);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
@@ -124,6 +127,8 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             #injected_optional
+
+            #injected_remedies
 
             /// Controller-level `#[use_interceptors(...)]`, read by `#[routes]`.
             #[doc(hidden)]

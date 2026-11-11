@@ -149,6 +149,7 @@ mod tests {
         assert!(
             missing
                 .remedy
+                .as_deref()
                 .is_some_and(|remedy| remedy.contains("`nest_rs::throttler::ThrottlerModule`")),
             "{missing}"
         );

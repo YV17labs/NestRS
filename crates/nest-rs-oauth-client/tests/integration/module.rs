@@ -83,6 +83,7 @@ async fn an_oauth_client_no_import_provides_is_refused_naming_its_module() {
     assert!(
         missing
             .remedy
+            .as_deref()
             .is_some_and(|remedy| remedy.contains("nest_rs::oauth::client::OAuthClientModule")),
         "{missing}"
     );

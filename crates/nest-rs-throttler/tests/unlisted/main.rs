@@ -36,6 +36,7 @@ async fn a_provider_injecting_the_store_no_module_lists_is_told_the_import() {
     assert!(
         missing
             .remedy
+            .as_deref()
             .is_some_and(|remedy| remedy.contains("`nest_rs::throttler::ThrottlerModule`")),
         "{missing}"
     );

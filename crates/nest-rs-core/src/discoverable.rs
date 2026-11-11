@@ -4,6 +4,7 @@
 use std::any::TypeId;
 use std::borrow::Cow;
 
+use crate::InjectedRemedy;
 use crate::access::{Composition, ModuleDescriptor};
 use crate::container::{Container, ContainerBuilder};
 
@@ -60,6 +61,14 @@ pub trait Discoverable {
     /// [`injected`](Discoverable::injected), never for scope — its consumer is
     /// a request.
     fn injected_per_request() -> Vec<(TypeId, &'static str)> {
+        Vec::new()
+    }
+
+    /// The remedy each dependency's type carries
+    /// ([`CarriesRemedy`](crate::CarriesRemedy)), by its key — an `#[inject]`
+    /// field's, a handler parameter's — read only where the boot refuses one no
+    /// module provides.
+    fn injected_remedies() -> Vec<InjectedRemedy> {
         Vec::new()
     }
 
@@ -465,6 +474,9 @@ mod tests {
         fn no_per_request() -> Vec<(TypeId, &'static str)> {
             Vec::new()
         }
+        fn no_remedies() -> Vec<crate::InjectedRemedy> {
+            Vec::new()
+        }
 
         fn only_itself() -> Vec<(TypeId, &'static str)> {
             Vec::new()
@@ -495,6 +507,7 @@ mod tests {
                         injects_optional: nothing,
                         inject_optional_names: no_names,
                         injects_per_request: no_per_request,
+                        inject_remedies: no_remedies,
                     }],
                 },
                 ModuleDescriptor {
@@ -511,6 +524,7 @@ mod tests {
                         injects_optional: nothing,
                         inject_optional_names: no_names,
                         injects_per_request: no_per_request,
+                        inject_remedies: no_remedies,
                     }],
                 },
             ];

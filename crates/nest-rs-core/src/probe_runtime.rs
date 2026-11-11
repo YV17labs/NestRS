@@ -89,6 +89,9 @@ mod tests {
     fn no_pairs() -> Vec<(TypeId, &'static str)> {
         Vec::new()
     }
+    fn no_remedies() -> Vec<crate::InjectedRemedy> {
+        Vec::new()
+    }
 
     const TASKS: ProviderDescriptor = ProviderDescriptor {
         name: "Tasks",
@@ -100,6 +103,7 @@ mod tests {
         injects_optional: nothing,
         inject_optional_names: no_names,
         injects_per_request: no_pairs,
+        inject_remedies: no_remedies,
     };
 
     /// Two modules list `Tasks`; the app's root is `ServedModule`.

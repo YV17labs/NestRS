@@ -246,6 +246,11 @@ pub trait DefaultOperationLayers: Sized + 'static {
         Vec::new()
     }
 
+    /// No decorated operations, so no remedy a parameter carries.
+    fn __nestrs_mcp_injected_remedies() -> Vec<nest_rs_core::InjectedRemedy> {
+        Vec::new()
+    }
+
     /// No decorated operations, so no site to check or compose.
     fn __nestrs_mcp_operation_sites() -> Vec<DeclaredOperation> {
         Vec::new()

@@ -6,9 +6,9 @@ use syn::{Expr, ItemStruct};
 use nest_rs_codegen::__private::{
     InjectableBody, Residency, build_injectable_body, dependencies_method, dependency_names_method,
     from_container_method, from_scope_method, injected_method, injected_names_method,
-    injected_optional_method, injected_optional_names_method, key_as_written,
-    optional_dependencies_method, optional_dependency_names_method, parse_provider_host,
-    provider_residency, unknown_value,
+    injected_optional_method, injected_optional_names_method, injected_remedies_method,
+    key_as_written, optional_dependencies_method, optional_dependency_names_method,
+    parse_provider_host, provider_residency, unknown_value,
 };
 
 pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -35,6 +35,7 @@ pub(crate) fn provider(
         dep_names,
         opt_keys,
         opt_names,
+        remedies,
     } = build_injectable_body(&mut item)?;
 
     let name = item.ident.clone();
@@ -49,6 +50,7 @@ pub(crate) fn provider(
     let injected_names = injected_names_method(&dep_names);
     let injected_optional = injected_optional_method(&opt_keys);
     let injected_optional_names = injected_optional_names_method(&opt_names);
+    let injected_remedies = injected_remedies_method(&remedies);
 
     // Every scope: a missing impl could be written by hand and lie about residency.
     let singleton_marker = provider_residency(
@@ -152,6 +154,7 @@ pub(crate) fn provider(
             #injected_names
             #injected_optional
             #injected_optional_names
+            #injected_remedies
 
             #register_fn
 

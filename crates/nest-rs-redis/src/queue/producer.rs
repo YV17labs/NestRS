@@ -16,6 +16,7 @@
 //! too**: it removes a job still waiting and everything it held, and refuses
 //! one a delivery runs.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::SystemTime;
@@ -31,6 +32,7 @@ use super::error::UnexpectedReply;
 use super::layout::{GROUP, QueueKeys};
 use super::scripts::SCRIPTS;
 use crate::RedisConnection;
+use crate::instance::{instance_phrase, typed_import};
 use crate::millis::{LONGEST, millis};
 
 /// The most queues whose keys a producer keeps spelled: a name pushed to past
@@ -121,6 +123,18 @@ impl<I: Instance> RedisQueueProducer<I> {
             .await
             .map_err(QueueError::backend)?;
         Ok(cancelled == 1)
+    }
+}
+
+impl<I: Instance> nest_rs_core::CarriesRemedy for RedisQueueProducer<I> {
+    fn remedy() -> Cow<'static, str> {
+        format!(
+            "Import `{}`, which binds the queue port on {}; a feature pushes jobs through the \
+             port's `Arc<nest_rs::queue::Jobs>`.",
+            typed_import::<I>("nest_rs::redis::RedisQueueModule"),
+            instance_phrase::<I>(),
+        )
+        .into()
     }
 }
 

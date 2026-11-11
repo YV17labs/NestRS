@@ -431,7 +431,10 @@ questions shape a port:
   unmet dependency names in place of the kernel's, as the module opening a
   resource does for the resource's type, and so does an access violation when no
   module the app reaches lists the key, whose import is otherwise the fix; a
-  contract no binding registers carries a remedy naming the handle. *By type
+  contract no binding registers carries a remedy naming the handle. A key the
+  app's own type makes — a resource opened per instance — is one no crate can
+  file under, so its type carries the line (`CarriesRemedy`), read where a
+  provider declares the dependency (below). *By type
   parameter* (`AuthnGuard<S: Strategy>`): two instantiations are two types, so
   no arbitration is owed. *By configuration*: the import opens the gate and
   configuration decides which members are active, zero to all — or, for a
@@ -473,7 +476,12 @@ to go (`.claude/decisions/one-execution-pipeline.md`).
   factory reads back with `ConfigModule::resolved_for::<I, C>`;
 - a helper called in expression position takes `I` from its caller's own type
   parameter, never from a default;
-- every refusal and every line names its instance's variables.
+- every refusal and every line names its instance's variables, and the
+  resource, and each key a binding registers under the instance, carries the
+  import a provider injecting it unopened is told (`CarriesRemedy`, naming
+  `RedisModule::<Cache>` for the `cache` instance), which the boot reads off
+  every `#[inject]` field and handler parameter declaring it — compile time
+  and refusal only, nothing per request.
 
 **An open-ended library is a public behavioural contract plus inventory
 discovery**, and `nest-rs-social` is the template. `SocialProvider` owns the

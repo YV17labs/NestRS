@@ -147,10 +147,9 @@ async fn a_scoped_parameter_no_module_offers_fails_the_boot_naming_it() {
             .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}")),
     };
     assert_eq!(missing.consumer, "CouponTools");
-    assert!(
-        missing.dependency.ends_with("::Coupon"),
-        "{}",
-        missing.dependency
+    assert_eq!(
+        missing.dependency, "Coupon",
+        "a refusal names a type by its short name, never its path"
     );
 }
 

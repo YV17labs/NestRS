@@ -423,27 +423,76 @@ struct ReadsTheCache {
 #[module(providers = [ReadsTheCache])]
 struct NoCacheModule;
 
-/// A remedy is filed by key, and a named instance's key is the app's type, so
-/// the refusal is the kernel's: it names the instance, never the module.
-#[tokio::test]
-async fn a_provider_injecting_a_named_instance_no_module_opens_is_refused_naming_it() {
-    let Err(refused) = App::builder().module::<NoCacheModule>().build().await else {
+/// The refusal of `M`, whose `consumer` reaches the cache's connection that no
+/// module opens: it names the connection, then the import opening it for the
+/// cache, and nothing else to do.
+async fn told_to_open_the_cache<M: Module + 'static>(consumer: &str) {
+    let Err(refused) = App::builder().module::<M>().build().await else {
         panic!("no module opens the instance");
     };
     let missing = refused
         .downcast::<nest_rs_core::MissingDependencyError>()
         .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
     assert_eq!(
-        (missing.consumer, missing.remedy),
-        ("ReadsTheCache", None),
+        (missing.consumer, missing.dependency),
+        (consumer, "RedisConnection<Cache>"),
         "{missing}"
     );
     let said = missing.to_string();
     assert!(
-        said.contains("depends on `RedisConnection<Cache>`")
-            && said.contains("Import the module that opens it"),
+        said.ends_with(
+            "which no module this app imports provides. Import \
+             `nest_rs::redis::RedisModule::<Cache>`, which opens the Redis connection every \
+             binding of the `cache` instance shares."
+        ),
         "{said}"
     );
+}
+
+#[tokio::test]
+async fn a_provider_injecting_a_named_instance_no_module_opens_is_told_its_module() {
+    told_to_open_the_cache::<NoCacheModule>("ReadsTheCache").await;
+}
+
+#[nest_rs_http::controller(path = "/cache")]
+struct CacheController {
+    #[inject]
+    _conn: std::sync::Arc<RedisConnection<Cache>>,
+}
+
+#[nest_rs_http::routes]
+impl CacheController {
+    #[get("/")]
+    async fn read(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [CacheController])]
+struct NoCacheForTheControllerModule;
+
+#[tokio::test]
+async fn an_edge_host_injecting_a_named_instance_no_module_opens_is_told_its_module() {
+    told_to_open_the_cache::<NoCacheForTheControllerModule>("CacheController").await;
+}
+
+#[nest_rs_http::controller(path = "/cache-per-request")]
+struct CachePerRequestController;
+
+#[nest_rs_http::routes]
+impl CachePerRequestController {
+    #[get("/")]
+    async fn read(&self, _conn: nest_rs_core::Scoped<RedisConnection<Cache>>) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [CachePerRequestController])]
+struct NoCachePerRequestModule;
+
+#[tokio::test]
+async fn a_handler_parameter_resolving_a_named_instance_no_module_opens_is_told_its_module() {
+    told_to_open_the_cache::<NoCachePerRequestModule>("CachePerRequestController").await;
 }
 
 #[tokio::test]
@@ -455,10 +504,12 @@ async fn a_provider_injecting_a_connection_no_module_opens_is_refused_naming_the
         .downcast::<nest_rs_core::MissingDependencyError>()
         .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
     assert_eq!(missing.consumer, "ReadsTheConnection");
+    let said = missing.to_string();
     assert!(
-        missing
-            .remedy
-            .is_some_and(|remedy| remedy.contains("`nest_rs::redis::RedisModule`")),
-        "{missing}"
+        said.ends_with(
+            "Import `nest_rs::redis::RedisModule`, which opens the Redis connection every \
+             binding of the default instance shares."
+        ),
+        "{said}"
     );
 }

@@ -31,7 +31,11 @@ async fn a_provider_injecting_the_port_no_module_lists_is_told_the_first_party_b
         .downcast_ref::<MissingDependencyError>()
         .unwrap_or_else(|| panic!("not the unmet dependency: {refused:#}"));
     assert_eq!(
-        (missing.consumer, missing.dependency, missing.remedy),
+        (
+            missing.consumer,
+            missing.dependency,
+            missing.remedy.as_deref()
+        ),
         ("InjectsTheBinding", "dyn UnitOfWork", Some(BACKEND_REMEDY)),
     );
 }
@@ -64,6 +68,7 @@ async fn a_provider_injecting_the_outbox_store_no_module_lists_is_told_the_bindi
     assert!(
         missing
             .remedy
+            .as_deref()
             .is_some_and(|remedy| remedy.contains("`nest_rs::seaorm::SeaOrmDatabaseModule`")),
         "{missing}"
     );

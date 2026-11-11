@@ -8,7 +8,7 @@ use nest_rs_queue::{
     Ask, BoundConsumer, Capabilities, Disposition, Envelope, JobConsumer, JobProducer, Jobs,
     LeaseHold, Prepared, ProcessMethod, PushOptions, QueueBackend, QueueError, QueueName, Received,
 };
-use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueModule};
+use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueModule, RedisQueueProducer};
 
 use crate::module::Cache;
 
@@ -183,5 +183,70 @@ async fn a_queue_on_each_of_two_instances_fails_the_boot_naming_the_remedy() {
         rendered.contains("contested declaration")
             && rendered.contains(nest_rs_queue::BACKEND_REMEDY),
         "{rendered}",
+    );
+}
+
+#[expect(
+    dead_code,
+    reason = "the producer is declared for the container to resolve, never read"
+)]
+#[nest_rs_core::injectable]
+struct PushesOnTheDefault {
+    #[inject]
+    producer: Arc<RedisQueueProducer>,
+}
+
+#[module(providers = [PushesOnTheDefault])]
+struct NoQueueModule;
+
+#[expect(
+    dead_code,
+    reason = "the producer is declared for the container to resolve, never read"
+)]
+#[nest_rs_core::injectable]
+struct PushesOnTheCache {
+    #[inject]
+    producer: Arc<RedisQueueProducer<Cache>>,
+}
+
+#[module(providers = [PushesOnTheCache])]
+struct NoQueueOnTheCacheModule;
+
+/// What `M`'s boot says of the producer no binding registers.
+async fn unmet_producer<M: Module + 'static>() -> String {
+    let Err(refused) = App::builder().module::<M>().build().await else {
+        panic!("no binding registers the producer");
+    };
+    refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"))
+        .to_string()
+}
+
+/// The producer is the binding's, on each instance: the refusal names the
+/// binding to import, and the port's handle a feature pushes through.
+#[tokio::test]
+async fn a_provider_injecting_a_producer_no_binding_registers_is_told_the_binding() {
+    let said = unmet_producer::<NoQueueModule>().await;
+    assert!(
+        said.contains("depends on `RedisQueueProducer`")
+            && said.ends_with(
+                "which no module this app imports provides. Import \
+                 `nest_rs::redis::RedisQueueModule`, which binds the queue port on the default \
+                 instance; a feature pushes jobs through the port's \
+                 `Arc<nest_rs::queue::Jobs>`."
+            ),
+        "{said}"
+    );
+    let said = unmet_producer::<NoQueueOnTheCacheModule>().await;
+    assert!(
+        said.contains("depends on `RedisQueueProducer<Cache>`")
+            && said.ends_with(
+                "which no module this app imports provides. Import \
+                 `nest_rs::redis::RedisQueueModule::<Cache>`, which binds the queue port on the \
+                 `cache` instance; a feature pushes jobs through the port's \
+                 `Arc<nest_rs::queue::Jobs>`."
+            ),
+        "{said}"
     );
 }

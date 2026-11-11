@@ -176,6 +176,18 @@ A crate of your own names one for a type it owns with
 same line closes the refusal when only a module your app does not reach lists the
 type; a module it reaches is named instead, since importing it is the fix.
 
+A type whose key your app chooses — a resource opened [per instance](#instances--one-resource-opened-twice),
+`RedisConnection<Cache>` — carries its line itself, and the boot reads it where
+you inject it, an `#[inject]` field or a `Scoped<T>` parameter alike:
+
+```text frame="terminal"
+unmet dependency: `CacheService` (in module `CatalogModule`) depends on `RedisConnection<Cache>`, which no module this app imports provides. Import `nest_rs::redis::RedisModule::<Cache>`, which opens the Redis connection every binding of the `cache` instance shares.
+```
+
+A resource of your own that an app opens per instance implements
+`nest_rs::core::CarriesRemedy` the same way, its sentence naming the instance's
+import.
+
 HTTP, WebSockets, GraphQL, and MCP each install a fresh request scope per call
 (one per request for HTTP and MCP — every operation one `/mcp` request or one
 GraphQL `POST` carries shares it — one per message for WebSockets, one per
@@ -381,7 +393,8 @@ beside the default's `Arc<Resource>` — Redis is one:
 `Arc<RedisConnection<Cache>>`. Each instance pins its config once; two
 instances never contest. A module generic over the instance is written by
 hand (`impl<I: Instance> Module for …`), since `#[module]` is not generic:
-`ForInstance` in `nest_rs::config` shows one whole.
+`ForInstance` in `nest_rs::config` shows one whole, and its resource carries the
+import a refusal names (`CarriesRemedy`, above).
 
 A value your app builds itself is told apart the same way, by a type. Two
 clients of one library are two newtypes — `pub struct

@@ -925,7 +925,7 @@ async fn a_provider_injecting_the_port_with_no_binding_is_refused_naming_the_fir
     let violation = refused
         .downcast::<nest_rs_core::AccessGraphError>()
         .unwrap_or_else(|refused| panic!("not an access violation: {refused:#}"));
-    assert_eq!(violation.remedy, Some(BACKEND_REMEDY));
+    assert_eq!(violation.remedy.as_deref(), Some(BACKEND_REMEDY));
     assert!(
         BACKEND_REMEDY.contains("`nest_rs::seaorm::SeaOrmDatabaseModule`"),
         "{BACKEND_REMEDY}"

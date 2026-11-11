@@ -15,9 +15,10 @@ use crate::type_name::shorten;
 /// A module the app reaches listing the dependency under its own type is the fix,
 /// and the refusal names it. Otherwise importing `owner` may be none: a root's
 /// pool reports a guard on its behalf, and no adapter imports its root; a module
-/// this app does not reach is another binary's. There, when the crate owning the
-/// dependency's type names the line to add — a
-/// [`DependencyRemedy`](crate::DependencyRemedy) — the refusal says that line.
+/// this app does not reach is another binary's. There, when the dependency's
+/// type names the line to add — a [`DependencyRemedy`](crate::DependencyRemedy)
+/// its crate files, or one it carries ([`CarriesRemedy`](crate::CarriesRemedy)) —
+/// the refusal says that line.
 ///
 /// The boot builds it; a program reads its fields, and a later 7.x may add one:
 ///
@@ -41,10 +42,10 @@ pub struct AccessGraphError {
     pub dependency: &'static str,
     /// Module that actually provides `dependency`.
     pub owner: &'static str,
-    /// The line to add, as the crate owning the dependency's type names it —
-    /// `None` when no crate names one or `owner` is reached and lists it, and the
-    /// refusal says to import `owner`.
-    pub remedy: Option<&'static str>,
+    /// The line to add, as the dependency's type carries it or the crate owning
+    /// it files it — `None` when neither names one or `owner` is reached and
+    /// lists it, and the refusal says to import `owner`.
+    pub remedy: Option<Cow<'static, str>>,
 }
 
 impl std::fmt::Display for AccessGraphError {
@@ -109,10 +110,12 @@ impl MissingAmbientError {
 /// infrastructure, not in its import closure, not registered anywhere. Raised
 /// at boot, for lazily- and eagerly-built providers alike.
 ///
-/// When the crate owning the dependency's type names the line to add — a
-/// [`DependencyRemedy`](crate::DependencyRemedy), `RedisQueueModule` for the
-/// queue port's `Jobs` — the refusal says that line in place of the
-/// kernel's generic one:
+/// When the dependency's type names the line to add — a
+/// [`DependencyRemedy`](crate::DependencyRemedy) its crate files,
+/// `RedisQueueModule` for the queue port's `Jobs`, or one it carries
+/// ([`CarriesRemedy`](crate::CarriesRemedy)), `RedisModule::<Cache>` for a named
+/// instance's connection — the refusal says that line in place of the kernel's
+/// generic one:
 ///
 /// ```
 /// let refused = nest_rs_core::MissingDependencyError::new("PostsModule", "PostsService", "Jobs")
@@ -132,9 +135,10 @@ pub struct MissingDependencyError {
     pub consumer: &'static str,
     /// The dependency that is registered nowhere and is not global infra.
     pub dependency: &'static str,
-    /// The line to add, as the crate owning the dependency's type names it —
-    /// `None` when no crate names one, and the refusal says the generic remedy.
-    pub remedy: Option<&'static str>,
+    /// The line to add, as the dependency's type carries it or the crate owning
+    /// it files it — `None` when neither names one, and the refusal says the
+    /// generic remedy.
+    pub remedy: Option<Cow<'static, str>>,
 }
 
 impl MissingDependencyError {
@@ -155,9 +159,9 @@ impl MissingDependencyError {
 
     /// The same refusal, naming `remedy` — the line the dependency's owning
     /// crate prescribes — in place of the generic one.
-    pub const fn with_remedy(self, remedy: &'static str) -> Self {
+    pub fn with_remedy(self, remedy: impl Into<Cow<'static, str>>) -> Self {
         Self {
-            remedy: Some(remedy),
+            remedy: Some(remedy.into()),
             ..self
         }
     }
@@ -2031,7 +2035,7 @@ mod boot_refusal_tests {
              a module `BlogHttpModule` already imports."
         );
         let remedied = AccessGraphError {
-            remedy: Some("Import `ThrottlerModule` where the guard is bound."),
+            remedy: Some("Import `ThrottlerModule` where the guard is bound.".into()),
             ..violation
         };
         assert_eq!(

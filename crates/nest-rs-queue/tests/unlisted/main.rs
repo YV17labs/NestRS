@@ -36,6 +36,7 @@ async fn a_provider_injecting_the_contract_no_module_lists_is_pointed_at_the_han
     assert!(
         missing
             .remedy
+            .as_deref()
             .is_some_and(|remedy| remedy.contains("Arc<nest_rs::queue::Jobs>")),
         "the refusal names the handle to inject: {missing}"
     );

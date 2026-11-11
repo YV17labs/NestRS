@@ -154,7 +154,20 @@ import typed (`AcmeModule::<Cache>`), the config queued with
 `ConfigModule::resolved_for::<I, C>` under the instance's namespace — as
 `RedisModule::<Cache>` opens a second Valkey. A binding your package ships over
 the resource imports its module bare, from both phases, by its instance, so an
-app writes the binding and names the resource only to pin it.
+app writes the binding and names the resource only to pin it. The resource's key
+is the app's own type, which no `DependencyRemedy` can be filed under, so the
+type carries the line a provider injecting it unopened is told:
+
+```rust title="from nest-rs-core's CarriesRemedy example"
+impl<I: Instance> CarriesRemedy for Pool<I> {
+    fn remedy() -> Cow<'static, str> {
+        match I::NAME {
+            "" => "Import `acme::PoolModule`, which opens the default pool.".into(),
+            name => format!("Import `acme::PoolModule` for the `{name}` instance.").into(),
+        }
+    }
+}
+```
 
 ## A registry it fills
 

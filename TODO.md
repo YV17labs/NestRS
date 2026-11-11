@@ -187,13 +187,6 @@ document says of it; what it keeps on purpose is §5's.
   private authority does not narrow trust to itself as libpq's does. Close: sqlx
   seeding none under a named root (§6). *read*
 
-**Configuration and telemetry**
-- A provider injecting a named instance's resource with no import
-  (`RedisConnection<Cache>`) is refused in the kernel's words, naming the
-  instance and no module: a remedy is filed by key, and that key is the app's
-  type. Close: a probe at each `#[inject]` site reading a remedy the type
-  carries, a change to every `#[injectable]` expansion. *seen*
-
 **Operator lines**
 - HTTP's `request failed` and GraphQL's `graphql operation failed` (and their
   `unavailable`) name `error` alone, joining their unit by its span, where a

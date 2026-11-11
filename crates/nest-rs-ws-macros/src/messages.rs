@@ -17,10 +17,10 @@ use nest_rs_codegen::__private::{
     PostureGate, PostureRules, SiteGuards, SiteItems, SitePosture, TailParam, ambient_type_ids,
     await_if_async, cfg_attrs, concrete_signature, declared_handler, force_guard_typeids,
     guard_capability_bounds, handler_const, handler_ref, host_runtime_entry, impl_self_ident,
-    injected_methods_with_layers, injected_per_request_method, layer_deps, no_row_answered,
-    no_tail_decoded, one_role_per_method, piped_input, reject_meta_on_operations, return_type,
-    returns_unit, scoped_specs, shared_receiver, site_items, site_ref, tail_param, takes_value,
-    ungrouped_expr, validate_argument,
+    injected_methods_with_layers, layer_deps, no_row_answered, no_tail_decoded,
+    one_role_per_method, piped_input, reject_meta_on_operations, return_type, returns_unit,
+    scoped_specs, shared_receiver, site_items, site_ref, tail_param, takes_value, ungrouped_expr,
+    validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -521,10 +521,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         meta: quote!(<#self_ty>::__nestrs_upgrade_meta),
     });
     let layers = layer_deps(conditional(&message_layers));
-    let injected_methods = injected_methods_with_layers(&self_ty, &layers);
     // A provider a parameter resolves per message is checked like an `#[inject]`
     // one: an unimported `Scoped<T>` target fails the boot.
-    let injected_per_request = injected_per_request_method(conditional(&message_params));
+    let injected_methods =
+        injected_methods_with_layers(&self_ty, &layers, conditional(&message_params));
     let crossings = declared.crossings();
     let gate_lookup = if gate_arms.is_empty() {
         quote! {
@@ -627,7 +627,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         impl ::nest_rs_core::Discoverable for #self_ty {
             #injected_methods
 
-            #injected_per_request
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,

@@ -85,6 +85,10 @@ macro_rules! __global_layer_pool {
                 $crate::__private::PoolReport::of(&L::__providers()).also_provides
             }
 
+            fn injected_remedies() -> ::std::vec::Vec<$crate::InjectedRemedy> {
+                $crate::__private::PoolReport::of(&L::__providers()).injected_remedies
+            }
+
             fn register(builder: $crate::ContainerBuilder) -> $crate::ContainerBuilder {
                 $crate::__private::declare_global::<$layer, Self>(
                     builder,
@@ -128,13 +132,13 @@ pub(crate) mod __private {
     use std::sync::{Arc, Mutex, PoisonError};
 
     use super::LayerSpec;
-    use crate::Discoverable;
     use crate::access::{Composition, Injection, ModuleDescriptor, injections, labelled};
     use crate::container::__private::{StalledProvider, record_stall};
     use crate::container::{Container, ContainerBuilder, Origin};
     use crate::discovery::Discovery;
     use crate::error::{MissingDependencyError, ScopeViolationError, UnresolvedLayerError};
     use crate::layer::{Layer, LayerSite};
+    use crate::{Discoverable, InjectedRemedy};
 
     /// What one layer family says of the app-wide pool its root module
     /// declares — implemented on the family's trait object (`dyn Guard`,
@@ -202,6 +206,7 @@ pub(crate) mod __private {
         /// What it waits on, as a stall reports it.
         waits_on: fn() -> StalledProvider,
         injections: fn() -> Vec<Injection>,
+        remedies: fn() -> Vec<InjectedRemedy>,
         also_provides: fn() -> Vec<(TypeId, &'static str)>,
         register: fn(ContainerBuilder) -> ContainerBuilder,
         register_overridden: fn(ContainerBuilder) -> ContainerBuilder,
@@ -229,6 +234,7 @@ pub(crate) mod __private {
                         &P::injected_optional_names(),
                     )
                 },
+                remedies: P::injected_remedies,
                 also_provides: P::also_provides,
                 register: P::register,
                 register_overridden: P::__nestrs_register_overridden,
@@ -252,6 +258,8 @@ pub(crate) mod __private {
         pub injected_optional_names: Vec<&'static str>,
         /// Every layer, and what each registers besides itself.
         pub also_provides: Vec<(TypeId, &'static str)>,
+        /// The remedy each type a layer injects carries, by its key.
+        pub injected_remedies: Vec<InjectedRemedy>,
     }
 
     impl PoolReport {
@@ -271,12 +279,17 @@ pub(crate) mod __private {
                     std::iter::once((provider.key, provider.name)).chain((provider.also_provides)())
                 })
                 .collect();
+            let injected_remedies = providers
+                .iter()
+                .flat_map(|provider| (provider.remedies)())
+                .collect();
             Self {
                 injected,
                 injected_names,
                 injected_optional,
                 injected_optional_names,
                 also_provides,
+                injected_remedies,
             }
         }
     }

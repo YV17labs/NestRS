@@ -19,11 +19,11 @@ use nest_rs_codegen::__private::{
     SiteGuards, SiteItems, SitePosture, ambient_type_ids, authorized_entity, await_if_async,
     cfg_attrs, concrete_signature, deprecation_header, force_guard_typeids,
     guard_capability_bounds, handler_const, host_runtime_entry, impl_self_ident,
-    injected_methods_with_layers, injected_per_request_method, layer_deps, mixed_site_ident,
-    no_row_answered, normalize_forwarded_args, nth_generic_type, one_role_per_method,
-    posture_key_unsupported, refuse_rust_deprecated, reject_meta_on_operations, scoped_specs,
-    shared_receiver, site, site_items, site_ref, spelled, take_posture, takes_value,
-    ungrouped_expr, unit_of_work_required, unknown_argument, validate_argument,
+    injected_methods_with_layers, layer_deps, mixed_site_ident, no_row_answered,
+    normalize_forwarded_args, nth_generic_type, one_role_per_method, posture_key_unsupported,
+    refuse_rust_deprecated, reject_meta_on_operations, scoped_specs, shared_receiver, site,
+    site_items, site_ref, spelled, take_posture, takes_value, ungrouped_expr,
+    unit_of_work_required, unknown_argument, validate_argument,
 };
 use nest_rs_codegen::take_flag_attr;
 
@@ -888,10 +888,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     })
             }),
     );
-    let injected_methods = injected_methods_with_layers(&self_ty, &route_layers);
     // A provider a parameter resolves per request is checked like an `#[inject]`
     // one: an unimported `Scoped<T>` or bound service fails the boot.
-    let injected_per_request = injected_per_request_method(
+    let injected_methods = injected_methods_with_layers(
+        &self_ty,
+        &route_layers,
         routes_by_path
             .iter()
             .flat_map(|group| group.handlers.iter())
@@ -996,8 +997,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl ::nest_rs_core::Discoverable for #self_ty {
             #injected_methods
-
-            #injected_per_request
 
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,

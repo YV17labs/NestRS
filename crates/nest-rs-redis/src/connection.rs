@@ -11,6 +11,7 @@
 //! reply timeout inside the client would never cover. A blocking command gets a
 //! connection of its own ([`RedisConnection::dedicated`]).
 
+use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,20 +30,12 @@ use redis::{
 
 use crate::cluster::{ClusterLink, SlotLink};
 use crate::error::RedisError;
-use crate::instance::RedisInstance;
+use crate::instance::{RedisInstance, instance_phrase, typed_import};
 use crate::script::{Invocation, RedisScript};
 use crate::sentinel::SentinelLink;
 use crate::standalone::StandaloneLink;
 use crate::url::{NodeAddr, RedisUrl};
 use crate::{RedisConfig, tls};
-
-nest_rs_core::inventory::submit! {
-    nest_rs_core::DependencyRemedy::new(
-        std::any::TypeId::of::<RedisConnection>,
-        "Import `nest_rs::redis::RedisModule`, which opens the Redis connection every binding of \
-         the default instance shares.",
-    )
-}
 
 /// How many times one call loads its script, at most: a `SCRIPT FLUSH` or a
 /// failover landing between a load and the call that follows it would
@@ -311,6 +304,17 @@ impl<I: Instance> RedisConnection<I> {
                 script.load_cmd().query_async::<()>(&mut self.clone()).await
             }
         }
+    }
+}
+
+impl<I: Instance> nest_rs_core::CarriesRemedy for RedisConnection<I> {
+    fn remedy() -> Cow<'static, str> {
+        format!(
+            "Import `{}`, which opens the Redis connection every binding of {} shares.",
+            typed_import::<I>("nest_rs::redis::RedisModule"),
+            instance_phrase::<I>(),
+        )
+        .into()
     }
 }
 

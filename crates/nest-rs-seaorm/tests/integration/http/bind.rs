@@ -123,7 +123,11 @@ async fn a_bound_route_with_no_unit_of_work_binding_is_refused_at_boot_naming_it
         .downcast::<nest_rs_core::MissingDependencyError>()
         .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
     assert_eq!(
-        (missing.consumer, missing.dependency, missing.remedy),
+        (
+            missing.consumer,
+            missing.dependency,
+            missing.remedy.as_deref()
+        ),
         (
             "NotesController",
             "dyn UnitOfWork",

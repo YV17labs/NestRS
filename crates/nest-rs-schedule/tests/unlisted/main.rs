@@ -30,7 +30,11 @@ async fn a_provider_injecting_the_lock_no_module_lists_is_told_the_binding() {
         .downcast_ref::<MissingDependencyError>()
         .unwrap_or_else(|| panic!("not the unmet dependency: {refused:#}"));
     assert_eq!(
-        (missing.consumer, missing.dependency, missing.remedy),
+        (
+            missing.consumer,
+            missing.dependency,
+            missing.remedy.as_deref()
+        ),
         ("ReadsTheLock", "dyn OccurrenceLock", Some(BACKEND_REMEDY)),
     );
     assert!(missing.to_string().ends_with(BACKEND_REMEDY), "{missing}");

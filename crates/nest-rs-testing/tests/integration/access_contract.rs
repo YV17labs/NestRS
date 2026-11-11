@@ -1,12 +1,16 @@
 //! Attribute-referenced layers (`#[use_guards/filters/interceptors]`), every
 //! edge host's dependencies, optional ones included, and the providers a
 //! handler's parameters resolve satisfy the access contract: one whose module
-//! isn't imported fails the boot.
+//! isn't imported fails the boot, and one whose type carries its remedy is told
+//! that line, on every edge.
 
+use std::borrow::Cow;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use nest_rs_core::{
-    AccessGraphError, App, Layer, MissingDependencyError, Scoped, async_trait, injectable, module,
+    AccessGraphError, App, CarriesRemedy, Instance, Layer, MissingDependencyError, Scoped, Unnamed,
+    async_trait, injectable, instance, module,
 };
 use nest_rs_graphql::{async_graphql, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
@@ -369,10 +373,9 @@ async fn a_handler_scoped_parameter_no_module_offers_fails_the_boot_naming_it() 
             .unwrap_or_else(|err| panic!("not the unmet dependency: {err:#}")),
     };
     assert_eq!(missing.consumer, "CouponController");
-    assert!(
-        missing.dependency.ends_with("::Coupon"),
-        "{}",
-        missing.dependency
+    assert_eq!(
+        missing.dependency, "Coupon",
+        "a refusal names a type by its short name, never its path"
     );
 }
 
@@ -439,10 +442,9 @@ async fn a_message_scoped_parameter_no_module_offers_fails_the_boot_naming_it() 
             .unwrap_or_else(|err| panic!("not the unmet dependency: {err:#}")),
     };
     assert_eq!(missing.consumer, "CouponGateway");
-    assert!(
-        missing.dependency.ends_with("::Coupon"),
-        "{}",
-        missing.dependency
+    assert_eq!(
+        missing.dependency, "Coupon",
+        "a refusal names a type by its short name, never its path"
     );
 }
 
@@ -453,4 +455,259 @@ async fn a_message_scoped_parameter_on_a_request_scoped_provider_it_imports_boot
         .build()
         .await
         .expect("a message is the consumer, so a request-scoped provider is the point");
+}
+
+/// The instance the shelf below is opened for.
+#[instance]
+struct Archive;
+
+/// A resource opened per instance, whose type names the import opening the
+/// app's own instance — what no remedy filed by key could.
+struct Shelf<I = Unnamed>(PhantomData<fn() -> I>);
+
+impl<I: Instance> CarriesRemedy for Shelf<I> {
+    fn remedy() -> Cow<'static, str> {
+        format!("Import the shelf of the `{}` instance.", I::NAME).into()
+    }
+}
+
+/// What the boot of `M` says of the archive's shelf no module opens: the
+/// consumer, the dependency and the line to add.
+async fn unmet_shelf<M: nest_rs_core::Module>() -> (&'static str, &'static str, Option<String>) {
+    let missing = match App::builder().module::<M>().build().await {
+        Ok(_) => panic!("no module opens the archive's shelf"),
+        Err(err) => err
+            .downcast::<MissingDependencyError>()
+            .unwrap_or_else(|err| panic!("not the unmet dependency: {err:#}")),
+    };
+    (
+        missing.consumer,
+        missing.dependency,
+        missing.remedy.map(String::from),
+    )
+}
+
+/// Each of `consumers`, told the line the archive's shelf carries.
+fn told_to_open_the_archive(
+    consumers: &[&'static str],
+) -> Vec<(&'static str, &'static str, Option<String>)> {
+    consumers
+        .iter()
+        .map(|consumer| {
+            (
+                *consumer,
+                "Shelf<Archive>",
+                Some("Import the shelf of the `archive` instance.".to_owned()),
+            )
+        })
+        .collect()
+}
+
+#[injectable]
+struct ShelfService {
+    #[inject]
+    _shelf: Arc<Shelf<Archive>>,
+}
+
+#[controller(path = "/shelf")]
+struct ShelfController {
+    #[inject]
+    _shelf: Arc<Shelf<Archive>>,
+}
+
+#[routes]
+impl ShelfController {
+    #[get("/")]
+    async fn shelf(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[gateway(path = "/shelf")]
+struct ShelfGateway {
+    #[inject]
+    _shelf: Arc<Shelf<Archive>>,
+}
+
+#[messages]
+impl ShelfGateway {
+    #[subscribe_message("shelf")]
+    #[public]
+    async fn shelf(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[resolver]
+struct ShelfResolver {
+    #[inject]
+    _shelf: Arc<Shelf<Archive>>,
+}
+
+#[operations]
+impl ShelfResolver {
+    #[query]
+    #[public]
+    async fn shelf(&self) -> async_graphql::Result<String> {
+        Ok("ok".into())
+    }
+}
+
+#[mcp]
+#[derive(Clone)]
+struct ShelfTools {
+    #[inject]
+    _shelf: Arc<Shelf<Archive>>,
+}
+
+#[tool_router(allow_empty)]
+impl ShelfTools {}
+
+#[tool_handler]
+impl ServerHandler for ShelfTools {}
+
+#[module(providers = [ShelfService])]
+struct ShelfServiceModule;
+
+#[module(providers = [ShelfController])]
+struct ShelfHttpModule;
+
+#[module(imports = [WsModule], providers = [ShelfGateway])]
+struct ShelfWsModule;
+
+#[module(providers = [ShelfResolver])]
+struct ShelfGraphqlModule;
+
+#[module(providers = [ShelfTools])]
+struct ShelfMcpModule;
+
+#[tokio::test]
+async fn every_host_injecting_a_type_that_carries_its_remedy_is_told_that_line() {
+    assert_eq!(
+        vec![
+            unmet_shelf::<ShelfServiceModule>().await,
+            unmet_shelf::<ShelfHttpModule>().await,
+            unmet_shelf::<ShelfWsModule>().await,
+            unmet_shelf::<ShelfGraphqlModule>().await,
+            unmet_shelf::<ShelfMcpModule>().await,
+        ],
+        told_to_open_the_archive(&[
+            "ShelfService",
+            "ShelfController",
+            "ShelfGateway",
+            "ShelfResolver",
+            "ShelfTools",
+        ]),
+    );
+}
+
+#[controller(path = "/shelf-per-request")]
+struct ShelfPerRequestController;
+
+#[routes]
+impl ShelfPerRequestController {
+    #[get("/")]
+    async fn shelf(&self, _shelf: Scoped<Shelf<Archive>>) -> &'static str {
+        "ok"
+    }
+}
+
+#[gateway(path = "/shelf-per-request")]
+struct ShelfPerRequestGateway;
+
+#[messages]
+impl ShelfPerRequestGateway {
+    #[subscribe_message("shelf")]
+    #[public]
+    async fn shelf(&self, _shelf: Scoped<Shelf<Archive>>) -> &'static str {
+        "ok"
+    }
+}
+
+#[resolver]
+struct ShelfPerRequestResolver;
+
+#[operations]
+impl ShelfPerRequestResolver {
+    #[query]
+    #[public]
+    async fn shelf(&self, _shelf: Scoped<Shelf<Archive>>) -> async_graphql::Result<String> {
+        Ok("ok".into())
+    }
+}
+
+#[mcp]
+#[derive(Clone)]
+struct ShelfPerRequestTools;
+
+#[nest_rs_mcp::tools]
+impl ShelfPerRequestTools {
+    /// Read the shelf.
+    #[tool]
+    #[public]
+    async fn shelf(&self, _shelf: Scoped<Shelf<Archive>>) -> Result<String, nest_rs_mcp::McpError> {
+        Ok("ok".into())
+    }
+}
+
+#[module(providers = [ShelfPerRequestController])]
+struct ShelfPerRequestHttpModule;
+
+#[module(imports = [WsModule], providers = [ShelfPerRequestGateway])]
+struct ShelfPerRequestWsModule;
+
+#[module(providers = [ShelfPerRequestResolver])]
+struct ShelfPerRequestGraphqlModule;
+
+#[module(providers = [ShelfPerRequestTools])]
+struct ShelfPerRequestMcpModule;
+
+#[tokio::test]
+async fn every_parameter_resolving_a_type_that_carries_its_remedy_is_told_that_line() {
+    assert_eq!(
+        vec![
+            unmet_shelf::<ShelfPerRequestHttpModule>().await,
+            unmet_shelf::<ShelfPerRequestWsModule>().await,
+            unmet_shelf::<ShelfPerRequestGraphqlModule>().await,
+            unmet_shelf::<ShelfPerRequestMcpModule>().await,
+        ],
+        told_to_open_the_archive(&[
+            "ShelfPerRequestController",
+            "ShelfPerRequestGateway",
+            "ShelfPerRequestResolver",
+            "ShelfPerRequestTools",
+        ]),
+    );
+}
+
+#[injectable]
+#[derive(Layer)]
+struct ShelfGuard {
+    #[inject]
+    _shelf: Arc<Shelf<Archive>>,
+}
+
+#[async_trait]
+impl Guard for ShelfGuard {
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for ShelfGuard {}
+
+#[module(providers = [nest_rs_guards::GlobalGuards<(ShelfGuard,)>])]
+struct ShelfPoolRoot;
+
+/// The pool registers its guard on the root's behalf, so what the guard
+/// injects is the declaration's, and so is the remedy its type carries.
+#[tokio::test]
+async fn a_pooled_layer_injecting_a_type_that_carries_its_remedy_is_told_that_line() {
+    assert_eq!(
+        vec![unmet_shelf::<ShelfPoolRoot>().await],
+        told_to_open_the_archive(&["GlobalGuards<(ShelfGuard,)>"]),
+    );
 }

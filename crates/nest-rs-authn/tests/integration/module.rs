@@ -220,6 +220,7 @@ async fn a_jwt_service_no_import_provides_is_refused_naming_the_authn_module() {
     assert!(
         missing
             .remedy
+            .as_deref()
             .is_some_and(|remedy| remedy.contains("nest_rs::authn::AuthnModule")),
         "{missing}"
     );

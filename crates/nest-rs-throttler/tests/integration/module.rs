@@ -33,6 +33,7 @@ mod guard_outside_for_root {
         assert!(
             missing
                 .remedy
+                .as_deref()
                 .is_some_and(|remedy| remedy.contains("`nest_rs::throttler::ThrottlerModule`")),
             "{missing}"
         );

@@ -260,7 +260,11 @@ async fn a_provider_injecting_the_lock_with_no_binding_is_told_the_binding() {
     let violation = refused
         .downcast_ref::<AccessGraphError>()
         .unwrap_or_else(|| panic!("not an access violation: {refused:#}"));
-    assert_eq!(violation.remedy, Some(BACKEND_REMEDY), "{violation}");
+    assert_eq!(
+        violation.remedy.as_deref(),
+        Some(BACKEND_REMEDY),
+        "{violation}"
+    );
     assert!(
         violation.to_string().ends_with(BACKEND_REMEDY),
         "{violation}"

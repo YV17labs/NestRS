@@ -202,7 +202,9 @@ pub struct ApiModule;
 same keys with its name after the vendor — `<PREFIX>_REDIS__CACHE__URL`,
 `<PREFIX>_REDIS__CACHE__CONNECT_TIMEOUT_SECS`, `<PREFIX>_REDIS__CACHE__TLS_*` —
 on any topology its URL declares. A provider of yours injects it as
-`Arc<RedisConnection<Cache>>`, beside the default's `Arc<RedisConnection>`.
+`Arc<RedisConnection<Cache>>`, beside the default's `Arc<RedisConnection>`; in an
+app that opens no such instance, the boot refuses it naming the import,
+`RedisModule::<Cache>`.
 
 A binding runs on the default instance unless its import names another, and
 opens the one it runs on: `RedisScheduleModule::<Locks>` claims on the `locks`

@@ -34,6 +34,7 @@ async fn a_provider_injecting_the_outbox_store_with_no_binding_is_told_the_bindi
     assert!(
         violation
             .remedy
+            .as_deref()
             .is_some_and(|remedy| remedy.contains("`nest_rs::seaorm::SeaOrmDatabaseModule`")),
         "{violation}"
     );

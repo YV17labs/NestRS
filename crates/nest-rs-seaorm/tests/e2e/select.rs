@@ -10,10 +10,10 @@ use nest_rs_authz::__private::install_ability;
 use nest_rs_authz::{Ability, AbilityBuilder, Action};
 use nest_rs_database::__private::with_request_executor;
 use nest_rs_seaorm::__private::SeaOrmExecutor;
-use nest_rs_seaorm::Repo;
+use nest_rs_seaorm::{Repo, RepoError};
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::{Condition, Expr, ExprTrait, Iden};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, Set};
 
 mod widget {
     use sea_orm::entity::prelude::*;
@@ -73,7 +73,7 @@ async fn read(
     conn: &DatabaseConnection,
     admitted: Uuid,
     condition: impl Into<Condition> + Send,
-) -> Result<Vec<Uuid>, DbErr> {
+) -> Result<Vec<Uuid>, RepoError> {
     let condition = condition.into();
     with_request_executor(
         SeaOrmExecutor::Pool(conn.clone()).into(),
@@ -88,7 +88,7 @@ async fn read(
     .await
 }
 
-fn refused(answer: &Result<Vec<Uuid>, DbErr>) -> bool {
+fn refused(answer: &Result<Vec<Uuid>, RepoError>) -> bool {
     matches!(answer, Err(err) if err.to_string().contains("refused before any statement"))
 }
 

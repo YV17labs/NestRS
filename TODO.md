@@ -202,11 +202,6 @@ keeps on purpose is §5's.
   *read*
 
 **Data, queue, storage, health**
-- A bare `DbErr` an app holds from `Repo` prints the server's message and
-  `detail`, the row it refused, through sea-orm's own `Debug` and `Display`;
-  every framework error holding one says it by its SQLSTATE, and `?` into a
-  `ServiceError` never meets it. Close: `Repo` answering an error of the
-  framework's, a break of every service's `?`. *seen*
 - Postgres's certificate is checked against the public authorities sqlx
   compiles in (webpki-roots) beside whatever root is named, the URL's
   `sslrootcert` or `PGSSLROOTCERT`: sqlx 0.9 seeds them under every root, so a
@@ -258,7 +253,10 @@ is refused today, never verified); client authentication `none`, `client_secret_
 methods; RFC 7009 revocation and RFC 7662 introspection; an authorization-code grant
 with PKCE for the demo's first-party login (RFC 6749 §4.1, a registered
 public client identifying itself, where `<PREFIX>_SIGN_IN__CLIENT_ID` names
-it today); a refresh grant on `OAuthClient`; `Repo::restore`;
+it today); a refresh grant on `OAuthClient`; `Repo::restore`; a `RepoError`
+variant per integrity condition no caller branches on yet, `NotNullViolation`,
+`CheckViolation` and `ExclusionViolation` (`23502`, `23514`, `23P01`, each
+`Other` today);
 `App::run_task`; public `ResourceBinding`; `nestrs generate guard` and
 `interceptor`; a public `RetiredKey`; bench tiers beyond HTTP; a lease port;
 named storage disks; `ModuleRef`; `AppLifecycle::spawn`; ETag / If-Match;

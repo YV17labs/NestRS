@@ -1,5 +1,5 @@
 //! What a failing handler tells the client, and what it tells the operator: a
-//! `DbErr`'s `Display` carries SQL and sometimes row values.
+//! driver's own error can carry SQL and sometimes row values in its `Display`.
 //!
 //! ```
 //! # use std::sync::Arc;

@@ -4,11 +4,11 @@
 
 use nest_rs_authz::{ActionMarker, current_ability};
 use nest_rs_core::__private::short_type_name;
-use sea_orm::{DbErr, EntityTrait, PrimaryKeyTrait};
+use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
 use crate::error::UnwiredBind;
-use crate::{Access, Authorized, CrudService, ServiceError};
+use crate::{Access, Authorized, CrudService, RepoError, ServiceError};
 
 /// Why no subject is handed over.
 pub(crate) enum Unbound {
@@ -18,7 +18,7 @@ pub(crate) enum Unbound {
     /// `error`, the service beside it.
     Unwired { why: UnwiredBind, provider: String },
     /// The service failed reading the row.
-    Failed(DbErr),
+    Failed(RepoError),
     /// The row exists and the caller may not have it.
     Denied,
     /// No such row.

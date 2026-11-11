@@ -155,7 +155,29 @@ fn settled(outcome: FinalizeOutcome) -> Result<(), AtomicError> {
         | FinalizeOutcome::Committed
         | FinalizeOutcome::RolledBack => Ok(()),
         FinalizeOutcome::Escaped => Err(AtomicError::Escaped),
-        FinalizeOutcome::CommitFailed(err) => Err(AtomicError::Database(Box::new(err))),
+        FinalizeOutcome::CommitFailed(err) => {
+            Err(AtomicError::Database(Box::new(crate::RepoError::from(err))))
+        }
         FinalizeOutcome::Poisoned { retryable } => Err(AtomicError::Poisoned { retryable }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A refused `COMMIT` reaches the port's `AtomicError::Database` as the
+    /// framework's database failure: no reader of the field prints the row.
+    #[test]
+    fn a_refused_commit_hands_the_port_a_failure_naming_no_value() {
+        let refused = settled(FinalizeOutcome::CommitFailed(
+            crate::error::tests::taken_email(),
+        ));
+        let Err(AtomicError::Database(held)) = refused else {
+            panic!("a refused commit is the database's failure: {refused:?}");
+        };
+        let printed = nest_rs_testing::printed(&*held);
+        assert!(printed.contains("23505"), "{printed}");
+        assert!(!printed.contains("ada@example.com"), "{printed}");
     }
 }

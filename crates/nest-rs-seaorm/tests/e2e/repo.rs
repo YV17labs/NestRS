@@ -16,7 +16,7 @@ use nest_rs_authz::{Ability, AbilityBuilder, Action};
 use nest_rs_database::__private::with_request_executor;
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_seaorm::__private::SeaOrmExecutor;
-use nest_rs_seaorm::{DbOutcome, Insertion, Repo, SeaOrmConfig, SeaOrmUnitOfWork};
+use nest_rs_seaorm::{Insertion, Repo, RepoError, SeaOrmConfig, SeaOrmUnitOfWork};
 use sea_orm::prelude::Uuid;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, IntoActiveModel,
@@ -180,8 +180,8 @@ async fn db() -> DatabaseConnection {
 /// committed on `Ok`.
 async fn in_a_unit<T: Send>(
     conn: &DatabaseConnection,
-    body: impl Future<Output = Result<T, DbErr>> + Send,
-) -> Result<T, DbErr> {
+    body: impl Future<Output = Result<T, RepoError>> + Send,
+) -> Result<T, RepoError> {
     let binding: Arc<dyn UnitOfWork> = Arc::new(SeaOrmUnitOfWork::new(
         Arc::new(conn.clone()),
         &SeaOrmConfig::default(),
@@ -195,7 +195,7 @@ async fn in_a_unit<T: Send>(
         ),
         body,
         Result::is_ok,
-        |why| Err(DbErr::Custom(nest_rs_core::error_message(&why))),
+        |why| Err(DbErr::Custom(nest_rs_core::error_message(&why)).into()),
     )
     .await
 }
@@ -377,10 +377,15 @@ async fn a_key_only_a_tombstone_holds_meets_its_violation_and_aborts_nothing() {
     let Err(violation) = met else {
         panic!("a tombstone is never returned: {met:?}");
     };
-    assert_eq!(
-        DbOutcome::of(&violation),
-        DbOutcome::Conflict,
-        "{violation}"
+    assert!(
+        matches!(&violation, RepoError::UniqueViolation(key) if key.table() == Some("repo_probe_legacy")),
+        "{violation:?}"
+    );
+    let printed = nest_rs_testing::printed(&violation);
+    assert!(printed.contains("23505"), "{printed}");
+    assert!(
+        !printed.contains(&email),
+        "the server's detail quotes the row: {printed}"
     );
     assert_eq!(accounts_with(&conn, &after).await, 1);
 }
@@ -417,11 +422,8 @@ async fn an_update_setting_nothing_hands_back_only_a_row_its_scope_admits() {
     .await;
 
     assert_eq!(admitted.expect("its scope admits the row"), own);
-    assert!(
-        matches!(outside, Err(DbErr::RecordNotUpdated)),
-        "{outside:?}"
-    );
-    assert!(matches!(absent, Err(DbErr::RecordNotUpdated)), "{absent:?}");
+    assert!(matches!(outside, Err(RepoError::NotFound)), "{outside:?}");
+    assert!(matches!(absent, Err(RepoError::NotFound)), "{absent:?}");
 }
 
 #[tokio::test]
@@ -446,7 +448,7 @@ async fn an_update_setting_nothing_hides_a_tombstone_from_a_job_too() {
     .await
     .expect("the unit commits");
 
-    assert!(matches!(met, Err(DbErr::RecordNotUpdated)), "{met:?}");
+    assert!(matches!(met, Err(RepoError::NotFound)), "{met:?}");
 }
 
 /// `work`, in a request unit on the pool under `ability`.
@@ -540,10 +542,7 @@ async fn a_row_is_written_only_where_its_grants_permit_each_column() {
         Repo::<article::Entity>::update(title_of(&in_bodies)),
     )
     .await;
-    assert!(
-        matches!(outside, Err(DbErr::RecordNotUpdated)),
-        "{outside:?}"
-    );
+    assert!(matches!(outside, Err(RepoError::NotFound)), "{outside:?}");
     let stands = article::Entity::find_by_id(in_bodies.id)
         .one(&conn)
         .await
@@ -554,7 +553,7 @@ async fn a_row_is_written_only_where_its_grants_permit_each_column() {
     both.body = Set("rewritten".to_owned());
     let no_row_meets_both = under(&conn, two_grants(), Repo::<article::Entity>::update(both)).await;
     assert!(
-        matches!(no_row_meets_both, Err(DbErr::RecordNotUpdated)),
+        matches!(no_row_meets_both, Err(RepoError::NotFound)),
         "{no_row_meets_both:?}",
     );
 }

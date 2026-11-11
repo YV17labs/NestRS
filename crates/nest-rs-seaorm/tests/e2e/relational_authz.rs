@@ -8,10 +8,10 @@ use nest_rs_authz::{Ability, AbilityBuilder, Action};
 use nest_rs_database::__private::with_request_executor;
 use nest_rs_seaorm::__private::SeaOrmExecutor;
 use nest_rs_seaorm::{
-    Access, Creatable, CreateModel, CrudService, Deletable, Repo, Updatable, UpdateModel,
+    Access, Creatable, CreateModel, CrudService, Deletable, Repo, RepoError, Updatable, UpdateModel,
 };
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, Set};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait, Set};
 
 mod container {
     use sea_orm::entity::prelude::*;
@@ -429,10 +429,7 @@ async fn a_write_line_names_its_row() {
                     },
                 )
                 .await;
-            assert!(
-                matches!(refused, Err(DbErr::RecordNotUpdated)),
-                "{refused:?}"
-            );
+            assert!(matches!(refused, Err(RepoError::NotFound)), "{refused:?}");
             ItemsService
                 .delete(theirs)
                 .await
@@ -506,7 +503,7 @@ async fn create_under_an_out_of_scope_parent_is_rejected() {
                 })
                 .await;
             assert!(
-                matches!(denied, Err(DbErr::RecordNotInserted)),
+                matches!(denied, Err(RepoError::Forbidden { ref columns, .. }) if columns.is_empty()),
                 "out-of-scope create must be rejected: {denied:?}",
             );
         })
@@ -545,7 +542,7 @@ async fn out_of_scope_update_is_denied_and_leaves_the_row_unchanged() {
                 )
                 .await;
             assert!(
-                matches!(denied, Err(DbErr::RecordNotUpdated)),
+                matches!(denied, Err(RepoError::NotFound)),
                 "an out-of-scope update must be denied: {denied:?}",
             );
         })
@@ -586,7 +583,7 @@ async fn out_of_scope_delete_is_denied_and_leaves_the_row() {
         install_ability(items_in_org(org_a), async {
             let denied = ItemsService.delete(model).await;
             assert!(
-                matches!(denied, Err(DbErr::RecordNotFound(_))),
+                matches!(denied, Err(RepoError::NotFound)),
                 "an out-of-scope delete must be denied: {denied:?}",
             );
         })
@@ -697,9 +694,9 @@ async fn a_relational_grant_limits_what_it_writes_in_the_statement() {
     .await;
 
     assert_eq!(own.expect("own org's label").label, "relabelled");
-    assert!(matches!(other, Err(DbErr::RecordNotUpdated)), "{other:?}");
+    assert!(matches!(other, Err(RepoError::NotFound)), "{other:?}");
     assert!(
-        matches!(&moved, Err(DbErr::AccessDenied { resource, .. }) if resource == "rel_item(container_id)"),
+        matches!(&moved, Err(RepoError::Forbidden { columns, .. }) if columns == &["container_id"]),
         "{moved:?}",
     );
     let untouched = item::Entity::find_by_id(item_b)
@@ -759,5 +756,5 @@ async fn a_replacement_changing_nothing_on_a_row_outside_its_grant_is_out_of_sco
     let own = unchanged(item_a).await.expect("its grant admits the row");
     assert_eq!(own.id, item_a);
     let other = unchanged(item_b).await;
-    assert!(matches!(other, Err(DbErr::RecordNotUpdated)), "{other:?}");
+    assert!(matches!(other, Err(RepoError::NotFound)), "{other:?}");
 }

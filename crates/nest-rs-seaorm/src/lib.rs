@@ -93,7 +93,7 @@ pub mod queue;
 
 pub use config::SeaOrmConfig;
 pub use database::SeaOrmDatabaseModule;
-pub use error::{DbOutcome, ServiceError};
+pub use error::{Diagnostics, RepoError, ServiceError};
 pub use exposed::Exposed;
 pub use insertion::Insertion;
 pub use module::{SeaOrmModule, SeaOrmSetup, connect_from_env};

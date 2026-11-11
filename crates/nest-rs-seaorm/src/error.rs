@@ -1,20 +1,22 @@
 //! `ServiceError` stays unprefixed: it is written in every app service's
 //! signature, like `Service` itself.
 //!
-//! A database failure is classified once, here ([`DbOutcome`]), and said once:
-//! this crate's [`SafeLink`](nest_rs_core::SafeLink) says a sea-orm or sqlx
-//! error by its SQLSTATE and the names the server reported, never by the
-//! server's message, which quotes the input it refused.
+//! A database failure is classified once, here ([`RepoError`]), and said once:
+//! by its SQLSTATE and the names the server reported, never by the server's
+//! message or its `detail`, which quote the input it refused. This crate's
+//! [`SafeLink`](nest_rs_core::SafeLink) says a sea-orm or sqlx error a chain
+//! still holds the same way.
 
 use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use nest_rs_core::__private::OpaqueCause;
 use nest_rs_core::DecodeError;
 use nest_rs_database::AtomicError;
 use ref_cast::RefCast;
-use sea_orm::sqlx::error::DatabaseError;
+use sea_orm::sqlx::error::{DatabaseError, ErrorKind};
 use sea_orm::sqlx::postgres::PgDatabaseError;
 use sea_orm::{DbErr, RuntimeErr, SqlxError};
 use validator::ValidationErrors;
@@ -39,8 +41,9 @@ pub(crate) enum UnwiredBind {
 /// `Internal`) answer a constant on every edge and keep their cause,
 /// said through [`error_message`](fn@nest_rs_core::error_message), for the
 /// operator's line. A `{:?}`, an `anyhow` report and a `main` returning it read
-/// what that says too: the value a rule refused and the server's message stay in
-/// the variant, for a `match`, and an internal failure's cause stays beneath it.
+/// what that says too: the value a rule refused stays in the variant, for a
+/// `match`, a database failure is a [`RepoError`], and an internal failure's
+/// cause stays beneath it.
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum ServiceError {
@@ -49,11 +52,12 @@ pub enum ServiceError {
     /// it. The fields ride under `errors` ([`field_errors`](Self::field_errors)),
     /// never `validator`'s `Debug`, which echoes the rejected value.
     Validation(ValidationErrors),
-    /// A `Repo`/ORM query failed for a reason the caller cannot act on
-    /// ([`DbOutcome::Internal`], a `500`), or Postgres cancelled it at its
-    /// bound ([`DbOutcome::Unavailable`], a `503`). The `DbErr` stays for
-    /// `tracing`, said by its SQLSTATE; the wire sees a generic message.
-    Db(DbErr),
+    /// A `Repo` statement failed for a reason the caller cannot act on (a
+    /// `500`), or Postgres cancelled it at its bound
+    /// ([`RepoError::QueryCanceled`], a `503`). The failure stays for a `match`
+    /// and the operator's line, said by its SQLSTATE; the wire sees a generic
+    /// message.
+    Db(RepoError),
     /// A well-formed request the service rejects on business grounds (empty
     /// body, non-positive amount). Maps to **422**; the message is client-facing.
     Invalid(String),
@@ -66,8 +70,8 @@ pub enum ServiceError {
     /// The addressed resource does not exist (or is deliberately hidden from
     /// this caller). Maps to **404**; client-facing.
     NotFound(String),
-    /// An internal failure that is not a `DbErr` (a hash, an enqueue push, an
-    /// upstream call). Maps to **500**: it displays the constant every edge
+    /// An internal failure that is not the database's (a hash, an enqueue push,
+    /// an upstream call). Maps to **500**: it displays the constant every edge
     /// answers, and its [`source`](Error::source) says the detail, then the
     /// cause's chain, in one sentence, for the operator's line. Built by
     /// [`internal`](Self::internal) or, with what failed,
@@ -99,7 +103,7 @@ impl fmt::Debug for ServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (variant, field): (&str, &dyn fmt::Debug) = match self {
             Self::Validation(errors) => ("Validation", SaidFailure::ref_cast(errors)),
-            Self::Db(err) => ("Db", SaidFailure::ref_cast(err)),
+            Self::Db(err) => ("Db", err),
             Self::Invalid(said) => ("Invalid", said),
             Self::Conflict(said) => ("Conflict", said),
             Self::Forbidden(said) => ("Forbidden", said),
@@ -116,7 +120,7 @@ impl Error for ServiceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Validation(errors) => Some(SaidFailure::ref_cast(errors)),
-            Self::Db(err) => Some(SaidFailure::ref_cast(err)),
+            Self::Db(err) => Some(err),
             Self::Internal { __cause } => Some(SaidFailure::ref_cast(__cause)),
             Self::Invalid(_) | Self::Conflict(_) | Self::Forbidden(_) | Self::NotFound(_) => None,
         }
@@ -135,12 +139,6 @@ impl From<ValidationErrors> for ServiceError {
 #[derive(RefCast)]
 #[repr(transparent)]
 struct SaidFailure<T>(T);
-
-impl fmt::Display for SaidFailure<DbErr> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&said_db(&self.0))
-    }
-}
 
 impl fmt::Display for SaidFailure<ValidationErrors> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -208,7 +206,7 @@ impl ServiceError {
         Self::NotFound(msg.into())
     }
 
-    /// **500** — an internal failure that is not a database error. The detail
+    /// **500** — an internal failure that is not the database's. The detail
     /// reaches the operator's line only; the wire sees a constant string. It
     /// names what failed, never a value the request carried.
     pub fn internal(detail: impl Into<Cow<'static, str>>) -> Self {
@@ -252,44 +250,42 @@ impl ServiceError {
             _ => None,
         }
     }
-
-    /// Whether Postgres cancelled the statement at its bound: a `503`, said at
-    /// `warn`, where any other `Db` is a `500`.
-    fn is_unavailable(&self) -> bool {
-        matches!(self, Self::Db(err) if DbOutcome::of(err) == DbOutcome::Unavailable)
-    }
 }
 
-/// A `DbErr` classified by [`DbOutcome`]: a unique violation is a
+/// A database failure as the class a client branches on: a unique violation is a
 /// [`Conflict`](ServiceError::Conflict) (`409`), a row a write found gone is
-/// [`NotFound`](ServiceError::NotFound) (`404`), a write a field grant refused is
-/// [`Forbidden`](ServiceError::Forbidden) (`403`), naming the columns as the
-/// table does, anything else is [`Db`](ServiceError::Db) — a `503` for a statement
-/// Postgres cancelled, a `500` otherwise.
-impl From<DbErr> for ServiceError {
-    fn from(err: DbErr) -> Self {
-        match DbOutcome::of(&err) {
-            DbOutcome::Conflict => {
+/// [`NotFound`](ServiceError::NotFound) (`404`), a write the caller's grants do not
+/// cover is [`Forbidden`](ServiceError::Forbidden) (`403`), naming the columns as
+/// the table does; anything else is [`Db`](ServiceError::Db) — a `503` for a
+/// statement Postgres cancelled, a `500` otherwise.
+impl From<RepoError> for ServiceError {
+    fn from(err: RepoError) -> Self {
+        match err {
+            RepoError::UniqueViolation(_) => {
                 Self::Conflict("the request conflicts with an existing record".into())
             }
-            DbOutcome::NotFound => Self::NotFound("not found".into()),
-            DbOutcome::Forbidden => Self::Forbidden(match refused_columns(&err) {
-                Some(columns) => format!("the caller may not write {columns}"),
-                None => "forbidden".into(),
-            }),
-            DbOutcome::Unavailable | DbOutcome::Internal => Self::Db(err),
+            RepoError::NotFound => Self::NotFound("not found".into()),
+            RepoError::Forbidden { .. } => Self::Forbidden(err.to_string()),
+            _ => Self::Db(err),
         }
     }
 }
 
+/// sea-orm's own error, classified as [`RepoError`] classifies it.
+impl From<DbErr> for ServiceError {
+    fn from(err: DbErr) -> Self {
+        Self::from(RepoError::from(err))
+    }
+}
+
 /// An atomic block that could not keep its promise: a database refusal by its
-/// [`DbOutcome`], anything else an opaque [`Internal`](ServiceError::Internal)
+/// [`RepoError`], anything else an opaque [`Internal`](ServiceError::Internal)
 /// whose cause is the `AtomicError`.
 impl From<AtomicError> for ServiceError {
     fn from(err: AtomicError) -> Self {
         let err = match err {
-            AtomicError::Database(source) => match source.downcast::<DbErr>() {
-                Ok(db) => return Self::from(*db),
+            AtomicError::Database(source) => match source.downcast::<RepoError>() {
+                Ok(repo) => return Self::from(*repo),
                 Err(other) => AtomicError::Database(other),
             },
             other => other,
@@ -298,93 +294,265 @@ impl From<AtomicError> for ServiceError {
     }
 }
 
-/// A failure inside an atomic block whose body speaks the driver's own
-/// [`DbErr`], folded back into one: `DbErr` cannot take an `AtomicError`
-/// itself.
-pub(crate) enum AtomicDbError {
-    Db(DbErr),
-    Atomic(AtomicError),
+/// A database failure as `Repo` hands it out: the class a caller branches on,
+/// said by its SQLSTATE and the names the server reported, never by the server's
+/// message or its `detail`, which quote the row it refused.
+///
+/// Every method of [`Repo`](crate::Repo), [`RepoSelect`](crate::RepoSelect) and
+/// [`CrudService`](crate::CrudService) answers one, and `?` turns it into the
+/// [`ServiceError`] every edge answers. What a service decides on is one `match`
+/// away:
+///
+/// ```
+/// use nest_rs_seaorm::{RepoError, ServiceError};
+///
+/// fn signing_up(created: Result<(), RepoError>) -> Result<(), ServiceError> {
+///     match created {
+///         Err(RepoError::UniqueViolation(key)) if key.constraint() == Some("users_email_key") => {
+///             Err(ServiceError::conflict("that email is registered"))
+///         }
+///         other => Ok(other?),
+///     }
+/// }
+/// # assert!(signing_up(Ok(())).is_ok());
+/// ```
+///
+/// A variant the server raised carries its [`Diagnostics`]; it can grow within
+/// 7.x, so a `match` outside this crate keeps a `_` arm.
+#[derive(Clone)]
+#[non_exhaustive]
+pub enum RepoError {
+    /// The row a write addressed is gone, or outside the caller's scope: a
+    /// `404`, `NOT_FOUND`.
+    NotFound,
+    /// The caller may not write the row: a grant's `.fields` withholds each of
+    /// `columns`, refused before any statement, or, `columns` empty, the row a
+    /// create inserted falls outside the caller's `Create` scope and is rolled
+    /// back. A `403`, `FORBIDDEN`.
+    #[non_exhaustive]
+    Forbidden {
+        /// The columns the caller's grants withhold, as the table names them.
+        columns: Vec<String>,
+    },
+    /// A unique key refused the write (SQLSTATE `23505`): a `409`, `CONFLICT`.
+    UniqueViolation(Diagnostics),
+    /// A foreign key refused the write (SQLSTATE `23503`): a `500`.
+    ForeignKeyViolation(Diagnostics),
+    /// The transaction lost to a concurrent one: a serialization failure
+    /// (SQLSTATE `40001`), or a deadlock Postgres broke by failing it (`40P01`).
+    /// Nothing it wrote stands, so running it again may succeed: a `500`.
+    SerializationFailure(Diagnostics),
+    /// Postgres cancelled the statement (SQLSTATE `57014`), past its
+    /// `statement_timeout` most often: a `503`, `UNAVAILABLE`, said at `warn`.
+    /// Inside a transaction nothing it wrote stands, so another attempt may
+    /// succeed.
+    QueryCanceled(Diagnostics),
+    /// Any other failure — a refusal no variant names, a connection lost, a
+    /// value that would not bind — said by its kind: a `500`.
+    #[non_exhaustive]
+    Other {
+        /// What the failure is, as every reader prints it.
+        #[doc(hidden)]
+        __said: Arc<str>,
+    },
 }
 
-impl From<DbErr> for AtomicDbError {
-    fn from(err: DbErr) -> Self {
-        Self::Db(err)
+impl RepoError {
+    /// A failure no variant names, said as `said`.
+    fn other(said: impl Into<Arc<str>>) -> Self {
+        Self::Other {
+            __said: said.into(),
+        }
     }
-}
 
-impl From<AtomicError> for AtomicDbError {
-    fn from(err: AtomicError) -> Self {
-        Self::Atomic(err)
-    }
-}
-
-impl From<AtomicDbError> for DbErr {
-    fn from(err: AtomicDbError) -> Self {
-        match err {
-            AtomicDbError::Db(err) => err,
-            AtomicDbError::Atomic(AtomicError::Database(source)) => {
-                match source.downcast::<DbErr>() {
-                    Ok(db) => *db,
-                    Err(other) => DbErr::Custom(nest_rs_core::error_message(&*other)),
-                }
-            }
-            AtomicDbError::Atomic(other) => DbErr::Custom(other.to_string()),
+    /// A create the caller's `Create` scope does not cover, refused or rolled
+    /// back.
+    pub(crate) fn outside_create_scope() -> Self {
+        Self::Forbidden {
+            columns: Vec::new(),
         }
     }
 }
 
-/// What a database failure means to a caller, read off the error alone — the
-/// one classification `ServiceError`, `#[crud]` and every edge share.
-///
-/// ```
-/// use nest_rs_seaorm::DbOutcome;
-/// use nest_rs_seaorm::sea_orm::DbErr;
-///
-/// assert_eq!(DbOutcome::of(&DbErr::RecordNotUpdated), DbOutcome::NotFound);
-/// assert_eq!(DbOutcome::of(&DbErr::RecordNotInserted), DbOutcome::Internal);
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum DbOutcome {
-    /// A unique constraint refused the write (SQLSTATE `23505`): `409`,
-    /// `CONFLICT`.
-    Conflict,
-    /// The row an update or delete addressed is no longer there: `404`,
-    /// `NOT_FOUND`.
-    NotFound,
-    /// A grant's `.fields` withholds a column the write sets, refused before any
-    /// statement: `403`, `FORBIDDEN`.
-    Forbidden,
-    /// Postgres cancelled the statement (SQLSTATE `57014`), past its
-    /// `statement_timeout` most often: the server could not serve it in time,
-    /// `503`, `UNAVAILABLE`, said at `warn`. Inside a transaction nothing it
-    /// wrote stands, so another attempt may succeed.
-    Unavailable,
-    /// Anything else, answered opaquely and logged. `RecordNotInserted` is one:
-    /// sea-orm also raises it for an `ON CONFLICT DO NOTHING` that inserted
-    /// nothing, so only `#[crud]`, whose create can raise it for its scope
-    /// re-check alone, reads it as a refusal.
-    Internal,
+impl fmt::Display for RepoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("the row is gone, or outside the caller's scope"),
+            Self::Forbidden { columns } if columns.is_empty() => {
+                f.write_str("the caller may not write the row")
+            }
+            Self::Forbidden { columns } => {
+                write!(f, "the caller may not write {}", columns.join(", "))
+            }
+            Self::UniqueViolation(diagnostics)
+            | Self::ForeignKeyViolation(diagnostics)
+            | Self::SerializationFailure(diagnostics)
+            | Self::QueryCanceled(diagnostics) => fmt::Display::fmt(diagnostics, f),
+            Self::Other { __said } => f.write_str(__said),
+        }
+    }
 }
 
-impl DbOutcome {
-    /// The class of `err`.
-    pub fn of(err: &DbErr) -> Self {
-        match err {
-            DbErr::RecordNotUpdated | DbErr::RecordNotFound(_) => Self::NotFound,
-            DbErr::AccessDenied { .. } => Self::Forbidden,
-            _ => match server_error(err) {
-                Some(server) if server.is_unique_violation() => Self::Conflict,
-                Some(server) if server.code().as_deref() == Some(CANCELLED) => Self::Unavailable,
-                _ => Self::Internal,
+impl fmt::Debug for RepoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (variant, diagnostics) = match self {
+            Self::NotFound => return f.write_str("NotFound"),
+            Self::Forbidden { columns } => {
+                return f
+                    .debug_struct("Forbidden")
+                    .field("columns", columns)
+                    .finish();
+            }
+            Self::Other { __said } => return f.debug_tuple("Other").field(__said).finish(),
+            Self::UniqueViolation(diagnostics) => ("UniqueViolation", diagnostics),
+            Self::ForeignKeyViolation(diagnostics) => ("ForeignKeyViolation", diagnostics),
+            Self::SerializationFailure(diagnostics) => ("SerializationFailure", diagnostics),
+            Self::QueryCanceled(diagnostics) => ("QueryCanceled", diagnostics),
+        };
+        f.debug_tuple(variant).field(diagnostics).finish()
+    }
+}
+
+/// Everything a `RepoError` knows is in its sentence: no link below it holds the
+/// server's own words.
+impl Error for RepoError {}
+
+/// sea-orm's error read into its class: a server's refusal by its SQLSTATE, a
+/// write `Repo` found no row for, or one a field grant refused, by what it
+/// means, anything else said by its kind.
+impl From<DbErr> for RepoError {
+    fn from(err: DbErr) -> Self {
+        match &err {
+            DbErr::RecordNotUpdated | DbErr::RecordNotFound(_) => return Self::NotFound,
+            DbErr::AccessDenied { .. } => {
+                return Self::Forbidden {
+                    columns: refused_columns(&err)
+                        .map(|columns| columns.split(", ").map(str::to_owned).collect())
+                        .unwrap_or_default(),
+                };
+            }
+            _ => {}
+        }
+        let Some(server) = server_error(&err) else {
+            return Self::other(said_db(&err));
+        };
+        let diagnostics = Diagnostics::of(server);
+        match server.kind() {
+            ErrorKind::UniqueViolation => Self::UniqueViolation(diagnostics),
+            ErrorKind::ForeignKeyViolation => Self::ForeignKeyViolation(diagnostics),
+            _ => match diagnostics.sqlstate() {
+                SERIALIZATION_FAILURE | DEADLOCK_DETECTED => {
+                    Self::SerializationFailure(diagnostics)
+                }
+                CANCELLED => Self::QueryCanceled(diagnostics),
+                _ => Self::other(said_db(&err)),
             },
         }
     }
 }
 
-/// The refusal of a write setting what a field grant withholds, as `Repo` speaks:
-/// a `DbErr` is what its every caller reads, and this one says what `GRANT UPDATE
-/// (title) ON posts` would.
+/// An atomic block whose body speaks `RepoError`: the database's refusal of its
+/// settling by its class, anything else said as the block's failure.
+impl From<AtomicError> for RepoError {
+    fn from(err: AtomicError) -> Self {
+        let err = match err {
+            AtomicError::Database(source) => match source.downcast::<Self>() {
+                Ok(repo) => return *repo,
+                Err(other) => AtomicError::Database(other),
+            },
+            other => other,
+        };
+        Self::other(nest_rs_core::error_message(&err))
+    }
+}
+
+/// What a database server reported of a failure beside its message: its
+/// SQLSTATE and the names it gave — the constraint, the table, the column. A
+/// name is the schema's, never a value a row holds.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Diagnostics(Box<Reported>);
+
+#[derive(Clone, PartialEq, Eq)]
+struct Reported {
+    sqlstate: Box<str>,
+    constraint: Option<Box<str>>,
+    table: Option<Box<str>>,
+    column: Option<Box<str>>,
+}
+
+impl Diagnostics {
+    /// What `server` reported, its message and `detail` left behind.
+    fn of(server: &(dyn DatabaseError + 'static)) -> Self {
+        let column = server
+            .try_downcast_ref::<PgDatabaseError>()
+            .and_then(PgDatabaseError::column);
+        Self(Box::new(Reported {
+            sqlstate: server.code().unwrap_or_default().into(),
+            constraint: server.constraint().map(Into::into),
+            table: server.table().map(Into::into),
+            column: column.map(Into::into),
+        }))
+    }
+
+    /// The five-character SQLSTATE the server answered (`23505`).
+    pub fn sqlstate(&self) -> &str {
+        &self.0.sqlstate
+    }
+
+    /// The constraint the server named: a unique key's, a foreign key's.
+    pub fn constraint(&self) -> Option<&str> {
+        self.0.constraint.as_deref()
+    }
+
+    /// The table the server named.
+    pub fn table(&self) -> Option<&str> {
+        self.0.table.as_deref()
+    }
+
+    /// The column the server named.
+    pub fn column(&self) -> Option<&str> {
+        self.0.column.as_deref()
+    }
+}
+
+/// `database error <SQLSTATE>`, then the constraint, table and column the
+/// server named: schema an operator searches for, where its message quotes the
+/// row.
+impl fmt::Display for Diagnostics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("database error")?;
+        if !self.sqlstate().is_empty() {
+            write!(f, " {}", self.sqlstate())?;
+        }
+        let mut separator = " on";
+        for (what, name) in [
+            ("constraint", self.constraint()),
+            ("table", self.table()),
+            ("column", self.column()),
+        ] {
+            if let Some(name) = name {
+                write!(f, "{separator} {what} {name:?}")?;
+                separator = ",";
+            }
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for Diagnostics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Diagnostics")
+            .field("sqlstate", &self.sqlstate())
+            .field("constraint", &self.constraint())
+            .field("table", &self.table())
+            .field("column", &self.column())
+            .finish()
+    }
+}
+
+/// The refusal of a write setting what a field grant withholds, as the sea-orm
+/// path a write takes carries it: a `DbErr` saying what `GRANT UPDATE (title) ON
+/// posts` would, which `From<DbErr>` reads back into [`RepoError::Forbidden`].
 pub(crate) fn write_refused(statement: &str, table: &str, columns: &[&str]) -> DbErr {
     DbErr::AccessDenied {
         permission: statement.to_owned(),
@@ -403,6 +571,17 @@ fn refused_columns(err: &DbErr) -> Option<&str> {
 /// SQLSTATE `query_canceled`: a statement Postgres cancelled, at its
 /// `statement_timeout` or by an operator.
 pub(crate) const CANCELLED: &str = "57014";
+
+/// SQLSTATE `serialization_failure`.
+pub(crate) const SERIALIZATION_FAILURE: &str = "40001";
+
+/// SQLSTATE `deadlock_detected`, Postgres's own.
+pub(crate) const DEADLOCK_DETECTED: &str = "40P01";
+
+/// Whether Postgres cancelled the statement `err` reports.
+pub(crate) fn is_cancelled(err: &DbErr) -> bool {
+    server_error(err).is_some_and(|server| server.code().as_deref() == Some(CANCELLED))
+}
 
 /// The error the database server answered, when `err` carries one.
 fn server_error(err: &DbErr) -> Option<&(dyn DatabaseError + 'static)> {
@@ -437,10 +616,9 @@ fn said_db(err: &DbErr) -> String {
         DbErr::TryIntoErr { from, into, .. } => format!("Error converting `{from}` into `{into}`"),
         DbErr::Type(_) => "Type Error".to_owned(),
         DbErr::Json(_) => "Json Error".to_owned(),
-        DbErr::Migration(_) => "Migration Error".to_owned(),
         DbErr::RbacError(_) => "RBAC error".to_owned(),
         // Each names a table, a column, a pool's state, a count or a sentence
-        // the framework wrote: never a value a client sent.
+        // the framework or a migration wrote: never a value a client sent.
         DbErr::ConnectionAcquire(_)
         | DbErr::ConvertFromU64(_)
         | DbErr::UnpackInsertId
@@ -448,6 +626,7 @@ fn said_db(err: &DbErr) -> String {
         | DbErr::RecordNotFound(_)
         | DbErr::AttrNotSet(_)
         | DbErr::Custom(_)
+        | DbErr::Migration(_)
         | DbErr::RecordNotInserted
         | DbErr::RecordNotUpdated
         | DbErr::BackendNotSupported { .. }
@@ -496,31 +675,9 @@ fn said_sqlx(err: &SqlxError) -> String {
     }
 }
 
-/// `database error <SQLSTATE>`, then the constraint, table and column the
-/// server named: schema an operator searches for, where its message quotes the
-/// row.
+/// What `server` reported, as its [`Diagnostics`] say it.
 fn said_server(server: &(dyn DatabaseError + 'static)) -> String {
-    let mut said = String::from("database error");
-    if let Some(code) = server.code() {
-        said.push(' ');
-        said.push_str(&code);
-    }
-    let column = server
-        .try_downcast_ref::<PgDatabaseError>()
-        .and_then(PgDatabaseError::column);
-    let named: Vec<String> = [
-        ("constraint", server.constraint()),
-        ("table", server.table()),
-        ("column", column),
-    ]
-    .into_iter()
-    .filter_map(|(what, name)| name.map(|name| format!("{what} {name:?}")))
-    .collect();
-    if !named.is_empty() {
-        said.push_str(" on ");
-        said.push_str(&named.join(", "));
-    }
-    said
+    Diagnostics::of(server).to_string()
 }
 
 /// What every edge answers for a `ServiceError`, HTTP included: a business
@@ -538,7 +695,7 @@ impl nest_rs_core::ToProblem for ServiceError {
             Self::Conflict(_) => Problem::new(409, code::CONFLICT),
             Self::Forbidden(_) => Problem::new(403, code::FORBIDDEN),
             Self::NotFound(_) => Problem::new(404, code::NOT_FOUND),
-            Self::Db(_) if self.is_unavailable() => unavailable(),
+            Self::Db(RepoError::QueryCanceled(_)) => unavailable(),
             Self::Db(_) | Self::Internal { .. } => return None,
         };
         let problem = problem.with_detail(self.to_string());
@@ -588,26 +745,28 @@ impl From<ServiceError> for nest_rs_graphql::async_graphql::Error {
 
 /// What a `#[crud]` operation's failure answers on every edge: a unique
 /// violation is a `409` — naming, for a create or an update, the fields of
-/// the input `written` the violated key holds — a create its scope re-check
-/// rolled back (`RecordNotInserted`) a `403`, as is a write a field grant refused,
-/// naming the fields of `written` that set a column it withholds, a row gone
-/// before the write a `404`, a statement Postgres cancelled a `503` filed at
-/// `warn`; any other failure a `500`, its error filed once at `error`.
+/// the input `written` the violated key holds — a write the caller's grants do
+/// not cover a `403`, naming the fields of `written` that set a column they
+/// withhold, a row gone before the write a `404`, a statement Postgres
+/// cancelled a `503` filed at `warn`; any other failure a `500`, its error filed
+/// once at `error`.
 #[cfg(any(feature = "http", feature = "graphql"))]
-fn crud_problem(err: &DbErr, written: Option<Written>) -> nest_rs_core::Problem {
+fn crud_problem(err: &RepoError, written: Option<Written>) -> nest_rs_core::Problem {
     use nest_rs_core::{Problem, code};
 
-    match DbOutcome::of(err) {
-        DbOutcome::Conflict => with_field_errors(
+    match err {
+        RepoError::UniqueViolation(diagnostics) => with_field_errors(
             Problem::new(409, code::CONFLICT),
-            written.and_then(|written| taken_fields(err, written, &*crate::unique_key::current()?)),
+            written.and_then(|written| {
+                taken_fields(diagnostics, written, &*crate::unique_key::current()?)
+            }),
         ),
-        DbOutcome::NotFound => Problem::new(404, code::NOT_FOUND),
-        DbOutcome::Forbidden => with_field_errors(
+        RepoError::NotFound => Problem::new(404, code::NOT_FOUND),
+        RepoError::Forbidden { columns } => with_field_errors(
             Problem::new(403, code::FORBIDDEN),
-            written.and_then(|written| withheld_fields(err, written)),
+            written.and_then(|written| withheld_fields(columns, written)),
         ),
-        DbOutcome::Unavailable => {
+        RepoError::QueryCanceled(_) => {
             tracing::warn!(
                 target: crate::target::ORM,
                 kind = "db",
@@ -616,10 +775,7 @@ fn crud_problem(err: &DbErr, written: Option<Written>) -> nest_rs_core::Problem 
             );
             unavailable()
         }
-        DbOutcome::Internal if matches!(err, DbErr::RecordNotInserted) => {
-            Problem::new(403, code::FORBIDDEN)
-        }
-        DbOutcome::Internal => {
+        _ => {
             tracing::error!(
                 target: crate::target::ORM,
                 kind = "db",
@@ -655,20 +811,19 @@ impl Written {
 #[cfg(any(feature = "http", feature = "graphql"))]
 const UNIQUE: &str = "unique";
 
-/// The fields of `written`'s input the unique key `err` violated holds, each
+/// The fields of `written`'s input the unique key `violated` names holds, each
 /// `[{"code": "unique"}]` — the shape [`ServiceError::field_errors`] gives a
 /// validation failure — and never the value. `None` when the violation is on
 /// another table and none of its partitions, on a key `keys` does not know, or
 /// on columns the input does not carry.
 #[cfg(any(feature = "http", feature = "graphql"))]
 fn taken_fields(
-    err: &DbErr,
+    violated: &Diagnostics,
     written: Written,
     keys: &crate::unique_key::UniqueKeys,
 ) -> Option<serde_json::Value> {
-    let server = server_error(err)?;
     let fields: serde_json::Map<String, serde_json::Value> = keys
-        .columns(written.table, server.table()?, server.constraint()?)?
+        .columns(written.table, violated.table()?, violated.constraint()?)?
         .iter()
         .filter_map(|column| (written.field_for)(column))
         .map(|field| (field.to_owned(), serde_json::json!([{ "code": UNIQUE }])))
@@ -681,14 +836,14 @@ fn taken_fields(
 #[cfg(any(feature = "http", feature = "graphql"))]
 const WITHHELD: &str = "forbidden";
 
-/// The fields of `written`'s input setting a column `err` refused, each
-/// `[{"code": "forbidden"}]`; `None` when the input carries none of them, a
-/// service having set what it refused.
+/// The fields of `written`'s input setting one of the `columns` a grant
+/// withholds, each `[{"code": "forbidden"}]`; `None` when the input carries none
+/// of them, a service having set what it refused.
 #[cfg(any(feature = "http", feature = "graphql"))]
-fn withheld_fields(err: &DbErr, written: Written) -> Option<serde_json::Value> {
-    let fields: serde_json::Map<String, serde_json::Value> = refused_columns(err)?
-        .split(", ")
-        .filter_map(written.field_for)
+fn withheld_fields(columns: &[String], written: Written) -> Option<serde_json::Value> {
+    let fields: serde_json::Map<String, serde_json::Value> = columns
+        .iter()
+        .filter_map(|column| (written.field_for)(column))
         .map(|field| (field.to_owned(), serde_json::json!([{ "code": WITHHELD }])))
         .collect();
     (!fields.is_empty()).then_some(serde_json::Value::Object(fields))
@@ -703,12 +858,13 @@ pub use graphql::{crud_error as graphql_crud_error, crud_write_error as graphql_
 #[cfg(feature = "graphql")]
 mod graphql {
     use nest_rs_graphql::async_graphql::Error;
-    use sea_orm::DbErr;
+
+    use super::RepoError;
 
     /// A GraphQL `#[crud]` operation's failure as the class a client branches
     /// on: the HTTP twin's statuses, as `CONFLICT`, `FORBIDDEN`, `NOT_FOUND` or
     /// the opaque `INTERNAL`. Called by the `#[crud]` expansion.
-    pub fn crud_error(err: DbErr) -> Error {
+    pub fn crud_error(err: RepoError) -> Error {
         nest_rs_graphql::problem_error(&super::crud_problem(&err, None))
     }
 
@@ -718,7 +874,7 @@ mod graphql {
     /// `#[crud]` expansion.
     pub fn crud_write_error<E: sea_orm::EntityTrait>(
         field_for: fn(&str) -> Option<&'static str>,
-    ) -> impl FnOnce(DbErr) -> Error {
+    ) -> impl FnOnce(RepoError) -> Error {
         move |err| {
             let written = super::Written::on::<E>(field_for);
             nest_rs_graphql::problem_error(&super::crud_problem(&err, Some(written)))
@@ -732,8 +888,8 @@ mod graphql {
 
         use super::*;
 
-        fn answered(err: DbErr) -> (String, serde_json::Value) {
-            let error = crud_error(err);
+        fn answered(err: impl Into<RepoError>) -> (String, serde_json::Value) {
+            let error = crud_error(err.into());
             let extensions = serde_json::to_value(&error.extensions).expect("extensions serialize");
             (error.message, extensions[CODE_EXTENSION].clone())
         }
@@ -747,12 +903,12 @@ mod graphql {
                 (said.as_str(), code),
                 ("conflict", code::CONFLICT.as_str().into())
             );
-            let (said, code) = answered(DbErr::RecordNotUpdated);
+            let (said, code) = answered(sea_orm::DbErr::RecordNotUpdated);
             assert_eq!(
                 (said.as_str(), code),
                 ("not found", code::NOT_FOUND.as_str().into())
             );
-            let (said, code) = answered(DbErr::RecordNotInserted);
+            let (said, code) = answered(RepoError::outside_create_scope());
             assert_eq!(
                 (said.as_str(), code),
                 ("forbidden", code::FORBIDDEN.as_str().into())
@@ -772,7 +928,7 @@ mod graphql {
             };
 
             let error = under_a_binding_holding(users_keys(), async {
-                crud_write_error::<user::Entity>(users_input)(taken_email())
+                crud_write_error::<user::Entity>(users_input)(taken_email().into())
             })
             .await;
             assert_eq!(error.message, "conflict");
@@ -793,7 +949,7 @@ mod graphql {
 
             let (crud, service) = on_a_pool_bounding_statements(STATEMENT_BOUND, || {
                 (
-                    crud_error(cancelled_statement()),
+                    crud_error(cancelled_statement().into()),
                     nest_rs_graphql::problem_error(&crate::ServiceError::from(
                         cancelled_statement(),
                     )),
@@ -813,7 +969,7 @@ mod graphql {
             use crate::error::tests::{user, users_input};
 
             let refused = super::super::write_refused("insert", "users", &["handle", "id"]);
-            let error = crud_write_error::<user::Entity>(users_input)(refused);
+            let error = crud_write_error::<user::Entity>(users_input)(refused.into());
 
             assert_eq!(error.message, "forbidden");
             let extensions = serde_json::to_value(&error.extensions).expect("extensions serialize");
@@ -891,7 +1047,7 @@ mod http {
     /// before the write, `503` for a statement Postgres cancelled, else a `500`
     /// whose error is filed at `error` — each with the `code` member the other
     /// edges answer. Called by the `#[crud]` expansion.
-    pub fn crud_error(err: sea_orm::DbErr) -> HttpError {
+    pub fn crud_error(err: super::RepoError) -> HttpError {
         HttpError::from(super::crud_problem(&err, None))
     }
 
@@ -901,7 +1057,7 @@ mod http {
     /// expansion.
     pub fn crud_write_error<E: sea_orm::EntityTrait>(
         field_for: fn(&str) -> Option<&'static str>,
-    ) -> impl FnOnce(sea_orm::DbErr) -> HttpError {
+    ) -> impl FnOnce(super::RepoError) -> HttpError {
         move |err| {
             let written = super::Written::on::<E>(field_for);
             HttpError::from(super::crud_problem(&err, Some(written)))
@@ -913,7 +1069,7 @@ mod http {
         use nest_rs_core::code;
         use nest_rs_http::{Response, StatusCode};
 
-        use super::super::ServiceError;
+        use super::super::{RepoError, ServiceError};
         use super::*;
 
         /// A value breaking its type's rules answers what the edge's own check
@@ -930,7 +1086,7 @@ mod http {
 
         #[test]
         fn db_is_500() {
-            let err = ServiceError::Db(sea_orm::DbErr::Custom("boom".into()));
+            let err = ServiceError::Db(RepoError::from(sea_orm::DbErr::Custom("boom".into())));
             assert_eq!(
                 HttpError::from(err).status(),
                 StatusCode::INTERNAL_SERVER_ERROR
@@ -943,8 +1099,8 @@ mod http {
         fn a_variant_rendered_for_the_edge_files_nothing_of_its_own() {
             let logs = nest_rs_testing::LogCapture::install();
             for error in [
-                ServiceError::Db(crate::error::tests::bad_uuid()),
-                ServiceError::Db(crate::error::tests::cancelled_statement()),
+                ServiceError::Db(RepoError::from(crate::error::tests::bad_uuid())),
+                ServiceError::Db(RepoError::from(crate::error::tests::cancelled_statement())),
                 ServiceError::internal("could not sign the export"),
                 ServiceError::not_found("no such widget"),
             ] {
@@ -957,14 +1113,14 @@ mod http {
         fn a_crud_500_emits_the_cause_and_the_mapped_statuses_do_not() {
             let logs = nest_rs_testing::LogCapture::install();
 
-            let mapped = crud_error(sea_orm::DbErr::RecordNotInserted);
+            let mapped = crud_error(super::super::RepoError::outside_create_scope());
             assert_eq!(mapped.status(), StatusCode::FORBIDDEN);
-            let taken = crud_error(crate::error::tests::taken_email());
+            let taken = crud_error(crate::error::tests::taken_email().into());
             assert_eq!(taken.status(), StatusCode::CONFLICT);
-            let vanished = crud_error(sea_orm::DbErr::RecordNotUpdated);
+            let vanished = crud_error(sea_orm::DbErr::RecordNotUpdated.into());
             assert_eq!(vanished.status(), StatusCode::NOT_FOUND);
 
-            let unexpected = crud_error(sea_orm::DbErr::Custom("deadlock detected".into()));
+            let unexpected = crud_error(sea_orm::DbErr::Custom("deadlock detected".into()).into());
             assert_eq!(unexpected.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
             let event = logs.expect_one(crate::target::ORM, "crud operation failed");
@@ -981,7 +1137,7 @@ mod http {
         /// the MCP and WebSocket edges do.
         #[tokio::test]
         async fn a_crud_503_answers_its_problem_document_with_the_code() {
-            let unavailable = crud_error(crate::error::tests::cancelled_statement());
+            let unavailable = crud_error(crate::error::tests::cancelled_statement().into());
             assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
             let resp = unavailable.into_response();
             assert_eq!(
@@ -998,7 +1154,7 @@ mod http {
         #[test]
         fn a_crud_500_files_the_database_error_without_the_value_it_quoted() {
             let logs = nest_rs_testing::LogCapture::install();
-            let failed = crud_error(crate::error::tests::bad_uuid());
+            let failed = crud_error(crate::error::tests::bad_uuid().into());
             assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
             let event = logs.expect_one(crate::target::ORM, "crud operation failed");
@@ -1058,7 +1214,10 @@ mod http {
 
             let logs = nest_rs_testing::LogCapture::install();
             let (status, ct, body) = under_a_binding_holding(users_keys(), async {
-                body_json_of(crud_write_error::<user::Entity>(users_input)(taken_email())).await
+                body_json_of(crud_write_error::<user::Entity>(users_input)(
+                    taken_email().into(),
+                ))
+                .await
             })
             .await;
             assert_eq!(status, StatusCode::CONFLICT);
@@ -1080,11 +1239,13 @@ mod http {
                 logs.events(),
             );
 
-            let (_, _, outside) =
-                body_json_of(crud_write_error::<user::Entity>(users_input)(taken_email())).await;
+            let (_, _, outside) = body_json_of(crud_write_error::<user::Entity>(users_input)(
+                taken_email().into(),
+            ))
+            .await;
             assert!(outside.get("errors").is_none(), "{outside}");
             let (_, _, read) = under_a_binding_holding(users_keys(), async {
-                body_json_of(crud_error(taken_email())).await
+                body_json_of(crud_error(taken_email().into())).await
             })
             .await;
             assert!(
@@ -1101,8 +1262,10 @@ mod http {
             use crate::error::tests::{user, users_input};
 
             let refused = super::super::write_refused("update", "users", &["handle", "id"]);
-            let (status, ct, body) =
-                body_json_of(crud_write_error::<user::Entity>(users_input)(refused)).await;
+            let (status, ct, body) = body_json_of(crud_write_error::<user::Entity>(users_input)(
+                refused.into(),
+            ))
+            .await;
 
             assert_eq!(status, StatusCode::FORBIDDEN);
             assert_eq!(ct.as_deref(), Some("application/problem+json"));
@@ -1118,7 +1281,7 @@ mod http {
 
             let only_the_services = super::super::write_refused("update", "users", &["id"]);
             let (status, _, body) = body_json_of(crud_write_error::<user::Entity>(users_input)(
-                only_the_services,
+                only_the_services.into(),
             ))
             .await;
             assert_eq!(status, StatusCode::FORBIDDEN);
@@ -1140,18 +1303,18 @@ mod http {
         /// answers for the same class: its code, and no detail.
         #[tokio::test]
         async fn db_error_renders_a_500_problem_without_leaking_the_driver_detail() {
-            let (status, ct, body) = body_json(ServiceError::Db(sea_orm::DbErr::Custom(
-                "SELECT password_hash FROM user".into(),
-            )))
+            let (status, ct, body) = body_json(ServiceError::Db(
+                sea_orm::DbErr::Custom("SELECT password_hash FROM user".into()).into(),
+            ))
             .await;
             assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
             assert_eq!(ct.as_deref(), Some("application/problem+json"));
             assert_eq!(body["status"], 500);
             assert_eq!(body["code"], code::INTERNAL.as_str(), "{body}");
             assert!(body.get("detail").is_none(), "a 5xx says no detail: {body}");
-            let (_, _, crud) = body_json_of(crud_error(sea_orm::DbErr::Custom(
-                "SELECT password_hash FROM user".into(),
-            )))
+            let (_, _, crud) = body_json_of(crud_error(
+                sea_orm::DbErr::Custom("SELECT password_hash FROM user".into()).into(),
+            ))
             .await;
             assert_eq!(body, crud);
             let (_, _, opaque) = body_json_of(
@@ -1193,7 +1356,7 @@ mod http {
             let (service, crud) = on_a_pool_bounding_statements(STATEMENT_BOUND, || {
                 (
                     HttpError::from(ServiceError::from(cancelled_statement())).into_response(),
-                    crud_error(cancelled_statement()).into_response(),
+                    crud_error(cancelled_statement().into()).into_response(),
                 )
             })
             .await;
@@ -1267,11 +1430,11 @@ pub(crate) mod tests {
     use super::*;
 
     /// A server's refusal as sqlx hands it over: a message quoting the row,
-    /// the SQLSTATE, and the names Postgres reports beside it.
+    /// the SQLSTATE its kind is read off, as sqlx reads a Postgres one's, and
+    /// the names Postgres reports beside it.
     #[derive(Debug)]
     struct ServerRefusal {
         code: &'static str,
-        unique: bool,
         constraint: Option<&'static str>,
         table: Option<&'static str>,
         message: &'static str,
@@ -1308,10 +1471,10 @@ pub(crate) mod tests {
             self.table
         }
         fn kind(&self) -> ErrorKind {
-            if self.unique {
-                ErrorKind::UniqueViolation
-            } else {
-                ErrorKind::Other
+            match self.code {
+                "23505" => ErrorKind::UniqueViolation,
+                "23503" => ErrorKind::ForeignKeyViolation,
+                _ => ErrorKind::Other,
             }
         }
     }
@@ -1322,10 +1485,9 @@ pub(crate) mod tests {
         ))))
     }
 
-    pub(super) fn taken_email() -> DbErr {
+    pub(crate) fn taken_email() -> DbErr {
         refused(ServerRefusal {
             code: "23505",
-            unique: true,
             constraint: Some("users_email_key"),
             table: Some("users"),
             message: "duplicate key value violates unique constraint: (email)=(ada@example.com)",
@@ -1338,7 +1500,6 @@ pub(crate) mod tests {
     fn unique_violation(index: &'static str, table: &'static str) -> DbErr {
         refused(ServerRefusal {
             code: "23505",
-            unique: true,
             constraint: Some(index),
             table: Some(table),
             message: "duplicate key value violates unique constraint: (slug)=(secret-slug)",
@@ -1425,12 +1586,12 @@ pub(crate) mod tests {
         let unique = serde_json::json!([{ "code": "unique" }]);
 
         assert_eq!(
-            taken_fields(&taken_email(), written, &keys),
+            taken_fields(&violated(taken_email()), written, &keys),
             Some(serde_json::json!({ "email": unique })),
         );
         assert_eq!(
             taken_fields(
-                &unique_violation("users_org_handle_live", "users"),
+                &violated(unique_violation("users_org_handle_live", "users")),
                 written,
                 &keys
             ),
@@ -1450,21 +1611,48 @@ pub(crate) mod tests {
                 unique_violation("users_email_key", "audit_log"),
                 "another table's key, a hook's insert",
             ),
-            (DbErr::RecordNotInserted, "no server error"),
         ] {
-            assert_eq!(taken_fields(&violation, written, &keys), None, "{why}");
+            assert_eq!(
+                taken_fields(&violated(violation), written, &keys),
+                None,
+                "{why}"
+            );
         }
     }
 
+    /// What the server reported of the unique violation `err` is.
+    #[cfg(any(feature = "http", feature = "graphql"))]
+    fn violated(err: DbErr) -> Diagnostics {
+        match RepoError::from(err) {
+            RepoError::UniqueViolation(diagnostics) => diagnostics,
+            other => panic!("a unique violation: {other:?}"),
+        }
+    }
+
+    /// The database failure a `ServiceError` holds for a `match` prints, by every
+    /// reader, what `error_message` says of it: no value the server quoted.
     #[test]
-    fn an_atomic_block_the_database_refused_is_classified_like_its_dberr() {
-        let conflict = ServiceError::from(AtomicError::Database(Box::new(taken_email())));
+    fn the_database_failure_a_service_error_holds_prints_no_value_by_any_reader() {
+        let ServiceError::Db(held) = ServiceError::from(bad_uuid()) else {
+            panic!("an unclassified refusal stays a database error");
+        };
+        let printed = nest_rs_testing::printed(&held);
+        assert!(printed.contains("22P02"), "{printed}");
+        assert!(!printed.contains("secret-123"), "{printed}");
+    }
+
+    #[test]
+    fn an_atomic_block_the_database_refused_is_classified_like_its_failure() {
+        let conflict = ServiceError::from(AtomicError::Database(Box::new(RepoError::from(
+            taken_email(),
+        ))));
         assert!(
             matches!(conflict, ServiceError::Conflict(_)),
             "{conflict:?}"
         );
 
-        let opaque = ServiceError::from(AtomicError::Database(Box::new(bad_uuid())));
+        let opaque =
+            ServiceError::from(AtomicError::Database(Box::new(RepoError::from(bad_uuid()))));
         let ServiceError::Db(err) = opaque else {
             panic!("an unclassified refusal stays a database error: {opaque:?}");
         };
@@ -1504,28 +1692,21 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_atomic_block_over_a_dberr_body_answers_a_dberr() {
-        let refused = DbErr::from(AtomicDbError::Atomic(AtomicError::Database(Box::new(
-            DbErr::RecordNotUpdated,
-        ))));
-        assert!(matches!(refused, DbErr::RecordNotUpdated), "{refused:?}");
+    fn an_atomic_block_over_a_repo_body_answers_its_class() {
+        let refused = RepoError::from(AtomicError::Database(Box::new(RepoError::NotFound)));
+        assert!(matches!(refused, RepoError::NotFound), "{refused:?}");
 
-        let poisoned = DbErr::from(AtomicDbError::Atomic(AtomicError::Poisoned {
-            retryable: true,
-        }));
+        let poisoned = RepoError::from(AtomicError::Poisoned { retryable: true });
         assert!(
-            matches!(&poisoned, DbErr::Custom(said) if said.contains("inside the atomic block")),
+            matches!(&poisoned, RepoError::Other { .. })
+                && poisoned.to_string().contains("inside the atomic block"),
             "{poisoned:?}"
         );
-
-        let own = DbErr::from(AtomicDbError::Db(DbErr::RecordNotInserted));
-        assert!(matches!(own, DbErr::RecordNotInserted));
     }
 
     pub(super) fn bad_uuid() -> DbErr {
         refused(ServerRefusal {
             code: "22P02",
-            unique: false,
             constraint: None,
             table: None,
             message: "invalid input syntax for type uuid: \"secret-123\"",
@@ -1536,7 +1717,6 @@ pub(crate) mod tests {
     pub(crate) fn cancelled_statement() -> DbErr {
         refused(ServerRefusal {
             code: "57014",
-            unique: false,
             constraint: None,
             table: None,
             message: "canceling statement due to statement timeout",
@@ -1545,9 +1725,8 @@ pub(crate) mod tests {
 
     #[test]
     fn a_statement_cancelled_at_its_bound_is_the_server_unable_to_serve_in_time() {
-        assert_eq!(
-            DbOutcome::of(&cancelled_statement()),
-            DbOutcome::Unavailable
+        assert!(
+            matches!(RepoError::from(cancelled_statement()), RepoError::QueryCanceled(diagnostics) if diagnostics.sqlstate() == "57014"),
         );
         let error = ServiceError::from(cancelled_statement());
         assert!(matches!(error, ServiceError::Db(_)), "{error:?}");
@@ -1641,31 +1820,56 @@ pub(crate) mod tests {
 
     #[test]
     fn a_database_failure_is_classified_once_off_the_error_alone() {
-        assert_eq!(DbOutcome::of(&taken_email()), DbOutcome::Conflict);
-        assert_eq!(DbOutcome::of(&DbErr::RecordNotUpdated), DbOutcome::NotFound);
+        let classed = |err: DbErr| format!("{:?}", RepoError::from(err));
         assert_eq!(
-            DbOutcome::of(&DbErr::RecordNotFound("widget".into())),
-            DbOutcome::NotFound
+            classed(taken_email()),
+            "UniqueViolation(Diagnostics { sqlstate: \"23505\", constraint: \
+             Some(\"users_email_key\"), table: Some(\"users\"), column: None })"
         );
+        assert_eq!(classed(DbErr::RecordNotUpdated), "NotFound");
+        assert_eq!(classed(DbErr::RecordNotFound("widget".into())), "NotFound");
         // sea-orm raises it for an `ON CONFLICT DO NOTHING` that inserted nothing too.
         assert_eq!(
-            DbOutcome::of(&DbErr::RecordNotInserted),
-            DbOutcome::Internal
+            classed(DbErr::RecordNotInserted),
+            "Other(\"None of the records are inserted\")"
         );
         assert_eq!(
-            DbOutcome::of(&DbErr::Custom("boom".into())),
-            DbOutcome::Internal
+            classed(DbErr::Custom("boom".into())),
+            "Other(\"Custom Error: boom\")"
         );
-        assert_eq!(DbOutcome::of(&bad_uuid()), DbOutcome::Internal);
+        assert_eq!(
+            classed(bad_uuid()),
+            "Other(\"Execution Error: database error 22P02\")"
+        );
+        for (code, class) in [
+            ("23503", "ForeignKeyViolation"),
+            ("40001", "SerializationFailure"),
+            ("40P01", "SerializationFailure"),
+            ("57014", "QueryCanceled"),
+        ] {
+            let said = classed(refused(ServerRefusal {
+                code,
+                constraint: Some("posts_org_id_fkey"),
+                table: Some("posts"),
+                message: "a message quoting (org_id)=(secret-123)",
+            }));
+            assert!(said.starts_with(class), "{code}: {said}");
+            assert!(
+                said.contains(code) && !said.contains("secret-123"),
+                "{said}"
+            );
+        }
     }
 
-    /// `DbErr` is what `Repo`'s every caller reads, so a refused write crosses it,
-    /// says what a `GRANT` would and answers `403` on every edge a service reaches.
+    /// A refused write crosses `Repo` as the columns a `GRANT` would name and
+    /// answers `403` on every edge a service reaches.
     #[test]
     fn a_write_a_field_grant_refuses_is_forbidden_naming_its_columns() {
         let refused = write_refused("update", "posts", &["title", "status"]);
 
-        assert_eq!(DbOutcome::of(&refused), DbOutcome::Forbidden);
+        assert!(
+            matches!(RepoError::from(refused.clone()), RepoError::Forbidden { columns } if columns == ["title", "status"]),
+        );
         assert_eq!(
             error_message(&refused),
             "Access denied: cannot perform `update` on `posts(title, status)`",
@@ -1692,9 +1896,8 @@ pub(crate) mod tests {
             resource: "posts".to_owned(),
         };
 
-        assert_eq!(DbOutcome::of(&refused), DbOutcome::Forbidden);
         assert!(
-            matches!(ServiceError::from(refused), ServiceError::Forbidden(said) if said == "forbidden"),
+            matches!(ServiceError::from(refused), ServiceError::Forbidden(said) if said == "the caller may not write the row"),
         );
     }
 
@@ -1752,7 +1955,7 @@ pub(crate) mod tests {
         for err in quoting {
             let said = error_message(&err);
             assert!(!said.contains("secret") && !said.contains("ada@"), "{said}");
-            let service = error_message(&ServiceError::Db(err));
+            let service = error_message(&ServiceError::Db(RepoError::from(err)));
             assert!(
                 !service.contains("secret") && !service.contains("ada@"),
                 "{service}"
@@ -1816,7 +2019,7 @@ pub(crate) mod tests {
                 "validation failed: password: Validation error: length",
             ),
             (
-                ServiceError::Db(bad_uuid()),
+                ServiceError::Db(RepoError::from(bad_uuid())),
                 "database error: Execution Error: database error 22P02",
             ),
         ] {
@@ -1829,8 +2032,8 @@ pub(crate) mod tests {
             assert!(report.contains(cause), "{report}");
         }
         assert_eq!(
-            format!("{:?}", ServiceError::Db(bad_uuid())),
-            "Db(\"Execution Error: database error 22P02\")"
+            format!("{:?}", ServiceError::Db(RepoError::from(bad_uuid()))),
+            "Db(Other(\"Execution Error: database error 22P02\"))"
         );
         assert_eq!(
             format!("{:?}", ServiceError::Validation(short_password())),
@@ -1887,8 +2090,8 @@ pub(crate) mod tests {
         );
     }
 
-    /// A refused `COMMIT` or outbox write keeps its `DbErr` for the driver's
-    /// `match`, and every reader of the port's error reads it by its SQLSTATE,
+    /// A port's failure whose chain still holds a `DbErr`, as another driver may
+    /// box one, is read through the `SafeLink` by its SQLSTATE by every reader,
     /// never the server's message nor its detail, which quote the row.
     #[test]
     fn no_reader_of_a_port_failure_prints_the_row_its_database_refused() {
@@ -1933,7 +2136,7 @@ pub(crate) mod tests {
                 "validation failed: password: Validation error: length",
             ),
             (
-                ServiceError::Db(bad_uuid()),
+                ServiceError::Db(RepoError::from(bad_uuid())),
                 "database error: Execution Error: database error 22P02",
             ),
             (
@@ -1961,6 +2164,7 @@ pub(crate) mod tests {
             DbErr::RecordNotInserted,
             DbErr::RecordNotUpdated,
             DbErr::Custom("cursor column is not a uuid".into()),
+            DbErr::Migration("We Don't Do That Here".into()),
             DbErr::ConnectionAcquire(sea_orm::ConnAcquireErr::Timeout),
             DbErr::AttrNotSet("users.email".into()),
             DbErr::Conn(RuntimeErr::SqlxError(Arc::new(SqlxError::PoolTimedOut))),
@@ -1978,7 +2182,9 @@ pub(crate) mod tests {
 
     #[test]
     fn db_display_is_wire_safe_constant() {
-        let err = ServiceError::Db(DbErr::Custom("SELECT password_hash FROM user".into()));
+        let err = ServiceError::Db(RepoError::from(DbErr::Custom(
+            "SELECT password_hash FROM user".into(),
+        )));
         assert_eq!(err.to_string(), "database error");
     }
 
@@ -2117,9 +2323,21 @@ pub(crate) mod tests {
         let inner = DbErr::Custom("connection lost".into());
         let err: ServiceError = inner.into();
         match err {
-            ServiceError::Db(DbErr::Custom(msg)) => assert_eq!(msg, "connection lost"),
+            ServiceError::Db(repo) => assert_eq!(repo.to_string(), "Custom Error: connection lost"),
             other => panic!("expected Db, got {other:?}"),
         }
+    }
+
+    /// A migration's refusal is its own sentence, never the server's: the migrate
+    /// binary, reporting through `RepoError`, says why it stopped.
+    #[test]
+    fn a_migration_s_refusal_keeps_its_sentence_as_a_repo_error() {
+        let sea_orm_s_default_down = DbErr::Migration("We Don't Do That Here".into());
+        let report = format!(
+            "{:?}",
+            anyhow::Error::new(RepoError::from(sea_orm_s_default_down))
+        );
+        assert_eq!(report, "Migration Error: We Don't Do That Here");
     }
 
     #[test]
@@ -2187,7 +2405,7 @@ pub(crate) mod tests {
             Some((400, code::INVALID_ARGUMENT, "validation failed".into()))
         );
         for opaque in [
-            ServiceError::Db(DbErr::Custom("relation \"posts\" does not exist".into())),
+            ServiceError::Db(DbErr::Custom("relation \"posts\" does not exist".into()).into()),
             ServiceError::internal("hash failed"),
         ] {
             assert_eq!(opaque.to_problem(), None, "{opaque:?}");

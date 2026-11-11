@@ -5,6 +5,8 @@
 //! module attaches, in `health/`, the unit of work under the
 //! HTTP edge's deadline, a page cursor refused at every edge reading one, and
 //! what a `#[resource]`'s binding answers over a service standing in for the row.
+//! A server's refusal reaches `Repo` from a Postgres double, so what it hands
+//! out is held to what it prints with no server running.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -56,4 +58,118 @@ pub(crate) async fn over_a_pool_refusing_every_acquire() -> nest_rs_testing::Tes
         .await
         .expect("a lazy pool opens nothing");
     nest_rs_testing::TestApp::builder().provide(db)
+}
+
+/// The `SSLRequest` a Postgres client opens with: its length, then the code
+/// 80877103.
+pub(crate) const SSL_REQUEST: [u8; 8] = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
+
+/// One Postgres message: its tag, then its length, which counts itself.
+pub(crate) fn postgres_message(tag: u8, body: &[u8]) -> Vec<u8> {
+    let length = u32::try_from(body.len() + 4).expect("a short message");
+    let mut message = vec![tag];
+    message.extend_from_slice(&length.to_be_bytes());
+    message.extend_from_slice(body);
+    message
+}
+
+/// A Postgres double over TLS, its certificate issued by a test authority, letting
+/// every client in and answering each statement with the `ErrorResponse` `fields`
+/// make (each a field's kind and its value), then `ReadyForQuery`; a bare `Sync`, a
+/// pool's ping, is answered ready. It answers at the statement's `Parse`, where a
+/// server meets a constraint at its `Execute`: sqlx decodes either alike. The URL
+/// it hands back trusts the authority through the file handed back beside it, which
+/// the test holds while it connects.
+pub(crate) async fn postgres_refusing_every_statement(
+    fields: &[(u8, &str)],
+) -> (String, tempfile::NamedTempFile) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let authority = nest_rs_testing::TestAuthority::new();
+    let root = tempfile::NamedTempFile::new().expect("a file for the authority");
+    std::fs::write(root.path(), authority.pem()).expect("the authority's certificate");
+    let mut body = Vec::new();
+    for (kind, value) in fields {
+        body.push(*kind);
+        body.extend_from_slice(value.as_bytes());
+        body.push(0);
+    }
+    body.push(0);
+    let mut refusal = postgres_message(b'E', &body);
+    let ready = postgres_message(b'Z', b"I");
+    refusal.extend_from_slice(&ready);
+    let mut welcome = postgres_message(b'R', &0_u32.to_be_bytes());
+    welcome.extend_from_slice(&ready);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    let acceptor = authority.server(&["127.0.0.1", "localhost"]).acceptor(None);
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let (acceptor, refusal, ready, welcome) = (
+                acceptor.clone(),
+                refusal.clone(),
+                ready.clone(),
+                welcome.clone(),
+            );
+            tokio::spawn(async move {
+                let mut request = [0_u8; 8];
+                if socket.read_exact(&mut request).await.is_err()
+                    || request != SSL_REQUEST
+                    || socket.write_all(b"S").await.is_err()
+                {
+                    return;
+                }
+                let Ok(mut tls) = acceptor.accept(socket).await else {
+                    return;
+                };
+                let mut length = [0_u8; 4];
+                if tls.read_exact(&mut length).await.is_err() {
+                    return;
+                }
+                let rest = usize::try_from(u32::from_be_bytes(length))
+                    .unwrap_or(0)
+                    .saturating_sub(4);
+                if tls.read_exact(&mut vec![0_u8; rest]).await.is_err()
+                    || tls.write_all(&welcome).await.is_err()
+                {
+                    return;
+                }
+                let mut statement = false;
+                loop {
+                    let mut header = [0_u8; 5];
+                    if tls.read_exact(&mut header).await.is_err() {
+                        return;
+                    }
+                    let [tag, length @ ..] = header;
+                    let rest = usize::try_from(u32::from_be_bytes(length))
+                        .unwrap_or(0)
+                        .saturating_sub(4);
+                    if tls.read_exact(&mut vec![0_u8; rest]).await.is_err() {
+                        return;
+                    }
+                    let answer = match tag {
+                        b'X' => return,
+                        b'Q' => &refusal,
+                        b'S' if std::mem::take(&mut statement) => &refusal,
+                        b'S' => &ready,
+                        _ => {
+                            statement = true;
+                            continue;
+                        }
+                    };
+                    if tls.write_all(answer).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    let url = format!(
+        "postgres://nestrs@127.0.0.1:{port}/postgres?sslmode=verify-full&sslrootcert={}",
+        root.path().display()
+    );
+    (url, root)
 }

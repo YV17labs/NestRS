@@ -9,10 +9,10 @@ use nest_rs_authz::__private::install_ability;
 use nest_rs_authz::{Ability, AbilityBuilder, Action};
 use nest_rs_database::__private::with_request_executor;
 use nest_rs_seaorm::__private::SeaOrmExecutor;
-use nest_rs_seaorm::{Access, Creatable, CrudService, Deletable, Repo, SoftDeletable};
+use nest_rs_seaorm::{Access, Creatable, CrudService, Deletable, Repo, RepoError, SoftDeletable};
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, IntoActiveModel, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, IntoActiveModel, Set};
 
 mod gravestone {
     use nest_rs_seaorm::expose;
@@ -145,7 +145,7 @@ async fn a_soft_deleted_row_is_hidden_from_every_read_and_update_but_with_tombst
             renamed.name = Set("revived".to_owned());
             assert!(matches!(
                 Repo::<gravestone::Entity>::update(renamed).await,
-                Err(DbErr::RecordNotUpdated)
+                Err(RepoError::NotFound)
             ));
 
             assert!(

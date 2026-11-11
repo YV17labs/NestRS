@@ -241,7 +241,7 @@ impl CrudService for FindingNotesService {
         &self,
         _action: Action,
         id: uuid::Uuid,
-    ) -> Result<nest_rs_seaorm::Access<note::Model>, sea_orm::DbErr> {
+    ) -> Result<nest_rs_seaorm::Access<note::Model>, nest_rs_seaorm::RepoError> {
         Ok(nest_rs_seaorm::Access::Found(note::Model { id }))
     }
 }

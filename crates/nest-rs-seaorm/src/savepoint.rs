@@ -214,7 +214,7 @@ impl Savepoint {
                     outcome = "rollback_and_fail",
                     "an atomic block's savepoint could not be settled; its unit cannot commit",
                 );
-                return Err(AtomicError::Database(Box::new(err)));
+                return Err(AtomicError::Database(Box::new(crate::RepoError::from(err))));
             }
         }
         self.give_back_turn();

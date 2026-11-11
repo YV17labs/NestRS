@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::Condition;
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, ActiveValue, DbErr, EntityName, EntityTrait, IdenStatic,
+    ActiveModelBehavior, ActiveModelTrait, ActiveValue, EntityName, EntityTrait, IdenStatic,
     IntoActiveModel, Iterable, PrimaryKeyTrait, QueryFilter,
 };
 
@@ -13,7 +13,7 @@ use nest_rs_authz::{Ability, Action, ActionMarker, current_ability};
 use nest_rs_database::atomic;
 
 use crate::column_default::fill_column_defaults;
-use crate::error::AtomicDbError;
+use crate::error::RepoError;
 use crate::page::{Page, PageCursor};
 use crate::repo::{
     Repo, ability_scope, barred_from_class, insert_contained, pk_condition, write_scope,
@@ -354,7 +354,7 @@ where
     /// Every row the caller may [`Read`](Action::Read), up to
     /// [`LIST_CAP`](crate::LIST_CAP) rows; a capped result logs a `warn`.
     /// Collections that may exceed it paginate with [`page`](CrudService::page).
-    async fn list(&self) -> Result<Vec<<Self::Entity as EntityTrait>::Model>, DbErr> {
+    async fn list(&self) -> Result<Vec<<Self::Entity as EntityTrait>::Model>, RepoError> {
         tracing::debug!(target: crate::target::ORM, entity = Self::entity_name(), "listing rows");
         let rows = Repo::<Self::Entity>::scoped(Action::Read)
             .limit(crate::LIST_CAP + 1)
@@ -377,7 +377,7 @@ where
         &self,
         first: u64,
         after: Option<PageCursor>,
-    ) -> Result<Page<<Self::Entity as EntityTrait>::Model>, DbErr>
+    ) -> Result<Page<<Self::Entity as EntityTrait>::Model>, RepoError>
     where
         <Self::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
         <Self::Entity as EntityTrait>::Model: Send + Sync,
@@ -394,7 +394,7 @@ where
         &self,
         action: Action,
         id: Uuid,
-    ) -> Result<Access<<Self::Entity as EntityTrait>::Model>, DbErr>
+    ) -> Result<Access<<Self::Entity as EntityTrait>::Model>, RepoError>
     where
         <Self::Entity as EntityTrait>::PrimaryKey: PrimaryKeyTrait<ValueType = Uuid>,
     {
@@ -456,21 +456,21 @@ pub trait Creatable: CrudService {
     /// the tenant a grant scopes the caller to, the author it names; one no
     /// grant pins takes the default its `#[expose]` entity declares. The
     /// fresh row is then re-checked in SQL against `condition_for(Create)`, and
-    /// one outside the caller's scope is [`DbErr::RecordNotInserted`] and never
-    /// persists — so a value the grants leave undecided is refused, never
-    /// guessed. A caller no row could pass for — no `Create` grant, a denial no
+    /// one outside the caller's scope is [`RepoError::Forbidden`], naming no
+    /// column, and never persists — so a value the grants leave undecided is
+    /// refused, never guessed. A caller no row could pass for — no `Create` grant, a denial no
     /// `when` narrows ([`Ability::can_class`]), or a request holding no ability,
     /// as on a route whose posture names no subject — is refused the same way
     /// before the hook runs or the insert is sent.
     ///
     /// A `Create` grant's `.fields` limits what the input sets, never what a pin,
     /// a default or a hook fills, nor the key: a column no grant permits is
-    /// [`DbErr::AccessDenied`] naming it, before anything runs, and the re-check
+    /// [`RepoError::Forbidden`] naming it, before anything runs, and the re-check
     /// holds the fresh row to a grant permitting each column.
     async fn create(
         &self,
         input: Self::Create,
-    ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
+    ) -> Result<<Self::Entity as EntityTrait>::Model, RepoError> {
         self.create_from_active(input.into_active_model()).await
     }
 
@@ -480,7 +480,7 @@ pub trait Creatable: CrudService {
     async fn create_from_active(
         &self,
         active: <Self::Entity as EntityTrait>::ActiveModel,
-    ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
+    ) -> Result<<Self::Entity as EntityTrait>::Model, RepoError> {
         let entity = Self::entity_name();
         Repo::<Self::Entity>::conn()?;
         // No row can pass the re-check, so the insert is never sent: what the
@@ -492,20 +492,15 @@ pub trait Creatable: CrudService {
                 action = Action::Create.as_str(),
                 "access denied — no row of the entity is in the caller's scope",
             );
-            return Err(DbErr::RecordNotInserted);
+            return Err(RepoError::outside_create_scope());
         }
         let scope = write_scope(Action::Create, &active)?;
         let active = match current_ability() {
             Some(ability) => fill_pinned::<Self::Entity>(active, &ability, entity),
             None => active,
         };
-        // A swallowed `RecordNotInserted` must not leave the row to commit with
-        // the request.
-        atomic(async move {
-            Ok::<_, AtomicDbError>(insert_in_scope::<Self::Entity>(active, scope, entity).await?)
-        })
-        .await
-        .map_err(DbErr::from)
+        // A swallowed refusal must not leave the row to commit with the request.
+        atomic(insert_in_scope::<Self::Entity>(active, scope, entity)).await
     }
 }
 
@@ -544,7 +539,7 @@ async fn insert_in_scope<E>(
     mut active: E::ActiveModel,
     scope: Condition,
     entity: &'static str,
-) -> Result<E::Model, DbErr>
+) -> Result<E::Model, RepoError>
 where
     E: EntityTrait,
     E::ActiveModel: ActiveModelBehavior + Send,
@@ -564,7 +559,7 @@ where
             action = Action::Create.as_str(),
             "access denied — row outside the caller's scope",
         );
-        return Err(DbErr::RecordNotInserted);
+        return Err(RepoError::outside_create_scope());
     }
     tracing::debug!(target: crate::target::ORM, entity, id = line_id::<E>(&model), "row created");
     Ok(model)
@@ -584,7 +579,7 @@ pub trait Updatable: CrudService {
 
     /// Apply an update-input DTO to a loaded row, in the request transaction.
     /// Ability-scoped by [`Repo::update`]: a row outside the caller's scope is
-    /// never touched and surfaces as [`DbErr::RecordNotUpdated`].
+    /// never touched and surfaces as [`RepoError::NotFound`].
     ///
     /// An input replaces the row's writable state (RFC 9110 §9.3.4), so under a
     /// grant whose `.fields` narrows what the caller may write, a column it carries
@@ -595,7 +590,7 @@ pub trait Updatable: CrudService {
         &self,
         model: <Self::Entity as EntityTrait>::Model,
         input: Self::Update,
-    ) -> Result<<Self::Entity as EntityTrait>::Model, DbErr> {
+    ) -> Result<<Self::Entity as EntityTrait>::Model, RepoError> {
         let entity = Self::entity_name();
         let id = line_id::<Self::Entity>(&model);
         let active = applied::<Self::Entity, Self::Update>(model, input);
@@ -604,7 +599,7 @@ pub trait Updatable: CrudService {
                 tracing::debug!(target: crate::target::ORM, entity, id, "row updated");
                 Ok(updated)
             }
-            Err(DbErr::RecordNotUpdated) => {
+            Err(RepoError::NotFound) => {
                 tracing::warn!(
                     target: crate::target::ORM,
                     entity,
@@ -612,7 +607,7 @@ pub trait Updatable: CrudService {
                     action = Action::Update.as_str(),
                     "access denied — row outside the caller's scope",
                 );
-                Err(DbErr::RecordNotUpdated)
+                Err(RepoError::NotFound)
             }
             Err(err) => Err(err),
         }
@@ -666,22 +661,17 @@ where
 pub trait Deletable: CrudService {
     /// Delete a loaded row, in the request transaction. Ability-scoped by
     /// [`Repo::delete`]: a row outside the caller's scope is
-    /// [`DbErr::RecordNotFound`].
-    async fn delete(&self, model: <Self::Entity as EntityTrait>::Model) -> Result<(), DbErr> {
+    /// [`RepoError::NotFound`].
+    async fn delete(&self, model: <Self::Entity as EntityTrait>::Model) -> Result<(), RepoError> {
         let entity = Self::entity_name();
         let id = line_id::<Self::Entity>(&model);
-        let out_of_scope = || {
-            DbErr::RecordNotFound(format!(
-                "{entity} row not found or outside the caller's scope"
-            ))
-        };
         match crate::soft_delete::tombstone_column::<Self::Entity>() {
             Some(col) => match Repo::<Self::Entity>::soft_delete(model, col).await {
                 Ok(()) => {
                     tracing::debug!(target: crate::target::ORM, entity, id, "row soft-deleted");
                     Ok(())
                 }
-                Err(DbErr::RecordNotUpdated) => {
+                Err(RepoError::NotFound) => {
                     tracing::warn!(
                         target: crate::target::ORM,
                         entity,
@@ -689,7 +679,7 @@ pub trait Deletable: CrudService {
                         action = Action::Delete.as_str(),
                         "access denied — row outside the caller's scope",
                     );
-                    Err(out_of_scope())
+                    Err(RepoError::NotFound)
                 }
                 Err(err) => Err(err),
             },
@@ -703,7 +693,7 @@ pub trait Deletable: CrudService {
                         action = Action::Delete.as_str(),
                         "access denied — row outside the caller's scope",
                     );
-                    return Err(out_of_scope());
+                    return Err(RepoError::NotFound);
                 }
                 tracing::debug!(target: crate::target::ORM, entity, id, "row deleted");
                 Ok(())
@@ -905,7 +895,7 @@ mod tests {
         .await;
 
         assert!(
-            matches!(created, Err(DbErr::RecordNotInserted)),
+            matches!(created, Err(RepoError::Forbidden { ref columns, .. }) if columns.is_empty()),
             "the scope refusal, never the database's: {created:?}",
         );
         let event = logs.expect_one(
@@ -932,8 +922,7 @@ mod tests {
         assert!(
             matches!(
                 &refused,
-                Err(DbErr::AccessDenied { permission, resource })
-                    if permission == "insert" && resource == "notes(body)"
+                Err(RepoError::Forbidden { columns, .. }) if columns == &["body"]
             ),
             "the column by name, never the database's refusal: {refused:?}",
         );
@@ -1085,8 +1074,7 @@ mod tests {
             assert!(
                 matches!(
                     &refused,
-                    Err(DbErr::AccessDenied { permission, resource })
-                        if permission == "update" && resource == "notes(org_id)"
+                    Err(RepoError::Forbidden { columns, .. }) if columns == &["org_id"]
                 ),
                 "{refused:?}",
             );
@@ -1184,7 +1172,7 @@ mod tests {
         .await;
 
         assert!(
-            matches!(created, Err(DbErr::RecordNotInserted)),
+            matches!(created, Err(RepoError::Forbidden { ref columns, .. }) if columns.is_empty()),
             "the scope refusal, never the database's: {created:?}",
         );
         let said = logs.expect_one(
@@ -1242,10 +1230,7 @@ mod tests {
         )
         .await;
 
-        assert!(
-            matches!(updated, Err(DbErr::RecordNotUpdated)),
-            "{updated:?}"
-        );
+        assert!(matches!(updated, Err(RepoError::NotFound)), "{updated:?}");
         let line = logs.expect_one(
             crate::target::ORM,
             "access denied — row outside the caller's scope",

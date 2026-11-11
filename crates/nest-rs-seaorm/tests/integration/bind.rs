@@ -12,7 +12,7 @@ use nest_rs_database::{Executor, OpenUnit, Settlement, Unhonoured, UnitOfWork, U
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::{EndpointGuards, HttpView};
 use nest_rs_mcp::{Json, McpAccess, McpError, McpModule, McpView, mcp, tools};
-use nest_rs_seaorm::{Access, Authorized, CrudService};
+use nest_rs_seaorm::{Access, Authorized, CrudService, RepoError};
 use nest_rs_testing::mcp::{
     call_method, call_method_with, open_session, open_session_with, result,
 };
@@ -69,7 +69,7 @@ struct NotesService;
 impl CrudService for NotesService {
     type Entity = note::Entity;
 
-    async fn access(&self, action: Action, id: Uuid) -> Result<Access<note::Model>, DbErr> {
+    async fn access(&self, action: Action, id: Uuid) -> Result<Access<note::Model>, RepoError> {
         assert_eq!(
             action,
             Action::Read,
@@ -83,13 +83,12 @@ impl CrudService for NotesService {
                 body: Some("masked away".to_owned()),
             })),
             DENIED => Ok(Access::Denied),
-            FAILING => Err(DbErr::Custom(
-                "connection to db.internal refused".to_owned(),
-            )),
+            FAILING => Err(DbErr::Custom("connection to db.internal refused".to_owned()).into()),
             CANCELLED => Err(crate::error::refused(
                 "57014",
                 "canceling statement due to statement timeout",
-            )),
+            )
+            .into()),
             _ => Ok(Access::Missing),
         }
     }

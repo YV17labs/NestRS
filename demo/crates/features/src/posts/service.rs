@@ -3,7 +3,9 @@ use std::sync::Arc;
 use nest_rs::core::injectable;
 use nest_rs::events::EventBus;
 use nest_rs::queue::Jobs;
-use nest_rs::seaorm::{Creatable, CrudService, Deletable, Repo, ServiceError, Updatable};
+use nest_rs::seaorm::{
+    Creatable, CrudService, Deletable, Repo, RepoError, ServiceError, Updatable,
+};
 use sea_orm::{IntoActiveModel, Set};
 
 use super::entities::post::{CreatePost, Entity as Posts, Model, Post, PostStatus, UpdatePost};
@@ -64,9 +66,9 @@ impl PostsService {
                 ..Default::default()
             })
             .await
-            .map_err(|err| match ServiceError::from(err) {
-                ServiceError::Conflict(_) => PostError::AlreadyPublished { id: post_id },
-                other => PostError::Service(other),
+            .map_err(|err| match err {
+                RepoError::UniqueViolation(_) => PostError::AlreadyPublished { id: post_id },
+                other => PostError::Service(other.into()),
             })?;
 
         tracing::debug!(

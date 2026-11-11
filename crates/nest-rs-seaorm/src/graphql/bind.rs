@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use nest_rs_authz::graphql::forbidden;
 
-use crate::error::DbOutcome;
+use crate::error::RepoError;
 use crate::{Access, Authorized, CrudService, ServiceError};
 
 /// Parse a by-id argument as a UUID v7, or refuse with the stable code
@@ -32,8 +32,8 @@ pub fn parse_v7(id: &str) -> Result<Uuid> {
 /// What a load that failed answers: a statement cancelled at its bound the class a
 /// route's answers, and anything else the opaque problem. Logged here: that bare
 /// problem carries no chain for the edge to file.
-fn load_failed<S>(err: sea_orm::DbErr) -> Error {
-    if DbOutcome::of(&err) == DbOutcome::Unavailable {
+fn load_failed<S>(err: RepoError) -> Error {
+    if matches!(err, RepoError::QueryCanceled(_)) {
         return problem_error(&ServiceError::Db(err));
     }
     tracing::error!(

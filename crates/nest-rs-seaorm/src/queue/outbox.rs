@@ -271,9 +271,9 @@ impl OutboxClaim for SeaOrmClaim {
     }
 }
 
-/// A driver's error as the outbox's, said through its `SafeLink`.
+/// A driver's error as the outbox's: the framework's, said by its SQLSTATE.
 fn database(err: DbErr) -> OutboxError {
-    OutboxError::Database(Box::new(err))
+    OutboxError::Database(Box::new(crate::RepoError::from(err)))
 }
 
 /// Write `records` with the statement runner `run` — the unit's transaction,
@@ -388,6 +388,18 @@ pub(crate) fn register(builder: ContainerBuilder) -> ContainerBuilder {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A refused outbox write reaches the port's `OutboxError::Database` as the
+    /// framework's database failure: no reader of the field prints the row.
+    #[test]
+    fn a_refused_outbox_write_hands_the_port_a_failure_naming_no_value() {
+        let OutboxError::Database(held) = database(crate::error::tests::taken_email()) else {
+            panic!("a refused write is the database's failure");
+        };
+        let printed = nest_rs_testing::printed(&*held);
+        assert!(printed.contains("23505"), "{printed}");
+        assert!(!printed.contains("ada@example.com"), "{printed}");
+    }
 
     fn record(n: u8, key: Option<&str>) -> OutboxRecord {
         OutboxRecord::new(

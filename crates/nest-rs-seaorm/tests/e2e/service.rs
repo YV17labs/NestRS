@@ -14,13 +14,13 @@ use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, resolver};
 use nest_rs_http::{EndpointGuards, StatusCode, controller};
 use nest_rs_seaorm::__private::SeaOrmExecutor;
 use nest_rs_seaorm::{
-    Creatable, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, Updatable, expose,
+    Creatable, CrudService, RepoError, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, Updatable,
+    expose,
 };
 use nest_rs_testing::TestApp;
 use sea_orm::prelude::Uuid;
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, IntoActiveModel, PaginatorTrait,
-    QueryFilter, Set,
+    ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, Set,
 };
 use serde_json::{Value, json};
 
@@ -457,7 +457,7 @@ async fn a_create_whose_row_its_grants_do_not_permit_each_column_rolls_back() {
     .await;
 
     assert!(
-        matches!(rolled_back, Err(DbErr::RecordNotInserted)),
+        matches!(rolled_back, Err(RepoError::Forbidden { ref columns, .. }) if columns.is_empty()),
         "{rolled_back:?}",
     );
     let inserted = article::Entity::find()

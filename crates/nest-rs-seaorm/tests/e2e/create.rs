@@ -7,11 +7,9 @@ use nest_rs_authz::__private::install_ability;
 use nest_rs_authz::{AbilityBuilder, Action};
 use nest_rs_database::__private::with_request_executor;
 use nest_rs_seaorm::__private::{FinalizeOutcome, LazyTransaction, SeaOrmExecutor};
-use nest_rs_seaorm::{Creatable, CreateModel, CrudService};
+use nest_rs_seaorm::{Creatable, CreateModel, CrudService, RepoError};
 use sea_orm::prelude::Uuid;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set, TransactionTrait,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TransactionTrait};
 
 mod gadget {
     use sea_orm::entity::prelude::*;
@@ -107,8 +105,8 @@ async fn out_of_scope_create_over_the_pool_executor_persists_nothing() {
     assert_eq!(denied.field("action").as_deref(), Some("create"));
 
     assert!(
-        matches!(result, Err(DbErr::RecordNotInserted)),
-        "an out-of-scope create must surface RecordNotInserted, got {result:?}",
+        matches!(result, Err(RepoError::Forbidden { ref columns, .. }) if columns.is_empty()),
+        "an out-of-scope create is forbidden, naming no column, got {result:?}",
     );
     let persisted = gadget::Entity::find()
         .filter(gadget::Column::Id.eq(id))
@@ -255,7 +253,7 @@ async fn create_tenanted(
     conn: &DatabaseConnection,
     ability: nest_rs_authz::Ability,
     id: Uuid,
-) -> Result<tenanted::Model, DbErr> {
+) -> Result<tenanted::Model, RepoError> {
     with_request_executor(
         SeaOrmExecutor::Pool(conn.clone()).into(),
         install_ability(Arc::new(ability), async {
@@ -304,7 +302,7 @@ async fn grants_pinning_the_tenant_apart_leave_it_unset_and_the_recheck_refuses(
     let refused = create_tenanted(&conn, b.build().expect("a valid ability"), id).await;
 
     assert!(
-        matches!(refused, Err(DbErr::RecordNotInserted)),
+        matches!(refused, Err(RepoError::Forbidden { ref columns, .. }) if columns.is_empty()),
         "two grants naming two tenants decide neither, got {refused:?}",
     );
     let persisted = tenanted::Entity::find_by_id(id)

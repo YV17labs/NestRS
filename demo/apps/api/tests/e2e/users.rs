@@ -171,12 +171,12 @@ async fn writes_are_scoped_to_the_callers_ability() {
             active.name = Set("Hacked".to_owned());
             let update = Repo::<user_row::Entity>::update(active).await;
             let delete = Repo::<user_row::Entity>::delete(model).await;
-            Ok::<_, sea_orm::DbErr>((update, delete))
+            Ok::<_, nest_rs::seaorm::RepoError>((update, delete))
         })
         .await
         .expect("the unit runs both writes");
     assert!(
-        matches!(update, Err(sea_orm::DbErr::RecordNotUpdated)),
+        matches!(update, Err(nest_rs::seaorm::RepoError::NotFound)),
         "an out-of-scope update touches no row: {update:?}",
     );
     let delete = delete.expect("a delete query runs");

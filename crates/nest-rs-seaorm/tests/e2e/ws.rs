@@ -169,7 +169,7 @@ impl ConnectRepoGateway {
         .await;
         *HOOK_REPO.lock().expect("no test poisons it") = Some((
             found.len(),
-            matches!(written, Err(sea_orm::DbErr::RecordNotUpdated)),
+            matches!(written, Err(nest_rs_seaorm::RepoError::NotFound)),
         ));
     }
 }

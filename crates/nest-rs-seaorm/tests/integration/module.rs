@@ -15,13 +15,10 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 
 use crate::system_store::stand_in_system_store;
+use crate::{SSL_REQUEST, postgres_message};
 
 #[module(imports = [SeaOrmModule])]
 struct PoolModule;
-
-/// The `SSLRequest` a Postgres client opens with: its length, then the code
-/// 80877103.
-const SSL_REQUEST: [u8; 8] = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
 
 /// A Postgres double that accepts TLS with a certificate `authority` issued,
 /// asking one of `clients` for a client certificate when it names them,
@@ -68,15 +65,6 @@ async fn postgres_signed_by(
         format!("postgres://nestrs:s3cret@127.0.0.1:{port}/postgres"),
         started,
     )
-}
-
-/// One Postgres message: its tag, then its length, which counts itself.
-fn postgres_message(tag: u8, body: &[u8]) -> Vec<u8> {
-    let length = u32::try_from(body.len() + 4).expect("a short message");
-    let mut message = vec![tag];
-    message.extend_from_slice(&length.to_be_bytes());
-    message.extend_from_slice(body);
-    message
 }
 
 /// The `ErrorResponse` a Postgres answers with: `code` in the words `message`

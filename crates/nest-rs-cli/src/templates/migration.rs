@@ -33,10 +33,13 @@ pub(crate) const CRATE_CLIPPY: &str = r#"# Empty on purpose: this replaces the w
 "#;
 
 /// The binary behind every `nestrs run db <verb>`. `connect_from_env` resolves
-/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use.
+/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use, and what
+/// the server refuses is said as a `RepoError`, never by the value its message
+/// quotes.
 pub(crate) const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
 use migrations::Migrator;
 use nest_rs::core::logging::{LogSettings, install_console};
+use nest_rs::seaorm::RepoError;
 use sea_orm_migration::MigratorTrait;
 
 #[nest_rs::main]
@@ -45,21 +48,22 @@ async fn main() -> Result<()> {
     install_console(&LogSettings::from_env()?);
 
     let conn = nest_rs::seaorm::connect_from_env().await?;
-    match std::env::args().nth(1).as_deref() {
-        Some("up") => Migrator::up(&conn, None).await?,
+    let migrated = match std::env::args().nth(1).as_deref() {
+        Some("up") => Migrator::up(&conn, None).await,
         Some("down") => {
             let steps: u32 = match std::env::args().nth(2) {
                 Some(arg) => arg.parse().context("steps must be a positive integer")?,
                 None => 1,
             };
-            Migrator::down(&conn, Some(steps)).await?
+            Migrator::down(&conn, Some(steps)).await
         }
-        Some("fresh") => Migrator::fresh(&conn).await?,
-        Some("refresh") => Migrator::refresh(&conn).await?,
-        Some("reset") => Migrator::reset(&conn).await?,
-        Some("status") => Migrator::status(&conn).await?,
+        Some("fresh") => Migrator::fresh(&conn).await,
+        Some("refresh") => Migrator::refresh(&conn).await,
+        Some("reset") => Migrator::reset(&conn).await,
+        Some("status") => Migrator::status(&conn).await,
         other => bail!("usage: migrate <up|down [N]|fresh|refresh|reset|status> (got {other:?})"),
-    }
+    };
+    migrated.map_err(RepoError::from)?;
     Ok(())
 }
 "#;
@@ -85,11 +89,12 @@ pub(crate) const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs
 //! idempotent (find-or-create, or `ON CONFLICT DO NOTHING`).
 
 use anyhow::Result;
+use nest_rs::seaorm::RepoError;
 
 #[nest_rs::main]
 async fn main() -> Result<()> {
     let conn = nest_rs::seaorm::connect_from_env().await?;
-    conn.ping().await?;
+    conn.ping().await.map_err(RepoError::from)?;
 
     // Insert your fixtures here.
     println!("seed: nothing to insert yet");

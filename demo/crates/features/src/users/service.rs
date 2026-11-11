@@ -8,9 +8,10 @@ use nest_rs::database::atomic;
 use nest_rs::graphql::dataloader;
 use nest_rs::pipes::validator::Validate;
 use nest_rs::seaorm::{
-    Creatable, CreateModel, CrudService, Deletable, Insertion, Repo, ServiceError, Updatable,
+    Creatable, CreateModel, CrudService, Deletable, Insertion, Repo, RepoError, ServiceError,
+    Updatable,
 };
-use sea_orm::{ColumnTrait, DbErr, Set};
+use sea_orm::{ColumnTrait, Set};
 use uuid::Uuid;
 
 use super::entities::user as entity;
@@ -117,7 +118,11 @@ impl UsersService {
             .map_err(|e| social_store_unavailable(identity.provider, e))
     }
 
-    async fn link_identity(&self, user_id: Uuid, identity: &SocialIdentity) -> Result<(), DbErr> {
+    async fn link_identity(
+        &self,
+        user_id: Uuid,
+        identity: &SocialIdentity,
+    ) -> Result<(), RepoError> {
         let linked = Repo::<UserIdentities>::insert_unscoped_or_existing(
             new_identity_active(user_id, identity),
             [
@@ -229,14 +234,14 @@ fn social_store_unavailable(
     AuthError::unavailable_because("the social identity store is unreachable", None, err)
 }
 
-async fn find_by_email(email: &str) -> Result<Option<entity::Model>, DbErr> {
+async fn find_by_email(email: &str) -> Result<Option<entity::Model>, RepoError> {
     Repo::<Users>::unscoped()
         .filter(entity::Column::Email.eq(email.to_owned()))
         .one()
         .await
 }
 
-fn store_unavailable(err: DbErr) -> AuthError {
+fn store_unavailable(err: RepoError) -> AuthError {
     tracing::error!(target: crate::users::TARGET, error = %error_message(&err), "credential lookup failed");
     AuthError::unavailable_because("the credential store is unreachable", None, err)
 }

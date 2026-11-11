@@ -6,6 +6,7 @@ use sea_orm::{
 };
 
 use crate::contained::{contained, contained_order, refused};
+use crate::error::RepoError;
 use crate::repo::Repo;
 
 /// A query [`Repo`] built — [`scoped`](Repo::scoped), an escape such as
@@ -34,7 +35,7 @@ use crate::repo::Repo;
 /// use nest_rs_seaorm::Repo;
 /// use sea_orm::ColumnTrait;
 ///
-/// # async fn titled(title: &str) -> Result<(), sea_orm::DbErr> {
+/// # async fn titled(title: &str) -> Result<(), nest_rs_seaorm::RepoError> {
 /// let posts = Repo::<post::Entity>::scoped(Action::Read)
 ///     .filter(post::Column::Title.eq(title))
 ///     .order_by_asc(post::Column::Id)
@@ -188,7 +189,7 @@ impl<E: EntityTrait> RepoSelect<E> {
     /// use nest_rs_seaorm::Repo;
     /// use sea_orm::sea_query::Expr;
     ///
-    /// # async fn search(words: &str) -> Result<(), sea_orm::DbErr> {
+    /// # async fn search(words: &str) -> Result<(), nest_rs_seaorm::RepoError> {
     /// #[expect(clippy::disallowed_methods, reason = "full-text search, its words bound")]
     /// let matching = Expr::cust_with_values(
     ///     r#"to_tsvector('english', "posts"."body") @@ plainto_tsquery('english', $1)"#,
@@ -267,26 +268,26 @@ impl<E: EntityTrait> RepoSelect<E> {
     }
 
     /// Every row the query matches.
-    pub async fn all(self) -> Result<Vec<E::Model>, DbErr> {
-        self.runnable()?.all(&Repo::<E>::conn()?).await
+    pub async fn all(self) -> Result<Vec<E::Model>, RepoError> {
+        Ok(self.runnable()?.all(&Repo::<E>::conn()?).await?)
     }
 
     /// The first row the query matches, or `None`.
-    pub async fn one(self) -> Result<Option<E::Model>, DbErr> {
-        self.runnable()?.one(&Repo::<E>::conn()?).await
+    pub async fn one(self) -> Result<Option<E::Model>, RepoError> {
+        Ok(self.runnable()?.one(&Repo::<E>::conn()?).await?)
     }
 
     /// How many rows the query matches.
-    pub async fn count(self) -> Result<u64, DbErr>
+    pub async fn count(self) -> Result<u64, RepoError>
     where
         E::Model: Sync,
     {
-        self.runnable()?.count(&Repo::<E>::conn()?).await
+        Ok(self.runnable()?.count(&Repo::<E>::conn()?).await?)
     }
 
     /// Whether the query matches any row.
-    pub async fn exists(self) -> Result<bool, DbErr> {
-        self.runnable()?.exists(&Repo::<E>::conn()?).await
+    pub async fn exists(self) -> Result<bool, RepoError> {
+        Ok(self.runnable()?.exists(&Repo::<E>::conn()?).await?)
     }
 }
 
@@ -300,9 +301,10 @@ mod tests {
         NullOrdering, OnConflict, OptionEnum, Order, OrderedStatement, OverStatement, PgFunc,
         Query, SelectStatement, SubQueryStatement, Value, Values, WindowStatement,
     };
-    use sea_orm::{ColumnTrait, DbBackend, DbErr, EntityTrait, QueryFilter, QueryTrait};
+    use sea_orm::{ColumnTrait, DbBackend, EntityTrait, QueryFilter, QueryTrait};
 
     use super::RepoSelect;
+    use crate::RepoError;
     use crate::repo::Repo;
 
     mod widget {
@@ -385,7 +387,7 @@ mod tests {
     }
 
     /// What each way of running a query answered.
-    async fn every_run() -> [Result<(), DbErr>; 4] {
+    async fn every_run() -> [Result<(), RepoError>; 4] {
         [
             Widgets::scoped(Action::Read).all().await.map(drop),
             Widgets::unscoped().one().await.map(drop),
@@ -465,8 +467,9 @@ mod tests {
             );
             let answer = refused.all().await;
             assert!(
-                matches!(&answer, Err(DbErr::Custom(said))
-                    if said.contains("refused before any statement") && !said.contains(fragment)),
+                matches!(&answer, Err(err @ RepoError::Other { .. })
+                    if err.to_string().contains("refused before any statement")
+                        && !err.to_string().contains(fragment)),
                 "{fragment}: {answer:?}",
             );
         }
@@ -763,9 +766,9 @@ mod tests {
         );
         let answer = ordered.all().await;
         assert!(
-            matches!(&answer, Err(DbErr::Custom(said))
-                if said.contains("refused before any statement")
-                    && said.contains("(quote_in_type_name)")),
+            matches!(&answer, Err(err @ RepoError::Other { .. })
+                if err.to_string().contains("refused before any statement")
+                    && err.to_string().contains("(quote_in_type_name)")),
             "{answer:?}",
         );
     }

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use nest_rs_core::{code, error_message, module};
 use nest_rs_http::{StatusCode, header};
-use nest_rs_seaorm::{DbOutcome, SeaOrmDatabaseModule, ServiceError};
+use nest_rs_seaorm::{RepoError, SeaOrmDatabaseModule, ServiceError};
 use nest_rs_testing::TestApp;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
 use uuid::Uuid;
@@ -76,7 +76,8 @@ async fn an_input_the_server_refused_is_said_by_its_sqlstate_and_never_quoted() 
     assert!(reason.contains("22P02"), "{reason}");
     assert!(!reason.contains("secret-123"), "{reason}");
 
-    assert_eq!(DbOutcome::of(&refused), DbOutcome::Internal);
+    let repo = RepoError::from(refused.clone());
+    assert!(matches!(repo, RepoError::Other { .. }), "{repo:?}");
     let service = ServiceError::from(refused);
     assert!(matches!(service, ServiceError::Db(_)), "{service:?}");
     assert!(!error_message(&service).contains("secret-123"));
@@ -95,13 +96,23 @@ async fn a_unique_violation_is_a_conflict_named_by_its_constraint_and_table() {
         .await
         .expect_err("the address is taken");
 
-    assert_eq!(DbOutcome::of(&taken), DbOutcome::Conflict);
     let said = error_message(&taken);
     assert_eq!(
         said,
         format!(
             "Execution Error: database error 23505 on constraint \"{UNIQUE}\", table \"{TABLE}\""
         ),
+    );
+    let repo = RepoError::from(taken.clone());
+    assert!(
+        matches!(&repo, RepoError::UniqueViolation(key)
+            if key.constraint() == Some(UNIQUE) && key.table() == Some(TABLE)),
+        "{repo:?}"
+    );
+    let printed = nest_rs_testing::printed(&repo);
+    assert!(
+        !printed.contains(&email),
+        "the server's detail quotes the row: {printed}"
     );
     assert!(
         matches!(ServiceError::from(taken), ServiceError::Conflict(_)),
@@ -122,7 +133,10 @@ async fn a_not_null_violation_names_its_column() {
     let conn = db().await;
     let missing = insert(&conn, None).await.expect_err("an email is required");
 
-    assert_eq!(DbOutcome::of(&missing), DbOutcome::Internal);
+    assert!(
+        matches!(RepoError::from(missing.clone()), RepoError::Other { .. }),
+        "no variant names a not-null violation"
+    );
     let said = error_message(&missing);
     assert!(
         said.starts_with("Execution Error: database error 23502 on "),

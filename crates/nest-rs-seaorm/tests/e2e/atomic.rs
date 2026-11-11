@@ -11,7 +11,7 @@ use nest_rs_database::{AtomicError, atomic};
 use nest_rs_seaorm::__private::{
     FinalizeOutcome, LazyTransaction, SeaOrmExecutor, current_executor,
 };
-use nest_rs_seaorm::DbOutcome;
+use nest_rs_seaorm::RepoError;
 use sea_orm::prelude::Uuid;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
 
@@ -98,7 +98,7 @@ async fn a_unique_violation_inside_a_block_leaves_the_request_free_to_write_and_
     with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         let clash = atomic(async { Ok::<_, Failure>(insert(taken).await?) }).await;
         assert!(
-            matches!(&clash, Err(Failure::Db(err)) if DbOutcome::of(err) == DbOutcome::Conflict),
+            matches!(&clash, Err(Failure::Db(err)) if matches!(RepoError::from(err.clone()), RepoError::UniqueViolation(_))),
             "{clash:?}"
         );
         insert(after)

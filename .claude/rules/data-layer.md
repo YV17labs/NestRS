@@ -105,17 +105,23 @@ writes the condition.
 `Repo::scoped(Action::Delete)` and deletes row by row through `Repo::delete`,
 bounded per run — the demo's notifications purge is the shape.
 
-**A database failure is classified once and said once.** `DbOutcome` reads a
-`DbErr` into the class every edge answers — a unique violation is a conflict,
-a row a write found gone is not found, a write a grant's `.fields` withholds is
-forbidden, a statement Postgres cancelled (`57014`) is unavailable, a `503` said at `warn` and retryable inside a transaction,
-anything else is opaque — and
-`ServiceError`, `#[crud]` and the product read it rather than matching the
-driver's error again. The server's message quotes the input it refused, so a
-driver says its errors through a `SafeLink`, by code and schema names, and
-`ServiceError`, `AtomicError` and `OutboxError` keep the `DbErr` for a `match` while
-their `Debug` and `source()` say what the `SafeLink` does; held by the unit tests
-beside each. **A `#[crud]`
+**A database failure is classified once and said once.** What the data layer
+hands out is a `RepoError`, never sea-orm's `DbErr`: every method of `Repo`,
+`RepoSelect`, `CrudService` and `retry_on_conflict` answers one, `ServiceError::Db`
+holds one, and the driver boxes one in `AtomicError::Database` and
+`OutboxError::Database`. Its variant is the class every edge answers — a unique
+violation is a conflict, a row a write found gone is not found, a write the
+caller's grants do not cover (a column `.fields` withholds, a create its scope
+refuses) is forbidden, a statement Postgres cancelled (`57014`) is unavailable,
+a `503` said at `warn` and retryable inside a transaction, anything else is
+opaque — so `ServiceError`, `#[crud]` and the product `match` it rather than the
+driver's error. The server's message and `detail` quote the input it refused, so
+a `RepoError` holds the SQLSTATE and the names the server reported, never its
+words, by every reader; a `DbErr` a caller holds of its own (a migration, a
+seed, a transaction it opened) is said through `RepoError::from`, and one still
+in a chain through the driver's `SafeLink`. Held by the unit tests beside each,
+and through `Repo` by the in-process suite's Postgres double
+(`.claude/decisions/repo-hands-out-no-connection.md`, 2026-11-11). **A `#[crud]`
 create or update a unique key
 refuses names the input's fields the key holds** under `errors`
 (`{"email": [{"code": "unique"}]}`), never the value: the binding reads the

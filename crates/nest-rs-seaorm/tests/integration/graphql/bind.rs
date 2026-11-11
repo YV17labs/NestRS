@@ -10,9 +10,8 @@ use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, Guard, GuardFor};
 use nest_rs_http::EndpointGuards;
-use nest_rs_seaorm::{Access, Authorized, CrudService};
+use nest_rs_seaorm::{Access, Authorized, CrudService, RepoError};
 use nest_rs_testing::{LogCapture, TestApp};
-use sea_orm::DbErr;
 
 use crate::always_authenticated::AlwaysAuthenticated;
 
@@ -228,11 +227,12 @@ struct CancelledService;
 impl CrudService for CancelledService {
     type Entity = note::Entity;
 
-    async fn access(&self, _action: Action, _id: uuid::Uuid) -> Result<Access<note::Model>, DbErr> {
-        Err(crate::error::refused(
-            "57014",
-            "canceling statement due to statement timeout",
-        ))
+    async fn access(
+        &self,
+        _action: Action,
+        _id: uuid::Uuid,
+    ) -> Result<Access<note::Model>, RepoError> {
+        Err(crate::error::refused("57014", "canceling statement due to statement timeout").into())
     }
 }
 
@@ -311,7 +311,11 @@ struct VisitedService;
 impl CrudService for VisitedService {
     type Entity = note::Entity;
 
-    async fn access(&self, action: Action, id: uuid::Uuid) -> Result<Access<note::Model>, DbErr> {
+    async fn access(
+        &self,
+        action: Action,
+        id: uuid::Uuid,
+    ) -> Result<Access<note::Model>, RepoError> {
         assert_eq!(
             action,
             Action::Read,

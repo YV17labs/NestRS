@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
 use nest_rs_core::AppBuilder;
-use nest_rs_seaorm::SeaOrmConfig;
+use nest_rs_seaorm::{RepoError, SeaOrmConfig};
 use sea_orm::{
     ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement,
 };
@@ -102,9 +102,13 @@ impl EphemeralDatabase {
         Self::create_with::<M>(&admin_url).await
     }
 
-    /// Create and migrate a fresh database against an explicit admin URL.
+    /// Create and migrate a fresh database against an explicit admin URL. What
+    /// the server refuses, a migration's statement included, is a [`RepoError`]:
+    /// said by its SQLSTATE, never by the value its message quotes.
     pub async fn create_with<M: MigratorTrait>(admin_url: &str) -> Result<Self> {
-        let admin = Database::connect(options(admin_url)?).await?;
+        let admin = Database::connect(options(admin_url)?)
+            .await
+            .map_err(RepoError::from)?;
         let name = unique_name();
 
         // Concurrent CREATEs fail with "source database template1 is being
@@ -114,14 +118,15 @@ impl EphemeralDatabase {
             reap_stale(&admin).await;
             admin
                 .execute_unprepared(&format!("CREATE DATABASE \"{name}\""))
-                .await?;
+                .await
+                .map_err(RepoError::from)?;
         }
 
         let url = crate::url_on(admin_url, &name);
         let mut options = options(&url)?;
         options.statement_timeout(nest_rs_seaorm::__private::DEFAULT_STATEMENT_TIMEOUT);
-        let connection = Database::connect(options).await?;
-        M::up(&connection, None).await?;
+        let connection = Database::connect(options).await.map_err(RepoError::from)?;
+        M::up(&connection, None).await.map_err(RepoError::from)?;
 
         Ok(Self {
             admin_url: admin_url.to_owned(),

@@ -101,8 +101,8 @@ inventory.workspace = true
 # its `Uuid` primary key.
 uuid.workspace = true
 thiserror.workspace = true
-# `ServiceError`'s chain says the `DbErr` or the `ValidationErrors` a variant holds
-# through a `#[repr(transparent)]` view of the field, which a borrow alone can reach.
+# `ServiceError`'s chain says the `ValidationErrors` or the opaque cause a variant
+# holds through a `#[repr(transparent)]` view of the field, which a borrow alone can reach.
 ref-cast.workspace = true
 tracing.workspace = true
 # The ambient executor is carried in a `tokio::task_local!`.
@@ -178,6 +178,9 @@ sea-orm-migration.workspace = true
 # `figment::Jail` declares each profile, so the tests show what a deployment
 # says of the URL it wrote.
 figment = { workspace = true, features = ["test"] }
+# The authority a Postgres double's client trusts lives in a file of the test's
+# own, removed on every exit the test takes.
+tempfile.workspace = true
 
 [lints]
 workspace = true

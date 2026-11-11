@@ -151,7 +151,7 @@ pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// and `#[api]` attrs — the create answering `Created<Json<T>>`, the cursor
 /// list `Paginated<Json<Vec<T>>>`), the whole block re-emitted under
 /// `#[routes]`. A write
-/// failure maps to 409/403/404; an unexpected `DbErr` is logged and answers an
+/// failure maps to 409/403/404; any other `RepoError` is logged and answers an
 /// empty-bodied 500.
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {

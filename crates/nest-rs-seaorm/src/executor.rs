@@ -548,10 +548,10 @@ enum Settled {
 /// cancelled at its bound (`57014`) answers the rollback of the transaction
 /// it ran in — a body cut at its deadline left it running — and Postgres has
 /// aborted that transaction: the in-doubt end every edge says at `warn`
-/// ([`DbOutcome::Unavailable`](crate::DbOutcome::Unavailable)).
+/// ([`RepoError::QueryCanceled`](crate::RepoError::QueryCanceled)).
 fn report_rollback_failed(transport: &'static str, err: &DbErr, why: Settled) {
     let error = nest_rs_core::error_message(err);
-    if crate::DbOutcome::of(err) == crate::DbOutcome::Unavailable {
+    if crate::error::is_cancelled(err) {
         tracing::warn!(
             target: crate::target::ORM,
             transport,

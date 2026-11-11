@@ -152,9 +152,9 @@ mod tests {
 
     #[tokio::test]
     async fn db_errors_map_to_an_opaque_500_with_no_driver_text() {
-        let answered = into_http(Unbound::Failed(DbErr::Custom(
-            "connection to db.internal:5432 refused".into(),
-        )))
+        let answered = into_http(Unbound::Failed(
+            DbErr::Custom("connection to db.internal:5432 refused".into()).into(),
+        ))
         .into_response();
         assert_eq!(answered.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = answered.into_body().into_string().await.expect("body");

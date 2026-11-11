@@ -1,3 +1,4 @@
+use nest_rs::seaorm::RepoError;
 use sea_orm_migration::prelude::*;
 
 use super::{
@@ -29,7 +30,6 @@ impl MigratorTrait for Migrator {
     }
 }
 
-pub async fn migrate(conn: &sea_orm::DatabaseConnection) -> anyhow::Result<()> {
-    Migrator::up(conn, None).await?;
-    Ok(())
+pub async fn migrate(conn: &sea_orm::DatabaseConnection) -> Result<(), RepoError> {
+    Migrator::up(conn, None).await.map_err(RepoError::from)
 }

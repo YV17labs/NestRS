@@ -13,7 +13,7 @@ use sea_orm::{
 
 use crate::column_default::fill_column_defaults;
 use crate::contained::contained_values;
-use crate::error::{AtomicDbError, write_refused};
+use crate::error::{RepoError, write_refused};
 use crate::executor::{SeaOrmExecutor, current_executor};
 use crate::insertion::Insertion;
 use crate::select::RepoSelect;
@@ -224,7 +224,7 @@ impl<E: EntityTrait> Repo<E> {
 
     /// Every row of `E` the caller may [`Read`](Action::Read), soft-deleted rows
     /// left out.
-    pub async fn all() -> Result<Vec<E::Model>, DbErr> {
+    pub async fn all() -> Result<Vec<E::Model>, RepoError> {
         Self::scoped(Action::Read).all().await
     }
 
@@ -233,7 +233,7 @@ impl<E: EntityTrait> Repo<E> {
     /// `None` — never leaking its existence.
     pub async fn find_by_id(
         id: <E::PrimaryKey as PrimaryKeyTrait>::ValueType,
-    ) -> Result<Option<E::Model>, DbErr> {
+    ) -> Result<Option<E::Model>, RepoError> {
         RepoSelect::new(E::find_by_id(id).filter(scope_for::<E>(Action::Read)))
             .one()
             .await
@@ -268,7 +268,7 @@ impl<E: EntityTrait> Repo<E> {
     /// row read for `Read`. A row gone since it was read answers `false`, and
     /// so does every row when the scope denies all of them
     /// ([`scope_for`]).
-    pub async fn can(action: Action, model: &E::Model) -> Result<bool, DbErr> {
+    pub async fn can(action: Action, model: &E::Model) -> Result<bool, RepoError> {
         let allowed = Self::scoped(action)
             .within(pk_condition::<E>(model))
             .exists()
@@ -321,7 +321,7 @@ impl<E: EntityTrait> Repo<E> {
     /// A column the row leaves unset takes the default its `#[expose]` entity
     /// declares: a v7 UUID for a `Uuid` key, its `#[expose(default = …)]` for
     /// any other.
-    pub async fn insert_unscoped(mut active: E::ActiveModel) -> Result<E::Model, DbErr>
+    pub async fn insert_unscoped(mut active: E::ActiveModel) -> Result<E::Model, RepoError>
     where
         E::ActiveModel: ActiveModelBehavior + Send,
         E::Model: IntoActiveModel<E::ActiveModel>,
@@ -333,7 +333,7 @@ impl<E: EntityTrait> Repo<E> {
             entity = E::default().table_name(),
             "insert unscoped",
         );
-        insert_contained::<E>(active, &conn).await
+        Ok(insert_contained::<E>(active, &conn).await?)
     }
 
     /// [`insert_unscoped`](Self::insert_unscoped), unless a live row already
@@ -352,13 +352,13 @@ impl<E: EntityTrait> Repo<E> {
     /// never returned.
     ///
     /// A key column the row leaves unset, or its `before_save` unsets, is refused
-    /// before anything is sent ([`DbErr::AttrNotSet`]), and the row holding the
+    /// before anything is sent ([`RepoError::Other`]), and the row holding the
     /// key is read by what that hook returned, the values the insert sends. When
     /// no live row holds the key after all — a
     /// tombstone a unique index counts holds it, or the row was deleted since
     /// — the insert is sent again inside a savepoint, so its own outcome
     /// stands: the row, or the violation it meets
-    /// ([`DbOutcome::Conflict`](crate::DbOutcome::Conflict)).
+    /// ([`RepoError::UniqueViolation`]).
     ///
     /// ```
     /// # mod identity {
@@ -375,10 +375,10 @@ impl<E: EntityTrait> Repo<E> {
     /// #     pub enum Relation {}
     /// #     impl ActiveModelBehavior for ActiveModel {}
     /// # }
-    /// use nest_rs_seaorm::{Insertion, Repo};
-    /// use sea_orm::{DbErr, Set};
+    /// use nest_rs_seaorm::{Insertion, Repo, RepoError};
+    /// use sea_orm::Set;
     ///
-    /// async fn link(provider: &str, subject: &str) -> Result<bool, DbErr> {
+    /// async fn link(provider: &str, subject: &str) -> Result<bool, RepoError> {
     ///     let link = identity::ActiveModel {
     ///         provider: Set(provider.to_owned()),
     ///         subject: Set(subject.to_owned()),
@@ -394,7 +394,7 @@ impl<E: EntityTrait> Repo<E> {
     pub async fn insert_unscoped_or_existing<const N: usize>(
         mut active: E::ActiveModel,
         key: [E::Column; N],
-    ) -> Result<Insertion<E::Model>, DbErr>
+    ) -> Result<Insertion<E::Model>, RepoError>
     where
         E::ActiveModel: ActiveModelBehavior + Send,
         E::Model: IntoActiveModel<E::ActiveModel>,
@@ -427,21 +427,20 @@ impl<E: EntityTrait> Repo<E> {
                 }
                 atomic(async move {
                     let conn = Self::conn()?;
-                    Ok::<_, AtomicDbError>(E::insert(active).exec_with_returning(&conn).await?)
+                    Ok::<_, RepoError>(E::insert(active).exec_with_returning(&conn).await?)
                 })
-                .await
-                .map_err(DbErr::from)?
+                .await?
             }
         };
         tracing::trace!(target: crate::target::ORM, entity, "insert unscoped");
-        E::ActiveModel::after_save(model, &conn, true)
-            .await
-            .map(Insertion::New)
+        Ok(Insertion::New(
+            E::ActiveModel::after_save(model, &conn, true).await?,
+        ))
     }
 
     /// Update a row, gated by `condition_for(Update)` ANDed with the primary
     /// key: a row outside the caller's scope, or soft-deleted, is never touched
-    /// and surfaces as [`DbErr::RecordNotUpdated`], so a caller cannot mutate by
+    /// and surfaces as [`RepoError::NotFound`], so a caller cannot mutate by
     /// id past its scope. An `active` setting nothing sends no `UPDATE` and hands
     /// back the row under that same scope, or the same error.
     ///
@@ -451,15 +450,15 @@ impl<E: EntityTrait> Repo<E> {
     /// gets the same error before any hook runs.
     ///
     /// A grant's `.fields` limits what `active` sets, its hook's stamps aside: a
-    /// column no grant permits is [`DbErr::AccessDenied`] naming it, before any hook
+    /// column no grant permits is [`RepoError::Forbidden`] naming it, before any hook
     /// runs or anything is sent, and a row whose grants do not permit each column is
     /// outside the scope.
-    pub async fn update<A>(active: A) -> Result<E::Model, DbErr>
+    pub async fn update<A>(active: A) -> Result<E::Model, RepoError>
     where
         A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
         E::Model: IntoActiveModel<A>,
     {
-        Self::scoped_save(active, Action::Update).await
+        Ok(Self::scoped_save(active, Action::Update).await?)
     }
 
     /// The scope filter forces sea-orm's `Update::one`, which does not run
@@ -504,29 +503,29 @@ impl<E: EntityTrait> Repo<E> {
     /// key. A row outside the caller's scope is not deleted; the returned
     /// [`DeleteResult::rows_affected`] is `0` when the scope (or the row's
     /// absence) excluded it — the caller decides whether that is a denial.
-    pub async fn delete<A, M>(model: M) -> Result<DeleteResult, DbErr>
+    pub async fn delete<A, M>(model: M) -> Result<DeleteResult, RepoError>
     where
         A: ActiveModelTrait<Entity = E> + Send,
         M: IntoActiveModel<A> + Send,
     {
         let conn = Self::conn()?;
-        Delete::one(model)
+        Ok(Delete::one(model)
             .validate()?
             .filter(scope_for::<E>(Action::Delete))
             .exec(&conn)
-            .await
+            .await?)
     }
 
     /// Soft-delete a loaded row: stamp `col = now()` in the request transaction,
     /// gated by `condition_for(Delete)` ANDed with the primary key. Idempotent
     /// when the row is already tombstoned. Hard purge stays on [`Self::delete`].
-    /// A caller no row could pass for gets [`DbErr::RecordNotUpdated`] before any
+    /// A caller no row could pass for gets [`RepoError::NotFound`] before any
     /// hook runs, as [`update`](Self::update).
     ///
     /// The row is then hidden from every read but
     /// [`with_tombstones`](Self::with_tombstones) when `E` is declared
     /// `#[expose(..., soft_delete)]` and `col` is its `deleted_at`.
-    pub async fn soft_delete<A, M>(model: M, col: E::Column) -> Result<(), DbErr>
+    pub async fn soft_delete<A, M>(model: M, col: E::Column) -> Result<(), RepoError>
     where
         A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
         M: IntoActiveModel<A> + Send,
@@ -1152,7 +1151,7 @@ mod tests {
         .await;
 
         assert!(
-            matches!(&refused, Err(DbErr::AttrNotSet(column)) if column == "name"),
+            matches!(&refused, Err(err @ RepoError::Other { .. }) if err.to_string().contains("name")),
             "{refused:?}"
         );
         assert_eq!(hooked::SAVES.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -1174,7 +1173,7 @@ mod tests {
         .await;
 
         assert!(
-            matches!(&refused, Err(DbErr::AttrNotSet(column)) if column == "name"),
+            matches!(&refused, Err(err @ RepoError::Other { .. }) if err.to_string().contains("name")),
             "{refused:?}"
         );
     }
@@ -1267,12 +1266,9 @@ mod tests {
         )
         .await;
 
+        assert!(matches!(updated, Err(RepoError::NotFound)), "{updated:?}");
         assert!(
-            matches!(updated, Err(DbErr::RecordNotUpdated)),
-            "{updated:?}"
-        );
-        assert!(
-            matches!(soft_deleted, Err(DbErr::RecordNotUpdated)),
+            matches!(soft_deleted, Err(RepoError::NotFound)),
             "{soft_deleted:?}"
         );
         assert_eq!(
@@ -1304,12 +1300,9 @@ mod tests {
         })
         .await;
 
+        assert!(matches!(updated, Err(RepoError::NotFound)), "{updated:?}");
         assert!(
-            matches!(updated, Err(DbErr::RecordNotUpdated)),
-            "{updated:?}"
-        );
-        assert!(
-            matches!(soft_deleted, Err(DbErr::RecordNotUpdated)),
+            matches!(soft_deleted, Err(RepoError::NotFound)),
             "{soft_deleted:?}"
         );
         assert_eq!(hooked::SAVES.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -1346,7 +1339,7 @@ mod tests {
         .await;
 
         assert!(
-            !matches!(updated, Ok(_) | Err(DbErr::RecordNotUpdated)),
+            !matches!(updated, Ok(_) | Err(RepoError::NotFound)),
             "{updated:?}"
         );
         assert_eq!(hooked::SAVES.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -1413,8 +1406,7 @@ mod tests {
         assert!(
             matches!(
                 &refused,
-                Err(DbErr::AccessDenied { permission, resource })
-                    if permission == "update" && resource == "hooked(deleted_at)"
+                Err(RepoError::Forbidden { columns, .. }) if columns == &["deleted_at"]
             ),
             "{refused:?}",
         );
@@ -1507,7 +1499,7 @@ mod tests {
         assert!(
             !matches!(
                 updated,
-                Ok(_) | Err(DbErr::RecordNotUpdated | DbErr::AccessDenied { .. })
+                Ok(_) | Err(RepoError::NotFound | RepoError::Forbidden { .. })
             ),
             "{updated:?}"
         );
@@ -1540,7 +1532,7 @@ mod tests {
         assert!(
             !matches!(
                 deleted,
-                Ok(()) | Err(DbErr::RecordNotUpdated | DbErr::AccessDenied { .. })
+                Ok(()) | Err(RepoError::NotFound | RepoError::Forbidden { .. })
             ),
             "{deleted:?}"
         );
@@ -1635,7 +1627,8 @@ mod tests {
     /// run first, and an insert. A key cannot hold one: sea-orm reads no key into it.
     #[tokio::test]
     async fn a_write_carrying_an_enum_type_name_leaving_its_quotes_sends_nothing() {
-        let refused = |answer: &DbErr| answer.to_string().contains("refused before any statement");
+        let refused =
+            |answer: &RepoError| answer.to_string().contains("refused before any statement");
         type Labelled = Repo<labelled::Entity>;
         let answers = with_job_executor(pool(), async {
             let carrying = || labelled_row(labelled::escaping());

@@ -535,7 +535,8 @@ fn render_migrator(registered: &Registered) -> String {
         .map(|entry| format!("            Box::new({entry}),\n"))
         .collect::<String>();
     format!(
-        "use sea_orm_migration::prelude::*;\n\
+        "use nest_rs::seaorm::RepoError;\n\
+         use sea_orm_migration::prelude::*;\n\
          {imports}\
          \n\
          pub struct Migrator;\n\
@@ -548,9 +549,8 @@ fn render_migrator(registered: &Registered) -> String {
          \x20   }}\n\
          }}\n\
          \n\
-         pub async fn migrate(conn: &sea_orm::DatabaseConnection) -> anyhow::Result<()> {{\n\
-         \x20   Migrator::up(conn, None).await?;\n\
-         \x20   Ok(())\n\
+         pub async fn migrate(conn: &sea_orm::DatabaseConnection) -> Result<(), RepoError> {{\n\
+         \x20   Migrator::up(conn, None).await.map_err(RepoError::from)\n\
          }}\n"
     )
 }
@@ -692,6 +692,25 @@ mod tests {
         assert!(out.contains("Box::new(m1_a::Migration),"));
         assert!(out.contains("Box::new(m2_b::Migration),"));
         assert!(out.contains("pub async fn migrate"));
+    }
+
+    /// The helper an app runs its migrations with says what the server refused as a
+    /// `RepoError`, never as the `DbErr` whose message quotes the row.
+    #[test]
+    fn the_migrate_helper_answers_a_repo_error() {
+        let out = render_migrator(&Registered::default());
+        assert!(
+            out.starts_with("use nest_rs::seaorm::RepoError;\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "pub async fn migrate(conn: &sea_orm::DatabaseConnection) -> Result<(), RepoError> \
+                 {\n    Migrator::up(conn, None).await.map_err(RepoError::from)\n}\n"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("anyhow"), "{out}");
     }
 
     /// The CLI places the framework's migration by the name the framework

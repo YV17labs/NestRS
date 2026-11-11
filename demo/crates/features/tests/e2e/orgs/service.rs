@@ -45,7 +45,7 @@ async fn access_hides_out_of_scope_orgs() {
     let (found, denied) = app
         .unit(ability, move || async move {
             let service = OrgsService;
-            Ok::<_, sea_orm::DbErr>((
+            Ok::<_, nest_rs::seaorm::RepoError>((
                 service.access(Action::Read, allowed).await?,
                 service.access(Action::Read, blocked).await?,
             ))

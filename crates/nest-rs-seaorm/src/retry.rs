@@ -10,13 +10,15 @@ use std::time::Duration;
 use nest_rs_core::{Backoff, process_seed};
 use sea_orm::{DbErr, RuntimeErr, SqlxError};
 
+use crate::error::{DEADLOCK_DETECTED, SERIALIZATION_FAILURE};
+
 /// SQLSTATE markers a transient conflict surfaces under across the
 /// supported backends.
 const RETRYABLE_SQLSTATES: &[&str] = &[
-    "40001", // PG / MySQL — serialization failure
-    "40P01", // PG — deadlock detected
-    "1213",  // MySQL — deadlock
-    "1205",  // SQL Server — deadlock victim
+    SERIALIZATION_FAILURE, // PG / MySQL
+    DEADLOCK_DETECTED,     // PG
+    "1213",                // MySQL — deadlock
+    "1205",                // SQL Server — deadlock victim
 ];
 
 /// SQLSTATE markers a **connection** fault surfaces under: the server closed
@@ -110,7 +112,8 @@ pub fn is_transient_failure(err: &DbErr) -> bool {
 /// between tries — jittered within a fifth either way, from a seed of its own
 /// per call — when the previous attempt failed with a conflict recognized by
 /// [`is_retryable_conflict`]. A non-retryable error returns immediately; the
-/// last error after exhausting the budget is returned.
+/// last error after exhausting the budget is returned, as the
+/// [`RepoError`](crate::RepoError) it classifies into.
 ///
 /// `attempts` is clamped to `[1, MAX_RETRY_ATTEMPTS]` so a caller passing
 /// `0` still runs the operation once and a caller passing `usize::MAX`
@@ -121,7 +124,7 @@ pub async fn retry_on_conflict<F, Fut, T>(
     attempts: usize,
     initial_backoff: Duration,
     mut op: F,
-) -> Result<T, DbErr>
+) -> Result<T, crate::RepoError>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, DbErr>>,
@@ -134,7 +137,7 @@ where
             Ok(value) => return Ok(value),
             Err(err) => {
                 if !is_retryable_conflict(&err) {
-                    return Err(err);
+                    return Err(err.into());
                 }
                 attempt += 1;
                 if attempt >= attempts {
@@ -145,7 +148,7 @@ where
                         error = %nest_rs_core::error_message(&err),
                         "transaction conflict — retry budget exhausted",
                     );
-                    return Err(err);
+                    return Err(err.into());
                 }
                 tracing::warn!(
                     target: crate::target::ORM,
@@ -219,6 +222,23 @@ mod tests {
         };
         let sqlx_err = sea_orm::SqlxError::database(stub);
         DbErr::Exec(RuntimeErr::SqlxError(std::sync::Arc::new(sqlx_err)))
+    }
+
+    /// What a transaction of the caller's own answers once the retries end is the
+    /// framework's database failure: no reader of it prints what the server quoted.
+    #[tokio::test]
+    async fn a_retried_transaction_hands_out_a_failure_naming_no_value() {
+        let refused = retry_on_conflict(1, Duration::from_millis(1), || async {
+            Err::<(), _>(sqlx_db_err(
+                Some("22P02"),
+                "invalid input syntax for type uuid: \"ada@example.com\"",
+            ))
+        })
+        .await
+        .expect_err("the statement is refused");
+        let printed = nest_rs_testing::printed(&refused);
+        assert!(printed.contains("22P02"), "{printed}");
+        assert!(!printed.contains("ada@example.com"), "{printed}");
     }
 
     #[test]
@@ -346,7 +366,7 @@ mod tests {
     #[tokio::test]
     async fn retries_until_success_within_budget() {
         let attempts = std::sync::atomic::AtomicUsize::new(0);
-        let result: Result<&str, DbErr> =
+        let result: Result<&str, crate::RepoError> =
             retry_on_conflict(3, Duration::from_millis(1), || async {
                 let n = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if n < 2 {
@@ -364,12 +384,16 @@ mod tests {
     async fn surfaces_last_error_when_budget_exhausted() {
         let logs = nest_rs_testing::LogCapture::install();
         let attempts = std::sync::atomic::AtomicUsize::new(0);
-        let result: Result<(), DbErr> = retry_on_conflict(2, Duration::from_millis(1), || async {
-            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Err::<(), _>(sqlx_db_err(Some("40001"), "could not serialize access"))
-        })
-        .await;
-        assert!(matches!(result, Err(DbErr::Exec(_))));
+        let result: Result<(), crate::RepoError> =
+            retry_on_conflict(2, Duration::from_millis(1), || async {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err::<(), _>(sqlx_db_err(Some("40001"), "could not serialize access"))
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::RepoError::SerializationFailure(_))
+        ));
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
 
         let retried = logs.expect_one(crate::target::ORM, "transaction conflict — retrying");
@@ -395,12 +419,13 @@ mod tests {
     #[tokio::test]
     async fn returns_immediately_on_non_retryable() {
         let attempts = std::sync::atomic::AtomicUsize::new(0);
-        let result: Result<(), DbErr> = retry_on_conflict(3, Duration::from_millis(1), || async {
-            attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Err::<(), _>(DbErr::RecordNotFound("widget".into()))
-        })
-        .await;
-        assert!(matches!(result, Err(DbErr::RecordNotFound(_))));
+        let result: Result<(), crate::RepoError> =
+            retry_on_conflict(3, Duration::from_millis(1), || async {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err::<(), _>(DbErr::RecordNotFound("widget".into()))
+            })
+            .await;
+        assert!(matches!(result, Err(crate::RepoError::NotFound)));
         assert_eq!(
             attempts.load(std::sync::atomic::Ordering::SeqCst),
             1,
@@ -423,13 +448,13 @@ mod tests {
     #[tokio::test]
     async fn excessive_attempts_clamp_to_ceiling() {
         let attempts = std::sync::atomic::AtomicUsize::new(0);
-        let result: Result<(), DbErr> =
+        let result: Result<(), crate::RepoError> =
             retry_on_conflict(usize::MAX, Duration::from_millis(1), || async {
                 attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Err::<(), _>(DbErr::RecordNotFound("non-retryable".into()))
             })
             .await;
-        assert!(matches!(result, Err(DbErr::RecordNotFound(_))));
+        assert!(matches!(result, Err(crate::RepoError::NotFound)));
         assert_eq!(
             attempts.load(std::sync::atomic::Ordering::SeqCst),
             1,

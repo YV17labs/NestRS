@@ -16,6 +16,7 @@ use sea_orm::{
 use nest_rs_authz::Action;
 
 use crate::contained::{contained, refused};
+use crate::error::RepoError;
 use crate::repo::{Repo, scope_for};
 
 /// One keyset page. `next_cursor` is the last row's primary key, present only
@@ -278,7 +279,7 @@ where
         first: u64,
         after: Option<PageCursor>,
         extra: Condition,
-    ) -> Result<Page<E::Model>, DbErr> {
+    ) -> Result<Page<E::Model>, RepoError> {
         let extra = operand::<E>(extra)?;
         let conn = Self::conn()?;
         let limit = clamp_page_size(first);
@@ -349,7 +350,7 @@ where
         first: u64,
         after: Option<PageCursor>,
         extra: Condition,
-    ) -> Result<HashMap<K, Page<E::Model>>, DbErr>
+    ) -> Result<HashMap<K, Page<E::Model>>, RepoError>
     where
         K: Clone + Eq + Hash + Into<Value> + ValueType + Send + Sync,
     {
@@ -398,7 +399,8 @@ where
                 return Err(DbErr::Custom(format!(
                     "relation page: `{}` returned a row outside the requested key set",
                     std::any::type_name::<E>(),
-                )));
+                ))
+                .into());
             };
             page.items.push(row);
         }
@@ -574,7 +576,8 @@ mod tests {
     async fn a_page_refuses_an_extra_condition_leaving_its_operand_before_any_statement() {
         let pool = SeaOrmExecutor::Pool(sea_orm::DatabaseConnection::default()).into();
         let widening = || Condition::all().add(Expr::cust("1 = 1) OR (1 = 1"));
-        let refused = |answer: &DbErr| answer.to_string().contains("refused before any statement");
+        let refused =
+            |answer: &RepoError| answer.to_string().contains("refused before any statement");
 
         let (page, pages) = nest_rs_database::__private::with_job_executor(pool, async {
             let page = Repo::<child::Entity>::page(10, None, widening()).await;

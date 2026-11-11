@@ -8,7 +8,7 @@ use nest_rs_authz::{AbilityBuilder, Action, Read, Update};
 use nest_rs_core::{Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamExt};
 use nest_rs_graphql::async_graphql::{
-    Executor as _, Json as GqlJson, Request as GqlRequest, SimpleObject,
+    Executor as _, Json as GqlJson, Request as GqlRequest, Result as GqlResult, SimpleObject,
 };
 use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
 use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
@@ -353,6 +353,82 @@ async fn a_row_judged_for_another_caller_names_the_route_that_answered_it() {
     }
 }
 
+/// A row a job built, every exposed column, kept past the job as a cache keeps it.
+static WARMED: OnceLock<Mutex<Option<Member>>> = OnceLock::new();
+
+/// The executor a job's unit runs on: nothing here reads through it.
+struct NoDatabase;
+
+impl nest_rs_database::Executor for NoDatabase {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Member 2 of org 2, built by a job as system work.
+async fn warm() {
+    let row = nest_rs_database::__private::with_job_executor(Arc::new(NoDatabase), async {
+        Member::from(&member::row(2, 2))
+    })
+    .await;
+    *WARMED.get_or_init(Mutex::default).lock().expect("warmed") = Some(row);
+}
+
+#[controller(path = "/warmed")]
+#[derive(Default)]
+struct WarmedController;
+
+#[routes]
+impl WarmedController {
+    #[get("/")]
+    #[public]
+    async fn warmed(&self) -> nest_rs_http::Result<Json<Member>> {
+        let row = WARMED
+            .get_or_init(Mutex::default)
+            .lock()
+            .expect("warmed")
+            .clone();
+        Ok(Json(row.expect("warmed by the test")))
+    }
+}
+
+/// No guard attaches an ability: the boot admits the `#[public]` route.
+#[module(providers = [WarmedController])]
+struct WarmedHttpModule;
+
+/// A row a job built answers no caller outside a job: a route holding no ability
+/// is refused it, as one holding the caller's is, its line naming the route though
+/// no layer and no unit of work runs there.
+#[tokio::test]
+async fn a_row_a_job_built_answers_no_caller() {
+    warm().await;
+    let app = TestApp::for_module::<WarmedHttpModule>()
+        .await
+        .expect("boots");
+    let logs = nest_rs_testing::LogCapture::install();
+    let (status, body) = get_as(&app, "", "/warmed").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        !body.contains("member2@example.test") && !body.contains("member 2"),
+        "{body}"
+    );
+    let filed = logs.find(
+        nest_rs_authz::TARGET,
+        "a wire row answered a caller it was not judged for",
+    );
+    assert_eq!(filed.len(), 1, "{filed:#?}");
+    for (field, named) in [
+        ("entity", "members"),
+        ("reason", "judged_for_another"),
+        ("host", "WarmedController"),
+        ("method", "warmed"),
+        ("verb", "GET"),
+        ("path", "/warmed"),
+    ] {
+        assert_eq!(filed[0].field(field).as_deref(), Some(named), "{field}");
+    }
+}
+
 #[gateway(path = "/ws/members")]
 #[derive(Default)]
 struct MembersGateway;
@@ -473,6 +549,17 @@ struct Flattened {
     rank: i32,
 }
 
+/// A push of the body's own holding the member it is about.
+#[derive(SimpleObject)]
+struct MemberMoved {
+    member: Member,
+}
+
+/// Member 1 of org 1 and member 2 of org 2, which the peer may not read.
+fn both_orgs() -> [member::Model; 2] {
+    [member::row(1, 1), member::row(2, 2)]
+}
+
 #[resolver]
 #[derive(Default)]
 struct MembersResolver;
@@ -486,6 +573,13 @@ impl MembersResolver {
             .iter()
             .map(Member::from)
             .collect()
+    }
+
+    /// A list a body built by hand, holding a row the peer's grants refuse.
+    #[query]
+    #[authorize(Read, member::Entity)]
+    async fn everyone(&self) -> Vec<Member> {
+        both_orgs().iter().map(Member::from).collect()
     }
 
     /// A scalar the body builds: the rows serialize whole.
@@ -528,7 +622,27 @@ impl MembersResolver {
     #[subscription]
     #[authorize(Read, member::Entity)]
     async fn member_feed(&self) -> impl Stream<Item = Member> {
-        stream::iter([member::row(1, 1), member::row(2, 2)]).map(|row| Member::from(&row))
+        stream::iter(both_orgs()).map(|row| Member::from(&row))
+    }
+
+    #[subscription]
+    #[authorize(Read, member::Entity)]
+    async fn optional_feed(&self) -> impl Stream<Item = Option<Member>> {
+        stream::iter(both_orgs()).map(|row| Some(Member::from(&row)))
+    }
+
+    #[subscription]
+    #[authorize(Read, member::Entity)]
+    async fn fallible_feed(&self) -> impl Stream<Item = GqlResult<Member>> {
+        stream::iter(both_orgs()).map(|row| Ok(Member::from(&row)))
+    }
+
+    #[subscription]
+    #[authorize(Read, member::Entity)]
+    async fn moves(&self) -> impl Stream<Item = MemberMoved> {
+        stream::iter(both_orgs()).map(|row| MemberMoved {
+            member: Member::from(&row),
+        })
     }
 
     /// A scalar a field resolver derives from its parent's columns.
@@ -789,10 +903,31 @@ async fn a_mutations_reply_holds_what_its_caller_may_read_and_never_what_its_wri
     );
 }
 
+/// A row a caller's grants refuse answers its key nowhere but a write's reply: a
+/// list a body built holding one fails the whole reply closed, its key with it.
+#[tokio::test]
+async fn a_query_holding_a_row_its_caller_may_not_read_answers_not_even_its_key() {
+    let app = TestApp::for_module::<MembersGraphqlModule>()
+        .await
+        .expect("boots");
+    let read = graphql_as(&app, "peer", "{ everyone { id } }").await;
+    assert_eq!(read["data"], serde_json::Value::Null, "{read}");
+    assert_eq!(
+        read["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{read}"
+    );
+    assert!(!read.to_string().contains(r#""id":2"#), "{read}");
+    let read = graphql_as(&app, "admin", "{ everyone { id } }").await;
+    assert_eq!(
+        read,
+        serde_json::json!({ "data": { "everyone": [{ "id": 1 }, { "id": 2 }] } })
+    );
+}
+
 /// A write's reply answers its key to a caller who may not read the row, and
 /// nothing else: the field selecting more is refused, and its write rolled back.
 #[tokio::test]
-async fn a_refused_row_answers_its_key_and_nothing_else() {
+async fn a_writes_refused_row_answers_its_key_and_nothing_else() {
     let app = TestApp::for_module::<MembersGraphqlModule>()
         .await
         .expect("boots");
@@ -844,6 +979,49 @@ async fn a_push_is_judged_for_each_subscriber() {
     assert_eq!(
         items[0]["data"]["memberFeed"]["email"],
         "member1@example.test"
+    );
+}
+
+/// An item holding a row inside an `Option` or a `Result` leaves the stream as a
+/// bare row does: the subscriber never learns the key of a push it may not read.
+#[tokio::test]
+async fn a_wrapped_row_its_subscriber_may_not_read_leaves_the_stream() {
+    let feeds = [
+        ("subscription { optionalFeed { id } }", "optionalFeed"),
+        ("subscription { fallibleFeed { id } }", "fallibleFeed"),
+    ];
+    let mut read = Vec::new();
+    let mut kept = Vec::new();
+    for (feed, field) in feeds {
+        read.push(items_to("peer", feed).await);
+        kept.push(vec![serde_json::json!({ "data": { field: { "id": 1 } } })]);
+        assert_eq!(items_to("admin", feed).await.len(), 2, "{feed}");
+    }
+    assert_eq!(
+        read, kept,
+        "member 2 is of org 2, which the peer may not read"
+    );
+}
+
+/// An item of the body's own holding such a row cannot be told from one holding
+/// none: it arrives, and the row it holds answers no column, its key included.
+#[tokio::test]
+async fn an_object_holding_a_row_its_subscriber_may_not_read_answers_not_even_its_key() {
+    let items = items_to("peer", "subscription { moves { member { id } } }").await;
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert_eq!(
+        items[0],
+        serde_json::json!({ "data": { "moves": { "member": { "id": 1 } } } })
+    );
+    assert_eq!(
+        items[1]["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{items:?}"
+    );
+    assert!(
+        !serde_json::to_string(&items[1])
+            .expect("JSON")
+            .contains(r#""id":2"#),
+        "{items:?}"
     );
 }
 

@@ -115,10 +115,11 @@ otherwise.
 **Today.** Rows are filtered in SQL, and each wire row is judged on its whole
 `Model` where `From<&Model>` builds it: a column a grant withholds is no value in
 the row (`#[expose(nullable)]` or an `Option`), a grant withholding any other
-fails `build()`, the row answers only the caller whose ability judged it, a
-`#[field_resolver]` under a row that answers no one refuses before it runs, and a
-dispatched method answering a `Model` does not compile (`mask-provenance.md`,
-2026-11-08). What remains:
+fails `build()`, the row answers only the caller whose ability judged it (a
+job's, inside a job and on a push alone), a refused row answers its key in a
+GraphQL mutation's reply alone, a `#[field_resolver]` under a row that answers no
+one refuses before it runs, and a dispatched method answering a `Model` does not
+compile (`mask-provenance.md`, 2026-11-08). What remains:
 
 - **A `#[public]` GraphQL field whose own guard attaches the ability**, its
   request carrying none, answers no wire row: the rows its body builds are judged
@@ -344,7 +345,10 @@ column it derives, so it stays the body's visible line, as a row a body serializ
 hand is read in review (`serde_json::to_value(&row)`, a push, a DTO holding it: a
 dispatched method answering a `Model` does not compile); a list a body built by hand holding a row
 its grants refuse failing the whole reply closed, where a `Repo` read never hands
-it one; a push to other connections carrying no row judged for a caller, so a
+it one; a subscription item of the body's own holding a row its subscriber may not
+read arriving refused, its row answering no column, so the subscriber learns a push
+arrived (an item that must not say even that is a row, a list, or one inside an
+`Option` or a `Result`, which leaves the stream); a push to other connections carrying no row judged for a caller, so a
 per-recipient row is built per recipient or is a DTO (`mask-provenance.md`,
 2026-11-08); real-clock budgets where only real time tells two outcomes apart;
 `Repo::delete` sending its statement under a class denial; a storage key whose

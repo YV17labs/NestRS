@@ -97,11 +97,13 @@ counted it: a row out of `Repo::scoped(Read)` passed `(OR grants) AND NOT (OR
 denials)`, so when no decided grant matches, an undecided one did, and the row
 keeps the columns every such grant permits.
 
-A row the caller's grants refuse never ships as an empty object: on GraphQL it
-answers its key alone and refuses every other column `FORBIDDEN`, and elsewhere the
-reply is refused `403` — a write-only caller's write answers its key on GraphQL and
-nothing on HTTP. A list a body built by hand holding such a row fails the whole
-reply closed; a `Repo` read never hands it one.
+A row the caller's grants refuse never ships as an empty object: in a GraphQL
+mutation's reply it answers its key alone, which names the row the write wrote, and
+refuses every other column `FORBIDDEN`; on any other operation it refuses every
+column, its key included; and elsewhere the reply is refused `403` — a write-only
+caller's write answers its key on GraphQL and nothing on HTTP. A list a body built
+by hand holding such a row fails the whole reply closed; a `Repo` read never hands
+it one.
 
 ## A row answers the caller who judged it
 
@@ -118,7 +120,9 @@ that the ability installed where it answers is that one, so:
   from the parent ships;
 - a push to other connections (`WsServer`'s `broadcast`, `emit_to`, `emit`)
   refuses a row judged for the caller pushing it — no recipient's ability judged
-  it — and takes a row a job built, which holds every exposed column for no caller;
+  it — and takes a row a job built, which holds every exposed column for no caller
+  and answers nowhere else outside a job: kept in a cache and answered by a route,
+  it fails as another caller's;
 - a subscription builds its rows where the socket polls its stream, so each is
   judged for its subscriber: carry the `Model` on your event and build the wire row
   in the stream.
@@ -134,8 +138,11 @@ async fn post_published(&self) -> impl Stream<Item = Post> {
 ```
 
 A subscription's item is a push no read filtered, so a rule only a read could
-decide grants nothing there, and an item a refusal makes leaves the stream: a
-subscriber learns nothing of a push they may not read.
+decide grants nothing there, and an item a refusal makes leaves the stream — a row,
+a list's rows, a row inside an `Option` or a `Result` — so a subscriber learns
+nothing of a push they may not read. An object of your own holding the row arrives,
+its row answering no column, the key included: stream the row itself where a
+subscriber must not learn a push happened.
 
 ## Every shape holds only what the row holds
 

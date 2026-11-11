@@ -1328,9 +1328,10 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     .map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
                 }
             });
-            // Under an entity's posture an item a refused row is leaves the stream,
-            // so a subscriber learns nothing of a push it may not read; every item is
-            // a push, judged where the socket polls the stream.
+            // Under a posture naming a subject, an item whose rows refuse leaves the
+            // stream — a row, a list's, one inside an `Option` or a `Result` — so a
+            // subscriber learns no key of a push it may not read; every item is a
+            // push, judged where the socket polls the stream.
             let body = match (root_kind, authorize_spec.is_some()) {
                 (RootKind::Subscription, true) => quote! {
                     match #call {

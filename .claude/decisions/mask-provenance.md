@@ -524,3 +524,39 @@ held, judged for the admin. `#[field_resolver]` now asks
 list from a row) that refuses the caller refuses the field as its columns do, `INTERNAL`
 or `FORBIDDEN`, one line per operation naming the resolver's site; any other parent
 passes. Cost: one judgement check per parent and resolver, as each column pays.
+
+## 2026-11-08 — a refused row's key answers a write's reply alone, and a job's row a job alone
+
+The review of the judged row ran three cases the entry above names and its code did not
+hold. A row its caller's grants refuse answered its key on every GraphQL operation, not on
+a write's reply alone: `{ members { id } }` listed the key of a row of another org, and a
+subscription item holding the row inside an `Option`, a `Result` or an object of the
+body's own reached the subscriber with its `id`, only a bare row leaving the stream. And a
+row a job built, every exposed column, answered whole a `#[public]` route holding no
+ability (`200` with the `email` a grant withholds), the `(System, None)` arm admitting
+wherever no ability was installed. Each seen red in `nest-rs-authz`'s `judged` suite and,
+for a relation, `nest-rs-seaorm`'s (a `has_many` under a refused parent loaded its
+children); the HTTP route's line named no unit there either, a bare site with no unit of
+work filing nothing itself.
+
+**Decided, by security, each with no line of everyday code moving:**
+
+- **A refused row answers its key in a mutation's reply alone** (F6 asked no more): the
+  column's guard reads the operation's type off the context it already holds, so a query,
+  a subscription and a `has_many` under such a parent refuse the key as every other column,
+  and a list a body built holding one fails closed whole.
+- **A pushed item leaves the stream wherever its rows can be told**: a row, a list's, or
+  either inside an `Option` or a `Result` (`PushedRows`, implemented in `nest-rs-authz`
+  alone, so no downstream impl overlaps it). An item of the body's own holding a row
+  arrives, its row answering no column, the key included.
+- **A system row answers inside a job and on a push to other connections, nowhere else**:
+  carried out of the job — a cache, a static — it is another caller's, `500` and its
+  `error` line, as a row judged for another ability is.
+- **The bare HTTP site files a refused reply's line** at the route, as every other site
+  does.
+
+**Refused:** dropping an object item holding a refused row after async-graphql resolved it
+(a schema extension's `subscribe` hook reading each response's errors): it would read a
+reply back, the design the judged row replaced, to hide only that a push arrived, which is
+all such an item tells its subscriber. Kept as a limit in `TODO.md` §6; an item that must
+not say even that is a row, a list, or one inside an `Option` or a `Result`.

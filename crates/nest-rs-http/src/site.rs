@@ -160,7 +160,12 @@ impl<T: SiteTail> Endpoint for SiteEndpoint<T> {
         req.set_handler(self.handler);
         match &self.unit {
             // Nothing bound and no unit of work: the tail alone, as it answers.
-            None if self.chains.shape() == Shape::Bare => self.tail.answer(&mut req).await,
+            None if self.chains.shape() == Shape::Bare => {
+                let mut response = self.tail.answer(&mut req).await?;
+                let served = ServedAddress::route(req.verb(), req.route());
+                file_refused_reply(self.handler, served, &mut response);
+                Ok(response)
+            }
             None => Ok(self.dispatched(req).await.response),
             Some((unit, policy)) => Ok(self.in_unit(unit, *policy, req).await),
         }

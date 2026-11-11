@@ -231,7 +231,12 @@ impl RelatedTo<shelf::Entity> for novel::Entity {
 
 fn ability_of(role: &str) -> nest_rs_authz::Ability {
     let mut ab = AbilityBuilder::new();
-    ab.can(Action::Read, shelf::Entity);
+    if role == "stranger" {
+        ab.can(Action::Read, shelf::Entity)
+            .when(|p| p.eq(shelf::Column::Id, Uuid::nil()));
+    } else {
+        ab.can(Action::Read, shelf::Entity);
+    }
     match role {
         // Reads a writer's name and a novel's title, a book whole.
         "member" => {
@@ -474,6 +479,25 @@ async fn a_has_many_answers_each_child_as_the_grant_reads_it() {
         assert_eq!(edge["node"]["shelfId"], Value::Null, "{read}");
         assert_eq!(edge["node"]["title"], "Sketches", "{read}");
     }
+}
+
+/// A parent its caller may not read lends no relation its key outside a write's
+/// reply: its children are never loaded, though the caller may read them.
+#[tokio::test]
+async fn a_has_many_under_a_parent_its_caller_may_not_read_answers_nothing() {
+    let app = library().await;
+    let read = answer(
+        &app,
+        "stranger",
+        "{ shelves { novels { edges { node { title } } } } }",
+    )
+    .await;
+    assert_eq!(read["data"], Value::Null, "{read}");
+    assert_eq!(
+        read["errors"][0]["extensions"]["code"], "FORBIDDEN",
+        "{read}"
+    );
+    assert!(!read.to_string().contains("Sketches"), "{read}");
 }
 
 /// A body reading a column off a row a generated loader answered reads what the

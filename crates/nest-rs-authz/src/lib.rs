@@ -97,7 +97,8 @@ pub mod __private {
     #[cfg(feature = "graphql")]
     pub use crate::judged::judged_field;
     pub use crate::judged::{
-        Judged, JudgedRow, Judgement, PushedItem, PushedItemFallback, Refused, WireColumns, judge,
+        Judged, JudgedRow, Judgement, PushedItem, PushedItemFallback, PushedRows, Refused,
+        WireColumns, judge,
     };
     pub use inventory;
     pub use nest_rs_core::__private::{RefusedAnswer, WireRow};

@@ -319,7 +319,8 @@ a body puts the row in ships it; a grant on `Read` or `Manage` withholding any
 other column is a `MalformedRuleError` at `build()` naming it, and every edge's
 schema says exactly what a reply can hold (the key required, nullable where a grant
 may withhold it). A job holding no ability is system work and reads every exposed
-column; anywhere else with no ability the row answers no one. A reply reads
+column, a row that answers inside a job and on a push to other connections alone;
+anywhere else with no ability the row answers no one. A reply reads
 `Read`'s grants whatever its posture's action: a write's `.fields` names writable
 columns.
 
@@ -328,11 +329,12 @@ columns.
 it, which its `Serialize` and each of its GraphQL columns check against the one
 installed where it answers. So a row carried into another request, a cache and a
 publisher's push answer no one, a row judged for a caller refuses on a push to
-other connections (`WsServer`'s `broadcast`, `emit_to`, `emit`), and a system row
+other connections (`WsServer`'s `broadcast`, `emit_to`, `emit`), a system row
 answers no caller, and a `#[field_resolver]` under such a parent refuses before it
 runs (`nest_rs_graphql::__private::ParentProbe`). A row its grants refuse answers its
-key alone on GraphQL and `FORBIDDEN` elsewhere, never `{}`; a list a body built holding one fails the whole
-reply closed, which a `Repo` read never hands it. Held by `nest-rs-authz`'s
+key alone in a GraphQL mutation's reply, which names the row it wrote, and
+`FORBIDDEN` everywhere else, its key included, never `{}`; a list a body built
+holding one fails the whole reply closed, which a `Repo` read never hands it. Held by `nest-rs-authz`'s
 `judged` suites and `nest-rs-seaorm`'s `expose/dto.rs`.
 
 `#[authorize(Action, Entity)]` or `#[public(Action, Entity)]` beside the
@@ -344,7 +346,9 @@ caller may `Read` (`.claude/decisions/denial-holds-whatever-the-token.md`). **Th
 gate is one function**, `class_gate`, on every edge; a subject `#[subject]`
 declares has no rows, so its posture gates and opens no read. A subscription's
 items are pushes: what its stream builds as the socket polls it is judged for the
-subscriber, and an item a refusal makes leaves the stream. A `belongs_to` reads its
+subscriber, and an item a refusal makes — a row, a list's, or one inside an
+`Option` or a `Result` — leaves the stream; an object of the body's own holding one
+arrives, its row answering no column. A `belongs_to` reads its
 link off the judged row, so a key the grant withholds reads `null`; a `has_many`
 groups its children by their key in the batch, its `#[expose]` its visible
 opening. An MCP tool's answer is written inside its site. What a refused row or a

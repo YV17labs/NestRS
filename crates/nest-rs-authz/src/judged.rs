@@ -149,25 +149,24 @@ impl fmt::Display for Refused {
 
 impl Judged {
     /// Whether this row answers the caller the running unit answers: the ability
-    /// that judged it is the one installed, a system row answers where none is, and
-    /// a push to other connections takes a system row alone. `key` is the primary
-    /// key's own column, which a refused row still answers: a write's reply names
-    /// the row it wrote.
-    fn answers(self, key: bool) -> Result<(), Refused> {
+    /// that judged it is the one installed, and a push to other connections takes a
+    /// system row alone. A system row — a job's — answers inside a job, where no
+    /// caller is, and nowhere else: carried out of it, it is another caller's.
+    fn answers(self) -> Result<(), Refused> {
         match (self.judge, crate::context::installed_id()) {
             (Judge::Nobody, _) => Err(Refused::JudgedByNothing),
             (Judge::Ability(_), _) if audience() == Audience::Others => {
                 Err(Refused::PushedToOthers)
             }
             (Judge::Ability(by), Some(answering)) if by == answering => {
-                if self.refused && !key {
+                if self.refused {
                     Err(Refused::Withheld)
                 } else {
                     Ok(())
                 }
             }
-            (Judge::System, None) => Ok(()),
-            (Judge::System, Some(_)) if audience() == Audience::Others => Ok(()),
+            (Judge::System, _) if audience() == Audience::Others => Ok(()),
+            (Judge::System, None) if current_executor_scope() == Some(ExecutorScope::Job) => Ok(()),
             _ => Err(Refused::JudgedForAnother),
         }
     }
@@ -176,14 +175,14 @@ impl Judged {
     /// once, as a serializer writes it; a refusal is handed to the edge answering,
     /// which files it once at the unit it names, since a serializer stops at it.
     pub fn serialize_check<E: EntityTrait>(&self) -> Result<(), Refused> {
-        self.answers(false)
+        self.answers()
             .inspect_err(|&refused| refuse_answer(refused_answer::<E>(refused)))
     }
 
     /// Why a row of `E` refuses the caller it answers, every column at once, as a
     /// field resolving under it reads them; `None` when it answers.
     pub fn refusal<E: EntityTrait>(&self) -> Option<RefusedAnswer> {
-        self.answers(false).err().map(refused_answer::<E>)
+        self.answers().err().map(refused_answer::<E>)
     }
 }
 
@@ -233,9 +232,11 @@ fn file(refused: &RefusedAnswer, handler: Option<&Handler>, served: ServedAddres
 }
 
 /// The guard `#[expose(…, graphql)]` puts on each column of a wire type of `E`: the
-/// column resolves only for the caller the row was judged for, `key` for the primary
-/// key's, which a refused row still answers. A refusal is filed once per operation
-/// and reason, however many rows and columns repeat it.
+/// column resolves only for the caller the row was judged for. `key` is the primary
+/// key's, which a row the caller's grants refuse still answers in a mutation's reply
+/// alone — a write names the row it wrote (F6) — and nowhere else, so a query or a
+/// push never hands a caller the key of a row it may not read. A refusal is filed
+/// once per operation and reason, however many rows and columns repeat it.
 #[cfg(feature = "graphql")]
 pub fn judged_field<E: EntityTrait>(
     judged: Judged,
@@ -244,9 +245,17 @@ pub fn judged_field<E: EntityTrait>(
 + Send
 + Sync
 + 'static {
+    use nest_rs_graphql::async_graphql::parser::types::OperationType;
+
     move |ctx| {
-        let Err(refused) = judged.answers(key) else {
-            return Ok(());
+        let refused = match judged.answers() {
+            Ok(()) => return Ok(()),
+            Err(Refused::Withheld)
+                if key && ctx.query_env.operation.node.ty == OperationType::Mutation =>
+            {
+                return Ok(());
+            }
+            Err(refused) => refused,
         };
         let entity = E::default().table_name();
         let root = nest_rs_graphql::__private::root_site(ctx);
@@ -282,29 +291,64 @@ pub fn judged_field<E: EntityTrait>(
 /// by hand; local, so a list of rows is told from a row.
 pub trait JudgedRow: WireRow {}
 
+/// What a subscription's item holds that the stream can tell: a wire row, a list
+/// of them, or either inside an `Option` or a `Result`, the shapes an item of rows
+/// takes. Implemented here alone: a downstream crate can name none of them.
+pub trait PushedRows: Sized {
+    /// The item, where it answers the subscriber; `None` takes it off the stream.
+    fn answering(self, site: &'static Site) -> Option<Self>;
+}
+
+impl<T: JudgedRow> PushedRows for T {
+    fn answering(self, site: &'static Site) -> Option<Self> {
+        answers_subscriber(&self, site).then_some(self)
+    }
+}
+
+/// A list keeps the rows that answer.
+impl<T: JudgedRow> PushedRows for Vec<T> {
+    fn answering(mut self, site: &'static Site) -> Option<Self> {
+        self.retain(|row| answers_subscriber(row, site));
+        Some(self)
+    }
+}
+
+/// `None` passes; a row inside that does not answer takes the item off.
+impl<T: PushedRows> PushedRows for Option<T> {
+    fn answering(self, site: &'static Site) -> Option<Self> {
+        match self {
+            Some(held) => held.answering(site).map(Some),
+            None => Some(None),
+        }
+    }
+}
+
+/// An error passes; a row inside an `Ok` that does not answer takes the item off.
+impl<T: PushedRows, E> PushedRows for Result<T, E> {
+    fn answering(self, site: &'static Site) -> Option<Self> {
+        match self {
+            Ok(held) => held.answering(site).map(Ok),
+            Err(failed) => Some(Err(failed)),
+        }
+    }
+}
+
 /// One item a subscription's stream yields, kept only where it answers the
 /// subscriber: a wire row its judgement refuses, or one judged for another
-/// caller, leaves the stream, and a list keeps the rows that answer. Any other
-/// item passes, its rows refusing where they resolve.
+/// caller, leaves the stream wherever [`PushedRows`] finds it, and a list keeps
+/// the rows that answer. Any other item passes, and its rows refuse every column
+/// where they resolve, the key included.
 pub struct PushedItem<T>(pub T);
 
-impl<T: JudgedRow> PushedItem<T> {
-    /// The row, where it answers the subscriber; `site` is the subscription's.
+impl<T: PushedRows> PushedItem<T> {
+    /// The item, where it answers the subscriber; `site` is the subscription's.
     pub fn kept(self, site: &'static Site) -> Option<T> {
-        answers_subscriber(&self.0, site).then_some(self.0)
+        self.0.answering(site)
     }
 }
 
-impl<T: JudgedRow> PushedItem<Vec<T>> {
-    /// The rows that answer the subscriber; `site` is the subscription's.
-    pub fn kept(self, site: &'static Site) -> Option<Vec<T>> {
-        let mut rows = self.0;
-        rows.retain(|row| answers_subscriber(row, site));
-        Some(rows)
-    }
-}
-
-/// What [`PushedItem::kept`] answers for an item holding no wire row at its top.
+/// What [`PushedItem::kept`] answers for an item whose rows [`PushedRows`] cannot
+/// tell.
 pub trait PushedItemFallback<T> {
     /// The item, whole.
     fn kept(self, site: &'static Site) -> Option<T>;
@@ -448,24 +492,24 @@ mod tests {
             let judgement = judge::<widget::Entity>(&row(7));
             assert!(judgement.permits(widget::Column::OrgId));
             assert!(!judgement.permits(widget::Column::Note));
-            assert_eq!(judgement.proof().answers(false), Ok(()));
+            assert_eq!(judgement.proof().answers(), Ok(()));
             judgement.proof()
         })
         .await;
-        assert_eq!(judged.answers(false), Err(Refused::JudgedForAnother));
+        assert_eq!(judged.answers(), Err(Refused::JudgedForAnother));
     }
 
     #[tokio::test]
-    async fn a_row_no_grant_admits_answers_its_key_alone() {
+    async fn a_row_no_grant_admits_is_withheld_whole() {
         let ability = reading(|ab| {
             ab.can(Action::Read, widget::Entity)
                 .when(|p| p.eq(widget::Column::OrgId, 7));
         });
         install_ability(ability, async {
             let judgement = judge::<widget::Entity>(&row(8));
+            assert!(!judgement.permits(widget::Column::Id));
             assert!(!judgement.permits(widget::Column::Note));
-            assert_eq!(judgement.proof().answers(false), Err(Refused::Withheld));
-            assert_eq!(judgement.proof().answers(true), Ok(()));
+            assert_eq!(judgement.proof().answers(), Err(Refused::Withheld));
         })
         .await;
     }
@@ -480,27 +524,44 @@ mod tests {
         })
         .await;
         install_ability(reading(rules), async move {
-            assert_eq!(judged.answers(false), Err(Refused::JudgedForAnother));
+            assert_eq!(judged.answers(), Err(Refused::JudgedForAnother));
         })
         .await;
     }
 
     #[tokio::test]
-    async fn a_job_reads_every_column_and_answers_where_no_caller_is() {
+    async fn a_job_reads_every_column_and_answers_inside_a_job_and_on_a_push_alone() {
         let judged = with_job_executor(Arc::new(Handle), async {
             let judgement = judge::<widget::Entity>(&row(7));
             assert!(judgement.permits(widget::Column::Note));
             judgement.proof()
         })
         .await;
-        assert_eq!(judged.answers(false), Ok(()));
+        let in_a_job = with_job_executor(Arc::new(Handle), async { judged.answers() }).await;
+        assert_eq!(in_a_job, Ok(()));
+        assert_eq!(
+            judged.answers(),
+            Err(Refused::JudgedForAnother),
+            "carried out of every unit"
+        );
+        let in_a_request =
+            with_request_executor(Arc::new(Handle), async { judged.answers() }).await;
+        assert_eq!(
+            in_a_request,
+            Err(Refused::JudgedForAnother),
+            "a request holding no ability is a caller all the same"
+        );
+        assert_eq!(
+            nest_rs_core::__private::for_others(|| judged.answers()),
+            Ok(())
+        );
         let caller = reading(|ab| {
             ab.can(Action::Read, widget::Entity);
         });
         install_ability(caller, async move {
-            assert_eq!(judged.answers(false), Err(Refused::JudgedForAnother));
+            assert_eq!(judged.answers(), Err(Refused::JudgedForAnother));
             assert_eq!(
-                nest_rs_core::__private::for_others(|| judged.answers(false)),
+                nest_rs_core::__private::for_others(|| judged.answers()),
                 Ok(())
             );
         })
@@ -513,9 +574,9 @@ mod tests {
             judge::<widget::Entity>(&row(7)).proof()
         })
         .await;
-        assert_eq!(judged.answers(false), Err(Refused::JudgedByNothing));
+        assert_eq!(judged.answers(), Err(Refused::JudgedByNothing));
         assert_eq!(
-            judge::<widget::Entity>(&row(7)).proof().answers(true),
+            judge::<widget::Entity>(&row(7)).proof().answers(),
             Err(Refused::JudgedByNothing)
         );
     }
@@ -527,9 +588,9 @@ mod tests {
         });
         install_ability(ability, async {
             let judged = judge::<widget::Entity>(&row(7)).proof();
-            assert_eq!(judged.answers(false), Ok(()));
+            assert_eq!(judged.answers(), Ok(()));
             assert_eq!(
-                nest_rs_core::__private::for_others(|| judged.answers(false)),
+                nest_rs_core::__private::for_others(|| judged.answers()),
                 Err(Refused::PushedToOthers)
             );
         })
@@ -545,17 +606,11 @@ mod tests {
                 .when(|p| p.eq(widget::Column::Note, 7));
         });
         install_ability(ability, async {
-            assert_eq!(
-                judge::<widget::Entity>(&row(7)).proof().answers(false),
-                Ok(())
-            );
+            assert_eq!(judge::<widget::Entity>(&row(7)).proof().answers(), Ok(()));
             let pushed =
                 nest_rs_core::__private::as_pushed(|| judge::<widget::Entity>(&row(7)).proof());
-            assert_eq!(pushed.answers(false), Err(Refused::Withheld));
-            assert_eq!(
-                judge::<widget::Entity>(&row(7)).proof().answers(false),
-                Ok(())
-            );
+            assert_eq!(pushed.answers(), Err(Refused::Withheld));
+            assert_eq!(judge::<widget::Entity>(&row(7)).proof().answers(), Ok(()));
         })
         .await;
     }

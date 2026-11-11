@@ -193,6 +193,13 @@ expansion grows by one statement per `#[inject]` field and per such parameter.
   `Instanced<Cache, RedisConfig>`, is no resource, and `Instanced<I, T>` is also the type
   an app seeds its own values under, whose fix is the seed; the sentence names both, the
   import first.
+- **A carried line holds whatever else the app imports**: the trait's function takes no
+  context, so a producer's line cannot know the queue port is already bound on another
+  instance, where adding the binding is a contest the boot refuses (2026-11-05, above). It
+  says the binding *in place of* any other, or the port's `Jobs` to push through instead.
+- **An extractor forwards its provider's line**: a parameter is asked through its own
+  type, so one resolving a provider that carries a line implements `CarriesRemedy` too, as
+  `Scoped<T>` does; `ResolvesProvider`'s rustdoc says so.
 
 **Refused:**
 

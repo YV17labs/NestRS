@@ -477,11 +477,12 @@ to go (`.claude/decisions/one-execution-pipeline.md`).
 - a helper called in expression position takes `I` from its caller's own type
   parameter, never from a default;
 - every refusal and every line names its instance's variables, and the
-  resource, and each key a binding registers under the instance, carries the
-  import a provider injecting it unopened is told (`CarriesRemedy`, naming
+  resource, and each provider a binding registers under the instance, carries
+  the import a provider injecting it unopened is told (`CarriesRemedy`, naming
   `RedisModule::<Cache>` for the `cache` instance), which the boot reads off
   every `#[inject]` field and handler parameter declaring it — compile time
-  and refusal only, nothing per request.
+  and refusal only, nothing per request; the instance's config keeps the
+  kernel's sentence.
 
 **An open-ended library is a public behavioural contract plus inventory
 discovery**, and `nest-rs-social` is the template. `SocialProvider` owns the

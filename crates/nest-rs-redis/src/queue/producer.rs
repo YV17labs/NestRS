@@ -128,11 +128,13 @@ impl<I: Instance> RedisQueueProducer<I> {
 
 impl<I: Instance> nest_rs_core::CarriesRemedy for RedisQueueProducer<I> {
     fn remedy() -> Cow<'static, str> {
+        // The port takes one binding, so the line holds beside one already
+        // imported on another instance: it replaces, never adds.
         format!(
-            "Import `{}`, which binds the queue port on {}; a feature pushes jobs through the \
-             port's `Arc<nest_rs::queue::Jobs>`.",
-            typed_import::<I>("nest_rs::redis::RedisQueueModule"),
+            "Bind the queue port on {} — `{}`, in place of any other queue binding — or push \
+             jobs through the port's `Arc<nest_rs::queue::Jobs>`.",
             instance_phrase::<I>(),
+            typed_import::<I>("nest_rs::redis::RedisQueueModule"),
         )
         .into()
     }

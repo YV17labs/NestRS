@@ -3,13 +3,16 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{App, Collecting, ContainerBuilder, Module, Registering, module};
+use nest_rs_core::{
+    App, AppBuilder, Collecting, ContainerBuilder, Instanced, Module, Registering, module,
+};
 use nest_rs_queue::{
     Ask, BoundConsumer, Capabilities, Disposition, Envelope, JobConsumer, JobProducer, Jobs,
     LeaseHold, Prepared, ProcessMethod, PushOptions, QueueBackend, QueueError, QueueName, Received,
 };
 use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueModule, RedisQueueProducer};
 
+use crate::connection::DemotedRedis;
 use crate::module::Cache;
 
 static ELSEWHERE: QueueBackend = QueueBackend::new("elsewhere", Capabilities::NONE);
@@ -212,9 +215,27 @@ struct PushesOnTheCache {
 #[module(providers = [PushesOnTheCache])]
 struct NoQueueOnTheCacheModule;
 
-/// What `M`'s boot says of the producer no binding registers.
-async fn unmet_producer<M: Module + 'static>() -> String {
-    let Err(refused) = App::builder().module::<M>().build().await else {
+/// A queue bound on the default instance, and a provider pushing on the cache.
+#[module(imports = [RedisQueueModule], providers = [PushesOnTheCache])]
+struct CacheProducerBesideTheDefaultQueueModule;
+
+/// The same provider once the queue is bound on the cache in its place.
+#[module(imports = [RedisQueueModule::<Cache>], providers = [PushesOnTheCache])]
+struct CacheProducerOnTheCacheQueueModule;
+
+/// What the refusal says, last, of the default instance's producer.
+const TOLD_THE_DEFAULT_BINDING: &str = "which no module this app imports provides. Bind the \
+     queue port on the default instance — `nest_rs::redis::RedisQueueModule`, in place of any \
+     other queue binding — or push jobs through the port's `Arc<nest_rs::queue::Jobs>`.";
+
+/// What the refusal says, last, of the cache's producer.
+const TOLD_THE_CACHE_BINDING: &str = "which no module this app imports provides. Bind the \
+     queue port on the `cache` instance — `nest_rs::redis::RedisQueueModule::<Cache>`, in place \
+     of any other queue binding — or push jobs through the port's `Arc<nest_rs::queue::Jobs>`.";
+
+/// What `app`'s boot says of the producer no binding registers.
+async fn unmet_producer(app: AppBuilder) -> String {
+    let Err(refused) = app.build().await else {
         panic!("no binding registers the producer");
     };
     refused
@@ -227,26 +248,41 @@ async fn unmet_producer<M: Module + 'static>() -> String {
 /// binding to import, and the port's handle a feature pushes through.
 #[tokio::test]
 async fn a_provider_injecting_a_producer_no_binding_registers_is_told_the_binding() {
-    let said = unmet_producer::<NoQueueModule>().await;
+    let said = unmet_producer(App::builder().module::<NoQueueModule>()).await;
     assert!(
         said.contains("depends on `RedisQueueProducer`")
-            && said.ends_with(
-                "which no module this app imports provides. Import \
-                 `nest_rs::redis::RedisQueueModule`, which binds the queue port on the default \
-                 instance; a feature pushes jobs through the port's \
-                 `Arc<nest_rs::queue::Jobs>`."
-            ),
+            && said.ends_with(TOLD_THE_DEFAULT_BINDING),
         "{said}"
     );
-    let said = unmet_producer::<NoQueueOnTheCacheModule>().await;
+    let said = unmet_producer(App::builder().module::<NoQueueOnTheCacheModule>()).await;
     assert!(
         said.contains("depends on `RedisQueueProducer<Cache>`")
-            && said.ends_with(
-                "which no module this app imports provides. Import \
-                 `nest_rs::redis::RedisQueueModule::<Cache>`, which binds the queue port on the \
-                 `cache` instance; a feature pushes jobs through the port's \
-                 `Arc<nest_rs::queue::Jobs>`."
-            ),
+            && said.ends_with(TOLD_THE_CACHE_BINDING),
         "{said}"
     );
+}
+
+/// The port takes one binding, so beside a queue bound on the default instance
+/// the cache's producer is told the cache's binding in its place, never beside
+/// it, which the boot refuses as contested; done, the app boots.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_producer_on_another_instance_than_the_bound_queue_is_told_the_binding_in_its_place() {
+    let server = DemotedRedis::start().await;
+    let said = unmet_producer(
+        App::builder()
+            .provide(server.config())
+            .module::<CacheProducerBesideTheDefaultQueueModule>(),
+    )
+    .await;
+    assert!(
+        said.contains("depends on `RedisQueueProducer<Cache>`")
+            && said.ends_with(TOLD_THE_CACHE_BINDING),
+        "{said}"
+    );
+    App::builder()
+        .provide(Instanced::<Cache, RedisConfig>::from(server.config()))
+        .module::<CacheProducerOnTheCacheQueueModule>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("the remedy followed boots: {refused:#}"));
 }

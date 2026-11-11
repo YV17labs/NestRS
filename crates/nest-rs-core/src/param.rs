@@ -30,6 +30,12 @@ use crate::scope::Scoped;
 /// module it imports, or global infrastructure — but never for scope: its
 /// consumer is a request, so a request-scoped provider is the point.
 ///
+/// The boot asks the parameter's own type for the line it says when the
+/// provider is missing, never the provider's: an extractor whose provider
+/// carries a remedy implements [`CarriesRemedy`](crate::CarriesRemedy) too,
+/// forwarding the provider's, as [`Scoped<T>`](crate::Scoped) does, or its
+/// refusal says the kernel's sentence.
+///
 /// ```
 /// use std::any::TypeId;
 /// use nest_rs_core::ResolvesProvider;

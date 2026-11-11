@@ -85,8 +85,10 @@ pub(crate) fn remedy_for(
 /// parameter, and said by the boot's
 /// [`MissingDependencyError`](crate::MissingDependencyError) and
 /// [`AccessGraphError`](crate::AccessGraphError) in place of the kernel's
-/// sentence. A parameter resolving a provider says that provider's:
-/// [`Scoped<T>`](crate::Scoped) carries `T`'s.
+/// sentence. A handler parameter is asked through its own type, so an
+/// extractor resolving a provider that carries a remedy forwards it, as
+/// [`Scoped<T>`](crate::Scoped) carries `T`'s
+/// ([`ResolvesProvider`](crate::ResolvesProvider)).
 ///
 /// ```
 /// use std::borrow::Cow;

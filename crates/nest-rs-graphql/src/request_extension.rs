@@ -19,6 +19,7 @@ use async_graphql::{Request, ServerError, ServerResult, ValidationResult};
 use crate::config::GraphqlConfig;
 use crate::context::held_by;
 use crate::document_cost::{self, DocumentLimits};
+use crate::field_collection;
 use crate::filed_facts::FiledFacts;
 use crate::loader::LoaderSeeds;
 use crate::operation_units::{OperationRefusal, selected_operation};
@@ -94,16 +95,27 @@ impl Extension for RequestExtension {
                 registry,
             ) {
                 Some(refusal) => Err(refusal),
-                None => Ok(own_key
-                    .zip(selected_operation(document, operation.as_deref()))
-                    .and_then(|(own_key, (_, selected))| {
-                        own_key
-                            .give(document, &selected.node, registry, &variables)
-                            .unwrap_or_else(|refusal| {
-                                uncollected = Some(refusal);
-                                None
-                            })
-                    })),
+                None => Ok(selected_operation(document, operation.as_deref()).and_then(
+                    |(_, selected)| {
+                        // A schema answering with no key of its own still runs a root
+                        // field once.
+                        let read = match &own_key {
+                            Some(own_key) => {
+                                own_key.give(document, &selected.node, registry, &variables)
+                            }
+                            None => field_collection::collected(
+                                document,
+                                &selected.node,
+                                registry,
+                                &variables,
+                            ),
+                        };
+                        read.unwrap_or_else(|refusal| {
+                            uncollected = Some(refusal);
+                            None
+                        })
+                    },
+                )),
             },
             Err(refused) => Err(unparsed(refused)),
         };
@@ -150,4 +162,68 @@ fn said_once(mut errors: Vec<ServerError>) -> Vec<ServerError> {
     let mut said = std::collections::HashSet::with_capacity(errors.len());
     errors.retain(|error| said.insert((error.message.clone(), error.locations.clone())));
     errors
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_graphql::{EmptySubscription, Object, Schema};
+    use nest_rs_core::module;
+    use nest_rs_http::DetachedWork;
+    use serde_json::json;
+
+    use super::*;
+    use crate::loader::LoaderSeeds;
+
+    #[module]
+    struct Bare;
+
+    /// How many writes [`Mutation`] ran, in this test's process.
+    static WRITES: AtomicUsize = AtomicUsize::new(0);
+
+    struct Query;
+
+    #[Object]
+    impl Query {
+        async fn up(&self) -> bool {
+            true
+        }
+    }
+
+    struct Mutation;
+
+    #[Object]
+    impl Mutation {
+        async fn write(&self) -> usize {
+            WRITES.fetch_add(1, Ordering::SeqCst) + 1
+        }
+    }
+
+    /// A schema executed with no key of its own to give, outside the executor
+    /// every mount wraps it in, still collects its document: a root field selected
+    /// twice runs once.
+    #[tokio::test]
+    async fn a_schema_holding_no_key_still_runs_a_root_field_once() {
+        let app = nest_rs_testing::TestApp::builder()
+            .module::<Bare>()
+            .build_headless()
+            .await
+            .expect("an empty app boots");
+        let loaders =
+            LoaderSeeds::new(app.container().clone(), DetachedWork::new()).expect("sealed");
+        let schema = Schema::build(Query, Mutation, EmptySubscription)
+            .extension(RequestExtensionFactory::new(
+                Arc::new(loaders),
+                &GraphqlConfig::default(),
+            ))
+            .finish();
+        let response = schema.execute("mutation { a: write a: write }").await;
+        assert!(response.errors.is_empty(), "{response:?}");
+        assert_eq!(WRITES.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            response.data.into_json().expect("plain JSON"),
+            json!({ "a": 1 })
+        );
+    }
 }

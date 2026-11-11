@@ -281,8 +281,6 @@ What remains:
   Windows job (`decisions/ci-on-change.md`, 2026-11-11). Close, if Windows is
   ever claimed: `cargo check --target x86_64-pc-windows-msvc` on a host holding
   that target and a C cross compiler. *read*
-- The benchmark figures are 4.0.0's, dated as such on every page. Close: the
-  runbook in `bench/` on a dedicated Linux host. *read*
 - 48 docs pages still exceed the ~300-line budget of `docs/STYLE.md`, the
   longest `security/authentication/oauth2.mdx` (594),
   `websockets/messages.mdx` (571), `configuration/index.mdx` (557),

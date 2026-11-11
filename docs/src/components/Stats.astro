@@ -16,10 +16,10 @@ interface Stat {
 }
 
 const stats: Stat[] = [
-  { big: '×4.2', to: 4.2, format: 'x1', label: 'throughput', sub: '241k req/s on one core · ×2.5 vs Fastify' },
-  { big: '×25', to: 25, format: 'xint', label: 'less memory', sub: '8 MB under load · NestJS ~200 MB' },
-  { big: '×23', to: 23, format: 'xint', label: 'faster cold start', sub: '~15 ms · NestJS ~350 ms' },
-  { big: '0.42', to: 0.42, format: 'f2', label: 'p99 latency, ms', sub: '×3 lower · no GC pauses' },
+  { big: '×2.0', to: 2.0, format: 'x1', label: 'throughput, guarded route', sub: '183k req/s on one core · ×1.3 on a bare hello' },
+  { big: '×17', to: 17, format: 'xint', label: 'less memory', sub: '6 MB idle · NestJS ~100 MB' },
+  { big: '×22', to: 22, format: 'xint', label: 'faster cold start', sub: '~10 ms · NestJS ~220 ms' },
+  { big: '0.46', to: 0.46, format: 'f2', label: 'p99 latency, ms', sub: 'guarded route · ×2.9 lower, no GC pauses' },
   { big: '0', to: 0, format: 'plain', label: 'unguarded routes', sub: 'an ungated, unmasked surface cannot ship' },
 ];
 ---

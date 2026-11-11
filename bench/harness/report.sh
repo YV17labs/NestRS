@@ -13,7 +13,7 @@ files=("$DIR"/*.json)
   echo "# Bench report — $(basename "$DIR")"
   echo
   jq -r '.fingerprint |
-    "- **Date**: \(.date)\n- **Host**: \(.host) — \(.cpu), \(.cores) cores, kernel \(.kernel)\n- **Toolchain**: \(.toolchain.rustc) · node \(.toolchain.node) · \(.toolchain.oha)\n- **Versions**: nestrs \(.versions.nestrs) · @nestjs/core \(.versions["nestjs-express"]) (express) / \(.versions["nestjs-fastify"]) (fastify)"' \
+    "- **Date**: \(.date)\n- **Host**: \(.host) — \(.cpu), \(.cores) cores, kernel \(.kernel)\n- **Toolchain**: \(.toolchain.rustc) · node \(.toolchain.node) · \(.toolchain.oha)\n- **Versions**: nestrs \(.versions.nestrs) · @nestjs/core \(.versions.nestjs) (node adapter)"' \
     "${files[0]}"
   jq -r '.params |
     "- **Protocol**: warmup \(.warmup_s)s · \(.runs) runs × \(.duration_s)s · \(.connections) connections · SUT on core(s) \(.sut_cpus), load on \(.load_cpus) — medians across runs"' \

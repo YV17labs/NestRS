@@ -54,11 +54,10 @@ review of the SUT source, which is deliberately small enough to read.
   no tuning, no middleware removed or added beyond what the scaffold
   ships. A NestJS SUT is `nest new --skip-tests --no-observe` as
   generated, plus the `hello` module, controller and service that
-  `nest generate` writes; the Fastify variant swaps the adapter the way
-  NestJS's performance guide shows. One deliberate exception: on
-  Express, a NestJS string response defaults to `text/html`, so that
-  SUT's T0 handler pins `text/plain` with the documented `@Header`
-  decorator. Fastify already answers `text/plain` and carries none.
+  `nest generate` writes, its adapter swapped for the `NodeAdapter` the
+  way NestJS's HTTP adapters page shows (`npm i @nestjs/platform-node`,
+  `new NodeAdapter()` passed to `NestFactory.create`). That adapter
+  answers a string as `text/plain`, so T0 carries no header of its own.
 - No per-request telemetry on either side: `nest new` offers the
   `@nestjs/observe` agent, which reports to a hosted service under an
   account's keys, and the SUT declines it (`--no-observe`, the CLI's own

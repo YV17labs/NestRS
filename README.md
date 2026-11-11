@@ -5,7 +5,7 @@
 <p align="center">
   <strong>The Rust framework for modular, scalable backends.</strong><br>
   You write the business logic; the framework carries the rest — modules, decorators and dependency injection over a native core.<br>
-  <sub>~25× less memory · ~23× faster cold starts · ×4 the throughput of NestJS, core for core — measured on NestRS 4.0.0 with a byte-identical contract, <a href="bench/">harness in the repo</a>.</sub>
+  <sub>~17× less memory · ~20× faster cold starts · ×2 the throughput of NestJS 12 on node:http, its fastest adapter, on a guarded route, core for core — byte-identical contract, <a href="bench/">harness in the repo</a>.</sub>
 </p>
 
 <p align="center">
@@ -60,20 +60,29 @@ binaries share the code and the database, hand work over through the queue,
 and each scales on its own signal, with no generated RPC between them.
 [The architecture, drawn →](https://nestrs.dev/why/#a-modular-monolith-deployed-per-workload)
 
-The numbers behind the tagline, measured 2026-07-25 on NestRS 4.0.0 — against
-the same hello-world service in NestJS 11, idiomatic on both sides, byte-identical
-HTTP contract, conformance-gated: NestRS runs in **~25× less memory** (single-digit MB
-against ~200 MB), cold-starts **~23× faster** (milliseconds against near half
-a second), and — core for core, each server pinned to a single CPU — serves
-**×4.2 the throughput of NestJS on Express** (its default) — **×2.5 its best
-case, Fastify** — with **p99 latency cut to a third**. Scaling out changes nothing:
-Node adds ~200 MB of process per core; one NestRS binary takes every core in
-a single single-digit-MB process.
-Where the Express service needs three boxes, one NestRS binary carries the
-load. Those figures come from a **4-core / 8 GB Docker VM** — virtualized,
-so they are a floor, not a ceiling. The harness lives in [`bench/`](bench/) and
-has since moved its contestants to NestJS 12, and the next published run replaces
-these figures; `cd bench && just bench` runs its protocol on your own hardware.
+The numbers behind the tagline, measured 2026-11-11 on NestRS 7.0 against the
+same service in **NestJS 12.4 on `node:http`** — its `NodeAdapter`, which NestJS
+recommends and measures ahead of Express and Fastify, so the slower adapters are
+not raced — idiomatic on both sides, byte-identical HTTP contract,
+conformance-gated, each server pinned to one core:
+
+| One core each | NestRS 7.0 | NestJS 12.4 · node:http | |
+|---|---|---|---|
+| Hello world, JSON through DI | ~201k req/s · p99 0.43 ms | ~154k req/s · p99 0.81 ms | ×1.3 |
+| Guarded route (guard + interceptor) | ~183k req/s · p99 0.46 ms | ~93k req/s · p99 1.32 ms | ×2.0 |
+| JSON request body | ~196k req/s · p99 0.46 ms | ~94k req/s · p99 1.31 ms | ×2.1 |
+| Streamed body | ~173k req/s · p99 0.53 ms | ~44k req/s · p99 6.75 ms | ×4.0 |
+| Memory idle | 6 MB | 103 MB | ×17 |
+| Cold start → first 200 | ~10 ms | ~220 ms | ×22 |
+
+On a bare hello world the gap is a third; as soon as the framework does a
+framework's work — a guard, an interceptor, a request body, a stream — it is ×2
+to ×4, with a tail two to thirteen times shorter. Given four cores, one NestRS
+process takes them all (×1.8 to ×3.5), where Node runs one ~100 MB process per
+core. Measured on a 14-core Apple-silicon host in a Linux VM, so a floor, not a
+ceiling; the [benchmarks page](https://nestrs.dev/benchmarks/) has every tier and
+the protocol, the harness lives in [`bench/`](bench/), and `cd bench && just
+bench` runs it on your own hardware.
 
 Try it on your machine:
 

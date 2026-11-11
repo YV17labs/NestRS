@@ -11,7 +11,7 @@ harness development, not publication.
 # Debian/Ubuntu — adapt to your distro
 sudo apt-get update && sudo apt-get install -y git curl build-essential jq util-linux
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y   # Rust stable
-curl -fsSL https://deb.nodesource.com/setup_24.x | sudo bash - && sudo apt-get install -y nodejs
+curl -fsSL https://deb.nodesource.com/setup_26.x | sudo bash - && sudo apt-get install -y nodejs
 cargo install oha just
 ```
 

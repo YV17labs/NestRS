@@ -1,5 +1,5 @@
 name = "nestjs"
-variant = "express"
+variant = "node"
 runtime = "node"
 port = 3110
 build = "npm ci && npm run build"

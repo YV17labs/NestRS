@@ -24,9 +24,11 @@ bench/
 2. **Each SUT is idiomatic for *its* framework** — written the way its
    own docs and CLI scaffold teach, defaults untouched. The comparison
    is "framework as taught vs framework as taught", not "tuned vs naive".
-3. **Compare against the opponent's best case.** NestJS runs both
-   `express` and `fastify` variants; future providers follow the same
-   pattern (e.g. `laravel-fpm` / `laravel-octane`).
+3. **Compare against the opponent's best case.** NestJS runs on its
+   `NodeAdapter` (`@nestjs/platform-node`, straight on `node:http`), the
+   adapter its own docs recommend since 12.3 and measure ahead of Express
+   and Fastify; a future provider enters on its own fastest documented
+   option.
 4. **A number without its environment is not a result.** Every result
    embeds the machine fingerprint (CPU, kernel, toolchains, resolved
    dependency versions) and the exact protocol parameters.

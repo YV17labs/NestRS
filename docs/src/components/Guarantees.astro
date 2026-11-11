@@ -37,12 +37,12 @@ const reasons: Reason[] = [
   {
     glyph: '▲',
     title: 'Native throughput',
-    desc: '×2.5 NestJS-on-Fastify, its best case, measured on NestRS 4.0.0 — with sub-millisecond p99 and no GC pauses.',
+    desc: '×2 NestJS on node:http, its fastest adapter, on a guarded route — with a sub-millisecond p99 and no GC pauses.',
   },
   {
     glyph: '▢',
     title: 'One lean artifact',
-    desc: 'A native binary for a distroless image — ~8 MB under load, milliseconds to boot, probes for the orchestrator.',
+    desc: 'A native binary for a distroless image — ~10 MB under load, ~10 ms to boot, probes for the orchestrator.',
   },
 ];
 ---

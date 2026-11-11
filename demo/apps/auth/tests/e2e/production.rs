@@ -17,6 +17,7 @@ use tokio::time::timeout;
 const WORKSPACE_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 const OWN_DIRECTORY: &str = env!("CARGO_MANIFEST_DIR");
 const OWN_SECRET: &str = "a-secret-this-test-names-on-the-process-alone";
+const OWN_ORIGIN: &str = "https://auth.example.com";
 const OWN_REDIRECT: &str = "https://auth.example.com/social/callback";
 
 async fn production_boot_refuses(
@@ -51,6 +52,14 @@ async fn assert_it_names_its_own_or_is_refused(directory: &str) {
         var_name(AuthnConfig::NAMESPACE, "SECRET"),
         OWN_SECRET.to_owned(),
     );
+    let issuer = (
+        var_name(AuthnConfig::NAMESPACE, "ISSUER"),
+        OWN_ORIGIN.to_owned(),
+    );
+    let audience = (
+        var_name(AuthnConfig::NAMESPACE, "AUDIENCE"),
+        OWN_ORIGIN.to_owned(),
+    );
     let clients = (
         var_name(OAuthServerConfig::<ClientPayload>::NAMESPACE, "CLIENTS"),
         serde_json::json!([{
@@ -77,14 +86,18 @@ async fn assert_it_names_its_own_or_is_refused(directory: &str) {
 
     for (named, said) in [
         (vec![], "no JWT key configured"),
-        (vec![&key], "at_least_one_client"),
-        (vec![&key, &clients], "at_least_one_resource"),
+        (vec![&key], issuer.0.as_str()),
+        (vec![&key, &issuer, &audience], "at_least_one_client"),
         (
-            vec![&key, &clients, &resources, &github],
+            vec![&key, &issuer, &audience, &clients],
+            "at_least_one_resource",
+        ),
+        (
+            vec![&key, &issuer, &audience, &clients, &resources, &github],
             "social provider `github` is linked but misconfigured",
         ),
         (
-            vec![&key, &clients, &resources, &google],
+            vec![&key, &issuer, &audience, &clients, &resources, &google],
             "social provider `google` is linked but misconfigured",
         ),
     ] {

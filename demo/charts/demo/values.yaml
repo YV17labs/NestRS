@@ -66,8 +66,9 @@ config:
 #                            answering 500, so the chart refuses that too
 #   OAUTH__SERVER__CLIENTS   JSON array, the clients `auth`'s token endpoint
 #                            registers — auth alone
-# Also required, under `apps`: the `host` of `auth` and of `assistant`, from which the
-# chart derives the URLs the apps name each other by (see `host` below).
+# Also required, under `apps`: the `host` of `api`, `assistant`, `auth` and `live`, from
+# which the chart derives the URLs the apps name each other by and the audience each
+# one requires (see `host` below).
 #
 # Optional, `auth` alone: SOCIAL__GITHUB__CLIENT_ID / __CLIENT_SECRET, SOCIAL__GOOGLE__*.
 # A provider is on once `auth` is handed both, here, in `config` or in its own
@@ -186,8 +187,10 @@ defaults:
 #        (issuer, each app's own audience, the assistant's resource, the
 #        resources a sign-in may name, the redirect of each social provider whose
 #        client id it reads) — set them rather than copying those URLs into `config`
-#        by hand. `auth` refuses a boot with no resource, `assistant` one with no
-#        resource of its own or no issuer (`auth`'s `host`).
+#        by hand. `api`, `auth` and `live` refuse a boot with no issuer (`auth`'s
+#        `host`) or no audience of their own (theirs: an app kept off the Ingress
+#        pins its `AUTHN__AUDIENCE` in its own `config`), `auth` one with no
+#        resource, `assistant` one with no resource of its own or no issuer.
 # `config` this app's own settings, spelled like the top-level `config` and laid
 #        over it for this app alone — what `apps/<app>/.env` holds locally
 # `reads` what the app's modules load from a deployment, read off its `module.rs`:
@@ -219,6 +222,8 @@ apps:
       STORAGE__ACCESS_KEY: required
       STORAGE__SECRET_KEY: required
       AUTHN__PUBLIC_KEY: required
+      AUTHN__ISSUER: required
+      AUTHN__AUDIENCE: required
 
   auth:
     bin: auth
@@ -229,6 +234,8 @@ apps:
       SEAORM__URL: required
       AUTHN__PUBLIC_KEY: required
       AUTHN__PRIVATE_KEY: required
+      AUTHN__ISSUER: required
+      AUTHN__AUDIENCE: required
       OAUTH__SERVER__CLIENTS: required
       SIGN_IN__RESOURCES: required
       SOCIAL__GITHUB__CLIENT_ID: optional
@@ -260,6 +267,8 @@ apps:
     reads:
       SEAORM__URL: required
       AUTHN__PUBLIC_KEY: required
+      AUTHN__ISSUER: required
+      AUTHN__AUDIENCE: required
     # WebSocket. Sockets live up to NESTRS_WS__MAX_CONNECTION_SECS (4h by
     # default), so a rollout closes them and clients reconnect — CPU is a poor
     # signal for a connection-bound edge, hence no autoscaling here by default.

@@ -2355,6 +2355,10 @@ lists what the boot, a log or the wire shows when one is missed.
   `<KEY>` and as `<KEY>_FILE` now refuse the install, naming the key and the apps that
   read it: add a key your own module reads under that app's `reads`. A tool reading
   `<release>-env` or `<release>-issuer` as a Secret reads `<release>-<app>`.
+- **The demo chart without the hostname of `api` or `live`** refuses the install since
+  0.8.0, naming `AUTHN__AUDIENCE` and the app: each app verifying a token requires its
+  own audience, derived from its `host`, where the install went through and the app
+  refused its boot. An app kept off the Ingress pins it in `apps.<app>.config`.
 - **A development-only route kept in a deployment**: an app listing
   `DevelopmentOnlyGuard` refuses its boot unless `<PREFIX>_ENV` declares
   `development` or `test` — `DevelopmentOnlyGuard guards a route only

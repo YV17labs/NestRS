@@ -164,6 +164,10 @@ if renders "the install line renders" "${install[@]}"; then
   holds demo-migrate SEAORM__URL
   for app in api assistant auth live worker; do reads "Deployment/demo-$app" "demo-$app"; done
   reads Job/demo-migrate demo-migrate
+  [ "$(configmap AUTHN__ISSUER)" = https://auth.example.com ] || fail "the issuer is not auth's origin"
+  for app in api auth live; do
+    [ "$(podenv "demo-$app" AUTHN__AUDIENCE)" = "https://$app.example.com" ] || fail "demo-$app's audience is not its own origin"
+  done
   checksum="$(annotation demo-live checksum/secret)"
   [ -n "$checksum" ] || fail "live's pods carry no checksum/secret"
   for app in api assistant auth worker; do
@@ -204,11 +208,21 @@ refuses "no hostname refuses auth" "$(needs SIGN_IN__RESOURCES auth)" "${line_se
 refuses "no hostname refuses the assistant's resource" "$(needs OAUTH__RESOURCE__RESOURCE assistant)" "${line_secrets[@]}"
 refuses "no issuer's hostname refuses the assistant" "$(needs OAUTH__RESOURCE__AUTHORIZATION_SERVERS assistant)" \
   "${install[@]}" --set apps.auth.host=
-renders "live's hostname alone is no app's need" "${install[@]}" --set apps.live.host= || true
-renders "a pinned resource stands for the hostnames" "${line_secrets[@]}" \
+for app in api auth live; do
+  refuses "no issuer's hostname refuses $app" "$(needs AUTHN__ISSUER $app)" "${install[@]}" --set apps.auth.host=
+  refuses "no hostname of its own refuses $app's audience" "$(needs AUTHN__AUDIENCE $app)" \
+    "${install[@]}" --set "apps.$app.host="
+done
+renders "an audience pinned on live stands for its hostname" "${install[@]}" --set apps.live.host= \
+  --set apps.live.config.AUTHN__AUDIENCE=https://live.example.com || true
+renders "pinned settings stand for the hostnames" "${line_secrets[@]}" \
   --set config.SIGN_IN__RESOURCES=https://api.example.com \
   --set config.OAUTH__RESOURCE__RESOURCE=https://assistant.example.com \
-  --set config.OAUTH__RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com || true
+  --set config.OAUTH__RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com \
+  --set config.AUTHN__ISSUER=https://auth.example.com \
+  --set apps.api.config.AUTHN__AUDIENCE=https://api.example.com \
+  --set apps.auth.config.AUTHN__AUDIENCE=https://auth.example.com \
+  --set apps.live.config.AUTHN__AUDIENCE=https://live.example.com || true
 refuses "an empty value is no value" "$(needs STORAGE__URL worker)" "${install[@]}" --set config.STORAGE__URL=
 refuses "an empty secret is no secret" "$(needs REDIS__URL api)" "${install[@]}" --set secrets.REDIS__URL=
 

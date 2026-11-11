@@ -84,12 +84,12 @@ helm install demo demo/charts/demo \
 The secrets are the *Required* list in [`values.yaml`](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo/values.yaml): a cluster's own services, the
 object store's credentials, the signing keypair, and `clients.json`, the array of clients
 `auth` registers, each with its `client_id`, `client_secret`, `payload`, `scopes` and
-`resources`. The chart derives the cross-app URLs from the hostnames. Leave out a secret,
-or `auth`'s or the assistant's hostname, and the install is refused, naming each setting
-and the apps that cannot run without it: an app reading one refuses its boot without it,
-but for the signing key, without which `auth` boots and its token endpoint answers `500`.
-Without `api`'s or `live`'s hostname the install goes through, that app unreachable from
-outside, as the install notes warn. Social sign-in stays optional: a provider is on once
+`resources`. The chart derives the cross-app URLs from the hostnames, and each app's
+audience from its own. Leave out a secret, or the hostname of `api`, `assistant`, `auth`
+or `live`, and the install is refused, naming each setting and the apps that cannot run
+without it: an app reading one refuses its boot without it, but for the signing key,
+without which `auth` boots and its token endpoint answers `500`. An app kept off the
+Ingress pins its `AUTHN__AUDIENCE` in its own `config` instead. Social sign-in stays optional: a provider is on once
 a deployment names its `CLIENT_ID` and `CLIENT_SECRET`, and one of the two alone is
 refused like a missing secret.
 

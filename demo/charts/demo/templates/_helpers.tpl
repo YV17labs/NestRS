@@ -147,11 +147,11 @@ resource identifier RFC 9728 discovery serves, the resources a sign-in may be
 minted a token for, the social redirect URIs — and every one of them is the
 same string as some app's public origin. Deriving them is what keeps a rename of
 one hostname from silently breaking the pair. The audience is no shared setting:
-each app requires its own (`demo.env`), and the assistant's MCP endpoint admits
-its resource's host by itself. A social redirect is derived only for a provider
-whose client id `auth` is handed where the chart sees it (`demo.appSets`, or the
-shared `config`), under its name or as `<KEY>_FILE`: on its own a redirect is a
-half-configured provider, which refuses `auth`'s boot.
+each app requires its own (`demo.appDerived`), and the assistant's MCP endpoint
+admits its resource's host by itself. A social redirect is derived only for a
+provider whose client id `auth` is handed where the chart sees it (`demo.appSets`,
+or the shared `config`), under its name or as `<KEY>_FILE`: on its own a redirect
+is a half-configured provider, which refuses `auth`'s boot.
 
 `.Values.config` is laid over the result, so any of these can still be pinned, under
 either spelling (`demo.sharedConfig`).
@@ -215,16 +215,29 @@ Everything that lands in the ConfigMap, every key wearing the deployment's prefi
 {{- end }}
 
 {{/*
+The settings the chart derives for one app alone, unprefixed: the audience a token must
+carry to be accepted here — this app's own origin, so a token minted for one app is
+refused by every other (RFC 8707) — unless the app is handed one under either spelling.
+Callers read it back with `fromYaml`.
+*/}}
+{{- define "demo.appDerived" -}}
+{{- $origin := include "demo.origin" (dict "ctx" .ctx "app" .app) -}}
+{{- $pins := merge (fromYaml (include "demo.appSets" .)) (default dict .ctx.Values.config) -}}
+{{- $derived := dict -}}
+{{- if and $origin (not (or (hasKey $pins "AUTHN__AUDIENCE") (index $pins "AUTHN__AUDIENCE_FILE"))) -}}
+{{- $_ := set $derived "AUTHN__AUDIENCE" $origin -}}
+{{- end -}}
+{{- $derived | toYaml -}}
+{{- end }}
+
+{{/*
 The env of one app: the prefix itself (the one name no prefix renames), the
-environment, the port this chart owns, the audience a token must carry to be
-accepted here — this app's own origin, so a token minted for one app is refused
-by every other (RFC 8707), unless the app is handed one under either spelling — and
-the app's own `config`, each outranking the ConfigMap and Secret that follow wholesale.
+environment, the port this chart owns, what the chart derives for this app alone
+(`demo.appDerived`) and the app's own `config`, each outranking the ConfigMap and
+Secret that follow wholesale.
 */}}
 {{- define "demo.env" -}}
 {{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" .ctx "app" .app)) -}}
-{{- $origin := include "demo.origin" (dict "ctx" .ctx "app" .app) -}}
-{{- $pins := merge (fromYaml (include "demo.appSets" .)) (default dict .ctx.Values.config) -}}
 - name: NESTRS_ENV_PREFIX
   value: {{ .ctx.Values.envPrefix | quote }}
 - name: {{ printf "%s_ENV" .ctx.Values.envPrefix }}
@@ -233,9 +246,9 @@ the app's own `config`, each outranking the ConfigMap and Secret that follow who
 - name: {{ printf "%s_HTTP__PORT" .ctx.Values.envPrefix }}
   value: {{ $cfg.port | quote }}
 {{- end }}
-{{- if and $origin (not (or (hasKey $pins "AUTHN__AUDIENCE") (index $pins "AUTHN__AUDIENCE_FILE"))) }}
-- name: {{ printf "%s_AUTHN__AUDIENCE" .ctx.Values.envPrefix }}
-  value: {{ $origin | quote }}
+{{- range $key, $value := fromYaml (include "demo.appDerived" .) }}
+- name: {{ printf "%s_%s" $.ctx.Values.envPrefix $key }}
+  value: {{ $value | quote }}
 {{- end }}
 {{- range $key, $value := $cfg.config }}
 - name: {{ printf "%s_%s" $.ctx.Values.envPrefix $key }}
@@ -357,7 +370,7 @@ is refused too, rather than dropped.
 {{- $reads := default dict $cfg.reads -}}
 {{- if not $cfg.existingSecret -}}
 {{- $reached = merge $reached $reads -}}
-{{- $seen := merge (fromYaml (include "demo.appSets" (dict "ctx" $ "app" $app))) $shared -}}
+{{- $seen := merge (fromYaml (include "demo.appSets" (dict "ctx" $ "app" $app))) (fromYaml (include "demo.appDerived" (dict "ctx" $ "app" $app))) $shared -}}
 {{- $missing := list -}}
 {{- range $key, $need := $reads -}}
 {{- if and (eq $need "required") (not (or (hasKey $seen $key) (hasKey $seen (printf "%s_FILE" $key)))) -}}
@@ -414,8 +427,8 @@ is refused too, rather than dropped.
 
 {{/*
 Where a missing setting comes from: a hostname, for those the chart derives
-(`demo.derivedConfig`); the other half, for a social provider named in part; the
-operator's values for the rest.
+(`demo.derivedConfig`, `demo.appDerived`); the other half, for a social provider named
+in part; the operator's values for the rest.
 */}}
 {{- define "demo.hint" -}}
 {{- $derived := dict
@@ -426,7 +439,9 @@ operator's values for the rest.
 {{- if regexMatch "^SOCIAL__[A-Z]+__REDIRECT_URL$" . -}}
 {{- $_ := set $derived . "`apps.auth.host`" -}}
 {{- end -}}
-{{- if hasKey $derived . -}}
+{{- if eq . "AUTHN__AUDIENCE" -}}
+{{- print "the chart derives each app's own from its `host`. Set that, or pin it in `apps.<app>.config`." -}}
+{{- else if hasKey $derived . -}}
 {{- printf "the chart derives it from %s. Set that, or pin it in `config`." (index $derived .) -}}
 {{- else if hasPrefix "SOCIAL__" . -}}
 {{- printf "a provider named in part refuses the boot. Set `secrets.%s` too, or drop the provider's other settings." . -}}

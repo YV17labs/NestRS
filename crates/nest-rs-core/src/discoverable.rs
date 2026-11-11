@@ -64,10 +64,9 @@ pub trait Discoverable {
         Vec::new()
     }
 
-    /// The remedy each dependency's type carries
-    /// ([`CarriesRemedy`](crate::CarriesRemedy)), by its key — an `#[inject]`
-    /// field's, a handler parameter's — read only where the boot refuses one no
-    /// module provides.
+    /// The remedy each dependency's type carries (`CarriesRemedy`), by its key —
+    /// an `#[inject]` field's, a handler parameter's — read only where the boot
+    /// refuses one no module provides.
     fn injected_remedies() -> Vec<InjectedRemedy> {
         Vec::new()
     }

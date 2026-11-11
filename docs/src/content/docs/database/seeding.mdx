@@ -31,7 +31,7 @@ pub const GLOBEX: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_61
 const DEMO_ORGS: [(Uuid, &str); 2] = [(ACME, "Acme"), (GLOBEX, "Globex")];
 
 // …
-pub async fn seed(db: &DatabaseConnection) -> Result<u64> {
+pub async fn seed(db: &DatabaseConnection) -> Result<u64, RepoError> {
     let mut inserted = 0;
     for (id, name) in DEMO_ORGS {
         let stmt = Query::insert()
@@ -108,11 +108,13 @@ Each row is inserted `ON CONFLICT (id) DO NOTHING`.
 ## The runner
 
 `seed::run` calls each factory in dependency order and sums the inserts —
-parents before children, so foreign keys resolve:
+parents before children, so foreign keys resolve. Each answers a `RepoError`,
+so a row the server refuses is said by its SQLSTATE and its constraint, never
+by the value its message quotes:
 
 ```rust title="crates/seed/src/runner.rs (from the demo, abridged)"
 // …
-pub async fn run(db: &DatabaseConnection) -> Result<u64> {
+pub async fn run(db: &DatabaseConnection) -> Result<u64, RepoError> {
     let mut inserted = 0;
     inserted += factories::org::seed(db).await?;
     inserted += factories::user::seed(db).await?;

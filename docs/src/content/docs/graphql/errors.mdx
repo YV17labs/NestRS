@@ -196,8 +196,8 @@ answers the map it wrote.
 ## `ServiceError`
 
 A service method the feature writes returns `Result<T, ServiceError>` — a
-`CrudService` read answers `DbErr`, which converts into no edge's error, so the method
-says `.map_err(ServiceError::from)` — and `ServiceError` implements `ToProblem`: `NotFound` answers `NOT_FOUND`, `Conflict` `CONFLICT`,
+`CrudService` read answers a `RepoError`, which converts into no edge's error, so the
+method's `?` makes it a `ServiceError` — and `ServiceError` implements `ToProblem`: `NotFound` answers `NOT_FOUND`, `Conflict` `CONFLICT`,
 `Forbidden` `FORBIDDEN`, `Invalid` and `Validation` `INVALID_ARGUMENT`, each with
 its own sentence, a validation failure's fields under `extensions.errors`; `Db` and `Internal` answer opaquely, their cause
 filed at `error` — but for a statement Postgres cancelled at its bound, a `Db` answering
@@ -219,10 +219,10 @@ impl PostsResolver {
 }
 ```
 
-A `DbErr` turned into a `ServiceError` by `?` is classified on the way: a
-unique violation becomes `Conflict`, a row a write found gone `NotFound`, any
-other failure `Db`, whose chain is filed by its SQLSTATE, never by the
-server's message. A `#[crud]` operation answers the same classes, a create
+A `RepoError` turned into a `ServiceError` by `?` keeps its class: a unique
+violation becomes `Conflict`, a write the caller's grants do not cover
+`Forbidden`, a row a write found gone `NotFound`, any other failure `Db`, filed
+by its SQLSTATE, never by the server's message. A `#[crud]` operation answers the same classes, a create
 or an update a unique key refuses naming the input's fields that key holds
 under `extensions.errors`
 ([When the database refuses](/database/crud/#when-the-database-refuses)), and a

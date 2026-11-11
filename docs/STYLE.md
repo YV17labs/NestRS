@@ -205,7 +205,7 @@ wrong, each filed by a reader following a page verbatim — check them on sight:
   `impl Layer for T`; a `type Exception = E` a route returns implements `ToProblem` (or
   `ResponseError`, for an answer that is no problem document); a trait is abridged, never given a
   method it lacks; `#[authorize(Action, bind = Service)]` takes the action first; a queue is named
-  by its `Queue` type on both sides; a handler never `?`s a `CrudService` read, whose `DbErr`
+  by its `Queue` type on both sides; a handler never `?`s a `CrudService` read, whose `RepoError`
   converts into no edge's error; a `?` on an `anyhow` error or a bare `StatusCode` never sits in
   a body answering `HttpError` (`.opaque()?`, `HttpError::from_status`).
 - **An excerpt that drifted.** A `(from the demo)` title names a file that exists, and every line

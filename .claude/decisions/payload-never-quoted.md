@@ -442,3 +442,15 @@ message and detail through sea-orm's own `Debug`, the one error type left that a
 framework call hands out raw. Closing it takes `Repo` answering an error of the
 framework's, a break of every service's `?`; `ServiceError::from` already says it,
 and the everyday `?` into a `ServiceError` never meets it.
+
+## 2026-11-11 — the data layer hands out no error printing the row
+
+The limit the entry above states is closed: `Repo` and every caller of it answer
+`RepoError`, which holds the SQLSTATE and the names the server reported and prints
+nothing else, by any reader (`repo-hands-out-no-connection.md`, this date). Seen first
+against a Postgres double sending what Postgres sends: a unique violation's `detail` and a
+refused value's message, each marked, printed by the `DbErr` an insert and a read handed
+back, by the `DbErr` `ServiceError::Db` held, by the one boxed in `AtomicError::Database`
+and `OutboxError::Database`, by `retry_on_conflict`'s answer and by `EphemeralDatabase`'s
+report; none prints it now. `ServiceError::Db` holds a `RepoError`, so its view of a
+`DbErr` is gone; the driver's `SafeLink` stays for a `DbErr` a chain still holds.

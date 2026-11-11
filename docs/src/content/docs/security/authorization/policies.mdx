@@ -358,7 +358,7 @@ ab.can(Action::Update, post::Entity)
 
 A write of `title` alone needs a post by the author; one of `title` and `status`, a
 post by the author in the org. A row its grants do not permit each column on is outside
-the caller's scope, as any other: `DbErr::RecordNotUpdated`, a `404`.
+the caller's scope, as any other: `RepoError::NotFound`, a `404`.
 
 <Aside type="caution">
 A write's reply still shows that write's own grant: `.fields([Title])` on `Update`

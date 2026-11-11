@@ -612,7 +612,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `ServiceError::internal(format!("password hashing failed: {e}"))` | `ServiceError::internal_because("password hashing failed", e)` |
    | `ServiceError::internal(&reason)`, `reason` a local `String` or a borrowed `&str` | `ServiceError::internal(reason.clone())` or `.to_owned()`: the detail is `'static`; a `String` or a `&'static str` passes unchanged |
    | `ServiceError::Internal(msg)` built or matched | `ServiceError::internal(msg)`; match `ServiceError::Internal { .. }`, the detail, then the cause's chain, read as `err.source()`'s `Display` |
-   | `err.source()` of a `ServiceError::Validation` or a `ServiceError::Db`, downcast to `ValidationErrors` or `DbErr` | the variant's own field, `ServiceError::Db(db)`: `source()` says the failure as `error_message` does, and holds neither |
+   | `err.source()` of a `ServiceError::Validation` or a `ServiceError::Db`, downcast to `ValidationErrors` or `DbErr` | the variant's own field: `ServiceError::Validation(errors)`, and `ServiceError::Db(err)`, a `RepoError` to `match` on; `source()` says the failure as `error_message` does |
    | `err.source()` of a `ServiceError::Internal`, walked to the cause `internal_because` was given and downcast | a variant of your own error holding it, for a failure a caller decides on: `source()` is one sentence, what `error_message` says of the detail and the cause's chain, with nothing beneath it |
    | `ServiceError::Masking(msg)` built or matched | nothing: the variant is gone, as no path built it. A wire row's refusal is the edge's own answer, and a failure of your own is `ServiceError::internal(msg)` |
    | `AuthError::Failed(format!("…: {e}"))`, `AuthError::Failed(msg)` | `AuthError::failed_because("…", e)`, `AuthError::failed(msg)` |
@@ -868,7 +868,9 @@ lists what the boot, a log or the wire shows when one is missed.
     | `nest_rs::worker::TARGET`, `nest_rs::worker::context`, `nest_rs::schedule::nest_rs_worker::JOB_TIMEOUT` | gone; the job bound is `nest_rs::core::JOB_TIMEOUT`, and nothing files on `nest_rs::worker` any more |
     | `nest_rs::seaorm::WorkerDbContext`; `nest_rs::seaorm::ws::WsDataContext`, `mcp::McpDataContext`; the seaorm `ws` and `mcp` features | `nest_rs::seaorm::SeaOrmUnitOfWork`; nothing: delete them |
     | a database driver's request interceptor and `JobContext` | one `UnitOfWork`, bound through `nest_rs::database::provide_unit_of_work`, which also runs every lifecycle hook in a unit; it implements `settle_net`, and `Executor::atomic` to offer an atomic block (*Writing a driver*) |
-    | a `match` on `ExecutorScope`, `TransactionPolicy` or `DbOutcome` outside its crate | add a `_` arm that fails closed |
+    | a `match` on `ExecutorScope`, `TransactionPolicy` or `RepoError` outside its crate | add a `_` arm that fails closed |
+    | `Result<T, DbErr>` from `Repo`, a `RepoSelect`, a page read or `CrudService` (`list`, `access`, `create`, `update`, `delete`), and `retry_on_conflict`'s answer; `Err(DbErr::RecordNotUpdated)`, `DbErr::RecordNotFound`, `DbErr::RecordNotInserted` or `DbErr::AccessDenied` matched; `ServiceError::Db(db_err)` | `nest_rs::seaorm::RepoError`: `RepoError::NotFound`, `RepoError::Forbidden { columns, .. }` (a create its scope refuses names no column), `RepoError::UniqueViolation(key)` with `key.constraint()`, `ForeignKeyViolation`, `SerializationFailure`, `QueryCanceled`, `Other { .. }`. `?` into a `ServiceError` is unchanged, and no reader of it prints the server's message or `detail`; a `DbErr` of your own (a migration, a seed, a transaction you opened) becomes one with `RepoError::from` |
+    | a `DbErr` `?`-ed into an `anyhow::Result`: `Migrator::up(conn, None).await?` in your migrations crate's `migrate` helper and binary, a seed's statements | `.map_err(RepoError::from)` before the `?`, the helper answering `Result<(), RepoError>`: an `anyhow` report of a `DbErr` prints the row a data migration refused. `nestrs g migration` regenerates `migrator.rs` with the helper |
     | `Repo::<E>::conn()`, and a query run on it (`Entity::find()….all(&conn)`, `active.insert(&conn)`) | `Repo::<E>::scoped(action)` with its own methods, then `.all()`; an ability-less read `Repo::unscoped`, an insert `Creatable::create_from_active` or `Repo::insert_unscoped(active)` |
     | `.all(&conn)`, `.one(&conn)`, `.count(&conn)`, `.exists(&conn)` on `Repo::scoped`, `with_tombstones`, `unscoped`, `unscoped_by_id` | `.all()`, `.one()`, `.count()`, `.exists()`: a `RepoSelect<E>` runs on the ambient executor |
     | `use sea_orm::{QueryFilter, QueryOrder, QuerySelect}` for a `Repo` select | delete the import: `filter`, `order_by`, `order_by_asc`, `order_by_desc`, `order_by_with_nulls`, `limit`, `offset` and `apply_if` are `RepoSelect<E>`'s own |
@@ -883,12 +885,12 @@ lists what the boot, a log or the wire shows when one is missed.
     | a row or a struct serialized with its secret and read back (a cache, a payload) | a `Secret` serializes as `"<redacted>"`: store the value itself, read through `expose_secret()`, where you mean to keep it |
     | `nest_rs::seaorm::Executor`, `LazyTransaction`, `FinalizeOutcome` | nothing: the edge's unit installs and settles the handle, and `Repo` reads it |
     | `Executor::Txn(txn)`, a transaction you opened and installed | an atomic block, `nest_rs::database::atomic(work)`, for a `Repo` write; a `db.begin()` of your own runs its statements on `txn`, which `Repo` never joins, and commits out of the framework's sight |
-    | `CommitError`, and its `is_retryable_conflict()` | `nest_rs::seaorm::retry::is_retryable_conflict(&err)` on the `DbErr` of a `commit()` of your own |
+    | `CommitError`, and its `is_retryable_conflict()` | `nest_rs::seaorm::retry::is_retryable_conflict(&err)` on the `DbErr` of a `commit()` of your own, or `RepoError::SerializationFailure(_)` on what `retry_on_conflict` answers |
     | `nest_rs::seaorm::{with_request_executor, with_job_executor}(executor, fut)`; `nest_rs::seaorm::with_executor` or `nest_rs::database::with_executor` | no public function installs an executor of its own: the edge's unit runs the body, and a service test runs it through `app.unit(ability, \|\| …)` or `app.system_unit(\|\| …)` |
     | `nest_rs::seaorm::{current_executor, ExecutorScope, current_executor_scope}` | `nest_rs::database::{ExecutorScope, current_executor_scope}`; a statement of a service's own goes through `Repo` |
     | `Unhonoured { reason, retryable }`, `JobTimedOut { timeout }` | `Unhonoured::new(reason, retryable)` (or `::retryable`, `::deterministic`), `JobTimedOut::new(timeout)` |
-    | a service catching a unique violation on the request's transaction (`Err(e) if DbOutcome::of(&e) == DbOutcome::Conflict`) and querying on | an insert that may meet the row holding its key: `Repo::<E>::insert_unscoped_or_existing(active, [key])`, which answers `Insertion::New` or `Insertion::Existing` and aborts nothing; any other statement: run it in `nest_rs::database::atomic` and match `ServiceError::Conflict` |
-    | `matches!(err.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))` to tell a taken key | `nest_rs::seaorm::DbOutcome::of(&err) == DbOutcome::Conflict` |
+    | a service catching a unique violation on the request's transaction and querying on | an insert that may meet the row holding its key: `Repo::<E>::insert_unscoped_or_existing(active, [key])`, which answers `Insertion::New` or `Insertion::Existing` and aborts nothing; any other statement: run it in `nest_rs::database::atomic` and match `RepoError::UniqueViolation(_)` |
+    | `matches!(err.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))` to tell a taken key | `matches!(err, RepoError::UniqueViolation(key) if key.constraint() == Some("users_email_key"))` |
     | `fn soft_delete_column() -> Option<Column> { Some(Column::DeletedAt) }` on a `CrudService` | delete it: `#[expose(..., soft_delete)]` alone stamps and hides |
     | `.filter(live_condition::<E>())` after a `Repo` read, `CrudService::live_read_filter()`, `audit_soft_delete_bindings()` | delete them: every `Repo` read carries the condition; `live_condition::<E>()` stays for a query outside `Repo` |
     | a `Repo` read meant to see deleted rows (admin, retention) | `Repo::<E>::with_tombstones(action)` |
@@ -2430,16 +2432,16 @@ lists what the boot, a log or the wire shows when one is missed.
 - **A `.fields` on `Update`, `Create` or `Manage`** now holds a write to its list. A write
   setting another column answers `403`, `FORBIDDEN`, where it wrote the column: under `errors`
   by the input's field on a `#[crud]` operation, in `detail` by the table's name through
-  `ServiceError`, and `DbErr::AccessDenied` to a service reading `Repo` itself. `nest_rs::orm`
-  files `access denied — a column the caller's grants withhold` at `warn`. A `PUT` carrying a
-  column back as it stands passes where the caller may read it; one it may not read refuses
-  whatever the value, so grant the read, take the column out of `input(update)`, or give that
-  caller a route of its own. A `.fields` on `Manage` holds every action's writes, so an
-  `Update` grant of its own beside it widens them. A row whose grants do not permit each column
-  answers `404`, as any row outside the scope.
+  `ServiceError`, and `RepoError::Forbidden { columns }` to a service reading `Repo` itself.
+  `nest_rs::orm` files `access denied — a column the caller's grants withhold` at `warn`. A
+  `PUT` carrying a column back as it stands passes where the caller may read it; one it may
+  not read refuses whatever the value, so grant the read, take the column out of
+  `input(update)`, or give that caller a route of its own. A `.fields` on `Manage` holds every
+  action's writes, so an `Update` grant of its own beside it widens them. A row whose grants do
+  not permit each column answers `404`, as any row outside the scope.
 - **`.fields([Headline])` on a `#[sea_orm(column_name = …)]` column** keeps `headline` in the
   reply, where 6.x stripped it: a client reading its absence reads the value.
-- **`Repo::update` of an active model setting nothing** answers `DbErr::RecordNotUpdated`, a
+- **`Repo::update` of an active model setting nothing** answers `RepoError::NotFound`, a
   `404`, for a row outside the caller's `Update` scope or a tombstone, where it handed the row
   back, and for a key no row holds, where it said `RecordNotFound`. A service using it to read
   reads with `Repo::find_by_id`.

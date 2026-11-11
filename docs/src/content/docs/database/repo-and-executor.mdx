@@ -37,8 +37,8 @@ Repo::<Posts>::all().await?;               // every readable row
 Repo::<Posts>::find_by_id(id).await?;      // None if absent OR out of scope
 Repo::<Posts>::scoped(Action::Read);       // RepoSelect<E> pre-filtered, chain freely
 Repo::<Posts>::with_tombstones(Action::Read);  // the same, deleted rows kept
-Repo::<Posts>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope or deleted;
-                                           // DbErr::AccessDenied naming a column `.fields` withholds
+Repo::<Posts>::update(active).await?;      // RepoError::NotFound if out of scope or deleted;
+                                           // RepoError::Forbidden naming a column `.fields` withholds
 Repo::<Posts>::delete(model).await?;       // 0 rows if out of scope; purges a deleted row too
 Repo::<Posts>::can(Action::Update, &model).await?;  // the instance check, in SQL
 Repo::<Posts>::page(first, after, Condition::all()).await?;  // keyset page — see Pagination
@@ -67,6 +67,28 @@ so a deleted account cannot sign in. `Repo::with_tombstones` is the one
 read that keeps them, for an administrator's view or a retention job. It
 reads only: no `Repo` write brings a deleted row back yet — `Repo::restore`
 is planned for 7.x.
+
+### What a failure says
+
+Every `Repo` method, every `RepoSelect` and every `CrudService` method answers a
+`RepoError`, and `?` turns it into the `ServiceError` every edge answers. What
+a service decides on is one `match` away — a row a write found gone, a write the
+caller's grants do not cover, a unique or a foreign key and which one, a
+serialization failure worth another attempt, a statement cancelled at its bound:
+
+```rust title="a service reading which key refused the row"
+match self.create_from_active(active).await {
+    Err(RepoError::UniqueViolation(key)) if key.constraint() == Some("users_email_key") => {
+        Err(ServiceError::conflict("that address is registered"))
+    }
+    created => Ok(User::from(&created?)),
+}
+```
+
+A `RepoError` says the failure by its SQLSTATE and the names the server gave —
+`database error 23505 on constraint "users_email_key", table "users"` — never by
+the server's message or its `detail`, which quote the row it refused, whoever
+prints it: a log line, a `{:?}`, an `anyhow` report, a `main` returning it.
 
 ### A custom query
 

@@ -370,7 +370,9 @@ the error print each link as it is, so a library error that always quotes a valu
 is kept as that sentence and never as a source, as `nest_rs::storage` keeps
 object_store's. The port's own errors do the rest: the error you hand
 `AtomicError::Database` or `OutboxError::Database` stays there for your own
-`match`, and every reader of their chain reads it as your sayer says it. Hold it
+`match`, and every reader of their chain reads it as your sayer says it.
+SeaORM's driver hands them its `RepoError`, which prints no server message
+itself. Hold it
 with a marked value in a test: `nest_rs_testing::printed` is every reader at once.
 
 ## TLS

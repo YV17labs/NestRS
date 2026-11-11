@@ -42,7 +42,7 @@ async fn list(&self) -> Result<Json<Vec<Post>>> {
 ```
 
 `feed` is the service method, and it is where the boundary work belongs:
-`CrudService::list` yields the entity's `Model` and a `DbErr`, neither of which
+`CrudService::list` yields the entity's `Model` and a `RepoError`, neither of which
 crosses the wire, so the service returns `Result<Vec<Post>, ServiceError>` and
 the handler stays a delegation.
 

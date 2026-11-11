@@ -273,7 +273,7 @@ when there is one; the demo's password login does it when its user store
 does not answer:
 
 ```rust title="crates/features/src/users/service.rs (from the demo, abridged)"
-fn store_unavailable(err: DbErr) -> AuthError {
+fn store_unavailable(err: RepoError) -> AuthError {
     // …
     AuthError::unavailable_because("the credential store is unreachable", None, err)
 }

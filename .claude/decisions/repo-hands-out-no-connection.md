@@ -373,3 +373,46 @@ entity.
   silently, and a condition needs neither.
 - **Scanning the scope a query reads**: a second render on every scoped query, for text
   each rule's builder checks once.
+
+## 2026-11-11 — what `Repo` answers is the framework's error, said by the server's names
+
+`Repo` handed out sea-orm's `DbErr`, and so did every caller of it: `RepoSelect`, the page
+reads, `CrudService` and its write traits, `retry_on_conflict`, `ServiceError::Db`, and the
+`AtomicError::Database` and `OutboxError::Database` the driver boxed. A `DbErr` prints
+the server's words: run this date against a Postgres double sending what Postgres sends,
+an insert meeting a unique key printed `detail: Some("Key (body)=(…) already exists.")`
+through its `Debug`, and a read whose value a type refused printed `invalid input syntax for
+type uuid: "…"` through its `Display`. `error_message` said both by their SQLSTATE, so no
+framework line or reply quoted one; an app's own `{:?}`, `anyhow` report, `main` or
+migration binary did.
+
+Every one of them now answers `RepoError`, which holds the SQLSTATE and the names the
+server reported (`Diagnostics`: `sqlstate`, `constraint`, `table`, `column`) and never its
+message or `detail`. Its variants are what a caller branches on — `NotFound`,
+`Forbidden { columns }`, `UniqueViolation`, `ForeignKeyViolation`,
+`SerializationFailure` (`40001`, and `40P01`, a deadlock), `QueryCanceled` (`57014`), `Other`
+— read off PostgreSQL's condition names where the server raised it, and the class every
+edge answers where the framework did. `?` into `ServiceError` is unchanged; a service
+deciding on a key matches it, `Err(RepoError::UniqueViolation(key)) if key.constraint() ==
+Some("users_email_key")`. A `DbErr` a caller holds of its own — a migration, a seed, a
+transaction it opened — becomes one with `RepoError::from`, which the demo's and `nestrs
+new`'s migrate and seed binaries, their migrations crate's `migrate` helper and
+`EphemeralDatabase` do.
+
+A create its scope refuses is `Forbidden` naming no column, through a service's `?` as
+through `#[crud]`: a service's create answered an opaque `500` and an `error` line for that
+denial, seen on the merge base, where `#[crud]` answered `403`. sea-orm's own
+`RecordNotInserted` stays opaque, since an `ON CONFLICT DO NOTHING` raises it too.
+
+**Refused:**
+
+- **`DbErr` kept, said through a view as `ServiceError::Db` was**: the field itself is what
+  a `match` hands an app, and it prints the row.
+- **A wrapper holding the `DbErr` privately, with a `kind()`**: a caller branches by a
+  method and a second enum, where a variant is one `match`.
+- **`DbError`** (one letter from `DbErr`, two concepts) and **`DatabaseError`** (sqlx's
+  trait, which the transactions page names) as the name; `RepoError` sits beside
+  `ServiceError`, `AtomicError` and `OutboxError`, each named for what answers it.
+- **`DbOutcome` kept public**: two ways to tell a class, and it read a `DbErr`.
+- **A variant per integrity condition now** (`23502`, `23514`, `23P01`): no caller branches
+  on one; `<Condition>Violation(Diagnostics)` places each when one does (`TODO.md`).

@@ -381,7 +381,8 @@ or two `#[meta]` values of one type on one operation, fail the boot.
 ## Failing without leaking
 
 A tool body talks to a **language model**, and it would repeat whatever an error's
-`Display` carries: a `DbErr` holds schema, column names and sometimes row values.
+`Display` carries: a database failure names tables and constraints, and a driver's own
+error sometimes the row's values.
 So an operation returns its error and the edge says what the model reads. A
 [`ToProblem`](/http/errors/) error answers its class under `data`: a
 `ServiceError` its `NOT_FOUND`, its `FORBIDDEN`, or the `UNAVAILABLE` of a statement

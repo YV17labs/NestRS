@@ -182,17 +182,25 @@ environment; `connect_from_env` works either way.
 The binary runs no `App`, so it installs the console an app would have — the
 same filter, format and source location, from `RUST_LOG`,
 `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION` — with one line at the
-top of `main`. A tool of your own does the same:
+top of `main`, and says what a migration met as a `RepoError`: by its SQLSTATE
+and the names the server gave, never by the value its message quotes, which a
+data migration's refusal holds. A tool of your own does the same:
 
 ```rust title="crates/migrations/src/bin/migrate.rs (from the demo, abridged)"
 use nest_rs::core::logging::{LogSettings, install_console};
+use nest_rs::seaorm::RepoError;
 
 #[nest_rs::main]
 async fn main() -> Result<()> {
     install_console(&LogSettings::from_env()?);
 
     let conn = nest_rs::seaorm::connect_from_env().await?;
-    // …
+    let migrated = match std::env::args().nth(1).as_deref() {
+        Some("up") => Migrator::up(&conn, None).await,
+        // …
+    };
+    migrated.map_err(RepoError::from)?;
+    Ok(())
 }
 ```
 

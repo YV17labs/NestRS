@@ -417,8 +417,9 @@ The failure modes a retry cannot fix:
   since the same input fails the same way.
 - **A handler-time conflict on the auto-commit transaction.** The
   request's unit cannot retry the body; the conflict surfaces as a
-  `DbErr` from the service, which gets mapped to the appropriate HTTP
-  status. Use `retry_on_conflict` at the service level instead.
+  `RepoError::SerializationFailure` from the service, which gets mapped to
+  the appropriate HTTP status. Use `retry_on_conflict` at the service level
+  instead.
 
 The split is deliberate. The request's unit handles the common case
 transparently (open / commit / rollback); the service handles the hard case

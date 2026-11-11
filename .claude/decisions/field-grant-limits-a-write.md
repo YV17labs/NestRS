@@ -129,3 +129,20 @@ refused.
 
 Held by `nest-rs-authz`'s `judged` suite (a route's and a mutation's reply to a caller
 updating every column and reading three) and the seaorm e2e's `service.rs`.
+
+## 2026-11-11 — the refusal crosses `Repo` as `RepoError`
+
+What `Repo` hands out became the framework's `RepoError`
+(`repo-hands-out-no-connection.md`, 2026-11-11): a `DbErr` an app holds prints the server's
+message and `detail`, the row it refused, through its own `{:?}` or `anyhow` report. The refusal
+above now crosses `Repo` as `RepoError::Forbidden { columns }`, naming the columns as the
+table does. `DbErr::AccessDenied` stays the shape the write's sea-orm path carries inside
+the crate, read back by `From<DbErr> for RepoError`; `DbOutcome` is gone, and a `match` on
+`RepoError` is the one way to tell the class. A row its grants do not permit each column on
+is `RepoError::NotFound`, and a tool or a message answering a `RepoError` itself answers
+opaquely, as before.
+
+The refusal of "a new error type on `Repo::update`" is reversed on the owner's word of
+2026-11-11, which agreed the break: `?` into `ServiceError` compiles unchanged, and what
+breaks is a signature naming `DbErr` or a `match` on its variants, each mapped in the
+upgrading guide's step 11.

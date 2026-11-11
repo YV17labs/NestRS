@@ -22,7 +22,7 @@ review checklist into a structural property.
 A service method that lists rows:
 
 ```rust title="crates/features/src/users/service.rs"
-async fn list(&self) -> Result<Vec<entity::Model>, DbErr> {
+async fn list(&self) -> Result<Vec<entity::Model>, RepoError> {
     Repo::<entity::Entity>::all().await
 }
 ```

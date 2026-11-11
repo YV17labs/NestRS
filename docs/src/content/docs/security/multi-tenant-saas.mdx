@@ -66,7 +66,7 @@ ability and reads past soft deletion. The
 credential lookup before sign-in is one, and it reads **across every tenant**:
 
 ```rust title="crates/features/src/users/service.rs (from the demo)"
-async fn find_by_email(email: &str) -> Result<Option<entity::Model>, DbErr> {
+async fn find_by_email(email: &str) -> Result<Option<entity::Model>, RepoError> {
     Repo::<Users>::unscoped()
         .filter(entity::Column::Email.eq(email.to_owned()))
         .one()

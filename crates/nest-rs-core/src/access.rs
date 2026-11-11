@@ -10,7 +10,6 @@
 //! an unchecked escape hatch.
 
 use std::any::TypeId;
-use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
@@ -456,7 +455,11 @@ pub(crate) fn validate_access_graph(
                 let owner = reached_listings
                     .get(&dep)
                     .map(|listing| (listing, None))
-                    .or_else(|| owners.get(&dep).map(|owner| (owner, remedy(p, dep))));
+                    .or_else(|| {
+                        owners
+                            .get(&dep)
+                            .map(|owner| (owner, remedy_for(dep, p.inject_remedies)))
+                    });
                 if let Some((&(dependency, owner), remedy)) = owner {
                     return Err(AccessGraphError {
                         module: desc.name,
@@ -476,23 +479,13 @@ pub(crate) fn validate_access_graph(
                     module: desc.name,
                     consumer: p.name,
                     dependency: name,
-                    remedy: remedy(p, dep),
+                    remedy: remedy_for(dep, p.inject_remedies),
                 }
                 .into());
             }
         }
     }
     Ok(())
-}
-
-/// The line to add for `key`, which `provider` depends on: what its type
-/// carries where `provider` declares it, else what its crate filed.
-fn remedy(provider: &ProviderDescriptor, key: TypeId) -> Option<Cow<'static, str>> {
-    (provider.inject_remedies)()
-        .into_iter()
-        .find(|(carried, _)| *carried == key)
-        .map(|(_, remedy)| remedy())
-        .or_else(|| remedy_for(key).map(Cow::Borrowed))
 }
 
 /// The provider and the module of each key `modules` declare. First listing

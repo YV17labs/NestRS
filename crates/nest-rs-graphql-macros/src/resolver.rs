@@ -1658,7 +1658,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         impl ::nest_rs_core::Discoverable for #self_ty {
             #injected_methods
 
-
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
@@ -1832,7 +1831,7 @@ fn field_method(
         if let Type::Reference(reference) = &*pt.ty {
             let dep_ty = &*reference.elem;
             // By position: a parameter's own name may lead with `_`, which
-            // `__dep_` would join into a name the developer's build warns on.
+            // `__nestrs_dep_` would join into a name the developer's build warns on.
             let dep = mixed_site_ident(&format!("__nestrs_dep_{position}"));
             if let Some(loader) = loader_read_by(&pt.ty) {
                 dep_bindings.push(quote! {

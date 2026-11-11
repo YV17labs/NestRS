@@ -631,7 +631,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         impl ::nest_rs_core::Discoverable for #self_ty {
             #injected_methods
 
-
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {

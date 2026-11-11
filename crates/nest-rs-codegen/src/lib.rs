@@ -139,7 +139,7 @@ pub mod __private {
         injected_optional_fns, injected_optional_method, injected_optional_names_method,
         injected_remedies_fn, injected_remedies_method, injects_impls, layer_deps,
         mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
-        optional_dependency_names_method, per_request_remedy,
+        optional_dependency_names_method, per_request_remedies,
     };
     pub use crate::instance::{DEFAULT_INSTANCE, INSTANCE, RESERVED_VOCABULARY, instance_name};
     pub use crate::item::item_shape;

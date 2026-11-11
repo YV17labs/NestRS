@@ -57,12 +57,22 @@ impl DependencyRemedy {
 
 inventory::collect!(DependencyRemedy);
 
-/// The remedy the crate owning `key`'s type files for it, read off the registry
-/// where a refusal is written.
-pub(crate) fn remedy_for(key: TypeId) -> Option<&'static str> {
-    inventory::iter::<DependencyRemedy>()
-        .find(|entry| (entry.key)() == key)
-        .map(|entry| entry.remedy)
+/// The line to add for `key`, read where a refusal is written: the remedy its
+/// type carries where the provider declares it (`carried`), else the one the
+/// crate owning it files.
+pub(crate) fn remedy_for(
+    key: TypeId,
+    carried: fn() -> Vec<InjectedRemedy>,
+) -> Option<Cow<'static, str>> {
+    carried()
+        .into_iter()
+        .find(|(declared, _)| *declared == key)
+        .map(|(_, remedy)| remedy())
+        .or_else(|| {
+            inventory::iter::<DependencyRemedy>()
+                .find(|entry| (entry.key)() == key)
+                .map(|entry| Cow::Borrowed(entry.remedy))
+        })
 }
 
 /// A key whose type names the line to add when a provider depends on it and no

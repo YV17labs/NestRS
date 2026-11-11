@@ -179,7 +179,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
 /// The remedy the dependency `ty`, held under `key`, carries — asked of
 /// `RemedyProbe` at the autoref depth its unit tests pin, so a type carrying
 /// none answers `None`.
-fn carried_remedy(ty: &Type, key: &TokenStream2) -> TokenStream2 {
+fn carried_remedy(ty: &impl ToTokens, key: &TokenStream2) -> TokenStream2 {
     quote! {
         (&&::nest_rs_core::__private::RemedyProbe::<#ty>::new())
             .carried_remedy()
@@ -544,19 +544,12 @@ pub fn injected_methods_with_layers<'a>(
     let labels = &layers.labels;
     let params = per_request_params(params);
     let injected_per_request = injected_per_request_method(&params);
-    let param_asks = params.iter().map(|(cfgs, ty)| {
-        let remedy = per_request_remedy(ty);
-        quote! {
-            #(#cfgs)*
-            let () = __nestrs_remedies.extend(#remedy);
-        }
-    });
+    let param_asks = params
+        .iter()
+        .map(|(cfgs, ty)| (*cfgs, per_request_remedy(ty)));
     let resolved_asks = resolved.into_iter().map(|Conditional { cfgs, item }| {
-        let remedy = carried_remedy(item, &quote! { ::core::any::TypeId::of::<#item>() });
-        quote! {
-            #(#cfgs)*
-            let () = __nestrs_remedies.extend(#remedy);
-        }
+        let key = quote! { ::core::any::TypeId::of::<#item>() };
+        (cfgs, carried_remedy(item, &key))
     });
     let remedies = remedies_body(
         quote! { <#self_ty>::__nestrs_injected_remedies() },
@@ -598,7 +591,7 @@ pub fn injected_methods_with_layers<'a>(
 /// carries ([`InjectableBody::remedies`]), read back by its impl half through
 /// [`injected_methods_with_layers`].
 pub fn injected_remedies_fn(remedies: &[TokenStream2]) -> TokenStream2 {
-    let body = remedies_body(quote! { ::std::vec::Vec::new() }, field_asks(remedies));
+    let body = field_remedies_body(remedies);
     quote! {
         #[doc(hidden)]
         pub fn __nestrs_injected_remedies() -> ::std::vec::Vec<::nest_rs_core::InjectedRemedy> {
@@ -615,7 +608,7 @@ pub fn injected_remedies_method(remedies: &[TokenStream2]) -> TokenStream2 {
     if remedies.is_empty() {
         return quote! {};
     }
-    let body = remedies_body(quote! { ::std::vec::Vec::new() }, field_asks(remedies));
+    let body = field_remedies_body(remedies);
     quote! {
         fn injected_remedies() -> ::std::vec::Vec<::nest_rs_core::InjectedRemedy> {
             #body
@@ -623,16 +616,42 @@ pub fn injected_remedies_method(remedies: &[TokenStream2]) -> TokenStream2 {
     }
 }
 
-/// One statement per field's remedy, extending what [`remedies_body`] collects.
-fn field_asks(remedies: &[TokenStream2]) -> impl Iterator<Item = TokenStream2> + '_ {
-    remedies.iter().map(|remedy| {
-        quote! { let () = __nestrs_remedies.extend(#remedy); }
-    })
+/// The body collecting what each `#[inject]` field's type carries.
+fn field_remedies_body(remedies: &[TokenStream2]) -> TokenStream2 {
+    remedies_body(
+        quote! { ::std::vec::Vec::new() },
+        remedies
+            .iter()
+            .map(|remedy| (&[] as &[TokenStream2], remedy)),
+    )
+}
+
+/// The body collecting the remedy each of `params` carries for the provider
+/// it resolves per request, each under its method's `#[cfg]`s — for an impl
+/// half listing them itself, as `#[tools]` does.
+pub fn per_request_remedies<'a>(
+    params: impl IntoIterator<Item = Conditional<'a, Type>>,
+) -> TokenStream2 {
+    remedies_body(
+        quote! { ::std::vec::Vec::new() },
+        params
+            .into_iter()
+            .map(|Conditional { cfgs, item }| (cfgs, per_request_remedy(item))),
+    )
 }
 
 /// An `injected_remedies` body: `start`, then what each of `asks` extends it
-/// with, each a statement so a parameter's `#[cfg]`s can sit on it.
-fn remedies_body(start: TokenStream2, asks: impl Iterator<Item = TokenStream2>) -> TokenStream2 {
+/// with, each a statement so its `#[cfg]`s can sit on it.
+fn remedies_body<'a>(
+    start: TokenStream2,
+    asks: impl IntoIterator<Item = (&'a [TokenStream2], impl ToTokens)>,
+) -> TokenStream2 {
+    let asks = asks.into_iter().map(|(cfgs, remedy)| {
+        quote! {
+            #(#cfgs)*
+            let () = __nestrs_remedies.extend(#remedy);
+        }
+    });
     quote! {
         #[allow(
             unused_imports,
@@ -652,18 +671,17 @@ fn remedies_body(start: TokenStream2, asks: impl Iterator<Item = TokenStream2>) 
 /// The remedy a handler's parameter of type `ty` carries for the provider it
 /// resolves per request, beside that provider's key — `None` for a parameter
 /// resolving none or carrying none. A `Scoped<T>` carries `T`'s.
-pub fn per_request_remedy(ty: &impl ToTokens) -> TokenStream2 {
+fn per_request_remedy(ty: &impl ToTokens) -> TokenStream2 {
+    let carried = carried_remedy(ty, &quote!(__key));
     quote! {
         (&&::nest_rs_core::__private::ParamProbe::<#ty>::new())
             .resolved_provider()
-            .zip((&&::nest_rs_core::__private::RemedyProbe::<#ty>::new()).carried_remedy())
-            .map(|((__key, _), __remedy)| (__key, __remedy))
+            .and_then(|(__key, _)| #carried)
     }
 }
 
 /// Each parameter type once per set of `#[cfg]`s, its lifetimes read as
-/// `'static`: a probe in a method body names no lifetime of the signature it
-/// was read off, and a provider's key is `'static` anyway.
+/// `'static` ([`lifetimes_static`]).
 fn per_request_params<'a>(
     params: impl IntoIterator<Item = Conditional<'a, Type>>,
 ) -> Vec<(&'a [TokenStream2], TokenStream2)> {

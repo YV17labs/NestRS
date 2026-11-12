@@ -6,6 +6,8 @@ NestRS framework umbrella — re-exports the core and the surface crates an app 
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 
+7.0 is the foundation the next versions build on: [what's new in 7.0](https://nestrs.dev/whats-new/).
+
 ```sh
 cargo add nest-rs --features http
 ```

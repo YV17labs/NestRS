@@ -33,7 +33,35 @@ import CodeCard from '../../components/CodeCard.astro';
 import Guarantees from '../../components/Guarantees.astro';
 import Workspace from '../../components/Workspace.astro';
 
-<Band label="01 — SECURITY" alt>
+<Band label="01 — NEW IN 7.0">
+
+## The foundation 7.x builds on
+
+7.0 is the release the next ones stand on. Each concern has one way to be
+declared and one contract on every edge, and the boot refuses what would fail
+in production. What comes next adds to it: no 7.x release breaks what you
+build on top.
+
+<div class="rs-caps not-content">
+  <a class="rs-cap" href="/whats-new/#secure-by-default-row-by-row"><span class="rs-cap-name">Secure by default</span><span class="rs-cap-desc">Rows filtered in SQL, each reply row judged for its caller</span></a>
+  <a class="rs-cap" href="/whats-new/#a-boot-that-refuses-what-would-fail-later"><span class="rs-cap-name">A boot that refuses</span><span class="rs-cap-desc">Wiring that would fail later stops the start, naming the fix</span></a>
+  <a class="rs-cap" href="/whats-new/#one-way-to-declare-each-thing"><span class="rs-cap-name">One way per concern</span><span class="rs-cap-desc">One import to configure, one layer grammar, one class gate</span></a>
+  <a class="rs-cap" href="/whats-new/#every-edge-and-every-backend-whole"><span class="rs-cap-name">Every edge, every backend</span><span class="rs-cap-desc">One pipeline per unit; Valkey standalone, Sentinel and Cluster</span></a>
+  <a class="rs-cap" href="/whats-new/#tls-on-every-connection"><span class="rs-cap-name">TLS everywhere</span><span class="rs-cap-desc">Every connection verified, or plaintext you wrote on purpose</span></a>
+  <a class="rs-cap" href="/whats-new/#guards-and-the-authorization-model"><span class="rs-cap-name">Guards and abilities</span><span class="rs-cap-desc">A visible posture, one policy read in SQL and on the wire</span></a>
+  <a class="rs-cap" href="/whats-new/#generators-that-wire-what-they-write"><span class="rs-cap-name">Generators</span><span class="rs-cap-desc">nestrs g writes guarded code and wires it into its app</span></a>
+  <a class="rs-cap" href="/whats-new/#what-7x-keeps"><span class="rs-cap-name">Kept until 8.0</span><span class="rs-cap-desc">No 7.x release breaks your code or your configuration</span></a>
+</div>
+
+<div class="rs-band-foot">
+
+**What 7.0 brings**, part by part, each with the page that holds it. [What's new in 7.0 →](/whats-new/)
+
+</div>
+
+</Band>
+
+<Band label="02 — SECURITY" alt>
 <div class="rs-split">
 <div>
 
@@ -104,7 +132,7 @@ rule, applied to every transport.
 </div>
 </Band>
 
-<Band label="02 — PERFORMANCE">
+<Band label="03 — PERFORMANCE">
 <div class="rs-band-head">
 
 ## How fast, exactly
@@ -124,7 +152,7 @@ byte-identical contract, one pinned core each, the regime that favours Node.
 
 </Band>
 
-<Band label="03 — BATTERIES" alt>
+<Band label="04 — BATTERIES" alt>
 
 ## Everything a backend needs
 
@@ -142,7 +170,7 @@ HTTP stack.
 
 </Band>
 
-<Band label="04 — GUARANTEES">
+<Band label="05 — GUARANTEES">
 
 ## Why developers pick NestRS
 
@@ -150,7 +178,7 @@ HTTP stack.
 
 </Band>
 
-<Band label="05 — SCALABILITY" alt>
+<Band label="06 — SCALABILITY" alt>
 
 ## A modular monolith, deployed per workload
 

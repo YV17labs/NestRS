@@ -29,7 +29,7 @@ search index, and the `llms.txt` family). `npm run preview` serves it.
 | `src/content/docs/` | every page — one directory per section |
 | `STYLE.md` | **the law** for docs prose and structure; read it before editing a page |
 | `templates/` | the five skeletons `STYLE.md` §B names — T-CONCEPT, T-INDEX, T-TUTORIAL, T-RECIPE, T-SINGLE |
-| `src/components/Sidebar.astro` | the menu: two levels, and only the section you are in lists its pages |
+| `src/components/Sidebar.astro` | the menu: two levels, every section listing its pages, nothing to unfold |
 | `src/redirects.mjs` | one entry per route that ever shipped and moved |
 
 ## Editorial rules
@@ -54,12 +54,14 @@ wrong first.
 ## Sections
 
 **The menu is two deep and never three**: a group is a section, its items are
-that section's pages. Sixteen doors, read as a path — and the tutorial sits
-second because the fastest way into the framework is to build something.
+that section's pages. Eighteen doors, read as a path — and the CLI and the
+tutorial follow the orientation because the fastest way into the framework is
+to build something.
 
 ```
-Start here      index, why, why-not-axum, benchmarks, coming-from-nestjs,
-                getting-started, cli, publish
+Start here      index, whats-new, why, why-not-axum, benchmarks,
+                coming-from-nestjs, getting-started, publish, semver, upgrading
+CLI             cli/
 Tutorial        build a posts feature end to end
 Fundamentals    architecture, fundamentals/
 Configuration   configuration/
@@ -74,6 +76,7 @@ Authorization   security/authorization/
 Background work queue/, schedule, events
 Testing         testing/
 Operations      opentelemetry/, server-timing, health/, rate-limiting
+Extending NestRS extending/
 Reference       packages, decorators, glossary
 ```
 

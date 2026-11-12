@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <strong>7.0 is the foundation the next versions build on</strong>: one way to declare each concern, one contract on every edge, a boot that refuses what would fail later — and no 7.x release breaks what you build on it. <a href="https://nestrs.dev/whats-new/">What's new in 7.0 →</a>
+</p>
+
+<p align="center">
   <a href="https://crates.io/crates/nest-rs"><img src="https://img.shields.io/crates/v/nest-rs?logo=rust&color=CE412B" alt="crates.io"></a>
   <a href="https://docs.rs/nest-rs"><img src="https://img.shields.io/docsrs/nest-rs?logo=docsdotrs&logoColor=white" alt="docs.rs"></a>
   <a href="https://github.com/YV17labs/NestRS/stargazers"><img src="https://img.shields.io/github/stars/YV17labs/NestRS?style=flat&logo=github&color=555" alt="GitHub stars"></a>
@@ -145,12 +149,9 @@ down to the third-party libraries you write in your own code (`sea-orm`,
 `async-graphql`, `rmcp`, `validator`, `schemars`), whose majors move only with
 a NestRS major.
 
-Coming from the previous major? [`changelog/7.0.md`](changelog/7.0.md) lists what moved:
-an edge is now **two** decorators — `#[resolver]` / `#[mcp]` on the struct,
-`#[operations]` / `#[tools]` on the impl; a guard bound where its check never
-runs no longer compiles; `McpModule::for_root` takes one value; a WebSocket
-message declares its posture; and an auto-resolved HasMany relation is a Relay
-`Connection` rather than a capped `Vec`.
+Coming from 6.x? [Upgrading from 6.x](https://nestrs.dev/upgrading/) is the
+order that moves a 6.1 project to 7.0, and [`changelog/7.0.md`](changelog/7.0.md)
+lists every change with its reason.
 
 ## Documentation
 

@@ -178,7 +178,7 @@ header.header {
 
 /* The splash opens on the hero, not on a rule: the landing's nav sits on the
    page rather than above a divided column, and the first hairline a reader
-   meets is the one that opens `01 — SECURITY`. Transparent rather than `none`,
+   meets is the one that opens the first band. Transparent rather than `none`,
    so the bar keeps its height and nothing below it shifts. */
 :root[data-has-hero] header.header {
   border-bottom-color: transparent;

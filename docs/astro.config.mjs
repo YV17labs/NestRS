@@ -251,6 +251,7 @@ export default defineConfig({
           label: 'Start here',
           items: [
             { label: 'Introduction', slug: 'index' },
+            { label: "What's new in 7.0", slug: 'whats-new' },
             { label: 'Why NestRS', slug: 'why' },
             { label: 'Why not axum?', slug: 'why-not-axum' },
             { label: 'Benchmarks', slug: 'benchmarks' },

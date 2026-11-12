@@ -151,8 +151,8 @@ Skeletons live in `docs/templates/`.
    the 80% case. Verbatim outputs are real (run it once, paste it), trimmed to ≤ ~8 lines. **Each
    evidence artifact appears once site-wide** — every other page links to it.
 3. **Competitor mentions.** Named competitors (NestJS, BullMQ, Socket.IO, Sidekiq, Hasura…) appear
-   **only** on the landing, `why.mdx`, and the comparison page. Reference pages sell by
-   demonstration.
+   **only** on the landing, `why.mdx`, `whats-new.mdx`, and the comparison page. Reference pages
+   sell by demonstration.
 4. **Prose style charter.** Second person, present tense, active voice. Average sentence ≤ ~22
    words. **Banned words**: *blazing(ly), powerful, seamless(ly), simply, effortless(ly), easy,
    magic(al)*. **No exclamation marks in prose.** The voice is a calm senior engineer showing you

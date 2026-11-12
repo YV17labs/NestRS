@@ -122,6 +122,7 @@ mod propagate;
 mod registry;
 mod resource;
 mod scope;
+mod session_client;
 mod sessions;
 mod unit;
 
@@ -436,4 +437,226 @@ pub(crate) async fn read_to_end(stream: &mut TcpStream) -> String {
         Err(_) => panic!("the server never closed the connection"),
     }
     String::from_utf8_lossy(&rest).into_owned()
+}
+
+/// Where [`WritingTools`] is served.
+pub(crate) const WRITING: &str = "/mcp/writing";
+
+/// How often `tick` writes to its session.
+pub(crate) const TICK: Duration = Duration::from_secs(10);
+
+/// How long `wait` takes to answer.
+pub(crate) const WAIT: Duration = Duration::from_secs(80);
+
+/// A host writing to its session on its own, as an app pushing what its client
+/// listens for does: `tick` writes a notification every [`TICK`], and `flood`
+/// writes them back to back from a second after it answers, each until the
+/// session is gone; `wait` answers after [`WAIT`].
+#[nest_rs_mcp::mcp(path = "/mcp/writing")]
+#[derive(Clone, Default)]
+pub(crate) struct WritingTools;
+
+impl nest_rs_mcp::ServerHandler for WritingTools {
+    fn get_info(&self) -> nest_rs_mcp::ServerConfig {
+        nest_rs_mcp::ServerConfig::new(
+            nest_rs_mcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build(),
+        )
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<nest_rs_mcp::model::PaginatedRequestParams>,
+        _context: nest_rs_mcp::service::RequestContext<nest_rs_mcp::service::RoleServer>,
+    ) -> Result<nest_rs_mcp::model::ListToolsResult, nest_rs_mcp::McpError> {
+        Ok(nest_rs_mcp::model::ListToolsResult::with_all_items(
+            ["tick", "flood", "wait"]
+                .map(|name| {
+                    nest_rs_mcp::model::Tool::new(
+                        name,
+                        "Writes to the session, or waits.",
+                        std::sync::Arc::new(nest_rs_mcp::model::JsonObject::new()),
+                    )
+                })
+                .to_vec(),
+        ))
+    }
+
+    async fn call_tool(
+        &self,
+        request: nest_rs_mcp::model::CallToolRequestParams,
+        context: nest_rs_mcp::service::RequestContext<nest_rs_mcp::service::RoleServer>,
+    ) -> Result<nest_rs_mcp::model::CallToolResponse, nest_rs_mcp::McpError> {
+        let peer = context.peer;
+        match &*request.name {
+            "tick" => {
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(TICK).await;
+                        if peer.notify_tool_list_changed().await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            "flood" => {
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    while peer.notify_tool_list_changed().await.is_ok() {}
+                });
+            }
+            "wait" => tokio::time::sleep(WAIT).await,
+            _ => {
+                return Err(nest_rs_mcp::McpError::invalid_params(
+                    "tool not found",
+                    None,
+                ));
+            }
+        }
+        Ok(nest_rs_mcp::model::CallToolResult::success(vec![
+            nest_rs_mcp::model::ContentBlock::text(request.name.to_string()),
+        ])
+        .into())
+    }
+}
+
+#[nest_rs_core::module(imports = [crate::open_mcp()], providers = [WritingTools])]
+pub(crate) struct WritingModule;
+
+/// [`WritingModule`] served under `config`, the event streams' keep-alive off:
+/// sse-stream re-arms it on the std clock, which a paused tokio clock would
+/// flood past.
+pub(crate) async fn writing(config: nest_rs_mcp::McpConfig) -> nest_rs_testing::TestApp {
+    nest_rs_testing::TestApp::builder()
+        .provide(nest_rs_mcp::McpConfig {
+            sse_keep_alive: None,
+            ..config
+        })
+        .module::<WritingModule>()
+        .build()
+        .await
+        .expect("boots")
+}
+
+/// A stream of the session as a client holding it, and reading nothing of it,
+/// leaves it: its standalone stream, or the one `last_event` names, resumed
+/// after that event.
+pub(crate) async fn open_stream(
+    app: &nest_rs_testing::TestApp,
+    path: &str,
+    session: &str,
+    last_event: Option<&str>,
+) -> nest_rs_testing::TestResponse {
+    let mut request = app
+        .http()
+        .get(path)
+        .header("host", "localhost")
+        .header("accept", "text/event-stream")
+        .header("mcp-session-id", session);
+    if let Some(last_event) = last_event {
+        request = request.header("last-event-id", last_event);
+    }
+    let response = request.send().await;
+    response.assert_status_is_ok();
+    response
+}
+
+/// The session's standalone stream, as a client holding it reads it.
+pub(crate) async fn hold_stream(
+    app: &nest_rs_testing::TestApp,
+    path: &str,
+    session: &str,
+) -> impl futures_util::Stream<Item = serde_json::Value> + Unpin {
+    events(open_stream(app, path, session, None).await)
+}
+
+/// The messages an event stream carries, as a client reads them.
+pub(crate) fn events(
+    stream: nest_rs_testing::TestResponse,
+) -> impl futures_util::Stream<Item = serde_json::Value> + Unpin {
+    use futures_util::StreamExt as _;
+    Box::pin(
+        stream
+            .0
+            .into_body()
+            .into_stream()
+            .map(|chunk| String::from_utf8_lossy(&chunk.expect("a chunk")).into_owned())
+            .flat_map(|chunk| {
+                futures_util::stream::iter(
+                    chunk
+                        .lines()
+                        .filter_map(|line| line.strip_prefix("data:"))
+                        .filter_map(|data| {
+                            serde_json::from_str::<serde_json::Value>(data.trim()).ok()
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }),
+    )
+}
+
+/// Whether the session still serves its client.
+pub(crate) async fn served(app: &nest_rs_testing::TestApp, path: &str, session: &str) -> bool {
+    let answer = nest_rs_testing::mcp::post_message(
+        app.http(),
+        path,
+        Some(session),
+        None,
+        &serde_json::json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/list" }),
+    )
+    .await;
+    answer.0.status() == nest_rs_http::StatusCode::OK
+}
+
+/// Whether the mount, holding one session at most, opens a new one: its one
+/// place is free.
+pub(crate) async fn opens_a_session(app: &nest_rs_testing::TestApp, path: &str) -> bool {
+    let opened = nest_rs_testing::mcp::post_message(
+        app.http(),
+        path,
+        None,
+        None,
+        &nest_rs_testing::mcp::initialize_request(),
+    )
+    .await;
+    opened.0.status() == nest_rs_http::StatusCode::OK
+}
+
+/// The client answers the ping `ping` on its session.
+pub(crate) async fn answer(
+    app: &nest_rs_testing::TestApp,
+    path: &str,
+    session: &str,
+    ping: &serde_json::Value,
+) {
+    assert_eq!(ping["method"], "ping", "{ping}");
+    nest_rs_testing::mcp::post_message(
+        app.http(),
+        path,
+        Some(session),
+        None,
+        &serde_json::json!({ "jsonrpc": "2.0", "id": ping["id"], "result": {} }),
+    )
+    .await
+    .assert_status(nest_rs_http::StatusCode::ACCEPTED);
+}
+
+/// Call `tool` on `session`, returning the response body once it ends.
+pub(crate) async fn call(
+    app: &nest_rs_testing::TestApp,
+    path: &str,
+    session: &str,
+    tool: &str,
+) -> String {
+    nest_rs_testing::mcp::call_method(
+        app.http(),
+        path,
+        session,
+        None,
+        "tools/call",
+        serde_json::json!({ "name": tool, "arguments": {} }),
+    )
+    .await
 }

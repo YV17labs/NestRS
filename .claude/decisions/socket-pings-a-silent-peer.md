@@ -146,3 +146,63 @@ time: a silent client's stream carried nothing and lived to the idle timeout.
 Left open, in `TODO.md`: a stream the transport cannot write to (the kernel's
 buffer full toward a vanished client) asks nothing until the kernel gives up; a
 session whose stream is gone while the server keeps writing to it never idles out.
+
+**2026-11-12, an MCP session's bounds are the mount's, timed apart from its
+streams** (closing the two lines the entry above left open). Seen by
+`nest-rs-mcp`'s suites on paused time, a host writing to its session on its own:
+
+- a session holding no stream, the server writing to it every ten seconds,
+  outlived its idle timeout — rmcp's worker re-creates its idle timer on every
+  event, the server's messages included, which wait in its cache for a stream;
+- a client holding its `GET` unread while the server wrote back to back was asked
+  nothing and kept its session: the ping's timer lived in the stream, which the
+  transport polls only when it can write, and rmcp's worker stopped inside its
+  write to that stream's bounded channel, where its token is not watched — so
+  ending the session by its token alone freed nothing (seen, the fix run without
+  letting go of the stream);
+- of the same family, a call of 80 s on a session idle at 50 s lost its session
+  under it: the timer ran while the call waited on its answer.
+
+What the mount does, rmcp's `SessionConfig::keep_alive` off:
+
+- **A watch per session**, a task asleep until the nearer of two deadlines: the
+  idle timeout from the session's last use — a message of its client's but a
+  ping's answer, one of the server's a stream hands the transport, or the end of
+  a call's wait for its answer, the timeout held while the transport waits on a
+  call's stream, first or resumed by its `Last-Event-ID` — and, while the client
+  listens on a stream with pings on, the
+  interval and the timeout from its last message of any kind, whether or not the
+  ping could be written. It wakes when a listening stream opens, which can bring
+  its deadline forward, and otherwise at the deadline it set, which only moves
+  later.
+- **Ending a session lets go of every stream it holds**: each keeps rmcp's
+  receiver where the session reaches it, so a worker held by a write to a stream
+  nobody reads fails that write, reads its token and stops, and rmcp's close
+  frees the place — whoever ends it: the watch, the stream finding its client
+  silent, a `DELETE`, rmcp itself.
+- **What a stream carries to its client is use**, so a client listening while
+  the server's messages reach it keeps its session, as with rmcp; a ping and its
+  answer stay none.
+- Measured on 10,000 idle sessions, release build: the watches hold 8 MiB (837 B
+  each, against about 110 KiB a session) and use no CPU asleep; at the idle
+  timeout's one-second floor with every session used twice a second, 10,000
+  wakes a second cost 1.6 % of a core (about 1.6 µs each). A message through a
+  session's stream pays about 40 ns more.
+
+**Refused:**
+
+- **One sweep per mount**: a pass over 10,000 sessions costs 100 µs, paid every
+  tick whatever the sessions do, and each deadline is late by up to the tick; the
+  watch costs nothing until a deadline nears and keeps it to the instant.
+- **The idle timeout counting the client's messages alone**: a client listening
+  for what it subscribed to would lose its session at every idle timeout and
+  re-subscribe; what reaches it is use, what no stream carries is not.
+- **The earlier refusal of a per-session task stands corrected**: it took a
+  stream the transport cannot write for the kernel's to end, but a client still
+  connected and reading nothing holds one forever, and rmcp's worker stops with
+  it.
+
+Left as they are, in `TODO.md` §5: with the pings off, a client gone holding its
+stream keeps its session while the transport still writes the server's messages
+to it, then its idle timeout; a call waiting on its answer holds its session up
+to the operation timeout, or as long as it runs with that off.

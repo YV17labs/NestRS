@@ -244,7 +244,7 @@ no `aud` or no `iss` is refused. The MCP endpoint's `Host` allowlist admits
 | `STATELESS_PROTOCOL_METADATA_REQUIRED` | require per-request protocol metadata on stateless POSTs (SEP-2243) — default `false` |
 | `OPERATION_TIMEOUT_SECS` | how long one operation may run, `subscriptions/listen` aside — default `20`, the request timeout's; whole seconds from `1` to `3600`, or `0` ⇒ none. An overrun answers a JSON-RPC internal error whose `data.reason` is `timeout`. A timeout past `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, files one `warn` at boot |
 | `MAX_CONCURRENT_SESSIONS` | live sessions one endpoint holds, whole numbers from `1` to `1048576` — default `1024`. Past it an `initialize` is answered `503` with `Retry-After: 5`; a stateless request is never refused for it |
-| `SESSION_IDLE_TIMEOUT_SECS` | how long a session may go without a message before it is closed, whole seconds from `1` to `3600`, never off — default `300` |
+| `SESSION_IDLE_TIMEOUT_SECS` | how long a session may go unused before it is closed — no message from its client but a ping's answer, none of the server's carried to it on a stream, and no call waiting on its answer — whole seconds from `1` to `3600`, never off — default `300` |
 | `PING_INTERVAL_SECS` | how long a session's client holding its stream may send nothing before it is sent MCP's `ping` on that stream, whole seconds from `1` to `3600` (`0` ⇒ none) — default `20` |
 | `PING_TIMEOUT_SECS` | how long that `ping` waits for anything back before the session is closed, whole seconds from `1` to `3600`, never off — default `20` |
 

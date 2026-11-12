@@ -234,6 +234,7 @@ where
         config.max_concurrent_sessions,
         posture,
         session_store.clone(),
+        config.session_idle_timeout,
         pings,
     ));
 

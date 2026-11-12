@@ -22,7 +22,7 @@
 //! [`ping_timeout`](McpConfig::ping_timeout) bound what a client gone without a
 //! close holds while its session's stream is open: MCP's `ping` request, sent on
 //! that stream once the client is silent, and the session ended when nothing
-//! comes back.
+//! comes back, whether or not the transport could write the `ping`.
 
 use std::time::Duration;
 
@@ -172,9 +172,14 @@ pub struct McpConfig {
     /// the session manager, and answered the same `503`.
     #[config(bounds = SESSIONS)]
     pub max_concurrent_sessions: usize,
-    /// How long a session may go without a message before it is closed, its
-    /// place under [`max_concurrent_sessions`](Self::max_concurrent_sessions)
-    /// freed; its client then gets `404` and opens a new one. Read from
+    /// How long a session may go unused before it is closed, its place under
+    /// [`max_concurrent_sessions`](Self::max_concurrent_sessions) freed; its
+    /// client then gets `404` and opens a new one. Use is any message from the
+    /// client but a ping's answer, and any of the server's a stream carries to
+    /// it: what the server writes to a session no stream carries is none. A
+    /// call waiting on its answer — on its stream, or on one its client resumed
+    /// — holds the timeout, which counts again from that answer, so a call
+    /// outlasting it is answered. Read from
     /// `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS`, whole seconds from 1 to 3600,
     /// never off — refused outside, from the environment and from the pinned
     /// struct alike; defaults to 300 seconds.
@@ -188,7 +193,9 @@ pub struct McpConfig {
     /// [`session_idle_timeout`](Self::session_idle_timeout) counts neither. A
     /// session holding no stream has no channel to ask through and is pinged by
     /// nothing. `None` ⇒ no ping, and a client gone without a close holds its
-    /// session to its idle timeout, or past it while the server writes to it.
+    /// session to its idle timeout, or past it while a stream still carries the
+    /// server's messages to it — until the send buffer toward it fills, or the
+    /// kernel gives its connection up.
     /// Read from `<PREFIX>_MCP__PING_INTERVAL_SECS`, whole seconds from 1 to
     /// 3600 or `0` for none — refused outside, from the environment and from
     /// the pinned struct alike; defaults to 20 seconds,
@@ -199,7 +206,9 @@ pub struct McpConfig {
     /// for gone and its session closed, its place under
     /// [`max_concurrent_sessions`](Self::max_concurrent_sessions) freed and its
     /// streams ended. A client that vanished while holding its stream is so
-    /// released within the interval and this timeout of its last message. Read
+    /// released within the interval and this timeout of its last message — timed
+    /// apart from the stream, so a stream the transport can no longer write,
+    /// which no `ping` reaches, ends there too. Read
     /// from `<PREFIX>_MCP__PING_TIMEOUT_SECS`, whole seconds from 1 to 3600,
     /// never off — refused outside, from the environment and from the pinned
     /// struct alike; defaults to 20 seconds,
@@ -243,13 +252,12 @@ impl McpConfig {
             .with_stateless_protocol_metadata_required(self.stateless_protocol_metadata_required)
     }
 
-    /// The SDK's per-session config: the idle timeout, the pinned `initialize`
-    /// wait, and the configured retry — rmcp primes a session's streams from
-    /// here, never from the server config.
+    /// The SDK's per-session config: the pinned `initialize` wait and the
+    /// configured retry — rmcp primes a session's streams from here, never from
+    /// the server config. The idle timeout is the session manager's own.
     pub(crate) fn to_session_config(&self) -> SessionConfig {
         // `#[non_exhaustive]`: rmcp's default, overwritten field by field.
         let mut session = SessionConfig::default();
-        session.keep_alive = Some(self.session_idle_timeout);
         session.init_timeout = Some(SESSION_INIT_TIMEOUT);
         session.sse_retry = self.sse_retry;
         session
@@ -658,14 +666,12 @@ mod tests {
     }
 
     #[test]
-    fn a_session_runs_on_the_configured_idle_timeout_retry_and_pinned_initialize_wait() {
+    fn a_session_runs_on_the_configured_retry_and_pinned_initialize_wait() {
         let session = McpConfig {
-            session_idle_timeout: Duration::from_secs(42),
             sse_retry: None,
             ..McpConfig::default()
         }
         .to_session_config();
-        assert_eq!(session.keep_alive, Some(Duration::from_secs(42)));
         assert_eq!(
             session.sse_retry, None,
             "the configured retry reaches sessions"

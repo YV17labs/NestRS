@@ -1,6 +1,7 @@
 //! [`BoundedSessions`] — rmcp's in-memory sessions, held to a maximum, each
-//! bound to the principal that opened it and ended when its client holding a
-//! stream answers no ping — and [`ReportedStore`], the app's session store,
+//! bound to the principal that opened it and ended when its client leaves it
+//! unused past the idle timeout, or holding a stream answers no ping — and
+//! [`ReportedStore`], the app's session store,
 //! keeping that principal beside each session. Each says the failures it hands
 //! rmcp, whose own lines are clamped.
 //!
@@ -14,6 +15,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, PoisonError, RwLock};
+use std::time::Duration;
 
 use futures_util::Stream;
 use nest_rs_core::{Correlation, Posture, current_tenant_id, error_message};
@@ -31,7 +33,9 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::SessionsError;
-use crate::ping::{PingingStream, Pings, SessionClient, is_ping_answer};
+use crate::ping::{Pings, is_ping_answer};
+use crate::session_client::SessionClient;
+use crate::session_stream::SessionStream;
 
 tokio::task_local! {
     /// The request rmcp is answering while [`BoundedSessions::answering`]
@@ -207,8 +211,8 @@ fn take_stored(id: &str) -> Option<Option<SessionState>> {
 }
 
 /// A live session as the mount holds it: the principal it is bound to — the
-/// one its `initialize`, or the request restoring it, was served for — and its
-/// client as last heard.
+/// one its `initialize`, or the request restoring it, was served for — and
+/// what the mount knows of its client.
 struct LiveSession {
     owner: Principal,
     client: Arc<SessionClient>,
@@ -216,7 +220,8 @@ struct LiveSession {
 
 /// rmcp's local session manager, refusing a session past `max` with
 /// [`SessionsError::Full`], serving each session to the principal that opened
-/// it alone, and pinging the client of each session whose stream it holds.
+/// it alone, closing it once its client leaves it unused past the idle timeout,
+/// and pinging the client of each session whose stream it holds.
 pub(crate) struct BoundedSessions {
     inner: LocalSessionManager,
     max: usize,
@@ -229,24 +234,31 @@ pub(crate) struct BoundedSessions {
     posture: Posture,
     /// The app's store, holding the sessions other instances opened.
     store: Option<Arc<ReportedStore>>,
+    /// How long a session may go unused.
+    idle: Duration,
     /// What a session's stream asks its silent client.
     pings: Pings,
 }
 
 impl BoundedSessions {
-    /// rmcp's local manager running each session on `session`, holding at
-    /// most `max` live sessions on a mount of `posture`, asking `store` whose a
-    /// session it does not hold is, and a session's client its `pings`.
+    /// rmcp's local manager running each session on `session`, its idle timer
+    /// off, holding at most `max` live sessions on a mount of `posture`, asking
+    /// `store` whose a session it does not hold is, closing a session left
+    /// unused for `idle`, and asking a session's client its `pings`.
     pub(crate) fn new(
         session: SessionConfig,
         max: usize,
         posture: Posture,
         store: Option<Arc<ReportedStore>>,
+        idle: Duration,
         pings: Pings,
     ) -> Self {
         // `#[non_exhaustive]`: rmcp's default, its session config replaced.
         let mut inner = LocalSessionManager::default();
         inner.session_config = session;
+        // The mount's own watch times a session's idleness: rmcp's timer counts
+        // the server's messages, and stops with a worker a write holds.
+        inner.session_config.keep_alive = None;
         Self {
             inner,
             max,
@@ -254,6 +266,7 @@ impl BoundedSessions {
             bound: RwLock::new(HashMap::new()),
             posture,
             store,
+            idle,
             pings,
         }
     }
@@ -323,9 +336,11 @@ impl BoundedSessions {
     }
 
     /// Bind session `id` to `owner`, the principal the request being answered
-    /// is served for, its client heard now; `end` ends the session.
+    /// is served for, its client heard now and watched from now on; `end` ends
+    /// the session.
     fn bind(&self, id: SessionId, owner: Principal, end: CancellationToken) {
         let client = Arc::new(SessionClient::new(end));
+        tokio::spawn(Arc::clone(&client).watch(self.idle, self.pings.clone()));
         self.bound
             .write()
             .unwrap_or_else(PoisonError::into_inner)
@@ -334,8 +349,9 @@ impl BoundedSessions {
 
     /// Refuse, at `call`, the request being answered a session another
     /// principal opened; one this manager does not hold is rmcp's to refuse.
-    /// A request admitted to its own session is its client heard.
-    fn admit(&self, id: &SessionId, call: &'static str) -> Result<(), SessionsError> {
+    /// A request admitted to its own session is its client heard, and the
+    /// session used unless it answers a ping.
+    fn admit(&self, id: &SessionId, call: &'static str, pinged: bool) -> Result<(), SessionsError> {
         let admitted = match self
             .bound
             .read()
@@ -344,6 +360,9 @@ impl BoundedSessions {
         {
             Some(live) if is_caller(&live.owner) => {
                 live.client.heard();
+                if !pinged {
+                    live.client.used();
+                }
                 true
             }
             Some(_) => false,
@@ -352,16 +371,22 @@ impl BoundedSessions {
         if admitted { Ok(()) } else { Err(foreign(call)) }
     }
 
-    /// Session `id`'s stream `inner`, asking the session's client a ping once
-    /// it is silent.
-    fn pinging<S>(&self, id: &SessionId, inner: S) -> PingingStream<S> {
-        let client = self
-            .bound
+    /// The client of session `id`, if this manager holds it.
+    fn client(&self, id: &SessionId) -> Option<Arc<SessionClient>> {
+        self.bound
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .get(id)
-            .map(|live| Arc::clone(&live.client));
-        PingingStream::new(inner, client, &self.pings)
+            .map(|live| Arc::clone(&live.client))
+    }
+
+    /// Session `id`'s stream `inner`, held for the session — one its client
+    /// listens on, which asks it a ping once it is silent, when `listening`.
+    fn held<S>(&self, id: &SessionId, inner: S, listening: bool) -> SessionStream
+    where
+        S: Stream<Item = ServerSseMessage> + Send + 'static,
+    {
+        SessionStream::new(inner, self.client(id), &self.pings, listening)
     }
 
     /// Whether a client's `DELETE` may close session `id`: one bound to its
@@ -433,7 +458,7 @@ impl SessionManager for BoundedSessions {
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<ServerJsonRpcMessage, Self::Error> {
-        self.admit(id, "initialize_session")?;
+        self.admit(id, "initialize_session", false)?;
         said(
             "initialize_session",
             self.inner.initialize_session(id, message).await,
@@ -471,10 +496,14 @@ impl SessionManager for BoundedSessions {
     }
 
     /// A client's `DELETE` closes its own session alone; rmcp closing a
-    /// session its worker ended runs outside any request.
+    /// session its worker ended runs outside any request. Either lets go of
+    /// the session's streams, so a worker writing to one nobody reads stops.
     async fn close_session(&self, id: &SessionId) -> Result<(), Self::Error> {
         if ANSWERING.try_with(|_| ()).is_ok() {
             self.admit_close(id).await?;
+        }
+        if let Some(client) = self.client(id) {
+            client.close();
         }
         let closed = said("close_session", self.inner.close_session(id).await);
         self.bound
@@ -489,19 +518,21 @@ impl SessionManager for BoundedSessions {
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
-        self.admit(id, "create_stream")?;
-        said("create_stream", self.inner.create_stream(id, message).await)
+        self.admit(id, "create_stream", false)?;
+        let stream = said("create_stream", self.inner.create_stream(id, message).await)?;
+        Ok(self.held(id, stream, false))
     }
 
-    /// An answer to one of the mount's pings stops here, the client heard:
-    /// rmcp's worker, whose idle timer every message re-arms, never sees it.
+    /// An answer to one of the mount's pings stops here, the client heard and
+    /// the session not used: rmcp's worker never sees it.
     async fn accept_message(
         &self,
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<(), Self::Error> {
-        self.admit(id, "accept_message")?;
-        if is_ping_answer(&message) {
+        let pinged = is_ping_answer(&message);
+        self.admit(id, "accept_message", pinged)?;
+        if pinged {
             return Ok(());
         }
         said(
@@ -514,23 +545,28 @@ impl SessionManager for BoundedSessions {
         &self,
         id: &SessionId,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
-        self.admit(id, "create_standalone_stream")?;
+        self.admit(id, "create_standalone_stream", false)?;
         let stream = said(
             "create_standalone_stream",
             self.inner.create_standalone_stream(id).await,
         )?;
-        Ok(self.pinging(id, stream))
+        Ok(self.held(id, stream, true))
     }
 
     /// rmcp answers a resume it cannot serve with an empty stream, so its
     /// failure — most often a `Last-Event-ID` the session no longer holds — is
-    /// said at `warn`.
+    /// said at `warn`. A `Last-Event-ID` naming a call's stream resumes that
+    /// stream, its wait holding the idle timeout as the first one's did; any
+    /// other, the stream the client listens on.
     async fn resume(
         &self,
         id: &SessionId,
         last_event_id: String,
     ) -> Result<impl Stream<Item = ServerSseMessage> + Send + Sync + 'static, Self::Error> {
-        self.admit(id, "resume")?;
+        self.admit(id, "resume", false)?;
+        // rmcp's event id: `<index>` on the standalone stream, `<index>/<request
+        // id>` on a call's (`local::EventId`).
+        let listening = !last_event_id.contains('/');
         let stream = self
             .inner
             .resume(id, last_event_id)
@@ -543,7 +579,7 @@ impl SessionManager for BoundedSessions {
                 );
                 SessionsError::from(error)
             })?;
-        Ok(self.pinging(id, stream))
+        Ok(self.held(id, stream, listening))
     }
 
     /// A restored session takes a place like a created one; one already
@@ -713,8 +749,6 @@ impl SessionStore for ReportedStore {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use nest_rs_testing::{CapturedEvent, LogCapture};
 
     use super::*;
@@ -726,6 +760,7 @@ mod tests {
             1,
             Posture::Public,
             None,
+            IDLE,
             no_pings(),
         )
     }
@@ -737,9 +772,13 @@ mod tests {
             2,
             Posture::Gated,
             None,
+            IDLE,
             no_pings(),
         )
     }
+
+    /// The mount's idle timeout, which no test here reaches.
+    const IDLE: Duration = Duration::from_secs(300);
 
     /// A mount asking no one.
     fn no_pings() -> Pings {

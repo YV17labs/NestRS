@@ -92,6 +92,8 @@ mod propagate;
 mod registry;
 mod resource;
 mod scope;
+mod session_client;
+mod session_stream;
 mod sessions;
 #[cfg(test)]
 mod testing;

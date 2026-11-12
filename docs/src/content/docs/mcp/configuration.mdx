@@ -48,7 +48,7 @@ McpModule::for_root((
 | `<PREFIX>_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
 | `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS` | `20` | How long one operation may run; whole seconds from `1` to `3600`, `0` ⇒ none |
 | `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` | `1024` | Live sessions one endpoint holds; from `1` to `1048576` |
-| `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS` | `300` | How long a session may stay idle before it is closed; whole seconds from `1` to `3600`, never off |
+| `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS` | `300` | How long a session may go unused before it is closed; whole seconds from `1` to `3600`, never off |
 | `<PREFIX>_MCP__PING_INTERVAL_SECS` | `20` | How long a session's client holding its stream may send nothing before it is sent MCP's `ping` on that stream; whole seconds from `1` to `3600`, `0` ⇒ none |
 | `<PREFIX>_MCP__PING_TIMEOUT_SECS` | `20` | How long that `ping` waits for anything back before the session is closed; whole seconds from `1` to `3600`, never off |
 
@@ -63,12 +63,22 @@ client that talks is never asked. One that sends nothing back within
 streams end, and one `warn` on `nest_rs::mcp` — `mcp session closed: the client
 sent nothing back within the ping timeout` — names the mount by `host` and
 `path`. A client that vanished holding its stream is so released within 40
-seconds of its last message. A ping and its answer are no use of the session:
-the idle timeout counts neither.
+seconds of its last message. The wait is timed apart from the stream, so a stream
+the transport can no longer write holds nothing past it either: a client that
+stopped reading while the server pushed, or vanished with the kernel's send
+buffer full toward it, is never asked, and its session closes all the same. A
+ping and its answer are no use of the session: the idle timeout counts neither.
+With the pings off, nothing asks: a client gone while holding its stream keeps
+its session for as long as the transport still writes the server's messages to
+it, then for its idle timeout.
 
 A session holding no stream has no channel to ask through, so nothing asks it:
-its idle timeout bounds it while the server writes nothing to it, since rmcp
-counts the server's own messages as use of the session. A stateless
+its idle timeout bounds it. That timeout counts the session's use — any message
+from its client but a ping's answer, and any of the server's a stream carries to
+it — and is held while a call waits on its answer, on its stream or on one its
+client resumes with `Last-Event-ID`, so a tool that outlasts it is still
+answered. What the server writes to a session no stream carries is no use:
+the session idles out as one nobody writes to. A stateless
 `2026-07-28` request, a `subscriptions/listen` among them, opens no session and
 has no channel for an answer either: a client gone without a close holds its stream until a write to
 it fails, once the kernel nearest it gives up retransmitting the keep-alive —
@@ -117,7 +127,7 @@ retry-after: 5
 ```
 
 A place comes back when a session closes: its client sends `DELETE` with its
-id, or it goes `session_idle_timeout` without a message. An idle session's
+id, or it goes `session_idle_timeout` unused. An idle session's
 next request is answered `404`, and its client opens a new one. A
 `2026-07-28` request is served statelessly and opens no session, so the cap
 never refuses it; with `<PREFIX>_MCP__LEGACY_SESSION_MODE=false`, no session

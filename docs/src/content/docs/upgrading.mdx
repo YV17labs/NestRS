@@ -1259,9 +1259,11 @@ lists what the boot, a log or the wire shows when one is missed.
       rate limiter is refused at boot: keep it under the 18-second net.
     - **MCP sessions are capped**: 1 024 per endpoint
       (`<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS`, about 110 KiB each), idling out
-      after `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS` (five minutes); a session
-      is served to the principal that opened it alone, and a principal naming no
-      subject opens none on a gated endpoint (`initialize` answered `403`). The
+      after `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS` (five minutes) unused — what
+      the server writes to a session no stream carries is no use, a call waiting
+      on its answer is; a session is served to the principal that opened it
+      alone, and a principal naming no subject opens none on a gated endpoint
+      (`initialize` answered `403`). The
       graphql-ws socket waits 3 s for `connection_init`
       (`<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS`, up to 60, for a client
       fetching a token first), and caps a message at 64 KiB and a socket at 100

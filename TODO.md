@@ -128,19 +128,6 @@ SDL and an MCP tool's output schema, whatever the posture of the unit answering 
   environment of its own running nginx, Envoy and HAProxy in front of an app,
   its suite run by hand, a new service the owner admits first. *read*
 
-**WebSocket and MCP**
-- An MCP session's `ping` rides its stream, so it is asked only while the
-  transport can write that stream: a client gone with the kernel's send buffer
-  full toward it (the server pushing faster than a vanished peer drains) is
-  asked nothing until the kernel gives up retransmitting (Linux: about 15
-  minutes). Close: the wait timed off the stream, a timer per session or one
-  sweep per mount, its cost measured. *read*
-- An MCP session whose stream is gone while the server keeps writing to it never
-  idles out: rmcp's worker re-arms its idle timer on every message, the server's
-  own included, and a session holding no stream is asked nothing. Close: the
-  idle timeout counting the client's messages alone, owned by the mount in place
-  of rmcp's (`SessionConfig::keep_alive` off). *read*
-
 **Data, queue, storage, health**
 - Postgres's certificate is checked against the public authorities sqlx
   compiles in (webpki-roots) beside whatever root is named, the URL's
@@ -198,7 +185,14 @@ answer, held by a client gone without a close until a write to it fails, once
 the kernel nearest it gives up retransmitting the keep-alive (Linux: about 15
 minutes), an `#[sse]` stream at most `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`
 (four hours by default), both ended at the shutdown signal
-(`TCP_USER_TIMEOUT` would see only the hop to a proxy); the chain `.opaque()`
+(`TCP_USER_TIMEOUT` would see only the hop to a proxy); with MCP's pings off
+(`<PREFIX>_MCP__PING_INTERVAL_SECS=0`), a client gone without a close while
+holding its session's stream keeping its session for as long as the transport
+still writes the server's messages to that stream — until the send buffer toward
+it fills or the kernel gives the connection up — then its idle timeout, since
+nothing asks it; and an MCP call waiting on its answer holding its session up to
+`<PREFIX>_MCP__OPERATION_TIMEOUT_SECS`, for as long as the call runs with that
+off (`socket-pings-a-silent-peer.md`, 2026-11-12); the chain `.opaque()`
 keeps in an error its handler then discards — a WebSocket `WsError`, an
 `HttpError`, an `async_graphql::Error`, a `problem_error`'s on GraphQL — lost
 with it as any error a handler discards is, where filing at the call kept it

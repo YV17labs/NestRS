@@ -23,7 +23,7 @@ per crate.
 | Layer | Target |
 |---|---|
 | HTTP request span | `nest_rs::http` — opened by the transport, not by this crate |
-| Operation log, one line per unit of work | `nest_rs::operation` — the only target naming a *kind of line* rather than a subsystem; see [Logs](/opentelemetry/logs/) |
+| Operation log, one line per unit of work | `nest_rs::operation` — the only target naming a *kind of line* rather than a subsystem; see [The operation log](/opentelemetry/operation-log/) |
 | ORM queries | `nest_rs::orm` |
 | Relation dataloaders | `nest_rs::loader` |
 | Authentication | `nest_rs::authn` |
@@ -172,6 +172,8 @@ or OTLP export changes.
 
 ## Going further
 
-- [Logs](/opentelemetry/logs/) — the access event and structured fields on the span.
+- [Logs](/opentelemetry/logs/) — the structured fields on the span.
+- [The operation log](/opentelemetry/operation-log/) — the access event, one line per
+  unit of work.
 - [Metrics](/opentelemetry/metrics/) — the aggregate counterpart to spans.
 - [OpenTelemetry](/opentelemetry/) — sampling, propagation, and OTLP export.

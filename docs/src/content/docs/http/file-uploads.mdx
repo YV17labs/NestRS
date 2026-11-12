@@ -9,7 +9,7 @@ Take a file part straight from a `multipart/form-data` request with the
 `Multipart` extractor, which parses the body with
 [multer](https://docs.rs/multer), and hand it to storage as it arrives. A direct
 upload is the single-round-trip alternative to the
-[presigned flow](/storage/): the client posts the bytes, the server stores
+[presigned flow](/storage/transfers/#presigned-uploads): the client posts the bytes, the server stores
 them. The demo reads the form in an extractor of its own, so the handler is
 one delegation:
 
@@ -152,6 +152,7 @@ states the parts.
 
 ## Going further
 
-- [File storage](/storage/) — the presigned flow and the object-store client.
+- [Uploads and downloads](/storage/transfers/) — the presigned flow, and what the
+  server reads and writes itself.
 - [`audio` in the demo](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio/http/controller.rs) — the direct upload in full.
 - [Streaming responses](/http/streaming/) — the download counterpart.

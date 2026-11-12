@@ -102,7 +102,8 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
 - security/
   - **authentication/**
     - [index.mdx](/security/authentication/) — `Strategy`, `AuthnGuard<S>`, reading the principal back with `Ambient<P>`
-    - [jwt.mdx](/security/authentication/jwt/) — `JwtStrategy`, `JwtService`, HS, EdDSA or JWK Set keys, claims
+    - [jwt.mdx](/security/authentication/jwt/) — `JwtStrategy`, `JwtService`, claims
+    - [jwt-configuration.mdx](/security/authentication/jwt-configuration/) — HS, EdDSA or JWK Set keys, issuer and audience
     - [external-identity-provider.mdx](/security/authentication/external-identity-provider/) — another issuer's tokens, against its JWK Set (better-auth end to end)
     - [oauth2.mdx](/security/authentication/oauth2/) — authorization-code flow with PKCE
     - [social-login.mdx](/security/authentication/social-login/) — the provider contract, GitHub and Google
@@ -110,7 +111,9 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
     - [split-deployment.mdx](/security/authentication/split-deployment/) — the split-deploy pattern
   - **authorization/**
     - [index.mdx](/security/authorization/) — `Ability`, `AuthzAbility`, where it runs
-    - [policies.mdx](/security/authorization/policies/) — `Subject`, `Action`, `RuleSpec`, predicates, fields
+    - [policies.mdx](/security/authorization/policies/) — `Subject`, `Action`, `RuleSpec`
+    - [predicates.mdx](/security/authorization/predicates/) — the predicate AST, relational scoping
+    - [field-grants.mdx](/security/authorization/field-grants/) — the fields a reply shows and a write may set
     - [row-level-filtering.mdx](/security/authorization/row-level-filtering/) — `condition_for`, `Repo::scoped`
     - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `#[authorize(A, bind = S)]`, the `Access` outcome
     - [response-masking.mdx](/security/authorization/response-masking/) — the judged wire row, `#[expose(nullable)]`

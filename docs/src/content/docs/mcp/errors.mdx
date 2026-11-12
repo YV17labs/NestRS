@@ -5,6 +5,10 @@ sidebar:
   order: 4.5
 ---
 
+A failing operation reaches the model as a class it can act on, never as its
+error's `Display`. The edge decides what the model reads, and a code of your
+own is written with `McpError`'s constructors.
+
 ## Failing without leaking
 
 A tool body talks to a **language model**, and it would repeat whatever an error's

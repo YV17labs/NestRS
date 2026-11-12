@@ -1,13 +1,13 @@
 ---
 title: Lifecycle columns
-description: The id, created_at, updated_at and deleted_at every entity carries, what timestamps and soft_delete do with them, and the migration behind them.
+description: The id, created_at, updated_at and deleted_at recommended on every entity, what timestamps and soft_delete do with them, and the migration behind them.
 sidebar:
   order: 2.2
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Four columns recur on every product entity, and two header flags give them
+Four columns are recommended on every entity, and two header flags give them
 their behaviour: `timestamps` stamps the times, and `soft_delete` keeps a
 deleted row as a tombstone every read hides.
 

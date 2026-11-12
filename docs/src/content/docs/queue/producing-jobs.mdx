@@ -1,11 +1,9 @@
 ---
 title: Producing jobs
-description: How a feature enqueues — the typed queue handle, the service as the choke point, and a delay, a unique key or a cancel.
+description: How a feature enqueues — the typed queue handle, the service as the choke point, and what a push answers when it fails.
 sidebar:
   order: 2
 ---
-
-import { Aside } from '@astrojs/starlight/components';
 
 Pushing a job is a one-line call — `jobs.push(AudioQueue, job).await?` —
 but *where* that line lives decides whether the feature stays auditable.
@@ -159,140 +157,13 @@ twice. A push failing at its first call returns that failure alone.
 
 ## A push inside a transaction
 
-A push written inside a transaction — a mutating request, a WebSocket message,
-a job attempt, a listener's call — is written **into** that transaction. With
-the `seaorm` and `queue` features, the job becomes a row of the outbox table,
-`nestrs_outbox`, committed or rolled back with the request's own writes; once
-the transaction commits, the outbox relay files it on the backend. A rollback
-leaves no job behind, a crash after the commit loses none, and the receipt
-names a job that exists exactly when the request's writes do. A `push_many`
-there is one write, so it lands whole or not at all.
+A push written inside a transaction is written into it, and filed once it
+commits: [The outbox](/queue/outbox/).
 
-You write the push as anywhere else, and list nothing: `SeaOrmDatabaseModule`
-keeps the outbox and attaches the relay. Your migrator lists the framework's
-migration, which creates the table — `nestrs g queue` registers it, or
-`nestrs g migration nestrs_outbox`, and the boot refuses without it, naming
-that remedy:
+## Delays, unique keys and cancels
 
-```rust title="crates/migrations/src/migrator.rs (abridged)"
-fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-    vec![
-        // …
-        Box::new(nest_rs::seaorm::queue::OutboxMigration),
-    ]
-}
-```
-
-A push on the pool — a safe request, a `transactional = false` job — is filed
-at once, as is one in an app binding no database.
-
-Two answers move from the push to the relay. A unique key another job holds is
-checked once the transaction committed: the record is dropped, in one `info`
-line on `nest_rs::queue` naming both jobs, and the caller saw `Ok`. A backend
-that refuses delays the job without losing it: the relay retries each record on
-the job retry backoff, says a failing pass at `warn`, and says once at `error`
-when records waited past the stall warning. Delivery stays [at least
-once](/queue/delivery/#filed-after-the-commit).
-
-## Holding a job back
-
-`push_with` carries what a push declares besides its queue and its payload.
-A delay holds the job for a `Duration`, or until a `SystemTime`:
-
-```rust title="crates/features/src/audio/service.rs"
-self.jobs
-    .push_with(
-        AudioQueue,
-        TranscodeCommand { file },
-        PushOptions::default().with_delay(Duration::from_secs(60)),
-    )
-    .await?;
-```
-
-A delay needs a backend declaring `Capability::DelayedPush`. The Redis backend
-does; a backend that does not refuses the push with `QueueError::Unsupported`,
-naming itself, before anything is filed — a delay is never dropped in silence.
-On Redis the job waits off the stream, due on Redis's clock, and a running
-worker files it within a second of falling due — with none running, it waits —
-see [Delivery on Redis](/queue/delivery/#delayed-jobs).
-
-## One job per key
-
-A unique key keeps a queue from holding the same piece of work twice. While a
-job pushed under a key is pending or running, a second push under that key is
-refused with `QueueError::UniqueKeyHeld`, which names the job holding it, never
-the key, which a push most often reads off its payload, and files nothing:
-
-```rust title="crates/features/src/audio/service.rs"
-let pushed = self
-    .jobs
-    .push_with(
-        AudioQueue,
-        TranscodeCommand { file },
-        PushOptions::default().with_unique(format!("transcode-{file}")),
-    )
-    .await;
-match pushed {
-    Ok(receipt) => Ok(Some(receipt)),
-    Err(QueueError::UniqueKeyHeld { holder, .. }) => {
-        tracing::debug!(target: crate::audio::TARGET, holder = %holder, "transcode already queued");
-        Ok(None)
-    }
-    Err(error) => Err(error.into()),
-}
-```
-
-The key is held from the push until the job reaches its outcome — it
-completes, it dead-letters, or it is cancelled — and is free for the next push
-from then on. It is scoped to the queue: the same key on two queues names two
-jobs. A key is 1 to 256 bytes with no control character, and `push_many_with`
-refuses one, since a key names one job.
-
-**At most once over pushes, never a lock.** A unique key keeps a sequence of
-pushes from queueing one piece of work twice. It does not make two replicas or
-two methods take turns at anything, and a job redelivered after its replica
-died runs again under the key it already holds.
-
-A unique key needs a backend declaring `Capability::UniquePush`. On Redis a
-push is one script: it reads and claims the key in the step that files the job,
-so pushes racing for one key queue one job, and a push lands whole or not at
-all — a push that never learned its answer claimed the key with its job, or
-claimed nothing. See [Delivery on Redis](/queue/delivery/#unique-keys).
-
-## Cancelling a job
-
-The receipt a push returns names the job, and `cancel` takes it back while it
-waits:
-
-```rust title="crates/features/src/audio/service.rs"
-let receipt = self.jobs.push(AudioQueue, job).await?;
-
-if self.jobs.cancel(&receipt).await? {
-    tracing::info!(target: crate::audio::TARGET, job_id = %receipt.id(), "transcode withdrawn");
-}
-```
-
-`Ok(true)` is a promise: the job had not started, and now never will —
-whether it waited on its queue, on the schedule its delay holds it on, or for
-the next attempt a failed one left it. Cancelling is the job's outcome, so the
-unique key it held is free again and its checkpoint is gone. `Ok(false)` says
-the job already started — it then runs to its own outcome — already finished,
-or was never known to the backend. A job is never stopped mid-attempt.
-
-A job still waiting in the outbox — its transaction committed, the relay not
-yet done filing it — is cancelled there: the cancel deletes its record, waiting
-a moment for a relay filing it at that instant, then asks the backend, and
-either answers `true`.
-
-A receipt is data: it serializes as `{"queue": …, "id": …}`, so a caller that
-cancels later, from another request or another process, keeps it wherever it
-keeps state. `cancel_unique(AudioQueue, key)` cancels the job holding a unique
-key instead, with the same answer.
-
-Cancelling needs a backend declaring `Capability::Cancellation`. On Redis a
-cancel is one script: it removes a job still waiting — on the stream and not
-yet handed over, or held back — with everything it held, and answers `false`
-for one a delivery runs. See [Delivery on Redis](/queue/delivery/#cancels).
+A push can hold its job back or keep one job per key, and a waiting job can be
+taken back: [Delays, unique keys and cancels](/queue/push-options/).
 
 ## The HTTP adapter
 
@@ -392,15 +263,6 @@ push side. The service is the contract; transports adapt.
   `push_many`, `push_many_with`, `cancel` and `cancel_unique`.
 - `crates/nest-rs-queue/src/producer.rs` — `JobProducer`, what a backend
   implements, and the path every push takes to it.
-- `crates/nest-rs-queue/src/outbox/relay.rs` — `OutboxRelay`, which files
-  what a committed transaction wrote.
-- `crates/nest-rs-seaorm/src/queue/outbox.rs` — `SeaOrmOutbox`, the table's
-  writes, claim and settle.
-- `crates/nest-rs-queue/src/push_options.rs` — `PushOptions`, and the
-  capability each option needs.
-- `crates/nest-rs-queue/src/push_receipt.rs` — `PushReceipt`.
-- `crates/nest-rs-redis/tests/e2e/queue/producer.rs` — a delay, a unique key
-  held, raced and let go, and a cancel, against live Redis.
 
 ## Going further
 

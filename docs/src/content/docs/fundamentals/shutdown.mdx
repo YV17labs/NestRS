@@ -41,7 +41,7 @@ own:
   `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s, then the half second, which
   the HTTP/2 streams it cut and the work its self-mounts ran off their
   connections share;
-- the queue worker's [drain window](/queue/delivery/#shutdown),
+- the queue worker's [drain window](/queue/leases/#shutdown),
   `<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, 20 s, its hand-backs inside it;
 - the scheduler's: a [scheduled tick](/schedule/) already running gets what a
   hook gets — five seconds, spent *before* the hooks so no tick runs through the

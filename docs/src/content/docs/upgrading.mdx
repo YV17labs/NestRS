@@ -1050,7 +1050,7 @@ lists what the boot, a log or the wire shows when one is missed.
       attempt, as in 6.x. But a job whose deliveries end that way three times in
       a row is dead-lettered without running, where 6.x ran it again every
       time. See
-      [Crashes, and the stall limit](/queue/delivery/#crashes-and-the-stall-limit).
+      [Crashes, and the stall limit](/queue/leases/#crashes-and-the-stall-limit).
     - **A job a newer release pushed is handed back, not failed.** During a
       rolling deploy, a 7.0 worker meeting a job sealed by a later wire format
       runs nothing, spends no attempt and puts it back as stored, due a minute
@@ -1076,7 +1076,7 @@ lists what the boot, a log or the wire shows when one is missed.
       job runs again only once a delivery's lease lapses — its worker crashed,
       froze, or was cut off past the lease — and what the first delivery writes
       after that lands nowhere. See
-      [At least once, and the fence](/queue/delivery/#at-least-once-and-the-fence).
+      [At least once, and the fence](/queue/leases/#at-least-once-and-the-fence).
     - A queue name is checked: 1 to 128 of `[A-Za-z0-9_.-]`. A name holding `:`
       or whitespace no longer compiles, so that queue takes a new name, and its
       6.x jobs are drained in step 18 under the old one.

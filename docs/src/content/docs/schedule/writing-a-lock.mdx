@@ -130,13 +130,13 @@ queue job the tick pushes.
 A lock over a connection another module opens — Redis's, over
 `RedisModule`'s — inherits its TLS. A lock whose crate opens its own client
 reads `nest_rs::config::ClientTls` under its namespace, as the
-[queue driver page](/queue/writing-a-driver/#tls) shows.
+[queue driver page](/queue/binding-a-driver/#tls) shows.
 
 ## Proof at boot
 
 `RedisModule` proves the connection the lock claims over before the app
 serves. A client your crate opens is proved through `nest_rs::core::prove` —
-see the [queue driver page](/queue/writing-a-driver/#proof-at-boot).
+see the [queue driver page](/queue/binding-a-driver/#proof-at-boot).
 
 ## Health
 

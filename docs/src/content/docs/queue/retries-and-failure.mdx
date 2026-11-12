@@ -1,6 +1,6 @@
 ---
 title: Retries and failure
-description: "What an Err from a #[process] method means — the retry budget and its backoff, resuming from a checkpoint, panic handling, and where a dead-lettered job goes."
+description: "What an Err from a #[process] method means — the retry budget and its backoff, panic handling, and where a dead-lettered job goes."
 sidebar:
   order: 5
 ---
@@ -57,7 +57,7 @@ that way three times in a row (`STALL_LIMIT`) is taking its workers down — an
 abort, an OOM kill, a hang until the pod is killed — and is dead-lettered
 without running, as
 `job dead-lettered: its deliveries ended without an answer past the stall limit`.
-See [Crashes, and the stall limit](/queue/delivery/#crashes-and-the-stall-limit).
+See [Crashes, and the stall limit](/queue/leases/#crashes-and-the-stall-limit).
 
 After attempt `n` fails, the job waits `min(5 min, 1 s · 2^(n − 1))` before
 attempt `n + 1`, scaled by a jitter between 0.8 and 1.2. The jitter is derived
@@ -139,88 +139,15 @@ A method returning `Result<(), ServiceError>` dead-letters a `NotFound`, a
 yourself beside it — can run before that write commits and find nothing: push from a
 listener on the event the commit announces, or return the error as `JobError::retry`.
 One pushed inside the unit's own transaction waits in the outbox for its commit
-([A push inside a transaction](/queue/producing-jobs/#a-push-inside-a-transaction)).
+([A push inside a transaction](/queue/outbox/)).
 An exception filter may also answer a failed attempt with
 `job.acknowledge()` through `QueueView`: the job settles as done, what it
 wrote rolls back, and the failure is said at `warn` as
 `job failed; a layer acknowledged it, so it settles done and its writes rolled back`.
 
-## How long an attempt runs
-
-An attempt runs for at most **ten minutes** unless its decorator says otherwise.
-`timeout` takes a whole number of `ms`, `s`, `m` or `h`, up to `"24h"`:
-
-```rust
-#[process(queue = AudioQueue, retries = 3, timeout = "30m")]
-async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-    self.svc.transcode(job.file).await?;
-    Ok(())
-}
-```
-
-No edge deadline sits above a job, so the timeout is what ends an attempt
-waiting on a call that never answers — an outbound request with no timeout of
-its own. It bounds the method's **body**: past it, the attempt is cut where it
-waits and fails **retryably**, since the next attempt may meet the answer the
-first waited on in vain, and what it wrote in its transaction is rolled back.
-The failure names the deadline, on the retry `warn`, the dead-letter line and
-its record alike:
-
-```text frame="terminal"
- WARN nest_rs::queue: job failed; will retry within the budget error=the attempt did not end within its 1800s timeout, and was cut — the `timeout` key on its job decorator sets it retry_after_ms=1143 trace_id=… span_id=…
-```
-
-A body that returned within its timeout is never retried for what comes after
-it: its `COMMIT` runs to its answer, and a listener on what it committed runs
-on past the timeout rather than failing the attempt. A commit that does not
-answer within the driver's bound may have landed, so that attempt is
-**dead-lettered, never replayed** — running it again could write twice:
-
-```text frame="terminal"
-ERROR nest_rs::queue: job dead-lettered: its commit did not answer in time, and what it wrote may have landed outcome="in_doubt" error=the unit's commit did not answer within its bound; its writes may have landed trace_id=… span_id=…
-```
-
-The default is the dispatch deadline of Google Cloud Tasks, and the same key,
-default and ceiling hold on `#[every]`, `#[cron]` and `#[after]` — see
-[How long a run lasts](/schedule/ticks/#how-long-a-run-lasts).
-
-## Resuming where an attempt stopped
-
-A retry replays the whole body. A job that works through a long file can keep
-its place instead, with a `Checkpoint<S>` parameter beside the job:
-
-```rust title="crates/features/src/audio/queue/processor.rs"
-#[process(queue = AudioQueue, retries = 3, transactional = false)]
-async fn transcode(&self, job: TranscodeCommand, mut progress: Checkpoint<TranscodeProgress>) -> Result<()> {
-    let first = progress.get().map_or(0, |saved| saved.next_chunk);
-    for chunk in first..self.svc.chunks(&job.file).await? {
-        self.svc.transcode_chunk(&job.file, chunk).await?;
-        progress.save(TranscodeProgress { next_chunk: chunk + 1 }).await?;
-    }
-    Ok(())
-}
-```
-
-`get` answers the last state saved for this job — by an earlier attempt, or by
-a replica that died holding it — and `save` stores a new one at once. The
-state is any `Serialize + DeserializeOwned` value, lasts through the job's
-retries and redeliveries, and is cleared when the job completes, dead-letters
-or is cancelled.
-
-The method must declare `transactional = false`, and the decorator refuses a
-`Checkpoint` without it: a save reaches the backend at once, while a
-transactional attempt rolls its database work back when it fails, so the retry
-would resume past rows that were undone. A checkpoint needs a backend declaring
-`Capability::Checkpoint`; on Redis it is one field beside the job, written
-only by the delivery holding it and removed when the job ends — see
-[Delivery on Redis](/queue/delivery/#where-a-queue-lives).
-
-A store that does not answer within the port's net — `BACKEND_TIMEOUT`, eighteen
-seconds — or panics answering fails the attempt, retryably, the panic said once
-at `error`: the read before your method runs does so on its own, and a save does
-when you return its error with `?`. The clear at the job's end is no call of its
-own: the backend lets the checkpoint go in the step that settles the job, so it lands
-or fails with the outcome.
+How long an attempt may run, and how a long one resumes where it stopped,
+are on [Long-running jobs](/queue/long-running-jobs/); what a worker does with
+a job another release sealed is on [Wire format](/queue/wire-format/).
 
 ## Where failed jobs go
 
@@ -311,47 +238,6 @@ so you don't have to think about them separately:
   dead-letters anyway. See
   [Repo and executor](/database/repo-and-executor/#workers--same-repo-one-transaction-per-attempt).
 
-## Wire-format mismatch
-
-A processor reads only payloads it understands. The wire envelope carries a
-version, and the port checks it before the handler runs.
-A future release that bumps `WIRE_FORMAT_VERSION` to `2` makes a `v: 1` worker
-leave `v: 2` jobs unread rather than misinterpret them: the job goes back to the
-queue exactly as it was stored, due again in a minute, with no attempt spent,
-and the worker files one line per delivery at `warn`, in the trace the newer
-producer sealed:
-
-```text
-WARN nest_rs::queue: job sealed by a newer release handed back unread queue=audio job_id=01a0… version=2 supported=1 retry_after_ms=60000 waited_ms=0 patience_ms=86400000 hint="a newer release sealed this job and only its consumers can run it: finish rolling them forward, or, rolling back, keep one running until the queue holds none of its jobs — a job still unread a day after it was first handed back is dead-lettered, naming both versions, and kept with the dead letters for a consumer of that release" trace_id=4bf9… span_id=…
-```
-
-So during a rolling deploy jobs from the new producers wait, and the new
-workers run them as they come up — under the id their push returned, which the
-line names. **A rollout that stopped does not hand its jobs back forever.**
-`waited_ms` counts from the job's first hand-back — never from its push, so a
-job pushed with a delay is not charged for the delay — and a job still unread a
-day later (`NEWER_RELEASE_PATIENCE`) is dead-lettered, once, at
-`error`:
-
-```text
-ERROR nest_rs::queue: job dead-lettered: a newer release sealed it, and none of its consumers ran it in time version=2 supported=1 waited_ms=86400412 patience_ms=86400000 hint="…"
-```
-
-Rolling the producers back stops new such jobs and recovers none already
-sealed: those need a consumer of the release that sealed them. Keep one
-running until the queue holds none of them — a job it runs is cleared of its
-wait — or let them reach the dead letters, where each keeps its record a week,
-naming both versions, for a consumer of that release. An **older** version — a `v: 1` job
-met by a `v: 2` worker — is dead-lettered naming the direction of the gap,
-since a newer consumer reading an older shape is a decision the release that
-bumps the version makes, not a default.
-
-An envelope with no `id` or `attempt` — what 6.x sealed — still runs, as
-attempt 1 under an id minted for its delivery. **Unversioned legacy payloads**
-(a bare job JSON, no `v` key) are decoded directly with a `tracing::warn`, so
-jobs left from a release before envelopes existed don't get stuck. New
-producers always seal.
-
 ## Limits
 
 - **The dead letters are not routed anywhere.** Nothing alerts or archives on
@@ -364,7 +250,7 @@ producers always seal.
   comes only once a lease lapses — a worker that crashed, froze, or was cut off
   from Redis for longer than its lease — and runs the job again, while every
   write the first delivery makes after that lands nowhere. See
-  [At least once, and the fence](/queue/delivery/#at-least-once-and-the-fence).
+  [At least once, and the fence](/queue/leases/#at-least-once-and-the-fence).
 
 ## Reference
 
@@ -372,8 +258,6 @@ producers always seal.
   the stall limit, the events and the operation line.
 - `crates/nest-rs-queue/src/backoff.rs` — the wait before each retry, and the
   waits pinned for one job.
-- `crates/nest-rs-queue/src/checkpoint.rs` — `Checkpoint<S>`, and the
-  `CheckpointStore` a backend keeps it in.
 - `crates/nest-rs-redis/src/queue/scripts.rs` — how an outcome settles on
   Redis, fenced on its lease: acknowledged, filed for later, or dead-lettered.
 - `crates/nest-rs-redis/tests/e2e/queue/consumer.rs` — the behaviour kit's

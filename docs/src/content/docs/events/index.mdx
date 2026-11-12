@@ -80,7 +80,7 @@ A listener reacts in process, and a reaction lost to a crash is lost. Work
 that must survive one — the org's notification of the same publish — is a
 [queue](/queue/) job, and the service pushes it inside its own transaction
 rather than from a listener: the job is
-[written into that transaction](/queue/producing-jobs/#a-push-inside-a-transaction)
+[written into that transaction](/queue/outbox/)
 and filed once it commits, so a crash after the commit loses nothing and a
 refused push fails the request that made it.
 

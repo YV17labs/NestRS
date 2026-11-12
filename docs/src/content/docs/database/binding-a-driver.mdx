@@ -179,7 +179,7 @@ match self.parsed()?.get_ssl_mode() {
 ```
 
 A store with no such standard reads `nest_rs::config::ClientTls` under its
-own namespace, as the [queue driver page](/queue/writing-a-driver/#tls) shows.
+own namespace, as the [queue driver page](/queue/binding-a-driver/#tls) shows.
 
 ## Proof at boot
 
@@ -253,8 +253,8 @@ probes, never on liveness — see
 
 ## Test it
 
-Your suite boots apps over your binding and proves each obligation above
-against a live server. SeaORM's holds them in `nest-rs-seaorm`'s suites:
+Your suite boots apps over your binding and proves each obligation above, and
+the [contract's](/database/writing-a-driver/), against a live server. SeaORM's holds them in `nest-rs-seaorm`'s suites:
 `tests/e2e/unit.rs` for the commit, the rollback, the escaped handle, the
 conflict and the held work under the HTTP edge;
 `tests/integration/database/module.rs` for the request timeout that cuts the

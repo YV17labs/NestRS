@@ -146,13 +146,13 @@ the key:
 A store over a connection another module opens — Redis's, over
 `RedisModule`'s — inherits its TLS. A store whose crate opens its own client
 reads `nest_rs::config::ClientTls` under its namespace, as the
-[queue driver page](/queue/writing-a-driver/#tls) shows.
+[queue driver page](/queue/binding-a-driver/#tls) shows.
 
 ## Proof at boot
 
 The same split holds: `RedisModule` proves the connection the store counts
 over before the app serves. A client your crate opens is proved through
-`nest_rs::core::prove` — see the [queue driver page](/queue/writing-a-driver/#proof-at-boot).
+`nest_rs::core::prove` — see the [queue driver page](/queue/binding-a-driver/#proof-at-boot).
 
 ## Health
 

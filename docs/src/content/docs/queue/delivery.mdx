@@ -1,17 +1,15 @@
 ---
 title: Delivery on Redis
-description: "What the Redis backend promises about each job — its keys and ACL, at least once and the fence, a crash, a timeout, shutdown, delays and dead letters."
+description: "Where the Redis backend keeps each job — its keys and the ACL each role takes — what each capability it declares keeps, and its dead letters."
 sidebar:
   order: 7
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 Every job is delivered **at least once**, and a handler is written so that
-running it twice is harmless. This page is the contract behind that sentence on
-Redis: the keys a queue holds and the ACL that reaches them, the fence every
-transition passes, what a crash, a Redis timeout and a shutdown do to a job in
-flight, and what each capability the backend declares keeps.
+running it twice is harmless. This page is where that contract lives on Redis:
+the keys a queue holds and the ACL that reaches them, what each capability the
+backend declares keeps, and where a dead letter goes.
+[Leases and redelivery](/queue/leases/) is what happens to a job in flight.
 
 The backend is written on the `redis` client and Redis Streams: one stream per
 queue, read through one consumer group, and every transition a job makes is one
@@ -96,137 +94,26 @@ holding the producer, worker or [operator](#dead-letters) rule can file a job
 for any actor and any tenant. Give those rules to the binaries that push and run
 jobs and to the people who refile, and to nobody else.
 
-## At least once, and the fence
+## What a backend supports
 
-A worker reads its queue with `XREADGROUP`, which hands an entry over, records
-the worker as its owner and starts its idle clock in one command — so a job is
-never handed over without a **lease**. While the attempt runs, the port renews
-the lease every third of its length, by claiming the entry again without
-counting a delivery. A lease no renewal reached for a whole lease has
-**lapsed**: the next worker that asks, with a permit free, takes the entry over,
-which counts a delivery. A worker looks for lapsed leases once a second: Redis
-filters a pending list of up to ten thousand entries whole, and a longer one is
-read a page of a thousand at a time from where the last look stopped, so no look
-costs Redis more however many deliveries run elsewhere; behind such a list, a
-lapsed entry waits up to a look per page.
+Every backend owes three things, and none of them is a capability: the retry
+budget and its backoff, which the port counts; one transaction per attempt,
+which the worker's context owns; and each method's `concurrency`. Beyond them a
+backend declares the capabilities it honours, and the port refuses a
+declaration the backend lacks at the first site that sees both — the push for a
+push option, the call for a cancel, the worker's boot for a `#[process]` key —
+naming the backend.
 
-Every write a delivery makes — its outcome, a renewal, a checkpoint — is
-**fenced**: the script first reads the entry's owner and delivery count, and
-writes nothing unless both are still what the worker received. So once a lease
-has lapsed and another worker holds the job, the first one's outcome, renewal
-and checkpoint land nowhere; its attempt is cut, filed `cancelled`, and the
-delivery holding the job decides.
-
-A job's outcome — completed, filed for its retry, dead-lettered — acknowledges
-and deletes its entry in the script that writes it, so a job that ended is
-never delivered again. A second delivery happens only when a lease lapses under
-a worker: the worker crashed, froze past its lease, or was cut off from Redis
-for longer than it — and then the first delivery's writes land nowhere.
-
-A push is filed once per job, too. The script that files it skips a job its
-queue still holds — on the stream, running, or held back in `…:delayed` — so
-a push the client sends again after its answer was lost files nothing twice.
-Once the job ended, the same job is filed as a new one.
-
-### Filed after the commit
-
-A job pushed inside a transaction waits in the outbox table until that
-transaction commits ([A push inside a
-transaction](/queue/producing-jobs/#a-push-inside-a-transaction)). The relay
-then claims committed records with `FOR UPDATE SKIP LOCKED`, so replicas never
-share one, files them, and deletes what was filed. A relay that dies between
-the push and its delete leaves the record to the next pass, which sends the
-same job again: the push script above files it once while the queue holds it.
-On the way down the relay starts no push; the one in flight answers within the
-port's 18 s net.
-
-<Aside type="caution">
-**Delivery is at least once, so a handler is idempotent.** A worker that
-crashes between a database commit and its outcome leaves the job to its lease,
-and the next delivery runs it again from the start of its body — the
-transaction bounds a retry, never a redelivery. A handler whose effects leave
-the process — an email, a charge — keys them on its `Attempt` parameter's
-`job_id()`: the id its push minted, the same on every attempt and every
-redelivery, which the provider then refuses to act on twice.
-</Aside>
-
-## Crashes, and the stall limit
-
-A replica that crashes mid-attempt leaves its job leased to it. Once the lease
-lapses — `<PREFIX>_REDIS__QUEUE__LEASE_SECS`, thirty seconds by default — the
-next replica asking for jobs takes it over, and the job runs again.
-
-**A delivery that ends without an answer does not spend the retry budget.**
-`retries` counts the attempts that answered; a delivery that ended without one —
-its worker killed, frozen, or cut off past its lease — is counted by the entry's
-own delivery count instead, and every filing of the job's record starts it over.
-A job whose deliveries end that way three times in a row (`STALL_LIMIT`) takes
-its workers down every time — an abort, an OOM kill, a hang until the pod is
-killed — and is dead-lettered without running, as
-`job dead-lettered: its deliveries ended without an answer past the stall limit`.
-
-## When Redis is slow or gone
-
-Every command a worker or a producer sends answers or fails within
-`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so an outage
-fails calls rather than holding them. The boot refuses a budget of eighteen
-seconds or more, the queue port's own net on every call: the port would stop
-waiting first, and a failure would reach its caller as a bare timeout instead of
-Redis's own cause. A worker's read blocks on a connection of
-its own — on the shared one it would stall every other caller — for at most a
-second, so its bound is that second plus the budget. A timeout says the answer
-did not arrive in time, never that the command did not run: a settle whose
-answer is lost may have ended the job all the same, which is why the line says
-*not confirmed*.
-
-| The call that failed | What happens to the job | The line, on `nest_rs::queue` |
+| Capability | What declares it | Redis |
 |---|---|---|
-| a read | nothing was handed over, or what was waits leased until its lease lapses; the read is tried again after a backoff doubling from 250 ms to 5 s, each wait within a fifth either way so replicas come back apart | `queue receive failed; retrying`, `warn` |
-| renewing leases | the attempts run on, and the renewal is tried again; one no renewal reached for a whole lease is cut and its job handed back | `job leases not renewed; retrying`, `warn` |
-| an outcome | tried again while the lease holds; past it, said, and left to its lease — the next delivery runs the job again unless the outcome landed | `job outcome not confirmed; unless it was written, the job runs again once its lease lapses`, `error` |
-| filing due jobs | they wait, and the next upkeep files them | `queue upkeep failed; retrying`, `warn` |
+| `DelayedPush` | `PushOptions::with_delay` | yes — the job waits off the stream, due on Redis's clock |
+| `UniquePush` | `PushOptions::with_unique` | yes — the key is claimed in the script that files the job |
+| `Cancellation` | `cancel(&receipt)`, `cancel_unique(queue, key)` | yes — a waiting job is removed; a running one runs to its outcome |
+| `Throttle` | `#[process(throttle(..))]` | yes — one fixed window per queue, across every replica |
+| `Checkpoint` | a `Checkpoint<_>` parameter | yes — one field beside the job, gone with its outcome |
 
-A backend call that panics — a driver's defect, not an outage — is treated as
-one that did not answer: the worker files the panic once, `queue backend
-panicked answering the worker; the call counts as unanswered`, at `error` with
-the `queue` and the `call`, then goes on as the table says.
-
-**A failover is followed.** A failover demotes the primary under its open
-connections; the first that answers `READONLY` is opened again, once, through
-the URL's name — which now reaches the new primary — and says so at `warn`,
-`redis connection opened again: the server it reached answered as a read-only
-replica`. The writes refused meanwhile fail as any refused call does.
-
-A push, a cancel and a checkpoint's read or save fail within one budget too, as
-the connection's own failure, before the queue port's net — eighteen seconds —
-gives up on the call; see
-[When a push fails](/queue/producing-jobs/#when-a-push-fails).
-
-**An attempt ends within its timeout.** A handler still running at its
-method's `timeout` — ten minutes unless `#[process]` says otherwise — is cut
-where it waits and fails retryably, so a call that never answers holds its
-permit and its renewed lease that long and no longer; see
-[How long an attempt runs](/queue/retries-and-failure/#how-long-an-attempt-runs).
-
-## Shutdown
-
-A shutdown stops asking for jobs at once, and hands back what a read brought
-after it. Running attempts get the shutdown window, less a reserve, to finish
-where they run, their leases renewed until each ends. What still runs when the
-window closes is interrupted — its `queue.job` line filed with
-`outcome="cancelled"` — and its job handed back to the stream inside the
-reserve, due at once for another replica, so the orchestrator's `SIGKILL` never
-lands on a job the worker still holds. The window is
-`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS`, 20 seconds by default, which leaves the
-shutdown hooks' five, the telemetry flush's three and the console's one inside
-Kubernetes' default 30-second grace period; a window you raise needs the pod's
-grace period at least 9.5 seconds above it, plus any `preStop` delay
-([the way down](/fundamentals/shutdown/#the-way-down)).
-
-**The reserve is one Redis call long**: the connection's budget, or five seconds
-when that is shorter, and never more than half the window. A delivery still
-waiting on Redis once the whole window has passed is said at `error` and left to
-its lease: the next delivery runs its job.
+Redis is the one backend the framework ships; a driver you write declares its
+own row — see [Writing a queue driver](/queue/writing-a-driver/).
 
 ## Delayed jobs
 

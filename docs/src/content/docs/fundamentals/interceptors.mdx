@@ -35,7 +35,7 @@ not compile. `next.run(cx)` consumes `next`, so the rest of the unit runs once.
 **Every edge runs them: HTTP routes, [GraphQL fields](#around-a-graphql-field),
 [WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes),
 [MCP operations](/mcp/#layers-around-an-operation),
-[jobs](/queue/#layers-around-a-job),
+[jobs](/queue/processors/#layers-around-a-job),
 [ticks](/schedule/ticks/#layers-around-a-tick) and
 [listener calls](/events/dispatch/#layers-around-a-listener-call).** A
 WebSocket `#[on_connect]` / `#[on_disconnect]` hook runs none yet:

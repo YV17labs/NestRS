@@ -1,0 +1,68 @@
+---
+title: The outbox
+description: "A push written inside a transaction lands with it: an outbox record committed beside the request's writes, then filed by the relay."
+sidebar:
+  order: 2.2
+---
+
+A push written inside a transaction — a mutating request, a WebSocket message,
+a job attempt, a listener's call — is written **into** that transaction. With
+the `seaorm` and `queue` features, the job becomes a row of the outbox table,
+`nestrs_outbox`, committed or rolled back with the request's own writes; once
+the transaction commits, the outbox relay files it on the backend. A rollback
+leaves no job behind, a crash after the commit loses none, and the receipt
+names a job that exists exactly when the request's writes do. A `push_many`
+there is one write, so it lands whole or not at all.
+
+You write the push as anywhere else, and list nothing: `SeaOrmDatabaseModule`
+keeps the outbox and attaches the relay. Your migrator lists the framework's
+migration, which creates the table — `nestrs g queue` registers it, or
+`nestrs g migration nestrs_outbox`, and the boot refuses without it, naming
+that remedy:
+
+```rust title="crates/migrations/src/migrator.rs (abridged)"
+fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+    vec![
+        // …
+        Box::new(nest_rs::seaorm::queue::OutboxMigration),
+    ]
+}
+```
+
+A push on the pool — a safe request, a `transactional = false` job — is filed
+at once, as is one in an app binding no database.
+
+Two answers move from the push to the relay. A unique key another job holds is
+checked once the transaction committed: the record is dropped, in one `info`
+line on `nest_rs::queue` naming both jobs, and the caller saw `Ok`. A backend
+that refuses delays the job without losing it: the relay retries each record on
+the job retry backoff, says a failing pass at `warn`, and says once at `error`
+when records waited past the stall warning. Delivery stays at least once
+([below](#filed-after-the-commit)).
+
+## Filed after the commit
+
+A job pushed inside a transaction waits in the outbox table until that
+transaction commits. The relay then claims committed records with `FOR UPDATE SKIP LOCKED`, so replicas never
+share one, files them, and deletes what was filed. A relay that dies between
+the push and its delete leaves the record to the next pass, which sends the
+same job again: the push script files it once while the queue holds it
+([At least once, and the fence](/queue/leases/#at-least-once-and-the-fence)).
+On the way down the relay starts no push; the one in flight answers within the
+port's 18 s net.
+
+## Reference
+
+- `crates/nest-rs-queue/src/outbox/relay.rs` — `OutboxRelay`, which files
+  what a committed transaction wrote.
+- `crates/nest-rs-seaorm/src/queue/outbox.rs` — `SeaOrmOutbox`, the table's
+  writes, claim and settle.
+
+## Going further
+
+- [Producing jobs](/queue/producing-jobs/) — the push, wherever it is
+  written.
+- [Transactions](/database/transactions/#what-waits-for-the-commit) — the
+  other work that waits for the commit.
+- [Leases and redelivery](/queue/leases/) — at least once, from the relay
+  to the worker.

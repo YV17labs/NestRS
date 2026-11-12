@@ -1,0 +1,134 @@
+---
+title: Processors
+description: "A #[processor] block: several queues on one provider, the layers around each attempt, and the one transaction an attempt runs in."
+sidebar:
+  order: 1.5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A queue handler is a method of a `#[processor]` block on any provider. One
+provider serves as many queues as it has methods, each attempt runs through the
+app's layers, and each runs in one transaction.
+
+## Several methods on the same provider
+
+The pattern the framework is built for: one `#[injectable]` declares
+the deps once, multiple decorated methods share them. Different queues,
+same service. Three queues, so three `#[queue]` declarations at the port —
+each pairing a wire name with the payload it carries:
+
+```rust title="crates/features/src/audio/command.rs"
+#[queue(name = "audio", job = TranscodeCommand)]
+pub struct AudioQueue;
+
+#[queue(name = "audio.preview", job = PreviewCommand)]
+pub struct AudioPreviewQueue;
+
+#[queue(name = "audio.cleanup", job = CleanupCommand)]
+pub struct AudioCleanupQueue;
+```
+
+```rust title="crates/features/src/audio/queue/processor.rs"
+#[injectable]
+pub struct AudioProcessor {
+    #[inject] audio_svc: Arc<AudioService>,
+    #[inject] media_svc: Arc<MediaService>,
+}
+
+#[processor]
+impl AudioProcessor {
+    #[process(queue = AudioQueue, retries = 3)]
+    async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
+        self.audio_svc.transcode(job.file).await?;
+        Ok(())
+    }
+
+    #[process(queue = AudioPreviewQueue, retries = 1)]
+    async fn preview(&self, job: PreviewCommand) -> Result<()> {
+        self.media_svc.preview(&job.file).await
+    }
+
+    #[process(queue = AudioCleanupQueue)]
+    async fn cleanup(&self, job: CleanupCommand) -> Result<()> {
+        self.media_svc.cleanup(job.older_than).await
+    }
+}
+```
+
+`#[process(queue = AudioCleanupQueue)]` omits the optional `retries`
+(default `0`).
+
+Three inventory entries — `AudioProcessor::transcode`, `AudioProcessor::preview`,
+`AudioProcessor::cleanup` — all pointing at the same `AudioProcessor` instance.
+Same `Arc<AudioService>`, same `Arc<MediaService>`, three queues. Each
+method still delegates: the processor is a router, never a place where
+business logic accumulates.
+
+<Aside type="note">
+Keep every queue handler of a service in one `#[processor]` block, the same
+convention as `#[routes]` and `#[scheduled]`: layers a block binds cover the methods
+in that block alone, so one block is one place to read them.
+</Aside>
+
+## Layers around a job
+
+An attempt runs through the same pipeline as a request: the interceptors and
+exception filters the app lists, then those a `#[processor]` block and its
+method bind, then the method. A layer reads the job through `QueueView`:
+
+```rust title="crates/features/src/audio/queue/processor.rs"
+#[processor]
+#[use_interceptors(TranscodeMetrics)]
+impl AudioProcessor {
+    #[process(queue = AudioQueue, retries = 3)]
+    #[use_exception_filters(UnsupportedFormatFilter)]
+    async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
+        self.svc.transcode(job.file).await?;
+        Ok(())
+    }
+}
+```
+
+`cx.switch_to::<QueueView>()` answers the attempt (`attempt()`, with the
+job's id and its number), the method (`processor()`) and the backend's record
+id (`backend_id()`). An interceptor that returns `Ok(job.acknowledge())`
+without running the rest settles the job as done — the inbox pattern, keyed on
+the job's id. A job has no caller, so `#[use_guards]` beside `#[process]` is a
+compile error saying so: guard where the work is produced. What a filter's
+answer does to the job is on
+[Retries and failure](/queue/retries-and-failure/#a-client-error-dead-letters-at-once).
+
+The app's own interceptors run around every job too, outermost. One that only
+means something for a request narrows itself with `Layer::serves`, which reads
+the unit — `nest_rs::queue::unit::JOB` is the attempt's.
+
+## One attempt, one transaction
+
+A job has **no caller** — system work, intentionally — so no ability is
+installed and `Repo` reads are unscoped, which is correct for work with no
+principal to scope to.
+
+The executor is a **transaction per attempt**: it opens on the job's first
+`Repo` call, commits when the method returns `Ok` and rolls back otherwise,
+so an attempt that failed halfway leaves nothing for the retry to write
+again. Add `transactional = false` to the decorator — `#[process(queue =
+AudioQueue, transactional = false)]`, and the same word on `#[every]`,
+`#[cron]` and `#[after]` — to run on the pool instead, which is right for a
+job that brackets long work that is not the database's. Such a job owns its
+own idempotency.
+
+The transaction bounds what a **retry** repeats, never what a
+**redelivery** does: a worker that dies between the commit and the job's
+outcome leaves the job to its lease, and the next delivery runs it again — its
+writes already landed. See
+[Job transactions](/database/job-transactions/) and
+[Retries and failure](/queue/retries-and-failure/).
+
+## Going further
+
+- [Queue](/queue/) — the first handler, and the modules that run it.
+- [Retries and failure](/queue/retries-and-failure/) — what an attempt's
+  `Err` spends.
+- [Job transactions](/database/job-transactions/) — the transaction an
+  attempt runs in, and the opt-out.

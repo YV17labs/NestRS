@@ -178,7 +178,7 @@ deadline`).
 
 A job you push waits too: with the `queue` feature, the push is written into
 the transaction as an outbox record and filed once it commits — see [A push
-inside a transaction](/queue/producing-jobs/#a-push-inside-a-transaction).
+inside a transaction](/queue/outbox/).
 
 A WebSocket broadcast and a storage write do **not** wait, and cannot: each
 answers its caller — a send failure, an object key — and that answer only

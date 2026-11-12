@@ -40,7 +40,7 @@ pub trait ExceptionFilter: Layer {
 [WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes), the
 app's around one no handler reads,
 [MCP tool calls and prompt fetches](/mcp/#layers-around-an-operation),
-[jobs](/queue/#layers-around-a-job), [ticks](/schedule/ticks/#layers-around-a-tick)
+[jobs](/queue/processors/#layers-around-a-job), [ticks](/schedule/ticks/#layers-around-a-tick)
 and [listener calls](/events/dispatch/#layers-around-a-listener-call). A
 WebSocket `#[on_connect]` / `#[on_disconnect]` hook runs none yet:
 `#[use_exception_filters]` on one is a compile error.

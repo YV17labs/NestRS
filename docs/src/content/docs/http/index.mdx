@@ -45,8 +45,7 @@ you name.
 - [Errors](/http/errors/) — `ToProblem` on a feature error enum,
   RFC 9457 `ProblemDetails` for one-off problem responses.
 - [Extractors](/http/extractors/) — the full extractor surface:
-  `RawBody`, `ClientIp`, `Scoped<T>`, `Ambient<T>` and
-  `#[meta(...)]`.
+  `Header<T>`, `RawBody`, `ClientIp`, `Scoped<T>` and `Ambient<T>`.
 
 ### All options
 
@@ -56,6 +55,10 @@ you name.
   call from, and the headers every response carries.
 - [Limits and deadlines](/http/limits/) — the body cap, the request budget,
   the connection cap and deadlines, the shutdown window.
+- [Problem details](/http/problem-details/) — an RFC 9457 document built
+  inline, and the `code` each status carries.
+- [Client IP](/http/client-ip/) — the peer, or the client a trusted proxy
+  names, and what to list behind each proxy.
 - [Versioning](/http/versioning/) — `#[controller(version = "1")]` and
   multi-version controllers.
 - [Compression](/http/compression/) — zstd, brotli, gzip or deflate negotiated from

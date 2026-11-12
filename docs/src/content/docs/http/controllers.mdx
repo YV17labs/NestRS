@@ -10,8 +10,7 @@ off its `impl` block, and `#[routes]` generates the route table. Verb
 attributes (`#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`) bind a
 method to a path, and [`#[sse]`](/http/streaming/) binds a `GET` that
 answers an event stream. Extractors, validation and response types all live in
-`nest_rs::http`, beside the DI shape and the self-composing route table; the
-whole extractor surface has its own [page](/http/extractors/).
+`nest_rs::http`, beside the DI shape and the self-composing route table.
 
 This page covers the minimum to ship an HTTP handler. Response shaping
 ([responses](/http/responses/)), error mapping ([errors](/http/errors/)),

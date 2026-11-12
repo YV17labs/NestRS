@@ -1,11 +1,9 @@
 ---
 title: Extractors
-description: The full HTTP extractor surface — JSON, raw body, client IP, request-scoped providers, guard-attached context, route metadata.
+description: The full HTTP extractor surface — JSON, headers, raw body, client IP, request-scoped providers, guard-attached context.
 sidebar:
   order: 6
 ---
-
-import { Aside } from '@astrojs/starlight/components';
 
 An extractor pulls a typed value out of the request before the handler
 runs. `Path<T>`, `Query<T>`, `Json<T>` and `Form<T>` cover the request line,
@@ -13,9 +11,8 @@ query string, JSON body and form body; beside them sit the framework-specific
 extractors:
 the typed header reader `Header<T>`, the
 raw-body reader `RawBody`, the spoofable but observation-grade
-`ClientIp`, the request-scoped DI resolver `Scoped<T>`, the
-guard-attached context reader `Ambient<T>`, and the route metadata a guard reads
-through `cx.reflector()`, declared with `#[meta(...)]`. A handler that needs
+`ClientIp`, the request-scoped DI resolver `Scoped<T>` and the
+guard-attached context reader `Ambient<T>`. A handler that needs
 the request itself — its URI, a header no DTO names — takes `req: &Request`.
 
 This page is the reference: one extractor, one example, one rule. The
@@ -186,101 +183,10 @@ Anything that can deserialize through `Json<T>` should use that instead —
 
 ## `ClientIp` — best-effort, observation-grade
 
-```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::ClientIp;
-
-#[get("/whoami")]
-async fn whoami(&self, ip: ClientIp) -> String {
-    format!("you look like {} (forwarded={})", ip.ip, ip.forwarded)
-}
-```
-
-`ClientIp` resolves against the **transport peer**, and only believes a
-forwarding header when that peer is a proxy you listed:
-
-1. No peer address at all (a unix socket, or a proxy that hides it) ⇒
-   `0.0.0.0`, `forwarded = false`. The extractor never fails.
-2. The peer is **not** in `<PREFIX>_HTTP__TRUSTED_PROXIES` ⇒ that peer is the
-   client, `forwarded = false`, and the headers are not read.
-3. The peer **is** a trusted proxy ⇒ the client is the **rightmost** hop that
-   is not itself a trusted proxy, read from `Forwarded` (RFC 7239) and
-   `X-Forwarded-For`, then `X-Real-IP`; `forwarded = true`. If every hop is a trusted
-   proxy, the outermost answers. If two headers name different clients none is
-   believed, and if no header names a usable hop the proxy's own address answers, both
-   with `forwarded = false`. Hops parse as a bare
-   IP, `IP:port`, or a bracketed IPv6 (`[ip]`, `[ip]:port`); `unknown` or an
-   obfuscated `_id` names no address, so where it stands for the client, the
-   proxy withheld it and no client is named.
-
-A header is read whole or not at all. One the parser cannot read — a quote no
-quote closes, a pair with no `=`, a hop that is no address — names no client,
-whatever the other headers say: the proxy's own address answers, and one `warn`
-on `nest_rs::http`, filed inside the request, names the header, never what it
-held. A quote left open is the reason: a proxy appending a quoted value to a
-caller's line would close the caller's quote, and the caller's own hop would
-read as the rightmost. `X-Real-IP`, one hop in no order, answers alone only
-where neither chain names a client; beside a chain, it names that chain's client
-or neither is believed. A proxy writing `X-Real-IP` and passing the caller's own
-`X-Forwarded-For` through would otherwise let the caller choose.
-
-With no trusted proxy configured — the default — step 2 always wins, so
-`forwarded` stays `false` and a header a caller sets changes nothing.
-
-```bash frame="terminal"
-# The deployment's ingress, named once. Read by ClientIp *and* the throttler.
-NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.42.0.0/16
-```
-
-An entry is an address or a CIDR range, and in code a `TrustedProxy`:
-`trusted_proxy!("10.42.0.0/16")` for a literal, checked as the program compiles,
-so a typo in a `#[module]`'s imports fails the build rather than the boot;
-`ip.into()` for an address a value holds, and `"10.42.0.0/16".parse()?` for text
-read at run time. An ingress whose pods move is named by their range. Everything
-inside one is believed, so it names your proxies and nothing a caller connects
-from. A `/0` fails the boot, since it would believe every caller, and so do ranges
-holding between them every address of a family a caller connects from
-(`0.0.0.0/1,128.0.0.0/1`, or `0.0.0.0/1,128.0.0.0/2,192.0.0.0/3`, short only of
-multicast and reserved space), from the environment and from code alike; so does a range with address bits set past
-its prefix (`10.0.0.1/8`), which could mean the one proxy or the whole range. A listener on `[::]` reports an IPv4 peer as `::ffff:10.0.0.1`: that is
-`10.0.0.1`, to this list and in the address `ClientIp` answers.
-
-**What to list behind each proxy.** Each writes its hop as its documentation
-says, and each shape below is pinned by the HTTP suite:
-
-| In front of the app | What it writes | What to list |
-|---|---|---|
-| nginx, `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for` | the caller's `X-Forwarded-For` with its peer appended; `X-Real-IP $remote_addr` beside it agrees | nginx's address |
-| Envoy, `use_remote_address: true` | its downstream appended to `x-forwarded-for` | every Envoy hop, the mesh's range |
-| HAProxy, `option forwardfor` or `option forwarded` | an `X-Forwarded-For` line of its own after the caller's, or `forwarded: proto=http;for=…` | HAProxy's address |
-| AWS Application Load Balancer, `append` mode | the client appended, `ip:port` (`[ip]:port` for IPv6) with client port preservation | the subnets its nodes take |
-| Google Cloud external Application Load Balancer | the client appended, **then the forwarding rule's own address** | its front ends (`35.191.0.0/16`, `130.211.0.0/22`) **and the forwarding rule's address** |
-
-Behind Google Cloud's balancer, leaving the forwarding rule's address off the
-list answers that address for every caller: it stands right of the client, and
-anything not listed is the client. A proxy writing one header passes the others
-through as the caller sent them, and two headers naming different clients are
-both refused; behind HAProxy's `option forwarded` alone, a caller's own
-`X-Forwarded-For` leaves its request with the proxy's address, so have the proxy
-delete what it does not write (`http-request del-header X-Forwarded-For`).
-
-**Rightmost, not leftmost.** A proxy appends the address it received the request
-from to the right of the chain, so the genuine client is the last hop your
-infrastructure wrote; a caller can only prepend, and a prepended entry lands to
-the left of it. Keying on the leftmost hop is the spoofable rule. A chain over
-several field lines is one list, in order, since a proxy may add its own line
-after the caller's; `X-Real-IP`, one hop, is read from its last line.
-
-<Aside type="caution">
-Treat the result as **observational** (geolocation hints, sampling keys),
-never as an authn or authz input — and as personal data: the framework writes it
-on no line and no span, and a line of yours holding it holds personal data. The peer is trustworthy; the hop behind
-it is only as trustworthy as the proxy that wrote it — list an ingress here only
-if it strips and rewrites the client's own forwarding headers.
-
-The [throttler](/rate-limiting/) resolves the client through this same
-mechanism, from this same list, so a request is never rate-limited as one
-address and handed to a handler as another.
-</Aside>
+`ClientIp` is the transport peer, or the client a proxy you listed in
+`<PREFIX>_HTTP__TRUSTED_PROXIES` names — the rightmost hop, never a header a
+caller set. [Client IP](/http/client-ip/) is how it resolves, and what to list
+behind each proxy.
 
 ## `Scoped<T>` — resolve a request-scoped provider
 
@@ -363,87 +269,13 @@ visitor too reads the principal with `nest_rs::core::ambient::<Claims>()`, an
 See [Guards](/fundamentals/guards/) for how to attach a value, and for
 the design rule (guards gate and attach; handlers read).
 
-## `#[meta(EXPR)]` — typed route metadata
+## `#[meta(EXPR)]` and `#[public]` — what a guard reads
 
-A route can carry typed metadata a guard reads at decision time —
-the cleanest case is a rate-limit guard reading the route's quota. The
-decorator declares; the reader picks it up by type.
-
-Declare metadata on the route, or on its `#[controller]` for every route it
-serves:
-
-```rust title="crates/features/src/sign_in/http/controller.rs (from the demo, abridged)"
-use nest_rs::throttler::{Throttle, ThrottlerGuard};
-// …
-
-#[post("/login")]
-#[public]
-#[use_guards(ThrottlerGuard)]
-#[meta(Throttle::per_minute(10))]
-// … #[api(…)]
-async fn login(&self, Json(input): Json<LoginDto>) -> Result<AccessTokenResponse> {
-    Ok(self
-        .svc
-        .grant_password(
-            &input.email,
-            input.password.expose_secret(),
-            input.resource.as_deref(),
-        )
-        .await?)
-}
-```
-
-### Advanced: reading `#[meta]` from a guard
-
-Everything below is for the **guard author**, not the handler — a
-handler only declares metadata; the guard reads it back at decision
-time:
-
-```rust title="nest_rs::throttler::ThrottlerGuard (abridged)"
-async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-    let limit = cx
-        .reflector()
-        .get::<Throttle>()
-        .copied()
-        .unwrap_or(*self.default);
-    // …
-}
-```
-
-Three rules pin the contract:
-
-- The value type must be `Send + Sync + 'static`. The expression is
-  evaluated once, when the route mounts, and every request reads that one
-  value through a pointer — never cloned, never shadowed by what a guard
-  attaches. The reader resolves by `TypeId`: wrap values of one underlying
-  shape in distinct newtypes when they need to coexist, and declare each
-  type once per level. A second would be read by nothing, so the compiler
-  refuses it when each expression names its type, and the boot when one
-  hides it (`Throttle::per_minute(10)`), naming the type and where.
-- The method's value of a type wins over its controller's, and a
-  controller's value of another type still reads through.
-- Scope does not change what a guard reads. The pool executes
-  post-routing in the route's guard stage, which carries the route's
-  declaration, so a guard the app's `GlobalGuards` lists reads the
-  route's `#[meta]` exactly as a `#[use_guards]` one does — see
-  [the request lifecycle](/fundamentals/request-lifecycle/).
-
-`#[meta]` is declared the same way on a resolver, a gateway, an MCP host and
-their operations, and on a processor's, scheduled tasks' or listeners' impl
-block and its methods. Each site keeps both levels in its one declaration, and
-a guard's `check` reads a resolver's, a message's or a tool's through
-`cx.reflector()` exactly as `check_http` reads a route's.
-
-## `#[public]` — the only universal marker
-
-`#[public]` declares the route's posture, the framework's only universal
-route marker. Guards read it through `cx.reflector().posture()`, which
-answers `Posture::Public` for it, and decide whether to honor it. The framework itself does *not* act on the
-marker — `AuthnGuard`, for example, still runs the strategy on a `#[public]`
-route, but lets an anonymous request through instead of returning `401`.
-It admits one on `/graphql`, `Posture::InBand`, the same way. The demo's
-`POST /login` [above](#metaexpr--typed-route-metadata) is one: open to the
-anonymous caller it signs in, and rate-limited all the same.
+Neither is an extractor. `#[meta(EXPR)]` declares a typed value on a route or its
+controller — a rate-limit quota, the roles a route needs — and `#[public]` its
+posture; a guard reads both through `cx.reflector()` at decision time, and the
+handler never does: [route metadata and the
+posture](/fundamentals/guard-context/#attach-context-and-route-metadata).
 
 ## Going further
 

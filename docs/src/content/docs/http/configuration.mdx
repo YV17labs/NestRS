@@ -85,7 +85,7 @@ Real env always wins over the `.env` cascade, and a pinned struct over every
 | `default_version` | `<PREFIX>_HTTP__DEFAULT_VERSION` | unset ⇒ no default | `HttpConfig { default_version: Some("1".into()), ..Default::default() }` |
 | `server_header` | `<PREFIX>_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |
 | `access_log` | `<PREFIX>_HTTP__ACCESS_LOG` (`true`/`false`) | `true` | `HttpConfig { access_log: false, ..Default::default() }` — see [Access log](/opentelemetry/operation-log/#access-log) |
-| `trusted_proxies` | `<PREFIX>_HTTP__TRUSTED_PROXIES` (comma list of addresses and CIDR ranges) | empty | `HttpConfig { trusted_proxies: vec![trusted_proxy!("10.0.0.1"), trusted_proxy!("10.0.0.0/8")], ..Default::default() }`, each literal checked as the program compiles — see [`ClientIp`](/http/extractors/#clientip--best-effort-observation-grade) |
+| `trusted_proxies` | `<PREFIX>_HTTP__TRUSTED_PROXIES` (comma list of addresses and CIDR ranges) | empty | `HttpConfig { trusted_proxies: vec![trusted_proxy!("10.0.0.1"), trusted_proxy!("10.0.0.0/8")], ..Default::default() }`, each literal checked as the program compiles — see [`ClientIp`](/http/client-ip/) |
 | `global_prefix` | `<PREFIX>_HTTP__GLOBAL_PREFIX` (one literal path: `{` `}` or `:` `*` `<` fail the boot) | unset ⇒ no prefix | `HttpConfig { global_prefix: Some("/api".into()), ..Default::default() }` |
 | `max_body_bytes` | `<PREFIX>_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig { max_body_bytes: 4 * 1024 * 1024, ..Default::default() }` |
 | `request_timeout` | `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `20 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |

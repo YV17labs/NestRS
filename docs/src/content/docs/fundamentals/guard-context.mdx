@@ -75,7 +75,8 @@ the price of a count; the newtype is what implements `AmbientValue`.
 For per-route policy — required roles, rate-limit quotas — `#[meta(...)]`
 declares a typed value; `cx.reflector()` reads it inside the guard. Declare it on
 the method, or on the controller for every route it serves; the method's
-value of a type wins over the controller's:
+value of a type wins over the controller's, and a controller's value of another
+type still reads through:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 #[controller(path = "/admin")]
@@ -100,6 +101,26 @@ when each expression names its type (`Roles(..)`), and the boot when one hides
 it (`Roles::new(..)`), naming the type and where. Because the global pool runs post-routing in the route's guard stage (above), a
 global guard reads `#[meta(...)]` too — the route's declaration is carried
 before the chain runs, and it holds `#[public]` below as well.
+
+`ThrottlerGuard` reads a route's quota this way — the demo's `POST /login`
+declares `#[meta(Throttle::per_minute(10))]` beside `#[use_guards(ThrottlerGuard)]`:
+
+```rust title="nest_rs::throttler::ThrottlerGuard (abridged)"
+async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    let limit = cx
+        .reflector()
+        .get::<Throttle>()
+        .copied()
+        .unwrap_or(*self.default);
+    // …
+}
+```
+
+`#[meta]` is declared the same way on a resolver, a gateway, an MCP host and
+their operations, and on a processor's, scheduled tasks' or listeners' impl
+block and its methods. Each site keeps both levels in its one declaration, and
+a guard's `check` reads a resolver's, a message's or a tool's through
+`cx.reflector()` exactly as `check_http` reads a route's.
 
 `#[public]` is declared the same way. Marking a route public does not strip its
 guards; it tells them a caller with no credential is admitted, and each decides

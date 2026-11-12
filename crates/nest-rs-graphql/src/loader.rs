@@ -417,6 +417,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_field_reading_a_loader_its_request_holds_no_seed_of_fails_and_tells_the_operator() {
+        use crate::root_fields::RootFields;
+
         struct Unseeded;
 
         impl async_graphql::dataloader::Loader<i32> for Unseeded {
@@ -454,6 +456,8 @@ mod tests {
             answer.errors[0].message,
             nest_rs_core::OPAQUE_CLIENT_MESSAGE
         );
+        // What the operation's unit does with its answer, which a bare schema has none of.
+        crate::error::file_kept(&answer.errors, Some("query"), &RootFields::default());
         let filed = logs.expect_one(crate::TARGET, "graphql operation failed");
         assert_eq!(filed.level, "error");
         let said = filed.field("error").unwrap_or_default();

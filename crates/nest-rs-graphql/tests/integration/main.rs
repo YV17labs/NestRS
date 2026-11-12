@@ -12,6 +12,7 @@ mod context;
 mod document_cost;
 mod duplicate_operation;
 mod endpoint;
+mod error;
 mod federation;
 mod field_collection;
 mod field_spellings;

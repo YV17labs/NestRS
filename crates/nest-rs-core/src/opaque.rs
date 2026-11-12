@@ -4,10 +4,9 @@
 //! Each client-facing transport has its own `Opaque` trait, whose `opaque()`
 //! substitutes [`OPAQUE_CLIENT_MESSAGE`] (on HTTP, the `500` problem document
 //! under the `INTERNAL` code, its `title` saying as much) and keeps the real error
-//! for the operator: HTTP and GraphQL file it at the call, WebSocket and MCP hand
-//! it to the edge, which files it naming the unit once that unit is answered. One
-//! trait per transport lets `.opaque()?` infer its output from the enclosing
-//! return type.
+//! for the operator, handing it to the edge, which files it naming the unit once
+//! that unit is answered. One trait per transport lets `.opaque()?` infer its
+//! output from the enclosing return type.
 
 /// What a client is told when an operation fails for a reason it must not read
 /// (a `500`).

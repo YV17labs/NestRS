@@ -148,27 +148,6 @@ SDL and an MCP tool's output schema, whatever the posture of the unit answering 
   private authority does not narrow trust to itself as libpq's does. Close: sqlx
   seeding none under a named root (§6). *read*
 
-**Operator lines**
-- HTTP's `request failed` and GraphQL's `graphql operation failed` (and their
-  `unavailable`) name `error` alone, joining their unit by its span, where a
-  gateway's and an MCP operation's name the unit's coordinates; and their
-  `.opaque()` files at its call, before the answer is final, so a filter
-  answering the failure `4xx` still files it. Seen 2026-11-11 by tests run red
-  and not kept: a route's and a root field's handler `Err` and `.opaque()?` each
-  filed their line with `error` alone, and a filter answering `.opaque()`'s
-  failure `409` left `request failed` or `graphql operation failed` filed.
-  Close as WebSocket and MCP were (the 2026-11-11 entry of the decision on a
-  client error's line): on HTTP, `HttpError` keeping the chain in a member the
-  wire skips, read by `withheld_behind` at the status sent, every line filed with
-  `verb` and `path` where an answer becomes final — `site::render` for a route,
-  the edge's `answer` for a mount — and at once where an `HttpError` is rendered
-  anywhere else (`into_response`); on GraphQL, the `async_graphql::Error` keeping
-  it as its `source`, which its `ServerError` carries into the response, filed
-  with `kind` and `field` where a root field's site answers and, for an error a
-  nested resolver returns, from the response's errors where the request or a
-  subscription's item answers; a chain an error the handler discards keeps is
-  lost with it there as on WebSocket (§5). *seen*
-
 **Docs, bench, tooling**
 - No run has started the scaffold's `compose.yml`: a unit test reads it as
   YAML against every URL and credential its two profiles boot on, and
@@ -220,9 +199,16 @@ the kernel nearest it gives up retransmitting the keep-alive (Linux: about 15
 minutes), an `#[sse]` stream at most `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`
 (four hours by default), both ended at the shutdown signal
 (`TCP_USER_TIMEOUT` would see only the hop to a proxy); the chain `.opaque()`
-keeps in a WebSocket `WsError` its handler then discards, lost with it as any
-error a handler discards is, where filing at the call kept it (MCP files it all
-the same: `client-error-is-its-line.md`, 2026-11-11); a storage key whose
+keeps in an error its handler then discards — a WebSocket `WsError`, an
+`HttpError`, an `async_graphql::Error`, a `problem_error`'s on GraphQL — lost
+with it as any error a handler discards is, where filing at the call kept it
+(MCP files it all the same: `client-error-is-its-line.md`, 2026-11-11 and
+2026-11-12); the chain `.opaque()` or `problem_error` keeps in an async-graphql
+schema executed outside `GraphqlModule`'s mount (one an app builds by hand,
+`nest-rs-graphql`'s own unit tests), which nothing files, since no operation's
+unit holds its errors (closing it: the error filing a chain still kept when its
+last clone drops, which files a discarded error's too, so it is decided with the
+limit before it, on every edge); a storage key whose
 every policy was removed booting on with its `warn` as a least-privilege one
 does, since the store answers both the boot's listing in the same document
 (`403`, `AccessDenied`, `Access Denied`, seen on RustFS 1.0.1) and a second call

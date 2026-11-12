@@ -50,6 +50,8 @@
 //! A deliberate error a client can act on (a validation rejection, a `404`) is
 //! returned directly, as a `ProblemDetails`.
 
+use nest_rs_core::__private::Withheld;
+
 use crate::error::HttpError;
 use crate::problem::ProblemDetails;
 
@@ -59,8 +61,9 @@ use crate::problem::ProblemDetails;
 /// whole cause chain reaches the operator's line through
 /// [`nest_rs_core::boxed_error`].
 pub trait Opaque<T> {
-    /// Log the real error for the operator, hand the client the opaque `500`:
-    /// [`ProblemDetails::internal`], its `code` and no `detail`.
+    /// Hand the client the opaque `500` — [`ProblemDetails::internal`], its
+    /// `code` and no `detail` — keeping the real error for the operator's
+    /// line, which the edge files naming the route once it is the answer.
     fn opaque(self) -> Result<T, HttpError>;
 }
 
@@ -70,15 +73,10 @@ where
 {
     fn opaque(self) -> Result<T, HttpError> {
         self.map_err(|err| {
-            let err = nest_rs_core::boxed_error(err);
-            tracing::error!(
-                target: crate::target::HTTP,
-                error = %nest_rs_core::error_message(&*err),
-                "request failed",
-            );
+            let said = nest_rs_core::error_message(&*nest_rs_core::boxed_error(err));
             // The document every undescribed server failure answers, so the shape
             // gives nothing away.
-            HttpError::from(ProblemDetails::internal())
+            HttpError::from(ProblemDetails::internal()).withholding(Withheld::Failed(said))
         })
     }
 }
@@ -114,15 +112,15 @@ mod tests {
         );
     }
 
+    /// The chain is kept for the answer, filed once that answer is rendered:
+    /// nothing at the call.
     #[test]
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "the test reads the line the call logs, not its result"
-    )]
     fn and_the_operator_gets_the_error_the_client_does_not() {
         let logs = nest_rs_testing::LogCapture::install();
-        let _: Result<(), HttpError> = Err(Leaky).opaque();
+        let err = Err::<(), _>(Leaky).opaque().expect_err("a failure");
+        logs.expect_none("nest_rs::http", "request failed");
 
+        drop(err.into_response());
         let event = logs.expect_one("nest_rs::http", "request failed");
         assert_eq!(event.level, "error");
         assert!(

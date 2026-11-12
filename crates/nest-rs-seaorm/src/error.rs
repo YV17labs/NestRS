@@ -996,24 +996,25 @@ mod graphql {
             assert!(!filed.contains("secret-123"), "{filed}");
         }
 
+        /// The conversion answers opaquely and keeps the chain for the edge,
+        /// which files it once the answer is final (the integration suite's
+        /// `a_service_error_from_the_database_answers_its_class_and_never_its_value`):
+        /// the detail, then the cause.
         #[test]
-        fn an_internal_failure_answers_opaquely_and_files_its_detail() {
+        fn an_internal_failure_answers_opaquely_and_keeps_its_detail_for_the_operator() {
             let logs = nest_rs_testing::LogCapture::install();
 
-            let refused = std::io::Error::other("the key store refused the connection");
-            let error = Error::from(crate::ServiceError::internal_because(
+            let failure = crate::ServiceError::internal_because(
                 "could not sign the export",
-                refused,
-            ));
-            assert_eq!(error.message, OPAQUE_CLIENT_MESSAGE);
-
-            let event = logs.expect_one(nest_rs_graphql::TARGET, "graphql operation failed");
-            assert_eq!(
-                event.field("error").as_deref(),
-                Some(
-                    "internal error: could not sign the export: the key store refused the connection"
-                ),
+                std::io::Error::other("the key store refused the connection"),
             );
+            assert_eq!(
+                nest_rs_core::error_message(&failure),
+                "internal error: could not sign the export: the key store refused the connection",
+            );
+            let error = Error::from(failure);
+            assert_eq!(error.message, OPAQUE_CLIENT_MESSAGE);
+            logs.expect_none(nest_rs_graphql::TARGET, "graphql operation failed");
         }
 
         #[test]
@@ -1104,7 +1105,7 @@ mod http {
                 ServiceError::internal("could not sign the export"),
                 ServiceError::not_found("no such widget"),
             ] {
-                let _ = HttpError::from(error).into_response();
+                let _ = nest_rs_http::ResponseError::as_response(&error);
             }
             assert!(logs.events().is_empty(), "{:#?}", logs.events());
         }
@@ -1355,7 +1356,9 @@ mod http {
             let logs = nest_rs_testing::LogCapture::install();
             let (service, crud) = on_a_pool_bounding_statements(STATEMENT_BOUND, || {
                 (
-                    HttpError::from(ServiceError::from(cancelled_statement())).into_response(),
+                    nest_rs_http::ResponseError::as_response(&ServiceError::from(
+                        cancelled_statement(),
+                    )),
                     crud_error(cancelled_statement().into()).into_response(),
                 )
             })

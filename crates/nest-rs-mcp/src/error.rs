@@ -146,12 +146,8 @@ fn withhold(withheld: Withheld, answer: &McpError) {
 /// chain's: a `4xx` drops it and a `5xx` keeps it at its own level. Any other
 /// failure keeps its own chain behind a `5xx`, beside what the operation kept.
 fn settled(problem: &Problem, error: &(dyn StdError + 'static)) -> Option<Withheld> {
-    match find_in_chain::<McpError>(error).and_then(take_kept) {
-        Some(kept) => problem
-            .is_server_error()
-            .then(|| kept.answered_as(problem.status())),
-        None => nest_rs_core::__private::withheld(problem, error),
-    }
+    let kept = find_in_chain::<McpError>(error).and_then(take_kept);
+    nest_rs_core::__private::withheld_over(problem.status(), error, kept)
 }
 
 /// The chain the running operation kept beside `answer`, taken: the latest

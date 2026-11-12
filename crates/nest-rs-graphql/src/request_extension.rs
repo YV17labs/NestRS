@@ -131,12 +131,16 @@ impl Extension for RequestExtension {
         {
             request.data.insert(OperationRefusal::new(refusal));
         }
+        // The operation's unit hands one in, to read back the root fields its
+        // answer's errors were met under; a schema executed bare gets its own.
+        if held_by::<Arc<RootFields>>(&request.data).is_none() {
+            request.data.insert(Arc::new(RootFields::default()));
+        }
         next.run(
             ctx,
             self.seeds
                 .seed(request)
-                .data(std::sync::Arc::new(FiledFacts::default()))
-                .data(std::sync::Arc::new(RootFields::default())),
+                .data(Arc::new(FiledFacts::default())),
         )
         .await
     }

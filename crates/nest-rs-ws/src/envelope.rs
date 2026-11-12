@@ -517,14 +517,12 @@ pub(crate) fn chain_rendered(error: &(dyn Error + 'static)) -> Rendered {
 /// withholds is filed, so a refusal, and a bare problem, file nothing. A frame
 /// in the chain keeping its own (`.opaque()`'s) withholds that one.
 pub(crate) fn problem_rendered(error: &(dyn Error + 'static), problem: &Problem) -> Rendered {
-    let kept = find_in_chain::<WsError>(error).and_then(WsError::kept);
-    let withheld = match kept {
-        Some(kept) if problem.is_server_error() => Some(kept.clone().answered_as(problem.status())),
-        _ => nest_rs_core::__private::withheld(problem, error),
-    };
+    let kept = find_in_chain::<WsError>(error)
+        .and_then(WsError::kept)
+        .cloned();
     Rendered {
         frame: WsError::from_problem(problem),
-        withheld,
+        withheld: nest_rs_core::__private::withheld_over(problem.status(), error, kept),
     }
 }
 

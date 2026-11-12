@@ -17,7 +17,13 @@
 //! behind it is filed the same way; a bare `Problem` withholds nothing. What a
 //! field answers is final only once its unit ran — an exception filter may
 //! answer it otherwise — so a chain is filed there, by the answer the client
-//! gets.
+//! gets, naming the root field it was met under by `kind` and `field`. An
+//! error built where no site answers it — `.opaque()` or [`problem_error`] in a
+//! body, a resolver written by hand — keeps its chain as its `source`, which
+//! its `ServerError` carries into the response: a site takes it there, and what
+//! no site answered is filed from the response's errors where its operation or
+//! a subscription's item answers, or from the errors it reported where it ends
+//! unanswered ([`file_kept`]).
 //!
 //! An error that is none of these — a `Display` type that is no
 //! `std::error::Error` — does not compile.
@@ -25,11 +31,11 @@
 //! [`OPAQUE_CLIENT_MESSAGE`]: nest_rs_core::OPAQUE_CLIENT_MESSAGE
 
 use std::error::Error as StdError;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
-use async_graphql::{Error, ErrorExtensions, ServerError};
+use async_graphql::{Error, ErrorExtensions, PathSegment, ServerError};
 use nest_rs_core::__private::{Withheld, caught_problem};
-use nest_rs_core::{DecodeError, Failure, Problem, ToProblem, code};
+use nest_rs_core::{DecodeError, Failure, Problem, ServedAddress, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 
@@ -45,16 +51,66 @@ pub const CODE_EXTENSION: &str = "code";
 
 /// What an error rendered from a `5xx` carries as its source, a member no
 /// response serializes: the failure is the server's own, so its unit's span
-/// records it, where one the caller's request earned fails nothing.
-#[derive(Debug)]
-struct ServerFailed;
+/// records it, where one the caller's request earned fails nothing; and the
+/// chain the answer keeps from its client, until the edge files it.
+#[derive(Debug, Default)]
+struct ServerFailed {
+    withheld: Mutex<Option<Withheld>>,
+}
+
+impl ServerFailed {
+    /// The chain kept, taken once: every clone of the error shares it.
+    fn take(&self) -> Option<Withheld> {
+        self.withheld
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+}
 
 /// `error` answering `status`, marked when that is a failure of the server's own.
 fn answering(mut error: Error, status: u16) -> Error {
     if status >= 500 {
-        error.source = Some(Arc::new(ServerFailed));
+        error.source = Some(Arc::new(ServerFailed::default()));
     }
     error
+}
+
+/// The chain `error` keeps from its client for the edge, taken for filing.
+pub(crate) fn take_withheld(error: &Error) -> Option<Withheld> {
+    error
+        .source
+        .as_ref()?
+        .downcast_ref::<ServerFailed>()?
+        .take()
+}
+
+/// File the chain each of `errors` still keeps — an error no site answered —
+/// naming the root field it was met under in an operation of `kind`, the
+/// field read off `roots` by the key its path opens with: what its operation
+/// or a subscription's item answers once nothing else can.
+pub(crate) fn file_kept(
+    errors: &[ServerError],
+    kind: Option<&'static str>,
+    roots: &crate::root_fields::RootFields,
+) {
+    for error in errors {
+        let Some(withheld) = error.source::<ServerFailed>().and_then(ServerFailed::take) else {
+            continue;
+        };
+        let mut at = ServedAddress::default();
+        at.kind = kind;
+        at.field = error
+            .path
+            .iter()
+            .find_map(|segment| match segment {
+                PathSegment::Field(key) => Some(key.as_str()),
+                PathSegment::Index(_) => None,
+            })
+            .and_then(|key| roots.site(key))
+            .map(|site| site.handler().address());
+        file(withheld, at);
+    }
 }
 
 /// An error a GraphQL unit answers with, read for what its span records.
@@ -127,7 +183,9 @@ pub fn denial_to_graphql_error(denial: Denial) -> Error {
 /// `extensions.title`, its wait under `extensions.retryAfterSeconds` and its
 /// field map under `extensions.errors`, each when it has one; or,
 /// when the error says none, the opaque answer. Either way the chain an answer
-/// withholds — the opaque one's, a `5xx` problem's — is filed at `error`.
+/// withholds — the opaque one's, a `5xx` problem's — rides the error as its
+/// `source`, which the edge files at `error` once the answer is final, naming
+/// the root field.
 ///
 /// A resolver returning the error answers through it already; a body mixing
 /// failures inside an `async_graphql::Result` converts with it.
@@ -139,12 +197,7 @@ pub fn denial_to_graphql_error(denial: Denial) -> Error {
 /// assert_eq!(error.message, "conflict");
 /// ```
 pub fn problem_error<E: ToProblem>(error: &E) -> Error {
-    problem_reply(error).filed()
-}
-
-/// `problem` as the answer to `error`, filing what a `5xx` answer withholds.
-fn answered(problem: &Problem, error: &(dyn StdError + 'static)) -> Error {
-    Reply::problem(problem, error).filed()
+    problem_reply(error).kept()
 }
 
 /// A field map as an extension's value. Plain JSON always converts; a failure
@@ -181,46 +234,50 @@ pub(crate) fn invalid_argument(detail: String) -> Error {
     rendered(&Problem::new(400, code::INVALID_ARGUMENT).with_detail(detail))
 }
 
-/// The opaque answer, with `error`'s whole chain on the operator's line: what
-/// a failure the client is owed no explanation for becomes.
+/// The opaque answer, keeping `error`'s whole chain for the operator's line:
+/// what a failure the client is owed no explanation for becomes.
 pub(crate) fn opaque_error(error: &(dyn StdError + 'static)) -> Error {
-    Reply::opaque(error).filed()
+    Reply::opaque(error).kept()
 }
 
-/// The operator's line for a failure the answer withholds: its whole chain.
-fn failed(said: &str) {
-    tracing::error!(
-        target: crate::TARGET,
-        error = %said,
-        "graphql operation failed",
-    );
-}
-
-/// The operator's line for a `503` the answer withholds the cause of: the
-/// server could not serve it in time, which is no failure of its own.
-fn unavailable(said: &str) {
-    tracing::warn!(
-        target: crate::TARGET,
-        error = %said,
-        "graphql operation unavailable",
-    );
+/// The operator's line for the chain an answer kept from its client, naming the
+/// root field `at` as its `graphql.field` line does, by `kind` and `field`: a
+/// failure at `error`, a `503` — the server could not serve it in time, which
+/// is no failure of its own — at `warn`.
+fn file(withheld: Withheld, at: ServedAddress<'_>) {
+    match withheld {
+        Withheld::Failed(said) => tracing::error!(
+            target: crate::TARGET,
+            kind = at.kind,
+            field = at.field,
+            error = %said,
+            "graphql operation failed",
+        ),
+        Withheld::Unavailable(said) => tracing::warn!(
+            target: crate::TARGET,
+            kind = at.kind,
+            field = at.field,
+            error = %said,
+            "graphql operation unavailable",
+        ),
+    }
 }
 
 /// Tiers 3 and 4: the framework vocabulary `error`'s chain carries, else the
 /// opaque answer.
-fn chain_error(error: &(dyn StdError + 'static)) -> Error {
+fn chain_error(error: &(dyn StdError + 'static)) -> Reply {
     use nest_rs_core::__private::find_in_chain;
 
     if let Some(problem) = find_in_chain::<Problem>(error) {
-        return answered(problem, error);
+        return Reply::problem(problem, error, None);
     }
     if let Some(rejection) = find_in_chain::<PipeError>(error) {
-        return pipe_error(rejection);
+        return Reply::said(pipe_error(rejection));
     }
     if let Some(report) = DecodeError::in_chain(error) {
-        return invalid_argument(report.to_string());
+        return Reply::said(invalid_argument(report.to_string()));
     }
-    opaque_error(error)
+    Reply::opaque(error)
 }
 
 /// Why a field's tail failed: the failure the pipeline carries, which its
@@ -239,17 +296,30 @@ pub(crate) struct Reply {
 }
 
 impl Reply {
+    /// `error`, an answer that keeps nothing from its client.
+    fn said(error: Error) -> Self {
+        Self {
+            error,
+            withheld: None,
+        }
+    }
+
     /// `problem` as the answer to `error`, keeping what a `5xx` answer
-    /// withholds.
-    fn problem(problem: &Problem, error: &(dyn StdError + 'static)) -> Self {
+    /// withholds: the chain the failure kept of its own (`kept`, `.opaque()`'s)
+    /// at that `5xx`'s level, else `error`'s.
+    fn problem(
+        problem: &Problem,
+        error: &(dyn StdError + 'static),
+        kept: Option<Withheld>,
+    ) -> Self {
         Self {
             error: rendered(problem),
-            withheld: nest_rs_core::__private::withheld(problem, error),
+            withheld: nest_rs_core::__private::withheld_over(problem.status(), error, kept),
         }
     }
 
     /// The opaque answer, keeping `error`'s whole chain.
-    fn opaque(error: &(dyn StdError + 'static)) -> Self {
+    pub(crate) fn opaque(error: &(dyn StdError + 'static)) -> Self {
         Self {
             // The `INTERNAL` code an internal denial carries, so the two are
             // indistinguishable.
@@ -258,14 +328,28 @@ impl Reply {
         }
     }
 
-    /// The answer, its withheld chain filed: it is the one sent.
-    pub(crate) fn filed(self) -> Error {
-        match self.withheld {
-            Some(Withheld::Failed(said)) => failed(&said),
-            Some(Withheld::Unavailable(said)) => unavailable(&said),
-            None => {}
+    /// The answer, its withheld chain filed naming the root field `at`: it is
+    /// the one sent.
+    pub(crate) fn filed_at(self, at: ServedAddress<'_>) -> Error {
+        if let Some(withheld) = self.withheld {
+            file(withheld, at);
         }
         self.error
+    }
+
+    /// The answer, its withheld chain riding it as its `source`, for the edge
+    /// to file once no site can answer it otherwise.
+    fn kept(self) -> Error {
+        let Self {
+            mut error,
+            withheld,
+        } = self;
+        if let Some(withheld) = withheld {
+            error.source = Some(Arc::new(ServerFailed {
+                withheld: Mutex::new(Some(withheld)),
+            }));
+        }
+        error
     }
 }
 
@@ -279,24 +363,23 @@ impl FieldFailure {
     }
 
     /// What a field failing with this answers when no exception filter
-    /// answers it, the chain it withholds filed.
+    /// answers it, the chain it withholds kept for the edge to file.
     pub fn into_answer(self) -> Error {
         match self.reply {
-            Some(reply) => reply.filed(),
-            None => unanswered(&self.failure),
+            Some(reply) => reply.kept(),
+            None => unanswered(&self.failure).kept(),
         }
     }
 }
 
-/// The edge's own error, as built: its own answer.
+/// The edge's own error, as built: its own answer, the chain it keeps
+/// (`.opaque()`'s) the site's to file.
 impl From<Error> for FieldFailure {
     fn from(error: Error) -> Self {
+        let withheld = take_withheld(&error);
         Self {
             failure: Failure::from(DeliberateError),
-            reply: Some(Box::new(Reply {
-                error,
-                withheld: None,
-            })),
+            reply: Some(Box::new(Reply { error, withheld })),
         }
     }
 }
@@ -361,23 +444,26 @@ pub(crate) struct Unserved {
 }
 
 /// What a field whose unit failed answers: an exception filter's problem over
-/// whatever it wrote, else the answer it wrote, else the edge's one rule —
-/// each filing the chain it keeps from the client.
-pub(crate) fn answer(failure: &Failure, reply: Option<Box<Reply>>) -> Error {
+/// whatever it wrote — the chain the field's own answer kept (`.opaque()`'s)
+/// at the level a `5xx` files it, none behind a `4xx` — else the answer it
+/// wrote, else the edge's one rule, each with the chain it keeps from the
+/// client.
+pub(crate) fn answer(failure: &Failure, reply: Option<Box<Reply>>) -> Reply {
     if let Some(problem) = caught_problem(failure) {
-        return answered(problem, failure.error());
+        let kept = reply.and_then(|reply| reply.withheld);
+        return Reply::problem(problem, failure.error(), kept);
     }
     match reply {
-        Some(reply) if failure.is_answered() => reply.filed(),
+        Some(reply) if failure.is_answered() => *reply,
         _ => unanswered(failure),
     }
 }
 
 /// The edge's one rule for a failure nothing answered: a refusal as its
 /// denial, the vocabulary its chain carries, else the opaque answer.
-fn unanswered(failure: &Failure) -> Error {
+fn unanswered(failure: &Failure) -> Reply {
     match failure.find::<Denial>() {
-        Some(denial) => denial_to_graphql_error(denial.clone()),
+        Some(denial) => Reply::said(denial_to_graphql_error(denial.clone())),
         None => chain_error(failure.error()),
     }
 }
@@ -386,7 +472,7 @@ fn unanswered(failure: &Failure) -> Error {
 /// answer when it says none — and the chain it keeps from the client.
 fn problem_reply<E: ToProblem>(error: &E) -> Reply {
     match error.to_problem() {
-        Some(problem) => Reply::problem(&problem, error),
+        Some(problem) => Reply::problem(&problem, error, None),
         None => Reply::opaque(error),
     }
 }
@@ -443,6 +529,11 @@ mod tests {
 
     fn extensions(err: &Error) -> serde_json::Value {
         serde_json::to_value(&err.extensions).expect("extensions serialize")
+    }
+
+    /// The chain `err` keeps for the edge to file, said whole.
+    fn kept(err: &Error) -> Option<Withheld> {
+        take_withheld(err)
     }
 
     /// A field reads its error before the response answers it opaquely, a
@@ -626,11 +717,10 @@ mod tests {
             .into_failure()
             .into_answer();
         assert_eq!(ledger.message, OPAQUE_CLIENT_MESSAGE);
-        let event = logs.expect_one(crate::TARGET, "graphql operation failed");
-        assert_eq!(event.level, "error");
+        logs.expect_none(crate::TARGET, "graphql operation failed");
         assert!(
-            event.field("error").is_some_and(|e| e.contains("10.0.0.1")),
-            "{event:#?}"
+            matches!(kept(&ledger), Some(Withheld::Failed(said)) if said.contains("10.0.0.1")),
+            "the answer keeps the chain it withholds for the edge",
         );
     }
 
@@ -684,50 +774,42 @@ mod tests {
     }
 
     /// A server problem answers the sentence an opaque failure answers, so it
-    /// files the chain it withholds — at `warn` for a `503`, the server unable
-    /// to serve in time, at `error` otherwise; a bare problem or a client one
-    /// withholds nothing and files none.
+    /// keeps the chain it withholds for the edge — at `warn`'s level for a `503`,
+    /// the server unable to serve in time, at `error`'s otherwise; a bare
+    /// problem or a client one withholds nothing. Nothing is filed before an
+    /// answer is final.
     #[test]
-    fn a_server_problem_files_the_chain_its_answer_withholds() {
+    fn a_server_problem_keeps_the_chain_its_answer_withholds() {
         use super::ErrorReportChain as _;
 
         let logs = nest_rs_testing::LogCapture::install();
-        let failed = || logs.find(crate::TARGET, "graphql operation failed");
 
         let outage = ErrorReport(Outage(Ledger)).into_failure().into_answer();
         assert_eq!(outage.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
         assert_eq!(extensions(&outage)[CODE_EXTENSION], "UNAVAILABLE");
-        let unavailable = logs.expect_one(crate::TARGET, "graphql operation unavailable");
-        assert_eq!(unavailable.level, "warn");
         assert!(
-            unavailable
-                .field("error")
-                .is_some_and(|e| e.contains("10.0.0.1")),
-            "{unavailable:#?}"
+            matches!(kept(&outage), Some(Withheld::Unavailable(said)) if said.contains("10.0.0.1")),
         );
-        assert!(failed().is_empty(), "{:#?}", failed());
 
         let carried = nest_rs_core::anyhow::Error::from(Problem::new(500, code::INTERNAL))
             .context("charging the card");
         let charged = ErrorReport(carried).into_failure().into_answer();
         assert_eq!(charged.message, OPAQUE_CLIENT_MESSAGE);
-        let lines = failed();
-        assert_eq!(lines.len(), 1, "{lines:#?}");
-        assert_eq!(lines[0].level, "error");
         assert!(
-            lines[0]
-                .field("error")
-                .is_some_and(|e| e.contains("charging the card")),
-            "{lines:#?}"
+            matches!(kept(&charged), Some(Withheld::Failed(said)) if said.contains("charging the card")),
         );
+        assert_eq!(kept(&charged), None, "taken once");
 
         let bare = problem_error(&Problem::new(503, code::UNAVAILABLE));
         assert_eq!(bare.message, nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE);
-        assert_eq!(failed().len(), 1, "a bare problem withholds nothing");
+        assert_eq!(kept(&bare), None, "a bare problem withholds nothing");
 
         let conflict = problem_error(&Problem::new(409, code::CONFLICT));
         assert_eq!(conflict.message, "conflict");
-        assert_eq!(failed().len(), 1, "a client problem withholds nothing");
+        assert_eq!(kept(&conflict), None, "a client problem withholds nothing");
+
+        logs.expect_none(crate::TARGET, "graphql operation failed");
+        logs.expect_none(crate::TARGET, "graphql operation unavailable");
     }
 
     #[test]
@@ -750,17 +832,13 @@ mod tests {
         assert!(!said.message.contains("sk_live"), "{}", said.message);
         assert_eq!(extensions(&said)[CODE_EXTENSION], "INVALID_ARGUMENT");
 
-        let logs = nest_rs_testing::LogCapture::install();
         let secret = ErrorReport(std::io::Error::other("secret 42"))
             .into_failure()
             .into_answer();
         assert_eq!(secret.message, OPAQUE_CLIENT_MESSAGE);
         assert_eq!(extensions(&secret)[CODE_EXTENSION], "INTERNAL");
-        let event = logs.expect_one(crate::TARGET, "graphql operation failed");
         assert!(
-            event
-                .field("error")
-                .is_some_and(|e| e.contains("secret 42"))
+            matches!(kept(&secret), Some(Withheld::Failed(said)) if said.contains("secret 42")),
         );
     }
 }

@@ -16,8 +16,8 @@ use nest_rs_database::{
     AtomicBlock, AtomicError, Executor, OpenUnit, Settlement, TransactionPolicy, Unhonoured,
     UnitOfWork, UnitSpec,
 };
-use nest_rs_graphql::async_graphql::{Object, Result};
-use nest_rs_graphql::{GraphqlModule, operations, resolver};
+use nest_rs_graphql::async_graphql::{Context, Object, Result};
+use nest_rs_graphql::{GraphqlModule, Opaque, operations, resolver};
 use nest_rs_http::{HttpConfig, HttpModule};
 use nest_rs_testing::{LogCapture, TestApp};
 use serde_json::{Value, json};
@@ -237,7 +237,17 @@ impl Shape {
             code::INTERNAL,
         )))
     }
+
+    async fn opaqued_below(&self) -> Result<Option<i32>> {
+        let refused: std::result::Result<Option<i32>, std::io::Error> =
+            Err(std::io::Error::other(STORE_REFUSED));
+        refused.opaque()
+    }
 }
+
+/// What the shape's store answers [`Shape::opaqued_below`], its words the
+/// operator's alone.
+const STORE_REFUSED: &str = "the shape store at 10.0.0.7 refused";
 
 /// An app's own class for a server failure no constant of the framework names.
 const INSUFFICIENT_STORAGE: nest_rs_core::Code = nest_rs_core::Code::new("INSUFFICIENT_STORAGE");
@@ -1640,6 +1650,156 @@ async fn a_mutations_commit_is_waited_for_past_the_request_deadline() {
         journal.read().last().map(String::as_str),
         Some("settle graphql.operation true")
     );
+}
+
+/// The one chain filed past `logs`' operation: `.opaque()`'s, kept by an error
+/// its answer never carried, naming the root field `field` of an operation of
+/// `kind` under the operation's own ids.
+fn assert_kept_chain_filed(logs: &LogCapture, kind: &str, field: &str) {
+    let line = logs.expect_one(nest_rs_graphql::TARGET, "graphql operation failed");
+    assert_eq!(line.level, "error");
+    assert_eq!(line.field("error").as_deref(), Some(STORE_REFUSED));
+    assert_eq!(
+        line.field("kind").as_deref(),
+        Some(kind),
+        "{:?}",
+        line.fields
+    );
+    assert_eq!(
+        line.field("field").as_deref(),
+        Some(field),
+        "{:?}",
+        line.fields
+    );
+    let lines = operation_lines(logs);
+    assert_eq!(lines.len(), 1, "{lines:#?}");
+    assert_eq!(
+        line.span_id, lines[0].span_id,
+        "said under the operation's own ids"
+    );
+}
+
+/// An operation cut inside its unit at the request's deadline answers the
+/// cut's `503`, and what the errors its resolution met kept from the client is
+/// filed all the same, naming the root field each was met under.
+#[tokio::test(start_paused = true)]
+async fn a_mutation_cut_at_the_request_deadline_files_the_chains_its_errors_kept() {
+    let logs = LogCapture::install();
+    let (app, _) = boot_with::<DeadlineModule>(Settles::At(Duration::ZERO)).await;
+    let reply = post(
+        &app,
+        json!({ "query": "mutation Cut { maybeShaped { opaquedBelow } slowWrite }" }),
+    )
+    .await;
+    assert_eq!(
+        reply["errors"][0]["extensions"]["code"], "UNAVAILABLE",
+        "{reply}"
+    );
+    assert!(!reply.to_string().contains(STORE_REFUSED), "{reply}");
+    logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "graphql operation not answered by the request deadline; it is cut",
+    );
+    assert_kept_chain_filed(&logs, "mutation", "maybeShaped");
+}
+
+/// An operation dropped with the request the edge cut files what its errors
+/// kept as it files its `cancelled` line.
+#[tokio::test(start_paused = true)]
+async fn a_query_the_edge_cuts_files_the_chains_its_errors_kept() {
+    let logs = LogCapture::install();
+    let (app, _) = boot_with::<DeadlineModule>(Settles::At(Duration::ZERO)).await;
+    app.http()
+        .post("/graphql")
+        .body_json(&json!({ "query": "query Cut { shape { opaquedBelow } slowRead }" }))
+        .send()
+        .await
+        .assert_status(nest_rs_http::StatusCode::SERVICE_UNAVAILABLE);
+    assert_kept_chain_filed(&logs, "query", "shape");
+    assert_eq!(
+        operation_lines(&logs)[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED)
+    );
+}
+
+/// What each request's data holds for its operations, the test keeping a weak
+/// handle on it alone.
+struct Held(Arc<()>);
+
+/// The handle on each [`Held`] a field met.
+static MET: Mutex<Vec<std::sync::Weak<()>>> = Mutex::new(Vec::new());
+
+nest_rs_core::inventory::submit! {
+    nest_rs_graphql::GraphqlContextSeed::new(
+        Some(std::any::TypeId::of::<HeldResolver>),
+        nest_rs_graphql::SeedLifetime::Request,
+        |_req, _container, gql| gql.data(Held(Arc::new(()))),
+    )
+}
+
+#[resolver]
+struct HeldResolver;
+
+#[operations]
+impl HeldResolver {
+    #[query]
+    #[public]
+    async fn held(&self, ctx: &Context<'_>) -> bool {
+        meet(ctx)
+    }
+
+    #[query]
+    #[public]
+    async fn slow_held(&self, ctx: &Context<'_>) -> bool {
+        meet(ctx);
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        true
+    }
+}
+
+fn meet(ctx: &Context<'_>) -> bool {
+    let held = ctx.data_unchecked::<Held>();
+    MET.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(Arc::downgrade(&held.0));
+    true
+}
+
+#[module(
+    imports = [
+        HttpModule::for_root(HttpConfig {
+            request_timeout: Some(Duration::from_secs(1)),
+            ..HttpConfig::default()
+        }),
+        GraphqlModule,
+    ],
+    providers = [HeldResolver],
+)]
+struct HeldModule;
+
+/// The root fields an operation noted hold its environment, which holds its
+/// request's data, only until its line takes back what its errors kept: that
+/// data goes once the operation answers, or once the edge cut it.
+#[tokio::test(start_paused = true)]
+async fn an_operations_request_data_goes_once_it_answers_or_is_cut() {
+    let app = TestApp::builder()
+        .module::<HeldModule>()
+        .build()
+        .await
+        .expect("the schema boots and mounts at /graphql");
+    let reply = post(&app, json!({ "query": "{ held }" })).await;
+    assert_eq!(reply["data"]["held"], true, "{reply}");
+    app.http()
+        .post("/graphql")
+        .body_json(&json!({ "query": "{ held slowHeld }" }))
+        .send()
+        .await
+        .assert_status(nest_rs_http::StatusCode::SERVICE_UNAVAILABLE);
+
+    let met = MET.lock().unwrap_or_else(PoisonError::into_inner);
+    assert_eq!(met.len(), 3, "each field met its request's data");
+    let kept = met.iter().filter(|held| held.strong_count() > 0).count();
+    assert_eq!(kept, 0, "no operation's data outlives it");
 }
 
 #[tokio::test(start_paused = true)]

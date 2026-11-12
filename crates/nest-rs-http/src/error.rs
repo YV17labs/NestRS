@@ -12,7 +12,7 @@ use http::{Extensions, StatusCode};
 
 use nest_rs_config::Namespaced as _;
 use nest_rs_core::__private::Withheld;
-use nest_rs_core::{DecodeError, Problem, ToProblem, code};
+use nest_rs_core::{DecodeError, Problem, ServedAddress, ToProblem, code};
 
 use crate::HttpConfig;
 use crate::endpoint_guards::NO_GUARD_REMEDY;
@@ -209,7 +209,8 @@ impl<E: ToProblem> ResponseError for E {
 /// It answers an RFC 9457 problem document unless it holds a ready response or
 /// a [`ResponseError`] that renders its own; its cause stays reachable by
 /// [`downcast_ref`](Self::downcast_ref) and as its
-/// [`source`](std::error::Error::source), for the log.
+/// [`source`](std::error::Error::source), for the log. What a `5xx` answer
+/// keeps from the client of it is filed once that answer is rendered.
 ///
 /// ```
 /// use nest_rs_http::{HttpError, StatusCode};
@@ -224,6 +225,8 @@ struct Repr {
     status: StatusCode,
     cause: Cause,
     extensions: Extensions,
+    /// The chain `.opaque()` keeps for the operator, which no answer carries.
+    withheld: Option<Withheld>,
 }
 
 /// How an error rendering itself answers on the wire, from a borrow.
@@ -242,6 +245,20 @@ enum Cause {
         error: BoxError,
         render: RenderTyped,
     },
+}
+
+impl Cause {
+    /// The response this cause answers at `status`, from a borrow: a ready
+    /// response, which only its owner renders, answers its status's problem.
+    fn rendered(&self, status: StatusCode) -> Response {
+        match self {
+            Cause::Error(error) => ProblemDetails::answering(status, &**error).into_response(),
+            Cause::Typed { error, render } => render(error, status),
+            Cause::Status | Cause::Response(_) => {
+                ProblemDetails::from_status(status).into_response()
+            }
+        }
+    }
 }
 
 impl HttpError {
@@ -294,7 +311,15 @@ impl HttpError {
             status,
             cause,
             extensions: Extensions::new(),
+            withheld: None,
         }))
+    }
+
+    /// This error, keeping `withheld` from its client for the operator: what a
+    /// `5xx` answer of it files in place of its own chain.
+    pub(crate) fn withholding(mut self, withheld: Withheld) -> Self {
+        self.0.withheld = Some(withheld);
+        self
     }
 
     /// The status this error answers.
@@ -395,7 +420,9 @@ impl HttpError {
     /// [`ResponseError`]'s own rendering, otherwise an RFC 9457 problem document
     /// whose `detail` on a `4xx` is the cause's sentence said without any value
     /// it quotes, and which a `5xx` answers without one. The extensions are
-    /// copied on last.
+    /// copied on last. What a `5xx` answer keeps from the client of it is filed
+    /// at once, naming no route: the edge renders a handler's error itself, and
+    /// names the route it answers.
     ///
     /// ```
     /// use nest_rs_http::{HttpError, StatusCode, header};
@@ -403,84 +430,105 @@ impl HttpError {
     /// let response = HttpError::from_status(StatusCode::NOT_FOUND).into_response();
     /// assert_eq!(response.headers()[header::CONTENT_TYPE], "application/problem+json");
     /// ```
-    pub fn into_response(self) -> Response {
-        let Repr {
-            status,
-            cause,
-            extensions,
-        } = *self.0;
-        let mut response = match cause {
-            Cause::Status => ProblemDetails::from_status(status).into_response(),
+    pub fn into_response(mut self) -> Response {
+        let response = self.take_rendered();
+        if let Some(withheld) = self.withheld_behind(response.status()) {
+            file(withheld, ServedAddress::default());
+        }
+        response
+    }
+
+    /// The response [`into_response`](Self::into_response) renders, filing
+    /// nothing: a ready response and the extensions are taken, leaving the
+    /// status and the chain.
+    fn take_rendered(&mut self) -> Response {
+        let mut response = match std::mem::replace(&mut self.0.cause, Cause::Status) {
             Cause::Response(response) => response,
-            Cause::Error(error) => ProblemDetails::answering(status, &*error).into_response(),
-            Cause::Typed { error, render } => render(&error, status),
+            cause => {
+                let response = cause.rendered(self.0.status);
+                self.0.cause = cause;
+                response
+            }
         };
-        response.extensions_mut().extend(extensions);
+        response
+            .extensions_mut()
+            .extend(std::mem::take(&mut self.0.extensions));
         response
     }
 }
 
 impl HttpError {
-    /// The response this error answers at the edge: as
-    /// [`into_response`](Self::into_response) renders it, except that a
-    /// [`Problem`] its cause carries answers its own document; the chain a `5xx`
-    /// answer withholds is filed once at `error`, at `warn` behind a `503`.
+    /// The response this error answers where no route is at hand to name, as
+    /// [`answer_at`](Self::answer_at) renders and files it.
     pub(crate) fn answer(self) -> Response {
-        match self.0.cause {
-            Cause::Response(_) => self.into_response(),
-            _ => self.answer_ref(),
-        }
+        self.answer_at(ServedAddress::default())
     }
 
-    /// The response this error answers, as [`answer`](Self::answer) renders
-    /// it but filing nothing, and the error to keep beside it: itself, unless
-    /// rendering took the ready response it held and its status is what is
-    /// left. Whoever answers last files what the client was not told
-    /// ([`withheld_behind`](Self::withheld_behind)).
-    pub(crate) fn rendered_kept(self) -> (Response, HttpError) {
-        match self.0.cause {
-            Cause::Response(_) => {
-                let status = self.0.status;
-                (self.into_response(), HttpError::from_status(status))
-            }
-            _ => (self.rendered_ref(), self),
-        }
-    }
-
-    /// [`answer`](Self::answer), from a borrow: a ready response, which only
-    /// its owner renders, answers its status's problem.
-    pub(crate) fn answer_ref(&self) -> Response {
-        let response = self.rendered_ref();
-        if let Some(withheld) = self.withheld_behind(response.status()) {
-            file(withheld);
+    /// The response this error answers at the edge, for the request `at`
+    /// addresses: as [`into_response`](Self::into_response) renders it, except
+    /// that a [`Problem`] its cause carries answers its own document; the
+    /// chain a `5xx` answer withholds is filed once at `error`, at `warn`
+    /// behind a `503`, naming the route.
+    pub(crate) fn answer_at(self, at: ServedAddress<'_>) -> Response {
+        let (response, error) = self.rendered_kept();
+        if let Some(withheld) = error.withheld_behind(response.status()) {
+            file(withheld, at);
         }
         response
     }
 
-    /// The response [`answer_ref`](Self::answer_ref) renders, filing nothing.
+    /// The response this error answers, as [`answer_at`](Self::answer_at)
+    /// renders it but filing nothing, and the error to keep beside it: itself,
+    /// a ready response it held taken. Whoever answers last files what the
+    /// client was not told ([`withheld_behind`](Self::withheld_behind)).
+    pub(crate) fn rendered_kept(mut self) -> (Response, HttpError) {
+        match self.0.cause {
+            Cause::Response(_) => (self.take_rendered(), self),
+            _ => (self.rendered_ref(), self),
+        }
+    }
+
+    /// This error rendered now as [`answer_at`](Self::answer_at) renders it,
+    /// filing nothing: a ready response keeping the chain its answer withholds,
+    /// for the edge to answer as it is and file naming the route. A site renders
+    /// it while the unit of work it failed in is ambient, which the edge answers
+    /// after: a cancelled statement's problem reads its wait off that unit's pool.
+    pub(crate) fn prerendered(self) -> Self {
+        let (response, error) = self.rendered_kept();
+        let withheld = error.withheld_behind(response.status());
+        let mut rendered = Self::from_response(response);
+        rendered.0.withheld = withheld;
+        rendered
+    }
+
+    /// The response [`answer_at`](Self::answer_at) renders, from a borrow,
+    /// filing nothing.
     pub(crate) fn rendered_ref(&self) -> Response {
-        let status = self.0.status;
         let problem = self
             .chain()
             .and_then(nest_rs_core::__private::find_in_chain::<Problem>);
-        let mut response = match (problem, &self.0.cause) {
-            (Some(problem), _) => problem_response(problem),
-            (None, Cause::Error(error)) => {
-                ProblemDetails::answering(status, &**error).into_response()
-            }
-            (None, Cause::Typed { error, render }) => render(error, status),
-            (None, _) => ProblemDetails::from_status(status).into_response(),
+        let mut response = match problem {
+            Some(problem) => problem_response(problem),
+            None => self.0.cause.rendered(self.0.status),
         };
         response.extensions_mut().extend(self.0.extensions.clone());
         response
     }
 
     /// What a `status` answer keeps from the client of this error: the chain
-    /// it carries behind a `5xx` — an error rendering itself too, whatever it
-    /// rendered — unless that is a bare [`Problem`], or a [`ProblemDetails`]
-    /// rendering itself, which answers all it holds. A status alone and a
-    /// ready response carry none.
+    /// `.opaque()` kept, this error's or one its cause holds, at the level a
+    /// `5xx` files it; otherwise the chain it carries behind a `5xx` — an error
+    /// rendering itself too, whatever it rendered — unless that is a bare
+    /// [`Problem`], or a [`ProblemDetails`] rendering itself, which answers all
+    /// it holds. A status alone and a ready response carry none.
     pub(crate) fn withheld_behind(&self, status: StatusCode) -> Option<Withheld> {
+        if let Some(kept) = kept_in(self) {
+            return nest_rs_core::__private::withheld_over(
+                status.as_u16(),
+                self,
+                Some(kept.clone()),
+            );
+        }
         let chain: &(dyn Error + 'static) = match &self.0.cause {
             Cause::Typed { error, .. } if error.is::<ProblemDetails>() => return None,
             Cause::Typed { error, .. } => &**error,
@@ -503,22 +551,47 @@ impl HttpError {
     }
 }
 
-/// The operator's line for a failure the answer withholds: its whole chain.
-pub(crate) fn failed(said: &str) {
-    tracing::error!(
-        target: crate::target::HTTP,
-        error = %said,
-        "request failed",
-    );
+/// The chain an [`HttpError`] in `error`'s chain kept for the operator
+/// (`.opaque()`'s), `error` itself first — an `anyhow` chain a `?` built over
+/// it among them.
+fn kept_in<'e>(error: &'e (dyn Error + 'static)) -> Option<&'e Withheld> {
+    std::iter::successors(Some(error), |&link| link.source())
+        .filter_map(|link| link.downcast_ref::<HttpError>())
+        .find_map(|error| error.0.withheld.as_ref())
 }
 
-/// File what an answer withheld: a failure at `error`, a `503` — the server
-/// unable to serve the request in time — at `warn`.
-pub(crate) fn file(withheld: Withheld) {
+/// What a `status` answer to `error`, a failure the edge answers, keeps from
+/// the client: an [`HttpError`]'s by its own reading, else the chain an error
+/// in it kept (`.opaque()`'s), else its whole chain behind a `5xx` unless it is
+/// a bare [`Problem`].
+pub(crate) fn withheld_behind(
+    error: &(dyn Error + 'static),
+    status: StatusCode,
+) -> Option<Withheld> {
+    match error.downcast_ref::<HttpError>() {
+        Some(error) => error.withheld_behind(status),
+        None => {
+            nest_rs_core::__private::withheld_over(status.as_u16(), error, kept_in(error).cloned())
+        }
+    }
+}
+
+/// File what an answer withheld, naming the request `at` addresses as its
+/// `http.request` line does: a failure at `error`, a `503` — the server unable
+/// to serve the request in time — at `warn`.
+pub(crate) fn file(withheld: Withheld, at: ServedAddress<'_>) {
     match withheld {
-        Withheld::Failed(said) => failed(&said),
+        Withheld::Failed(said) => tracing::error!(
+            target: crate::target::HTTP,
+            verb = at.verb,
+            path = at.path,
+            error = %said,
+            "request failed",
+        ),
         Withheld::Unavailable(said) => tracing::warn!(
             target: crate::target::HTTP,
+            verb = at.verb,
+            path = at.path,
             error = %said,
             "request unavailable",
         ),

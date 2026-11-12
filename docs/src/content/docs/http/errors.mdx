@@ -95,7 +95,8 @@ error is mapped one way: a `ResponseError` written for a type that implements
 
 Either rendering keeps a `5xx`'s cause for the operator, and neither logs it
 itself. The edge files the error's whole chain once the answer is final,
-on `nest_rs::http`: at `error`, at `warn` behind a `503`. It goes by the
+on `nest_rs::http`: at `error`, at `warn` behind a `503`, naming the route as the
+`http.request` line does, by `verb` and `path`. It goes by the
 status the client was finally sent, so an [exception
 filter](/fundamentals/exception-filters/) that answers the failure with a
 `4xx` files nothing. A `4xx` your error answers is the client's own, and
@@ -161,8 +162,10 @@ async fn report(&self, Path(id): Path<Uuid>) -> Result<Json<Report>> {
 }
 ```
 
-`.opaque()?` logs the real error at `error` on `nest_rs::http` and answers the
-opaque `500`, the one document every server failure the framework does not
+`.opaque()?` answers the opaque `500` and keeps the real error for the operator:
+the edge files it at `error` on `nest_rs::http` once that answer goes out, naming
+the route, and an exception filter answering the failure with a `4xx` leaves no
+line. The `500` is the one document every server failure the framework does not
 describe is on HTTP — a `ServiceError`'s, a `#[crud]` operation's, a panic's,
 an unknown error's alike:
 

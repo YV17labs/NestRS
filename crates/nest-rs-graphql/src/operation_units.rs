@@ -35,9 +35,11 @@ use nest_rs_database::{
 use nest_rs_http::__private::RequestDeadline;
 use tracing::Instrument;
 
-use crate::error::AnsweredError;
+use crate::error::{AnsweredError, file_kept};
 use crate::loader::BatchSpan;
 use crate::null_propagation::{MutationAnswer, RootAnswer};
+use crate::operation::operation_label;
+use crate::root_fields::RootFields;
 
 /// The schema `E`, each query and mutation it executes run as a unit of work
 /// of its own; a subscription's unit is its connection.
@@ -120,20 +122,26 @@ impl<E: Executor> OperationUnits<E> {
         request: Request,
         cut: Option<&RequestDeadline>,
     ) -> Response {
-        let request = request.data(BatchSpan(tracing::Span::current()));
+        let roots = Arc::new(RootFields::holding_errors());
+        let request = request
+            .data(BatchSpan(tracing::Span::current()))
+            .data(Arc::clone(&roots));
         let body = self.executor.execute(request);
         let scope = nest_rs_core::current_request_scope();
-        self.run(selected, scope, cut, body).await
+        self.run(selected, scope, cut, &roots, body).await
     }
 
     /// Run `body`, the operation `selected` names, as its unit in `scope`: cut
     /// at `cut`, settled on whether its answer reports data, and filed on its
-    /// own line.
+    /// own line, each chain its answer still keeps — or, ended before it
+    /// answers, its errors kept — filed naming the root field `roots` holds it
+    /// under.
     async fn run<B>(
         &self,
         selected: Selected,
         scope: Option<Arc<RequestScope>>,
         cut: Option<&RequestDeadline>,
+        roots: &RootFields,
         body: B,
     ) -> Response
     where
@@ -158,13 +166,18 @@ impl<E: Executor> OperationUnits<E> {
             Some(deadline) => spec.with_deadline(deadline.at()),
             None => spec,
         };
-        let line = OperationLine::open(selected, correlation.clone(), span.clone());
+        let kind = selected.type_name();
+        let line = OperationLine::open(selected, correlation.clone(), span.clone(), roots);
+        let filed = |response: Response| {
+            file_kept(&response.errors, kind, roots);
+            Answered::Executed(response)
+        };
         let body = async {
             let Some(deadline) = cut else {
-                return Answered::Executed(body.await);
+                return filed(body.await);
             };
             match tokio::time::timeout_at(deadline.at(), body).await {
-                Ok(response) => Answered::Executed(response),
+                Ok(response) => filed(response),
                 Err(_) => {
                     line.cut(deadline.timeout());
                     Answered::Cut
@@ -214,11 +227,14 @@ impl<E: Executor> Executor for OperationUnits<E> {
     ) -> BoxStream<'static, Response> {
         let selected = Selected::of(&mut request);
         let scope = self.scopes.open();
+        let roots = Arc::new(RootFields::holding_errors());
+        let request = request.data(Arc::clone(&roots));
         if selected.ty == Some(OperationType::Subscription) {
             return InScope {
                 scope: Some(scope),
                 unit: None,
                 stream: self.executor.execute_stream(request, session_data),
+                roots,
             }
             .boxed();
         }
@@ -233,7 +249,7 @@ impl<E: Executor> Executor for OperationUnits<E> {
                     .await
                     .unwrap_or_default()
             };
-            units.run(selected, Some(scope), None, answer).await
+            units.run(selected, Some(scope), None, &roots, answer).await
         })
         .boxed()
     }
@@ -242,12 +258,14 @@ impl<E: Executor> Executor for OperationUnits<E> {
 /// A subscription's stream, each poll of it in the request scope the
 /// subscription opened with, nested in the socket's unit, which polls it. What a
 /// poll builds is a push, which no read under the subscriber's ability filtered:
-/// a wire row built there is judged as one.
+/// a wire row built there is judged as one. Each chain an item still keeps is
+/// filed as the item answers, naming the subscription `roots` holds.
 struct InScope {
     /// Taken into [`unit`](Self::unit) at the first poll.
     scope: Option<Arc<RequestScope>>,
     unit: Option<RequestContinuation>,
     stream: BoxStream<'static, Response>,
+    roots: Arc<RootFields>,
 }
 
 impl Stream for InScope {
@@ -258,7 +276,31 @@ impl Stream for InScope {
         let unit = this.unit.get_or_insert_with(|| {
             nested_continuation(this.scope.take(), nest_rs_core::Correlation::inherited())
         });
-        unit.enter(|| nest_rs_core::__private::as_pushed(|| this.stream.poll_next_unpin(cx)))
+        unit.enter(|| {
+            let item = nest_rs_core::__private::as_pushed(|| this.stream.poll_next_unpin(cx));
+            if let Poll::Ready(Some(item)) = &item {
+                let subscription = Some(operation_label(OperationType::Subscription));
+                file_kept(&item.errors, subscription, &this.roots);
+            }
+            item
+        })
+    }
+}
+
+/// A subscription stopped while an item resolved, by its client or with its
+/// socket: what that item's errors kept is filed, the item never answered.
+impl Drop for InScope {
+    fn drop(&mut self) {
+        let unanswered = self.roots.take_unanswered();
+        if unanswered.is_empty() {
+            return;
+        }
+        let subscription = Some(operation_label(OperationType::Subscription));
+        let file = || file_kept(&unanswered, subscription, &self.roots);
+        match &self.unit {
+            Some(unit) => unit.enter(file),
+            None => file(),
+        }
     }
 }
 
@@ -382,11 +424,7 @@ impl Selected {
     }
 
     fn type_name(&self) -> Option<&'static str> {
-        self.ty.map(|ty| match ty {
-            OperationType::Query => "query",
-            OperationType::Mutation => "mutation",
-            OperationType::Subscription => "subscription",
-        })
+        self.ty.map(operation_label)
     }
 }
 
@@ -695,20 +733,27 @@ impl From<AtomicError> for FieldFailed {
 ///
 /// The correlation is held: a `Drop` runs while the future is torn down, not
 /// reliably inside the scope that future installed.
-struct OperationLine {
+///
+/// Ahead of that line it files the chains the errors its operation reported
+/// still keep from the client, naming the root field each was met under, as
+/// an answer would have: none once the operation's answer is built, which took
+/// them; what an operation cut, dropped or unwound before answering met.
+struct OperationLine<'r> {
     ty: Option<&'static str>,
     correlation: nest_rs_core::Correlation,
     span: tracing::Span,
     started: std::time::Instant,
+    roots: &'r RootFields,
 }
 
-impl OperationLine {
+impl<'r> OperationLine<'r> {
     /// The operation's unit catches its own unwind and files it, so another
     /// dropping the line is a sibling's.
     fn open(
         selected: Selected,
         correlation: nest_rs_core::Correlation,
         span: tracing::Span,
+        roots: &'r RootFields,
     ) -> FiledOnce<Self> {
         FiledOnce::new(
             Self {
@@ -716,6 +761,7 @@ impl OperationLine {
                 correlation,
                 span,
                 started: std::time::Instant::now(),
+                roots,
             },
             Unwinding::Shared,
         )
@@ -743,9 +789,12 @@ impl OperationLine {
     }
 }
 
-impl Line for OperationLine {
+impl Line for OperationLine<'_> {
     fn file(&mut self, outcome: &'static str) {
         nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
+            let unanswered = self.roots.take_unanswered();
+            self.span
+                .in_scope(|| file_kept(&unanswered, self.ty, self.roots));
             nest_rs_core::operation_line!(
                 crate::unit::OPERATION,
                 span: &self.span,

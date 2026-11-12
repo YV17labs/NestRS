@@ -229,12 +229,16 @@ impl<E: Endpoint> EdgeEndpoint<E> {
     }
 
     /// The inner tree, under the context `call` built and installs again
-    /// around the response body, and the budget counted from `arrival`.
+    /// around the response body, and the budget counted from `arrival`; an
+    /// `Err` escaping it is rendered naming the request as `verb` and the route
+    /// `matched` say it.
     async fn handle(
         &self,
         mut req: Request,
         continuation: &RequestContinuation,
         arrival: Instant,
+        verb: &str,
+        matched: &MatchedRoute,
     ) -> Response {
         // The router matches exactly: `/kitchen/` would 404 before any guard runs.
         trim_trailing_slash(&mut req);
@@ -299,7 +303,12 @@ impl<E: Endpoint> EdgeEndpoint<E> {
         }
         let resp = match result {
             Ok(resp) => resp,
-            Err(err) => crate::problem::normalize_error_response(err.answer()).await,
+            Err(err) => {
+                let route = matched.route();
+                let at = nest_rs_core::ServedAddress::route(verb, route.as_deref());
+                let answered = continuation.enter(|| err.answer_at(at));
+                crate::problem::normalize_error_response(answered).await
+            }
         };
         self.finish(resp)
     }
@@ -345,7 +354,7 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         let answer = crate::raw_body::with_body_limit(
             self.body_limit,
             nest_rs_core::panic::contain(
-                self.handle(req, &continuation, arrival)
+                self.handle(req, &continuation, arrival, &method, &matched)
                     .instrument(span.clone()),
             ),
         )

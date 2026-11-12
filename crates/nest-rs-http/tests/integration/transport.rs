@@ -1356,6 +1356,86 @@ async fn a_route_a_controller_registers_by_hand_runs_inside_a_unit_of_work() {
     );
 }
 
+/// What the cancelled route's failure files for the operator.
+const CANCELLED_AT_ITS_BOUND: &str = "the statement was cancelled at its bound";
+
+/// A failure that renders itself from the unit it failed in, as a statement
+/// cancelled at its pool's bound names that bound as its wait: a `503` with a
+/// `Retry-After` only where a unit's executor is ambient.
+#[derive(Debug)]
+struct CancelledAtItsBound;
+
+impl std::fmt::Display for CancelledAtItsBound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(CANCELLED_AT_ITS_BOUND)
+    }
+}
+
+impl std::error::Error for CancelledAtItsBound {}
+
+impl nest_rs_core::ToProblem for CancelledAtItsBound {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        let problem = nest_rs_core::Problem::new(503, nest_rs_core::code::UNAVAILABLE);
+        Some(match nest_rs_database::current_executor() {
+            Some(_) => problem.with_retry_after(1),
+            None => problem,
+        })
+    }
+}
+
+/// A controller whose one route, registered by hand, fails with
+/// [`CancelledAtItsBound`], beside the bound unit of work.
+struct Cancelling;
+
+impl nest_rs_core::Discoverable for Cancelling {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        let meta = nest_rs_http::__private::http_controller_meta(
+            "Cancelling",
+            "cancelling",
+            "/cancelled",
+            &[],
+            Vec::new(),
+            |_, routes| {
+                routes.route(
+                    Method::POST,
+                    "/cancelled",
+                    nest_rs_http::endpoint_fn(|_| async {
+                        Err::<nest_rs_http::Response, _>(nest_rs_http::HttpError::from(
+                            CancelledAtItsBound,
+                        ))
+                    }),
+                );
+            },
+        );
+        builder
+            .provide(Cancelling)
+            .attach_meta::<Cancelling, nest_rs_http::HttpControllerMeta>(meta)
+            .provide_dyn::<dyn nest_rs_database::UnitOfWork>(std::sync::Arc::new(RecordingUnits))
+    }
+}
+
+#[module(providers = [Cancelling])]
+struct CancellingModule;
+
+/// A route running no layer hands its error to the edge, which names the route:
+/// the error is rendered first, while the unit it failed in is ambient, so what
+/// its answer reads from that unit — the wait of the pool it ran on — is there.
+#[tokio::test]
+async fn a_route_error_is_rendered_inside_its_unit_and_filed_naming_the_route() {
+    let client = crate::boot::<CancellingModule>().await;
+    let logs = LogCapture::install();
+
+    let resp = client.post("/cancelled").send().await;
+
+    resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    resp.assert_header(nest_rs_http::header::RETRY_AFTER, "1");
+    let line = logs.expect_one(nest_rs_http::target::HTTP, "request unavailable");
+    assert_eq!(line.level, "warn");
+    assert_eq!(line.field("verb").as_deref(), Some("POST"));
+    assert_eq!(line.field("path").as_deref(), Some("/cancelled"));
+    assert_eq!(line.field("error").as_deref(), Some(CANCELLED_AT_ITS_BOUND));
+}
+
 #[tokio::test]
 async fn the_route_log_names_the_host_its_method_and_the_verb() {
     let logs = LogCapture::install();

@@ -156,10 +156,16 @@ async fn post(&self, id: String) -> nest_rs::graphql::async_graphql::Result<Post
 }
 ```
 
-`.opaque()?` logs the real error at `error` on `nest_rs::graphql` and puts
-a constant message on the wire, under the same `INTERNAL` code an internal
-denial carries — so a client cannot tell an unexpected failure from a
-refusal it was owed no explanation for.
+`.opaque()?` puts a constant message on the wire, under the same `INTERNAL`
+code an internal denial carries — so a client cannot tell an unexpected
+failure from a refusal it was owed no explanation for — and keeps the real
+error for the operator. It is filed at `error` on `nest_rs::graphql` once the
+answer is final, naming the root field it was met under by `kind` and `field`:
+where the root field's site answers, or a `#[field_resolver]`'s, and, for an
+object resolver written by hand, where its operation or a subscription's item
+answers — or ends unanswered, cut at the request's deadline or stopped first.
+An exception filter answering the failure with a `4xx` leaves no line;
+`problem_error` keeps a `5xx` problem's chain the same way.
 
 ## An exception filter answers first
 

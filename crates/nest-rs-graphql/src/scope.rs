@@ -83,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn a_miss_answers_no_type_name_and_files_it() {
+    fn a_miss_answers_no_type_name_and_keeps_it_for_the_operator() {
         let logs = LogCapture::install();
 
         let Err(missed) = scoped_parameter::<red::Hidden>() else {
@@ -94,12 +94,11 @@ mod tests {
         assert_eq!(answered.message, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
         let said = serde_json::to_string(&answered.extensions).expect("extensions serialize");
         assert!(!said.contains("Hidden"), "{said}");
-        let line = logs.expect_one(crate::TARGET, "graphql operation failed");
+        logs.expect_none(crate::TARGET, "graphql operation failed");
+        let kept = crate::error::take_withheld(&answered);
         assert!(
-            line.field("error")
-                .is_some_and(|error| error.contains("red::Hidden")),
-            "{:?}",
-            line.fields,
+            matches!(&kept, Some(nest_rs_core::__private::Withheld::Failed(said)) if said.contains("red::Hidden")),
+            "the answer keeps the type for the operator's line: {kept:?}",
         );
     }
 }

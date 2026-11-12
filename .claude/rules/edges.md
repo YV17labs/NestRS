@@ -269,11 +269,16 @@ guard, filter or interceptor loop of its own.
     compile time: async-graphql's `custom-error-conversion` is on, so a `?`
     cannot turn a foreign error's `Display` into a client message. An
     `Opaque` trait beside the edge's error type says the same at a call
-    site — on WebSocket and MCP handing the chain to the edge, which files it
-    naming the unit once the unit is answered; on HTTP and GraphQL still filing
-    it at the call; the trait is per edge and only the constant is shared,
-    because the trait's output *is* the edge's error type, which is what lets
-    `.opaque()?` infer. A handler's error is boxed with
+    site, handing the chain to the edge, which files it naming the unit as its
+    unit line does once the unit is answered — on HTTP by `verb` and `path`
+    where the site or the edge answers, at once wherever
+    `HttpError::into_response` renders it; on GraphQL by `kind` and the root
+    `field` where a field's site answers, or from the operation's errors for an
+    error no site answered — its response's, or, ended unanswered, those it
+    reported — a filter's answer read through one rule for the four edges
+    (`withheld_over`). The trait is per edge and only the constant
+    is shared, because the trait's output *is* the edge's error type, which is
+    what lets `.opaque()?` infer. A handler's error is boxed with
     `nest_rs_core::boxed_error`, never `.into()`, so its chain stays
     readable; every reply built from an error says a decode failure without
     its value (`DecodeError::redact`), where it failed when the edge decoded

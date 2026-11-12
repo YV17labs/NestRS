@@ -1,8 +1,9 @@
 //! A failure the client is owed no word of, said where it is met: `.opaque()`
 //! turns any error into the `async_graphql::Error` a resolver body returns,
 //! answering [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE)
-//! under the `INTERNAL` code and filing the whole chain at `error`, whatever the
-//! error's type would otherwise have answered.
+//! under the `INTERNAL` code, whatever the error's type would otherwise have
+//! answered, and keeping the whole chain as its `source`, which the edge files
+//! at `error` naming the root field once that error is the answer.
 //!
 //! ```
 //! # use std::sync::Arc;
@@ -69,7 +70,8 @@ use async_graphql::Error as GraphqlError;
 /// Separate from the MCP and WS twins: the output type is what lets `.opaque()?`
 /// infer from the resolver's return type (see `nest_rs_core::opaque`).
 pub trait Opaque<T> {
-    /// Log the real error for the operator, hand the client an opaque one.
+    /// Hand the client an opaque error, keeping the real one for the
+    /// operator's line, which the edge files once it is the answer.
     fn opaque(self) -> Result<T, GraphqlError>;
 }
 
@@ -134,23 +136,21 @@ mod tests {
         assert_eq!(out.ok(), Some(7));
     }
 
+    /// The chain rides the error as its source, for the edge to file once the
+    /// answer is final: nothing at the call, and nothing of it on the wire.
     #[test]
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "the test reads the line the call logs, not its result"
-    )]
     fn and_the_operator_gets_the_error_the_client_does_not() {
         let logs = nest_rs_testing::LogCapture::install();
-        let _ = Err::<(), _>(Leaky).opaque();
+        let err = Err::<(), _>(Leaky).opaque().expect_err("a failure");
 
-        let event = logs.expect_one("nest_rs::graphql", "graphql operation failed");
-        assert_eq!(event.level, "error");
+        logs.expect_none("nest_rs::graphql", "graphql operation failed");
+        let kept = crate::error::take_withheld(&err);
         assert!(
-            event
-                .field("error")
-                .is_some_and(|e| e.contains("password_hash")),
-            "the cause the frame withholds is exactly what the log has to carry, got {:?}",
-            event.fields,
+            matches!(&kept, Some(nest_rs_core::__private::Withheld::Failed(said)) if said.contains("password_hash")),
+            "the cause the answer withholds is exactly what the line has to carry, got {kept:?}",
         );
+        let wire = serde_json::to_string(&err.into_server_error(async_graphql::Pos::default()))
+            .expect("serializes");
+        assert!(!wire.contains("password_hash"), "{wire}");
     }
 }

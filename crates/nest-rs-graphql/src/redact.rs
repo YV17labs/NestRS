@@ -13,9 +13,9 @@
 //! fragment, a variable — stays, as the specification's own errors name it.
 //!
 //! `Context::data`'s refusal names a Rust type, and a resolver's `?` hands it on
-//! as an answer of its own: it answers the opaque error, the type filed. The line
-//! names no field: an error's path holds the aliases the client wrote, and the
-//! field's own `graphql.field` line, under one trace, names it as it is served.
+//! as an answer of its own: it answers the opaque error, the type kept for the
+//! operator's line, which its operation files naming the root field its path
+//! opens under, never the alias the client wrote there.
 //!
 //! An [`Executor`] wrapper rather than an extension, which would be entered on
 //! every field of every request. A document that does not parse never reaches it

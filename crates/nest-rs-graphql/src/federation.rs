@@ -31,15 +31,15 @@ use nest_rs_core::__private::{
     SiteDeclaration, SiteLayers, declare_handler, declare_site,
 };
 use nest_rs_core::anyhow;
-use nest_rs_core::{Container, Handler, Posture};
+use nest_rs_core::{Container, Handler, Posture, ServedAddress};
 use nest_rs_guards::__private::{global_guards_active, identifies, resolve_global_chain};
 use nest_rs_guards::Guard;
 use nest_rs_http::__private::carried_request_chain;
 
 use crate::config::GraphqlConfig;
-use crate::error::{FieldFailure, Unserved, opaque_error};
+use crate::error::{FieldFailure, Reply, Unserved};
 use crate::operation::{
-    DENIED_FEDERATION_FIELD, FieldGuardStage, FieldUnit, ROOT_FIELD, in_field_unit,
+    DENIED_FEDERATION_FIELD, FieldGuardStage, FieldUnit, ROOT_FIELD, in_field_unit, operation_label,
 };
 use crate::view::{FieldRole, GraphqlView};
 
@@ -271,9 +271,21 @@ impl Extension for FederationExtension {
             let unserved = Unserved {
                 field: site.handler().address(),
             };
-            return Err(opaque_error(&unserved).into_server_error(position));
+            let at = ServedAddress::field(
+                operation_label(OperationType::Query),
+                site.handler().address(),
+            );
+            return Err(Reply::opaque(&unserved)
+                .filed_at(at)
+                .into_server_error(position));
         };
-        let unit = FieldUnit::new(site, container, OperationType::Query, FieldRole::Federation);
+        let unit = FieldUnit::new(
+            site,
+            container,
+            OperationType::Query,
+            FieldRole::Federation,
+            Some(site),
+        );
         let tail = move || async move {
             next.run(ctx, info).await.map_err(|answered| {
                 let carried = Error {

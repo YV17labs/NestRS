@@ -271,6 +271,7 @@ where
         ctx.data_unchecked::<Container>(),
         operation,
         kind.role(),
+        Some(site),
     );
     in_field_unit(
         site.handler(),
@@ -358,6 +359,7 @@ where
         ctx.data_unchecked::<Container>(),
         operation,
         kind.role(),
+        crate::root_fields::root_site(ctx),
     );
     // Run once per parent: what it files repeating is one line per operation.
     unit.view = unit.view.filing_into(
@@ -378,25 +380,34 @@ pub(crate) fn operation_label(operation: OperationType) -> &'static str {
 }
 
 /// One field to dispatch: its site, the container its chains are composed
-/// against, and the view its layers read.
+/// against, the view its layers read, and the root field its failure's line
+/// names.
 pub(crate) struct FieldUnit<'a> {
     site: &'static Site,
     container: &'a Container,
     view: GraphqlView,
+    at: ServedAddress<'static>,
 }
 
 impl<'a> FieldUnit<'a> {
-    /// The field `site` declares, in an `operation`, playing `role`.
+    /// The field `site` declares, in an `operation`, playing `role`, its
+    /// failure's line naming `root`, the root field it runs under: its own site
+    /// for a root field.
     pub(crate) fn new(
         site: &'static Site,
         container: &'a Container,
         operation: OperationType,
         role: FieldRole,
+        root: Option<&'static Site>,
     ) -> Self {
+        let mut at = ServedAddress::default();
+        at.kind = Some(operation_label(operation));
+        at.field = root.map(|root| root.handler().address());
         Self {
             site,
             container,
             view: GraphqlView::new(site.handler().address(), operation, role),
+            at,
         }
     }
 
@@ -423,7 +434,7 @@ impl<'a> FieldUnit<'a> {
             let mut cx = new_unit_context(handler, &mut view, None, None);
             dispatch(&mut cx, &chains, &mut tail).await
         };
-        answered(handler, outcome, slot)
+        answered(handler, outcome, slot, self.at)
     }
 }
 
@@ -444,17 +455,19 @@ fn refused_site(handler: &Handler, refused: &anyhow::Error) -> GraphqlError {
 }
 
 /// What the field `handler` declares came to, as the client reads it: the
-/// value its tail wrote, or its failure answered by the edge's one rule.
+/// value its tail wrote, or its failure answered by the edge's one rule, the
+/// chain that answer keeps filed naming the root field `at`.
 fn answered<T>(
     handler: &Handler,
     outcome: Outcome,
     slot: Option<Result<T, Box<Reply>>>,
+    at: ServedAddress<'_>,
 ) -> Result<T, GraphqlError> {
     let failure = match outcome {
         Ok(_) => {
             return match slot {
                 Some(Ok(value)) => Ok(value),
-                Some(Err(reply)) => Err(reply.filed()),
+                Some(Err(reply)) => Err(reply.filed_at(at)),
                 None => {
                     tracing::error!(
                         target: crate::TARGET,
@@ -472,7 +485,7 @@ fn answered<T>(
     {
         mark.mark();
     }
-    Err(answer(&failure, slot.and_then(Result::err)))
+    Err(answer(&failure, slot.and_then(Result::err)).filed_at(at))
 }
 
 /// A field's tail as the pipeline runs it: `run`, its value written into the
@@ -681,6 +694,7 @@ mod tests {
             site: &SITE,
             container,
             view: GraphqlView::new("field", OperationType::Query, FieldRole::RootField),
+            at: ServedAddress::default(),
         };
         let holding = || async {
             let held = [0u8; N];
@@ -713,6 +727,7 @@ mod tests {
             site: &SITE,
             container: &container,
             view: GraphqlView::new("field", OperationType::Query, FieldRole::RootField),
+            at: ServedAddress::default(),
         };
         let answered = unit.run(|| async { Ok::<_, FieldFailure>(7) }).await;
         assert_eq!(answered.ok(), Some(7));
@@ -722,7 +737,7 @@ mod tests {
     fn a_field_settled_without_a_value_is_refused_naming_its_site() {
         let logs = nest_rs_testing::LogCapture::install();
 
-        let answer = answered::<i32>(&FIELD, Ok(settled()), None);
+        let answer = answered::<i32>(&FIELD, Ok(settled()), None, ServedAddress::default());
 
         assert!(answer.is_err());
         let line = logs.expect_one(

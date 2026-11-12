@@ -134,9 +134,12 @@ impl<T: SiteTail> SiteEndpoint<T> {
     }
 }
 
-/// What one unit answered, and whether its unit of work commits.
+/// What one unit answered, and whether its unit of work commits: an error a
+/// site running no layer met is rendered inside its unit and goes on to the
+/// edge, which files what it withholds naming the route, its request emptied
+/// by an endpoint that took it whole.
 struct Answered {
-    response: Response,
+    response: Result<Response>,
     commits: bool,
 }
 
@@ -150,7 +153,7 @@ fn commits(answered: &Answered) -> bool {
 /// the driver having said why.
 fn unhonoured(_: Unhonoured) -> Answered {
     Answered {
-        response: ProblemDetails::internal().into_response(),
+        response: Ok(ProblemDetails::internal().into_response()),
         commits: false,
     }
 }
@@ -166,8 +169,8 @@ impl<T: SiteTail> Endpoint for SiteEndpoint<T> {
                 file_refused_reply(self.handler, served, &mut response);
                 Ok(response)
             }
-            None => Ok(self.dispatched(req).await.response),
-            Some((unit, policy)) => Ok(self.in_unit(unit, *policy, req).await),
+            None => self.dispatched(req).await.response,
+            Some((unit, policy)) => self.in_unit(unit, *policy, req).await,
         }
     }
 }
@@ -180,7 +183,7 @@ impl<T: SiteTail> SiteEndpoint<T> {
         unit: &Arc<dyn UnitOfWork>,
         policy: UnitPolicy,
         req: Request,
-    ) -> Response {
+    ) -> Result<Response> {
         let (transaction, cuts) = match policy {
             UnitPolicy::ByMethod if req.method().is_safe() => (TransactionPolicy::Pool, true),
             UnitPolicy::ByMethod => (TransactionPolicy::PerUnit, true),
@@ -205,7 +208,7 @@ impl<T: SiteTail> SiteEndpoint<T> {
             match tokio::time::timeout_at(at, self.dispatched(req)).await {
                 Ok(answered) => answered,
                 Err(_) => Answered {
-                    response: deadline.timed_out(),
+                    response: Ok(deadline.timed_out()),
                     commits: false,
                 },
             }
@@ -224,11 +227,11 @@ impl<T: SiteTail> SiteEndpoint<T> {
                     file_refused_reply(self.handler, served, &mut response);
                     Answered {
                         commits: !is_error(&response),
-                        response,
+                        response: Ok(response),
                     }
                 }
                 Err(error) => Answered {
-                    response: error.answer(),
+                    response: Err(error.prerendered()),
                     commits: false,
                 },
             };
@@ -251,7 +254,10 @@ impl<T: SiteTail> SiteEndpoint<T> {
         // What a layer answered around the tail: an exception filter's own reply.
         let served = view.served_address().unwrap_or_default();
         file_refused_reply(self.handler, served, &mut response);
-        Answered { response, commits }
+        Answered {
+            response: Ok(response),
+            commits,
+        }
     }
 }
 
@@ -308,7 +314,8 @@ impl<T: SiteTail> Tail for Running<'_, T> {
 /// The response `outcome` answers at `handler`'s site: the reply the view
 /// holds, an exception filter's problem over it, or, for a failure nobody
 /// answered, the edge's one rule. A failure's chain the answer keeps from the
-/// client is filed here, once, by the status it went out with.
+/// client is filed here, once, by the status it went out with, naming the
+/// route the view's request addresses.
 fn render(handler: &Handler, view: &mut HttpView, outcome: Outcome) -> Response {
     let failure = match outcome {
         Ok(_) => {
@@ -328,25 +335,20 @@ fn render(handler: &Handler, view: &mut HttpView, outcome: Outcome) -> Response 
         _ => failure_response(&failure),
     };
     if let Some(withheld) = withheld_behind(&failure, response.status()) {
-        file(withheld);
+        file(withheld, view.served_address().unwrap_or_default());
     }
     response
 }
 
 /// What a `status` answer keeps from the client of `failure`: its chain
 /// behind a `5xx` — never a refusal's, which its decider filed, nor a bare
-/// problem's, which says it all — read off the error the edge renders
-/// ([`HttpError::withheld_behind`]) when that is the failure.
+/// problem's, which says it all — or the chain `.opaque()` kept, read off the
+/// error the edge renders ([`crate::error::withheld_behind`]).
 fn withheld_behind(failure: &Failure, status: StatusCode) -> Option<Withheld> {
     if !status.is_server_error() || failure.find::<Denial>().is_some() {
         return None;
     }
-    let error = failure.error();
-    match error.downcast_ref::<HttpError>() {
-        Some(error) => error.withheld_behind(status),
-        None if error.is::<Problem>() => None,
-        None => Withheld::behind(status.as_u16(), error),
-    }
+    crate::error::withheld_behind(failure.error(), status)
 }
 
 /// What a failure the view holds no answer to renders: an exception filter's
@@ -712,7 +714,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_handler_error_rolls_back_and_answers_its_own_rendering() {
+    /// A site running no layer renders its error inside its unit and hands it
+    /// on, its unit rolled back, to the edge, which files it naming the route:
+    /// the endpoint took the request whole, so the site holds no route to name.
+    async fn a_handler_error_rolls_back_and_goes_on_to_the_edge() {
         let unit = Recording::new(Duration::ZERO, Settlement::Settled);
         let failing = endpoint_fn(|_req| async {
             Err(HttpError::from(Problem::new(
@@ -720,11 +725,12 @@ mod tests {
                 nest_rs_core::code::CONFLICT,
             )))
         });
-        let answered = site(&unit, UnitPolicy::ByMethod, failing)
+        let refused = site(&unit, UnitPolicy::ByMethod, failing)
             .call(Request::builder().method(Method::POST).finish())
             .await
-            .expect("answers");
-        assert_eq!(answered.status(), StatusCode::CONFLICT);
+            .expect_err("the edge renders it");
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert_eq!(refused.answer().status(), StatusCode::CONFLICT);
         assert_eq!(unit.settled(), [false]);
     }
 }

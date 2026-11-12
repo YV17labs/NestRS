@@ -168,3 +168,61 @@ against the entries above. Seen by tests on both edges, red before the change.
   `.opaque()` and discards the `WsError` drops its chain with it, as any error it
   discards; at the call, `.opaque()` filed it. MCP files it all the same, since
   its list outlives the error.
+
+## 2026-11-12 — HTTP and GraphQL hand `.opaque()`'s chain to the edge too
+
+The entry above left HTTP's `request failed` and GraphQL's `graphql operation failed`
+(and each one's `unavailable`) naming `error` alone, and their `.opaque()` filing at the
+call, before the answer was final: a filter answering the failure as the caller's `4xx`
+still filed a chain the answer no longer withheld. Seen by tests on both edges, red
+before the change (a route's and a root field's `Err`, `.opaque()?` bare and layered, a
+hand-written route, a nested resolver written by hand, a subscription's item, a filter's
+`409` and `503`).
+
+- **Decided, on HTTP**: `HttpError` keeps `.opaque()`'s chain in a member no answer
+  carries, read by `withheld_behind` at the status sent, and an `HttpError` holding one
+  anywhere in a failure's chain (an `anyhow` a `?` built over it) answers for it. Every
+  line names the request as `http.request` does, by `verb` and `path`, where the answer
+  becomes final: the site's render for a unit running its layers, the edge for an error
+  a unit running none hands on — rendered inside that unit, whose pool a cancelled
+  statement's wait is read off, then filed once its unit of work rolled back, since an
+  endpoint taking the request whole leaves the site no route to name — and `into_response`, at
+  once and naming no route, wherever an `HttpError` is rendered by hand, where a chain
+  was lost before.
+- **Decided, on GraphQL**: the `async_graphql::Error` keeps the chain as its `source`, the
+  marker that already said the server failed now holding it until it is taken, so the
+  clones of one error file it once. `.opaque()`, `problem_error` and the edge's own
+  opaque answers keep it there. A framework site — a root field's, a
+  `#[field_resolver]`'s, a federation field's — takes it from the error its field answers
+  and files it where that answer is final, naming the root field by `kind` and `field`, a
+  nested site's root read off its path (`RootFields`). An error no site answered — an
+  object resolver written by hand, a field reading its `Context` by hand — rides its
+  `ServerError` into the response, and the operation's unit files it from the response's
+  errors, a subscription's stream from each item's, naming the root field its path opens
+  under, never the alias the client wrote. An operation that ends before its answer is
+  built — cut at its deadline, dropped with its request, unwound — and a subscription
+  stopped mid-item file what the errors they reported still keep where the operation's
+  line is filed, or the stream dropped: async-graphql (`7.2.1`) holds those errors in the
+  operation's environment until it builds the answer, which the `RootFields` a unit hands
+  in holds from the first root field until then. That environment holds the request's
+  data, which holds the `RootFields`, so only a unit's, which always takes it back, holds
+  it. Seen by tests red before it (a mutation cut inside its unit, a query the edge cut, a
+  subscription stopped), with one holding that no operation's data outlives it.
+- **One rule for a filter's answer on the four edges**: a `5xx` over a failure that kept
+  its own chain files that chain at the `5xx`'s level, any other status none, else the
+  failure's own chain behind a `5xx` — `nest_rs_core::__private::withheld_over`, which
+  WebSocket and MCP spelled each on their own until a third edge needed it.
+- **Refused: filing every GraphQL chain from the response's errors**, a root field's
+  included: a site files inside its unit's span and correlation, and an error async-graphql
+  leaves with no path names no field there.
+- **Refused: copying the route out of every HTTP request** so a site running no layer
+  could file before its endpoint takes the request: every request that succeeds would pay
+  for it; the edge holds the route already.
+- **Refused: filing a kept chain when its error is dropped untaken**, a `Drop` on the
+  marker, which would reach a schema built by hand too: it files the chain of an error a
+  handler discards, which the edges keep lost on purpose, at once and naming no field.
+- **Left as it is** (`TODO.md`, §5): a chain an error the handler discards keeps is lost
+  with it, on HTTP and GraphQL as on WebSocket; a schema executed outside the module's
+  mount — `.opaque()` or `problem_error` in an async-graphql schema an app builds by
+  hand, this crate's own unit tests — files nothing its errors keep, since no unit holds
+  them.

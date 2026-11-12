@@ -303,7 +303,7 @@ pub mod __private {
         TailParam,
     };
     pub use crate::probe_runtime::ProbeRuntime;
-    pub use crate::problem::__private::{Withheld, retry_after_secs, withheld};
+    pub use crate::problem::__private::{Withheld, retry_after_secs, withheld, withheld_over};
     pub use crate::process_start::ProcessStart;
     pub use crate::remedy::{RemedyProbe, RemedyProbeCarries, RemedyProbeFallback};
     pub use crate::request_scope::__private::{RequestScopes, nested_continuation};

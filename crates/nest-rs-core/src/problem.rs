@@ -504,10 +504,23 @@ pub(crate) mod __private {
     /// whole chain when the answer is a `5xx` and `error` is more than the bare
     /// problem, else `None`.
     pub fn withheld(problem: &Problem, error: &(dyn Error + 'static)) -> Option<Withheld> {
-        if error.is::<Problem>() {
-            return None;
+        withheld_over(problem.status(), error, None)
+    }
+
+    /// What an answer of `status` keeps from the client of `error`, a failure
+    /// that may have kept a chain of its own for the edge (`.opaque()`'s,
+    /// `kept`): that chain, at the level a `5xx` files it, and nothing behind
+    /// any other status, which speaks for the failure; else [`withheld`]'s.
+    pub fn withheld_over(
+        status: u16,
+        error: &(dyn Error + 'static),
+        kept: Option<Withheld>,
+    ) -> Option<Withheld> {
+        match kept {
+            Some(kept) => (status >= 500).then(|| kept.answered_as(status)),
+            None if error.is::<Problem>() => None,
+            None => Withheld::behind(status, error),
         }
-        Withheld::behind(problem.status(), error)
     }
 
     /// The chain a `5xx` answer keeps from its client, and the level the edge

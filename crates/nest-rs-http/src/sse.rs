@@ -136,8 +136,9 @@ impl SseEvent {
             field(&mut frame, b"event", &self.event);
         }
         if let Some(after) = self.retry {
+            let mut digits = fmt::NumBuffer::new();
             frame.put_slice(b"retry: ");
-            put_decimal(&mut frame, after.as_millis());
+            frame.put_slice(after.as_millis().format_into(&mut digits).as_bytes());
             frame.put_u8(b'\n');
         }
         for line in lines(&self.data) {
@@ -186,28 +187,10 @@ impl fmt::Display for SseEvent {
     }
 }
 
-/// `n` in decimal, its digits written into `frame`, never through a `String`.
-fn put_decimal(frame: &mut BytesMut, mut n: u128) {
-    let mut digits = [0_u8; DECIMAL_DIGITS_MAX];
-    let mut start = digits.len();
-    loop {
-        start -= 1;
-        digits[start] = b'0' + (n % 10) as u8;
-        n /= 10;
-        if n == 0 {
-            break;
-        }
-    }
-    frame.put_slice(&digits[start..]);
-}
-
 /// The number of decimal digits `n` is written with.
 fn decimal_len(n: u128) -> usize {
     n.checked_ilog10().map_or(1, |log| log as usize + 1)
 }
-
-/// The most decimal digits a `u128` is written with.
-const DECIMAL_DIGITS_MAX: usize = u128::MAX.ilog10() as usize + 1;
 
 /// `name: value`, the value's line breaks dropped: a field holds one line.
 fn field(frame: &mut BytesMut, name: &[u8], value: &str) {

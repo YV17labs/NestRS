@@ -106,15 +106,11 @@ struct AdmitGuard;
 #[async_trait]
 impl Guard for AdmitGuard {
     async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
-        if nest_rs_http::HttpView::of(cx)?
+        nest_rs_http::HttpView::of(cx)?
             .request()
             .header(ADMIT)
             .is_some()
-        {
-            Ok(())
-        } else {
-            Err(Denial::unauthorized("no"))
-        }
+            .ok_or_else(|| Denial::unauthorized("no"))
     }
 
     async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {

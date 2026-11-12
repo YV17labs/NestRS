@@ -37,7 +37,7 @@ impl Attempts {
         let ran = run_unit(
             Some(&self.0),
             spec,
-            async move { if job.await { Ok(()) } else { Err(None) } },
+            async move { job.await.ok_or(None) },
             Result::is_ok,
             |why| Err(Some(why)),
         )

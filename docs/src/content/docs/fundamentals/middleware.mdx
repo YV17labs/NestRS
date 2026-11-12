@@ -100,11 +100,11 @@ impl Guard for RequireApiKey {
     }
 
     async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
-        if HttpView::of(cx)?.request().header("x-api-key").is_some() {
-            Ok(())
-        } else {
-            Err(Denial::unauthorized("missing key"))
-        }
+        HttpView::of(cx)?
+            .request()
+            .header("x-api-key")
+            .is_some()
+            .ok_or_else(|| Denial::unauthorized("missing key"))
     }
 
     async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {

@@ -520,11 +520,7 @@ mod tests {
             let said = &said;
             async move {
                 said.lock().unwrap_or_else(|e| e.into_inner()).push(n);
-                if refused {
-                    Err(std::io::Error::other(format!("goodbye {n} refused")))
-                } else {
-                    Ok(())
-                }
+                (!refused).ok_or_else(|| std::io::Error::other(format!("goodbye {n} refused")))
             }
         };
 

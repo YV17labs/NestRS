@@ -153,14 +153,12 @@ fn validate_namespace(lit: &LitStr) -> syn::Result<()> {
         && value
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-    if valid {
-        Ok(())
-    } else {
-        Err(syn::Error::new(
+    valid.ok_or_else(|| {
+        syn::Error::new(
             lit.span(),
             "#[config] `namespace` must be a lowercase env-domain segment \
              (start with a letter, then lowercase letters, digits, or underscores), \
              e.g. \"seaorm\" or \"redis__queue\"",
-        ))
-    }
+        )
+    })
 }

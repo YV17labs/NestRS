@@ -120,11 +120,10 @@ impl Guard for RolesGuard {
             return Ok(());
         };
         let claims = cx.require::<Claims>()?;
-        if required.iter().any(|role| claims.roles.iter().any(|held| held == role)) {
-            Ok(())
-        } else {
-            Err(Denial::forbidden("a role this route requires is missing"))
-        }
+        required
+            .iter()
+            .any(|role| claims.roles.iter().any(|held| held == role))
+            .ok_or_else(|| Denial::forbidden("a role this route requires is missing"))
     }
 }
 ```

@@ -79,11 +79,7 @@ pub fn contained_value(value: &Value) -> Result<(), Uncontained> {
 }
 
 fn contained_type_name(type_name: &str) -> Result<(), Uncontained> {
-    if type_name.contains(['"', '\0']) {
-        Err(Uncontained::TypeName)
-    } else {
-        Ok(())
-    }
+    (!type_name.contains(['"', '\0'])).ok_or(Uncontained::TypeName)
 }
 
 /// What a byte outside every quoted region continues, which decides what a `$` or a
@@ -156,11 +152,7 @@ fn scan(sql: &[u8]) -> Result<(), Uncontained> {
         }
         word = Word::None;
     }
-    if depth == 0 {
-        Ok(())
-    } else {
-        Err(Uncontained::Parenthesis)
-    }
+    (depth == 0).ok_or(Uncontained::Parenthesis)
 }
 
 /// Where the string opened before `at` ends: a doubled quote is the string's, and in

@@ -377,11 +377,7 @@ impl BoundedSessions {
             }
             None => false,
         };
-        if foreign_owner {
-            Err(foreign(call))
-        } else {
-            Ok(())
-        }
+        (!foreign_owner).ok_or_else(|| foreign(call))
     }
 
     /// Whether the mount ended session `id`, which rmcp may still hold.

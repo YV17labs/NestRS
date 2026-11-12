@@ -32,7 +32,7 @@ use crate::response::Response;
 ///             .map_err(|_| Denial::unauthorized("an unreadable body"))?;
 ///         let signed = request.header("x-signature").is_some() && !body.is_empty();
 ///         request.set_body(body);
-///         if signed { Ok(()) } else { Err(Denial::unauthorized("an unsigned body")) }
+///         signed.ok_or_else(|| Denial::unauthorized("an unsigned body"))
 ///     }
 /// }
 ///

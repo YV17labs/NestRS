@@ -143,11 +143,10 @@ impl OAuthClientConfig {
     /// # Ok::<(), nest_rs_config::ConfigError>(())
     /// ```
     pub fn validate_scopes(scopes: &[String]) -> Result<(), validator::ValidationError> {
-        if scopes.iter().all(|scope| is_scope_token(scope)) {
-            Ok(())
-        } else {
-            Err(validator::ValidationError::new("not_a_scope_token"))
-        }
+        scopes
+            .iter()
+            .all(|scope| is_scope_token(scope))
+            .ok_or_else(|| validator::ValidationError::new("not_a_scope_token"))
     }
 
     /// The rule [`authorization_parameters`](Self::authorization_parameters) is

@@ -107,7 +107,7 @@ impl<P> Validate for OAuthServerConfig<P> {
             }
             // … an empty secret, a client registered for no resource
         }
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
+        errors.is_empty().ok_or(errors)
     }
 }
 ```

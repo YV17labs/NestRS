@@ -27,11 +27,8 @@ impl Guard for RolesGuard {
             .map(|r| r.0)
             .unwrap_or(&[]);
         let caller = HttpView::of(cx)?.request().header("x-role").unwrap_or("");
-        if required.is_empty() || required.contains(&caller) {
-            Ok(())
-        } else {
-            Err(Denial::forbidden("forbidden"))
-        }
+        (required.is_empty() || required.contains(&caller))
+            .ok_or_else(|| Denial::forbidden("forbidden"))
     }
 
     async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {

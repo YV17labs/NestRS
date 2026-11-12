@@ -63,11 +63,7 @@ pub(crate) fn registered_within_policy(
             refuse("client_id", "names_the_first_party_client");
         }
     }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
+    errors.is_empty().ok_or(errors)
 }
 
 #[cfg(test)]

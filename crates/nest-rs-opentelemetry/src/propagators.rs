@@ -41,11 +41,7 @@ pub(crate) fn read_propagators(read: &impl Fn(&str) -> Option<String>) -> Result
             return Err(ConfigError::parse(OTEL_PROPAGATORS, ACCEPTED));
         }
     }
-    if trace_context && baggage {
-        Ok(())
-    } else {
-        Err(ConfigError::parse(OTEL_PROPAGATORS, ACCEPTED))
-    }
+    (trace_context && baggage).ok_or_else(|| ConfigError::parse(OTEL_PROPAGATORS, ACCEPTED))
 }
 
 /// The SDK's global propagator, for what reads it outside the framework: the

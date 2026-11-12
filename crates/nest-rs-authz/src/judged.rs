@@ -159,11 +159,7 @@ impl Judged {
                 Err(Refused::PushedToOthers)
             }
             (Judge::Ability(by), Some(answering)) if by == answering => {
-                if self.refused {
-                    Err(Refused::Withheld)
-                } else {
-                    Ok(())
-                }
+                (!self.refused).ok_or(Refused::Withheld)
             }
             (Judge::System, _) if audience() == Audience::Others => Ok(()),
             (Judge::System, None) if current_executor_scope() == Some(ExecutorScope::Job) => Ok(()),

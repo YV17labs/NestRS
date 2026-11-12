@@ -114,7 +114,7 @@ async fn publish_in_an_attempt(
             with_ability(actor, svc.publish(model))
                 .await
                 .expect("the post publishes inside the attempt");
-            if attempt_succeeds { Ok(()) } else { Err(None) }
+            attempt_succeeds.ok_or(None)
         },
         Result::is_ok,
         |why| Err(Some(why)),

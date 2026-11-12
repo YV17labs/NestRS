@@ -101,17 +101,13 @@ pub type RedisQueueSetup<I = Unnamed> = ConfigSetup<RedisQueueModule<I>, RedisQu
 /// `Ok` when the port's renewal fits in `lease` though it waits out the whole
 /// `budget`, else the refusal naming the instance `I`'s variables.
 fn renewable<I: Instance>(lease: Duration, budget: Duration) -> Result<(), RedisError> {
-    if nest_rs_queue::lease_fits_renewal(lease, budget) {
-        Ok(())
-    } else {
-        Err(RedisError::BudgetPastLease {
-            budget,
-            lease,
-            lease_var: RedisQueueConfig::LEASE
-                .var(&instance_namespace::<I>(RedisQueueConfig::NAMESPACE)),
-            connect_timeout_var: RedisInstance::of::<I>().connect_timeout_var(),
-        })
-    }
+    nest_rs_queue::lease_fits_renewal(lease, budget).ok_or_else(|| RedisError::BudgetPastLease {
+        budget,
+        lease,
+        lease_var: RedisQueueConfig::LEASE
+            .var(&instance_namespace::<I>(RedisQueueConfig::NAMESPACE)),
+        connect_timeout_var: RedisInstance::of::<I>().connect_timeout_var(),
+    })
 }
 
 #[cfg(test)]

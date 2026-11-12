@@ -591,11 +591,7 @@ mod tests {
         fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
             Box::pin(async move {
                 cx.attach(Attached("by a guard"));
-                if self.0 {
-                    Ok(())
-                } else {
-                    Err(Failure::from(Refused))
-                }
+                self.0.ok_or_else(|| Failure::from(Refused))
             })
         }
     }

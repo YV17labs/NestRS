@@ -105,11 +105,7 @@ impl<P> Validate for OAuthServerConfig<P> {
                 refuse("scopes", "not_a_scope_token");
             }
         }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
+        errors.is_empty().ok_or(errors)
     }
 }
 

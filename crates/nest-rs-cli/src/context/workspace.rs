@@ -293,13 +293,11 @@ pub(crate) fn validate_env_prefix(prefix: &str) -> Result<(), String> {
         && prefix
             .chars()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
-    if valid {
-        Ok(())
-    } else {
-        Err(format!(
+    valid.ok_or_else(|| {
+        format!(
             "`{prefix}` is not a usable env prefix: use uppercase ASCII letters, digits and \
              underscores, starting with a letter and not ending in `_` (e.g. `ACME`, which \
              yields ACME_ENV and ACME_SEAORM__URL)"
-        ))
-    }
+        )
+    })
 }

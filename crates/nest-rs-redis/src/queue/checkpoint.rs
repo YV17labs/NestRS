@@ -76,10 +76,6 @@ impl<I: Instance> CheckpointStore for RedisCheckpoint<I> {
             )
             .await
             .map_err(QueueError::backend)?;
-        if written == 1 {
-            Ok(())
-        } else {
-            Err(QueueError::backend(CheckpointFenced))
-        }
+        (written == 1).ok_or_else(|| QueueError::backend(CheckpointFenced))
     }
 }

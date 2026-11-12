@@ -78,10 +78,10 @@ pub(crate) fn collected(
     let fragments = &document.fragments;
     let set = &operation.selection_set;
     let glance = Glance::of(fragments, registry, &set.node);
-    let collected = match needs_collecting(fragments, operation, root, registry, variables, &glance)
-    {
-        true => as_collected(document, operation, root, registry, variables, limits)?,
-        false => None,
+    let collected = if needs_collecting(fragments, operation, root, registry, variables, &glance) {
+        as_collected(document, operation, root, registry, variables, limits)?
+    } else {
+        None
     };
     // Only a key twice in one set makes copies.
     if glance.twice
@@ -987,8 +987,6 @@ struct Shapes<'a> {
     registry: &'a Registry,
     /// The fields each fragment selects.
     spread: HashMap<&'a str, Vec<Selected<'a>>>,
-    /// The fragments being read: a cycle, which validation refuses, ends there.
-    expanding: Vec<&'a str>,
     /// The places of one set read, by where it opens.
     read_alone: HashSet<Pos>,
     /// The places of several sets read, by where their sets open.
@@ -1004,7 +1002,6 @@ impl<'a> Shapes<'a> {
             fragments,
             registry,
             spread: HashMap::new(),
-            expanding: Vec::new(),
             read_alone: HashSet::new(),
             read: HashSet::new(),
         }
@@ -1043,10 +1040,13 @@ impl<'a> Shapes<'a> {
                 continue;
             }
             // A field the schema does not declare there is validation's to refuse.
-            let mut answering = copies.into_iter().filter_map(|(field, on)| {
-                answered_type(registry, on, &field.node.name.node).map(|ty| (field, ty))
-            });
-            let Some((first, shape)) = answering.next() else {
+            let mut answering = copies
+                .into_iter()
+                .filter_map(|(field, on)| {
+                    answered_type(registry, on, &field.node.name.node).map(|ty| (field, ty))
+                })
+                .peekable();
+            let Some(&(_, shape)) = answering.peek() else {
                 continue;
             };
             let leaf = registry
@@ -1054,7 +1054,7 @@ impl<'a> Shapes<'a> {
                 .get(MetaTypeName::concrete_typename(shape))
                 .is_some_and(MetaType::is_leaf);
             let mut below = Vec::new();
-            for (copy, ty) in std::iter::once((first, shape)).chain(answering) {
+            for (copy, ty) in answering {
                 if ty != shape && !same_shape(registry, shape, ty) {
                     return Some((key, copy.pos));
                 }
@@ -1108,16 +1108,13 @@ impl<'a> Shapes<'a> {
     /// The fields fragment `name` selects, read once: one still being read, a cycle
     /// validation refuses, selects nothing.
     fn fragment_selected(&mut self, name: &'a str, depth: usize) -> &[Selected<'a>] {
-        let fragments = self.fragments;
-        if !self.spread.contains_key(name)
-            && !self.expanding.contains(&name)
-            && let Some(fragment) = fragments.get(name)
-        {
-            self.expanding.push(name);
+        if !self.spread.contains_key(name) {
+            self.spread.insert(name, Vec::new());
             let mut fields = Vec::new();
-            let on = fragment.node.type_condition.node.on.node.as_str();
-            self.selected(&fragment.node.selection_set.node, on, depth, &mut fields);
-            self.expanding.pop();
+            if let Some(fragment) = self.fragments.get(name) {
+                let on = fragment.node.type_condition.node.on.node.as_str();
+                self.selected(&fragment.node.selection_set.node, on, depth, &mut fields);
+            }
             self.spread.insert(name, fields);
         }
         self.spread.get(name).map_or(&[], Vec::as_slice)
@@ -3019,13 +3016,6 @@ mod tests {
         }
     }
 
-    /// What copies of `key` answering in two shapes are refused with.
-    fn misshapen_said(key: &str) -> String {
-        format!(
-            r#"the operation selects "{key}" more than once at one place with different response shapes"#
-        )
-    }
-
     /// What collecting `text` against [`shapes`], `variables` sent, refuses it with.
     fn shapes_refusal(text: &str, variables: serde_json::Value) -> Option<String> {
         let document = parse_query(text).expect("the document parses");
@@ -3068,6 +3058,11 @@ mod tests {
     /// one out, below copies merged, inside a condition a rewrite reads, at any depth.
     #[test]
     fn copies_answering_in_two_shapes_are_refused() {
+        let refusal = |key: &str| {
+            format!(
+                r#"the operation selects "{key}" more than once at one place with different response shapes"#
+            )
+        };
         for (document, key) in [
             (
                 "{ results { ... on User { x: name } ... on Org { x: size } } }",
@@ -3136,7 +3131,7 @@ mod tests {
         ] {
             assert_eq!(
                 shapes_refusal(document, json!({})),
-                Some(misshapen_said(key)),
+                Some(refusal(key)),
                 "{document}"
             );
         }
@@ -3145,7 +3140,7 @@ mod tests {
         for skipped in [true, false] {
             assert_eq!(
                 shapes_refusal(document, json!({ "s": skipped })),
-                Some(misshapen_said("x")),
+                Some(refusal("x")),
                 "a document's validity is no variable's: {skipped}"
             );
         }

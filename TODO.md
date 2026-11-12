@@ -261,15 +261,16 @@ own count of what it copies, held to `max_complexity` at its largest, counting
 copies a merge inside a copy per type then folds into one, so such a document can
 be refused a field per fold below the limit (closing it: a separate bound on the
 work, twice the limit and the document, with the limit read on the finished
-rewrite); copies of one GraphQL key in one shape naming different fields, under a
-condition on an interface or a union and one on an object no value of it is,
+rewrite); copies of one GraphQL key in one shape naming different fields, under
+a condition on an interface or a union and one on an object no value of it is,
 `{ results { ... on Named { x: name } ... on Org { x: title } } }`, each value
 answering its own field where §5.3.2 refuses the document, the name rule reading
 the copies one value meets rather than their parents' types
-(`graphql-transactions.md`, 2026-11-12; closing it: comparing each pair of copies,
-two objects' exclusivity inherited from the copies above them, which grows as the
-square of a key's copies at a place); the demo chart's `checksum/secret`, one
-sum over every Secret the chart writes, which an install handing the chart one weak secret and nothing
+(`graphql-transactions.md`, 2026-11-12; closing it: comparing each pair of
+copies, two objects' exclusivity inherited from the copies above them, which
+grows as the square of a key's copies at a place); the demo chart's
+`checksum/secret`, one sum over every Secret the chart writes, which an install
+handing the chart one weak secret and nothing
 else (every other app on an `existingSecret`) publishes unsalted to whoever
 reads its pods (closing it: a salt kept in the cluster, which `helm
 template` cannot read); the demo's Helm chart, linted and rendered by hand and

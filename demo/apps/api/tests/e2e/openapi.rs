@@ -62,12 +62,21 @@ async fn openapi_document_describes_the_routes() {
         doc["components"]["schemas"]["Org"].is_object(),
         "the output entity is a component, not just the create/update inputs",
     );
+    assert_eq!(
+        list_ok["description"], "OK",
+        "a route's success reads its status alone: {list_ok}",
+    );
+    let user = &doc["components"]["schemas"]["User"]["properties"];
     assert!(
-        list_ok["description"]
+        user["email"]["description"]
             .as_str()
             .expect("a description")
             .contains("ability"),
-        "a route whose posture names an entity says its field set is ability-dependent: {list_ok}",
+        "a property a grant may withhold says so where the row is: {user}",
+    );
+    assert!(
+        user["name"].get("description").is_none(),
+        "a property no grant withholds says nothing of it: {user}",
     );
 
     let created = &doc["paths"]["/orgs"]["post"]["responses"]["201"];

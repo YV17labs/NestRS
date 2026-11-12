@@ -37,7 +37,7 @@ The caller authenticates on the **upgrade** request, with the same
 serves the playground when it is enabled; the upgrade header is what
 selects the socket. A handshake the server cannot accept is refused as a
 gateway's is ([When the server refuses a
-handshake](/websockets/#when-the-server-refuses-a-handshake)), a `HEAD`
+handshake](/websockets/socket-lifecycle/#when-the-server-refuses-a-handshake)), a `HEAD`
 carrying one included.
 
 A browser never consults CORS before it opens a socket, so the upgrade
@@ -157,7 +157,7 @@ Everything else is the GraphQL module's own configuration — see
 
 - [Subscriptions](/graphql/subscriptions/) — the operation the socket carries,
   gated at subscribe and judged per item.
-- [WebSockets](/websockets/#what-bounds-a-socket) — the same bounds on a
+- [WebSockets](/websockets/socket-lifecycle/#what-bounds-a-socket) — the same bounds on a
   gateway's socket.
 - [Correlation](/fundamentals/correlation/) — the connection's span its items
   run in.

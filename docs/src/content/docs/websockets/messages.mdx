@@ -5,8 +5,6 @@ sidebar:
   order: 2
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 Every frame in and out of a gateway rides one shape:
 
 ```json
@@ -78,7 +76,7 @@ The macro reads five things from the signature:
   upgrade's guards and the message's own attached, as a route reads it; a
   `#[public]` message reading the principal a guard of its chain produces
   refuses a caller that guard did not identify `UNAUTHENTICATED`.
-- **The return type** — drives the reply, per the contract below.
+- **The return type** — drives the reply, per [the return contract](/websockets/replies/).
 
 A `&WsClient` parameter is the [per-connection handle](/websockets/rooms/);
 it can appear in any position alongside the payload. The macro tells the four
@@ -108,109 +106,11 @@ scope, which has nothing to build.
 
 ## A message's posture
 
-A message takes HTTP's grammar, because a socket authenticates where a route
-does, before any message runs. A message under its gateway's `#[use_guards]`, the
-app's pool or a guard of its own **needs no posture**: the guards decide, as they
-do on a route. Where it declares who may call it beyond them, it does so with
-`#[authorize]`:
+A message under its gateway's `#[use_guards]`, the app's pool or a guard of its
+own needs no posture: the guards decide, as on a route. `#[public]` opens one on
+purpose, and `#[authorize(Action, Entity)]` gates it and judges each row it
+answers — [Message posture](/websockets/posture/).
 
-```rust title="crates/features/src/chat/ws/gateway.rs"
-#[gateway(path = "/ws")]
-#[use_guards(AuthnGuard, AuthzGuard)]
-pub struct ChatGateway { /* ... */ }
-
-#[messages]
-impl ChatGateway {
-    #[subscribe_message("history")]    // covered by the upgrade's guards
-    async fn history(&self) -> Vec<ChatMessageDto> { /* ... */ }
-
-    #[subscribe_message("message")]
-    #[authorize(Create, Posting)]      // a gate, on a capability no table holds
-    async fn on_message(&self, msg: SendMessageDto) -> Result<(), WsError> { /* ... */ }
-
-    #[subscribe_message("users.list")]
-    #[authorize(Read, users::Entity)]  // class gate, and reads under the caller's ability
-    async fn list(&self) -> Result<Vec<User>, ServiceError> {
-        Ok(self.svc.list().await?.iter().map(User::from).collect())
-    }
-}
-```
-
-**The boot reads the rest.** A message no guard identifying a caller covers says
-`#[public]` or fails the boot, which names every such message on the gateway and each
-remedy; a macro reading an `impl` cannot see the app's pool, so this is where it can
-be said. A rate limit identifies no one, so it covers nothing, and a guard of your own
-declaring no `phase()` is read the same way. A gateway running no such guard at its
-upgrade and with no `#[public]` message fails the same way, whatever guards its
-messages bind: a message's guard runs on that message, while any caller connects, its
-hooks run and what the server emits reaches the socket.
-
-**`#[public]` means a caller with no credential is admitted**, the word's one
-meaning on every edge. It is the line a gateway open on purpose writes, and a
-reviewer greps for:
-
-```rust title="crates/features/src/ticker/ws/gateway.rs"
-#[gateway(path = "/ticker")]
-pub struct TickerGateway;
-
-#[messages]
-impl TickerGateway {
-    #[subscribe_message("latest")]
-    #[public]
-    async fn latest(&self) -> Price { /* ... */ }
-}
-```
-
-Behind an upgrade whose guards establish or read who the caller is, one declaring
-`GuardPhase::Authentication` or `Authorization`, no visitor ever reaches the
-message, so `#[public]` could open nothing, and the boot refuses it, naming the
-guard. A guard of the app's pool runs at every upgrade, so a gateway opens beneath
-it only by moving that guard onto the hosts it should cover. A guard that identifies
-no one — a rate limit — leaves it standing: a visitor does reach the message, and the
-word is true.
-
-**A bare `#[public]` reads nothing a grant guards.** A ticker keeps the bare word and
-pays nothing for it. A message serving rows to a visitor names them, with
-`#[authorize]`'s arguments, its gate and its reads:
-
-```rust title="crates/features/src/posts/ws/gateway.rs"
-#[gateway(path = "/feed")]
-pub struct FeedGateway;
-
-#[messages]
-impl FeedGateway {
-    #[subscribe_message("latest")]
-    #[public(Read, post::Entity)]
-    #[use_guards(AuthzGuard)]
-    async fn latest(&self) -> Result<Vec<Post>, WsError> { /* ... */ }
-}
-```
-
-The guard beside it builds the rules
-[`define_visitor`](/security/authorization/public-reads/) writes, since no ability
-reached a message under an upgrade no guard ran at: those rules answer every caller
-of such a socket.
-
-**`#[authorize(Action, Entity)]` emits what you would otherwise write by
-hand.** Right after the message's guards, before any interceptor, exception
-filter or pipe, a class-level gate asks the caller's ambient `Ability` whether
-it may perform `Action` on `Entity`; a refusal is an error frame and nothing
-else runs. The handler then reads through `Repo` under that ability, so its rows
-are the ones the caller may read, and each wire row it answers was judged for
-the caller where `User::from(&row)` built it: a column a field grant withholds
-reads `null` in the frame. **You write no masking call**, and nothing reads the
-reply back.
-
-### What a refused row answers
-
-A wire row the caller may not read at all — a write's reply to a caller whose
-`Read` grants refuse that row — answers a `FORBIDDEN` frame, and one judged for
-someone else (a row kept from another socket's message) the opaque `INTERNAL`
-frame; each files one line on `nest_rs::authz` naming the message as its
-`mounted` line does, `path` and `event`. A gated message no ability guard reaches
-refuses the boot, so a message never runs with no ability to judge its rows. A
-frame pushed to *other* connections is not a reply and carries no caller's row;
-see [Server-side push](/websockets/server-push/#a-push-carries-no-callers-row).
 
 ## The payload
 
@@ -236,7 +136,7 @@ type does not declare, so such a payload is an error frame.
 
 A malformed payload (wrong shape, missing fields) is treated as a
 dispatch error: the connection stays open, the client receives an error
-frame on the same event name (see below), naming where the payload failed
+frame on the same event name ([error frames](/websockets/replies/)), naming where the payload failed
 and never its value — ``invalid payload for `message` at `text`: missing``. A
 payload type declaring `validator` rules is held to them as it decodes, and a
 custom transform binds a [pipe](/fundamentals/pipes/) on the payload argument,
@@ -267,210 +167,10 @@ async fn history(&self) -> Vec<ChatMessageDto> {
 
 ## The return contract
 
-The handler's return type picks the reply behavior, read by the type itself:
+The handler's return type picks the reply: `()` none, `T` one frame on the
+event, `Result` an error frame for an `Err`, whose type decides what the client
+reads — [Replies and error frames](/websockets/replies/).
 
-| Return type | Wire effect |
-|---|---|
-| `()` | No reply frame. Fire-and-forget. |
-| `T` | One frame: `{"event":"<event>","data":<T serialized>}`. |
-| `Result<(), E>` | `Ok(())` → silent. `Err(e)` → error frame (see below). |
-| `Result<T, E>` | `Ok(t)` → reply with `t`. `Err(e)` → error frame. |
-
-The error frame is shaped like any other envelope:
-
-```json
-{ "event": "send", "data": { "error": "text must not be empty" } }
-```
-
-What it says is decided by the error's **type**, so a client reads only what
-someone meant it to read:
-
-- a `WsError` is sent whole — `WsError::new("text must not be empty")`, or a
-  `String` through `?` into a `Result<T, WsError>`;
-- an error implementing `ToProblem` answers the problem it says: its sentence,
-  and its code beside it (`"code": "CONFLICT"`, plus `type` and `title` when it
-  names a problem type of its own, `retryAfterSeconds` when it names a wait
-  and `errors` when it carries a field map); `ServiceError` is one;
-- the framework's own vocabulary found in the chain — a `Problem`, a pipe
-  rejection, a decode failure said without its value
-  (`invalid type: a string, expected u64 at line 1 column 24`) — answers in its
-  own form, a decode failure under `code: "INVALID_ARGUMENT"` as a payload or
-  an envelope that does not decode does;
-- **anything else answers `"internal error"`** under `code: "INTERNAL"`, and
-  its whole chain is filed once at `error` on `nest_rs::ws`.
-
-That opaque frame is one shape whoever answered it — an unknown error, a
-`ToProblem` saying `None`, `.opaque()`, a panic, a request-scoped provider the
-message cannot reach:
-
-```json
-{ "event": "send", "data": { "error": "internal error", "code": "INTERNAL" } }
-```
-
-Every error frame the framework writes says its class in `data.code`, beside
-`error`, with what a client acts on next to it: `reason` and `requiredScopes`
-for a guard's denial, `retryAfterSeconds` for a wait. A frame a handler builds
-itself with `WsError::new` carries no class, as a GraphQL `Error::new` carries
-none.
-
-A rejection that carries **structured** detail adds an `errors` member beside
-its class — a payload breaking its type's rules names the offending fields,
-the same way the HTTP body does:
-
-```json
-{
-  "event": "validated",
-  "data": {
-    "error": "invalid payload for `validated`: validation failed",
-    "code": "INVALID_ARGUMENT",
-    "errors": {
-      "text": [{ "code": "length", "message": "text must not be empty" }]
-    }
-  }
-}
-```
-
-`errors` is the field map and nothing else, on every edge: the class a client
-branches on is `data.code`, as HTTP's problem document carries `code` beside
-its `errors`. A pipe's rejection with no field map is its sentence and
-`"code": "INVALID_ARGUMENT"` alone.
-
-Each entry is `{ code }`, with a `message` when the `#[validate]` rule sets
-one. A rule's parameters never ride along — they can hold the rejected
-**value**, so a too-short password never rides back out — and a client keys
-its sentence on `code`.
-
-`errors` is **absent**, not `null`, when the failure had nothing structured to
-say, so a client can branch on its presence. Every refused dispatch files its
-`ws.message` line `outcome="error"`, so a denied dispatch shows up in logs
-without extra instrumentation, and says why beside it. What the gateway refuses
-of what the client sent — a frame that is no envelope, a payload that does not
-deserialize, a pipe rejection, an unknown event — is reported at `debug` on
-`nest_rs::ws`, where it failed included: a client can send one per frame, and
-none is a denial. A handler's `Err` answered as a refusal — its `WsError`, a
-`4xx` problem, a pipe rejection, a decode failure — is the client's error too.
-The message's line files it, with nothing beside it, as HTTP files a `4xx` on
-its access line alone. A guard's denial is filed at `warn` on the guard's
-target, `nest_rs::layers` when it declares none. An opaque failure is filed at `error` on `nest_rs::ws`
-(`websocket message failed`), as is the chain behind a `5xx` problem. The
-chain behind a `503`, the server unable to answer in time, is filed at `warn`
-(`websocket message unavailable`). Both name the message by the gateway's
-`path` and its `event`, as its `mounted` line does. A handler's `Err` is filed
-once its answer is final, by the status that answer says, whoever gave it: an
-[exception filter](#interceptors-filters-and-pipes) that answers it as a
-refusal files nothing, and one answering a `5xx` files the chain it withholds.
-
-A type **alias** over `Result` behaves the same. `pub type ServiceResult<T> =
-Result<T, MyError>` produces the identical error frame and the identical
-line: the decision is made on the type, so however the return is spelled,
-an `Err` never reaches the reply `data`.
-
-<Aside type="caution" title="`Opaque` says it at the call site">
-An error with no `ToProblem` is already answered opaquely, and one with it answers
-its class: return a `ServiceError` and a cancelled statement reaches the client as
-`UNAVAILABLE`. When a failure has no word for the client, say so where it happens:
-
-```rust title="crates/features/src/chat/ws/gateway.rs (from the demo, abridged)"
-#[subscribe_message("message")]
-#[authorize(Create, Posting)]
-async fn on_message(
-    &self,
-    caller: Ambient<Claims>,
-    message: SendMessageDto,
-) -> Result<(), WsError> {
-    self.svc.record(caller.into_inner().sub, message).opaque()?;
-    Ok(())
-}
-```
-
-`.opaque()?` hands the client a constant and the gateway the real error, which
-it files at `error` on `nest_rs::ws` once that frame is the message's answer,
-naming the message as every failure does — the operator loses nothing, and a
-filter answering the failure as a refusal files nothing. The same trait exists
-on GraphQL and MCP, spelled the same way. A rejection the client *can* act on
-is the opposite case and travels as itself.
-</Aside>
-
-## Three handler patterns
-
-**Fire-and-forget** — record state, broadcast a derived event later,
-no reply to the sender:
-
-```rust title="crates/features/src/chat/ws/gateway.rs"
-#[subscribe_message("typing")]
-async fn typing(&self, msg: SendMessageDto, client: &WsClient) -> Result<(), WsError> {
-    client.broadcast("typing", &msg).opaque()?;
-    Ok(())
-}
-```
-
-The handler answers `Ok(())`, so no envelope flows back to the sender on
-this event. The `client.broadcast(...)` call pushes a server→client
-event on a different event name — see [Rooms](/websockets/rooms/).
-
-**Request/response** — the client asks, the server answers on the same
-event:
-
-```rust title="crates/features/src/chat/ws/gateway.rs"
-#[subscribe_message("presence")]
-async fn presence(&self) -> usize {
-    self.svc.present()
-}
-```
-
-```text frame="terminal"
-> {"event":"presence","data":null}
-< {"event":"presence","data":1}
-```
-
-The return value is serialized straight into `data`. Clients
-correlate by event name; if you need multiple in-flight requests of the
-same kind, include an `id` field in the payload and echo it in the
-response.
-
-**Explicit failure** — the operation can fail and the client needs to
-see why, so the error says what the client may read through `ToProblem`:
-
-```rust title="crates/features/src/chat/ws/gateway.rs"
-use nest_rs::core::{Problem, ToProblem, code};
-
-#[derive(thiserror::Error, Debug)]
-enum SendError {
-    #[error("text must not be empty")]
-    Empty,
-    #[error("rate limited")]
-    RateLimit,
-}
-
-impl ToProblem for SendError {
-    fn to_problem(&self) -> Option<Problem> {
-        Some(match self {
-            Self::Empty => Problem::new(422, code::INVALID_ARGUMENT)
-                .with_detail("text must not be empty"),
-            Self::RateLimit => Problem::new(429, code::RATE_LIMITED),
-        })
-    }
-}
-
-#[subscribe_message("send")]
-async fn send(&self, msg: SendMessageDto) -> Result<ChatMessageDto, SendError> {
-    if msg.text.is_empty() {
-        return Err(SendError::Empty);
-    }
-    Ok(self.svc.record(msg))
-}
-```
-
-```text frame="terminal"
-> {"event":"send","data":{"text":""}}
-< {"event":"send","data":{"error":"text must not be empty","code":"INVALID_ARGUMENT"}}
-```
-
-Without the `ToProblem` impl the same `Err` answers `"internal error"` under
-`code: "INTERNAL"`: an error's `Display` is never what decides. The wire shape stays the same
-envelope — clients branch on the presence of `data.error`, on `data.code` for
-the class, and read the field entries under `data.errors` when they need to
-point at a field.
 
 ## Interceptors, filters and pipes
 

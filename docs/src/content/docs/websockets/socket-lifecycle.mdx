@@ -1,0 +1,131 @@
+---
+title: Socket lifecycle
+description: "A gateway's socket from handshake to close — what refuses a handshake, what bounds a socket and a message, and the code each close says."
+sidebar:
+  order: 7
+---
+
+A gateway's socket opens with a handshake the server may refuse, lives within
+bounds that hold one client to its share, and closes with a code that says why.
+This page is each of those three, in the order a socket meets them.
+
+
+## What bounds a socket
+
+`WsModule::for_root(WsConfig { .. })` pins these, and `<PREFIX>_WS__*` overlays
+each field:
+
+| Variable | Default | What it bounds |
+|---|---|---|
+| `<PREFIX>_WS__MAX_CONNECTION_SECS` | `14400` (4 h) | a socket's lifetime, so a credential checked at the upgrade expires with it; whole seconds from `1` to `86400`, `0` ⇒ unlimited |
+| `<PREFIX>_WS__MAX_MESSAGE_BYTES` | `65536` (64 KiB) | one inbound frame, refused before it is buffered; from `1` to `1073741824` (a gibibyte) |
+| `<PREFIX>_WS__MESSAGE_TIMEOUT_SECS` | `20` | one message — its guards, pipes and handler — counted once its envelope is decoded; whole seconds from `1` to `3600`, `0` ⇒ none |
+| `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` | `20` | the `#[on_connect]` hook, on the message timeout's range |
+| `<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS` | `20` | the `#[on_disconnect]` hook, on the message timeout's range |
+| `<PREFIX>_WS__PING_INTERVAL_SECS` | `20` | how long the peer may send nothing before the server sends it a Ping; whole seconds from `1` to `3600`, `0` ⇒ none |
+| `<PREFIX>_WS__PING_TIMEOUT_SECS` | `20` | how long that Ping waits for any frame back before the peer is dropped; whole seconds from `1` to `3600`, never off |
+
+A peer can vanish without a close — a phone that lost its network, a laptop
+closed mid-session — and its TCP connection says nothing of it. So once a peer
+has sent nothing for the Ping interval, the server sends it a Ping (RFC 6455
+§5.5.2), which every client answers as it reads, a browser's `WebSocket`
+included, with no code of yours. Any frame from the peer counts as its answer,
+so a peer that talks is never pinged, and one that only listens is pinged
+however busy its socket is. A peer that sends nothing back within the
+Ping timeout is taken for gone: its socket is dropped without a close, its
+`#[on_disconnect]` hook runs, and one `warn` on `nest_rs::ws` names the gateway
+by `host` and `path`. A vanished peer is so released within 40 seconds of its
+last frame by default, and the Pings keep a proxy's idle timeout — sixty
+seconds on nginx and a cloud load balancer — from closing a quiet socket. With
+the Pings off, a peer gone without a close holds its socket until
+`<PREFIX>_WS__MAX_CONNECTION_SECS`. A client may send a Ping of its own too,
+which the server answers.
+
+A socket answers one message at a time, so a handler that never returns would
+hold its socket until the connection's lifetime ran out. Past the message
+timeout its work is dropped and rolled back, the client gets an error frame on
+the message's event, and the socket goes on serving the next one:
+
+```json
+{"event":"report","data":{"error":"the message was not answered in time","code":"UNAVAILABLE","reason":"timeout"}}
+```
+
+The `ws.message` line files `error`, and one `warn` on `nest_rs::ws` names the
+message by its gateway's `path` and its `event`, and the timeout with
+`reason="timeout"`. The default is the HTTP request
+timeout's, inside the 20-second shutdown window; a timeout past
+`<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, is said once per gateway and
+unit at boot, since a unit admitted just before a stop could then be cut
+unanswered. A handler that legitimately runs longer raises the timeout and the
+window together.
+
+A statement the database cancelled at its own bound answers the same `code`,
+`UNAVAILABLE`, which is what a client branches on, retrying the message. Only the
+gateway's own deadline adds `reason: "timeout"`: the cancelled statement is the
+service's answer, rendered as every [problem](/websockets/replies/) is, with
+its `retryAfterSeconds` when the bound gives one.
+
+The connection hooks are bounded the same way, each by its own timeout: past
+it, the hook's work is dropped and rolled back, its `ws.connect` or
+`ws.disconnect` line files `error`, and one `warn` names the unit. A connect hook
+cut there leaves the socket set up halfway, so it closes unserved, as one that
+panicked does; a disconnect hook cut there lets the close go on.
+
+## When the server refuses a handshake
+
+A gateway's handshake is a `GET`. Any other method is answered by the route
+table before anything else runs: `405`, with `Allow: GET, HEAD`. Then the
+browser-origin check and the gateway's `#[use_guards]` run, so a refused caller
+learns nothing about the handshake. A handshake the server cannot accept is
+answered before any socket opens, with a problem document saying what it lacks
+(RFC 6455 §4.2.1) and never quoting what was sent:
+
+| The handshake | Status |
+|---|---|
+| Sent as a `HEAD`, which the route table answers as its `GET` without the content | `400` |
+| An `Upgrade` listing no `websocket`, a `Connection` listing no `upgrade`, or a `Sec-WebSocket-Key` that is not 16 bytes in base64 | `400` |
+| A `Sec-WebSocket-Version` other than `13` | `426`, with `Sec-WebSocket-Version: 13` |
+| Over a connection that cannot switch protocols — HTTP/1.0, or an in-process test client | `426` |
+
+`Upgrade` and `Connection` are lists, read as RFC 9110 reads them:
+`Upgrade: h2c, websocket` asks for a WebSocket, and the browser-origin check
+reads it the same way.
+
+A socket opens over HTTP/1.1: the server advertises no RFC 8441 extended CONNECT,
+so a browser opens an HTTP/1.1 connection for it, and no `permessage-deflate` (RFC
+7692) is negotiated.
+
+## When the server closes a socket
+
+The server closes a socket with the RFC 6455 code for the cause, and a reason,
+so a client can tell a deliberate close from the `1006` a network fault leaves:
+
+| Cause | Code | What the client does |
+|---|---|---|
+| The shutdown signal, after the message it is answering | `1001 Going Away` | reconnects, to a replica still serving |
+| `<PREFIX>_WS__MAX_CONNECTION_SECS` elapsed | `1001 Going Away` | re-upgrades, and is authenticated again |
+| The client stopped reading and its outbox filled | `1008 Policy Violation` | drains faster, or is shed again |
+| The client took nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s) | none can reach it — it reads `1006` | reconnects |
+| The client sent nothing back within `<PREFIX>_WS__PING_TIMEOUT_SECS` of a Ping | none is sent, RFC 6455 §7.1.7 — it reads `1006`, if anything | reconnects |
+| A message past `<PREFIX>_WS__MAX_MESSAGE_BYTES` | `1009 Message Too Big` | sends smaller messages |
+| A read failed on broken framing | `1011 Internal Error` | reconnects |
+| `#[on_connect]` panicked, or outlasted `<PREFIX>_WS__CONNECT_TIMEOUT_SECS` | `1011 Internal Error` | reconnects |
+
+A message past the cap closes the socket unread, so no `ws.message` line and no
+layer sees it: the close is its one line, a `warn` on `nest_rs::ws` naming the
+gateway by `host` and `path`, as its `mounted` lines do, with the cap and the code,
+never the frame. Every line about a socket's end — its lifetime, a stalled
+outbox, the send deadline, a silent peer — names its gateway the same way.
+
+A handler that panics does not close the socket: its `ws.message` line files
+`panic`, the client gets the opaque error frame — `internal error`, under
+`code: "INTERNAL"` — and the panic's text goes to `nest_rs::ws` at `error`. A message still running when the shutdown
+window closes is dropped with its socket, and files `cancelled`.
+
+## Going further
+
+- [WebSockets](/websockets/) — the gateway the socket is mounted for.
+- [The subscription socket](/graphql/subscription-socket/) — the same bounds on
+  a GraphQL subscription's socket.
+- [Limits and deadlines](/http/limits/) — the HTTP transport's own bounds,
+  the send timeout and the shutdown window among them.

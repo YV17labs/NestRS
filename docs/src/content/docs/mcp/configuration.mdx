@@ -73,7 +73,7 @@ counts the server's own messages as use of the session. A stateless
 has no channel for an answer either: a client gone without a close holds its stream until a write to
 it fails, once the kernel nearest it gives up retransmitting the keep-alive —
 about fifteen minutes on Linux. A WebSocket is pinged the same way, with its own
-frame ([WebSockets](/websockets/#what-bounds-a-socket)).
+frame ([WebSockets](/websockets/socket-lifecycle/#what-bounds-a-socket)).
 
 ## The operation timeout
 

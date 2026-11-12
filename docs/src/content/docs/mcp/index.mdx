@@ -269,12 +269,6 @@ or two `#[meta]` values of one type on one operation, fail the boot.
 `#[mcp]` and `#[tools]` sit on a concrete type: each operation's site is a
 `static`, so a generic host does not compile.
 
-## Failing without leaking
-
-A tool body talks to a language model, which repeats whatever an error says:
-an operation returns its error, and the edge says what the model reads —
-[MCP errors](/mcp/errors/).
-
 ## Trait-based DI
 
 Injecting a trait — `Arc<dyn Upstream>` for a service the tool calls out to —
@@ -284,12 +278,22 @@ the tool host and any service built at boot alike. Same hexagonal pattern as the
 framework: the tool depends on the trait, the impl lives behind the module,
 the access graph rejects accidental coupling at boot.
 
+## In this section
+
+### Basics
+
+- [MCP tools](/mcp/tools/) — several tools on one server, and validated inputs.
+- [MCP authorization](/mcp/authorization/) — the guards every request runs, and each operation's posture.
+
+### All options
+
+- [Endpoints](/mcp/endpoints/) — several features on one URL, and what the client is told the server is.
+- [Resources and prompts](/mcp/resources-and-prompts/) — `#[prompt]` and `#[resource]`, gated like a tool.
+- [MCP errors](/mcp/errors/) — what a failing operation answers the model, which repeats whatever an error says.
+- [MCP configuration](/mcp/configuration/) — the env keys, the operation timeout, sessions and the host allowlist.
+
 ## Going further
 
-- [MCP tools](/mcp/tools/) — several tools on one server, and validated
-  inputs.
-- [Authorization](/mcp/authorization/) — the guards every tool call's
-  request runs, and the posture each operation declares.
-- [Endpoints](/mcp/endpoints/) — several features on one URL, and what the
-  client is told the server is.
-- [MCP errors](/mcp/errors/) — how a failing operation talks to a model.
+- [HTTP](/http/) — the transport an `#[mcp]` host self-mounts on.
+- [Authorization](/security/authorization/) — the ability every operation runs under.
+- [Driving the app](/testing/driving/) — a test posting to `/mcp` with a bearer its guards admit.

@@ -186,6 +186,25 @@ nothing of telemetry: it logs through the console the boot installs, under
 `RUST_LOG` and `<PREFIX>_LOG_*`, and exports nothing. A provider injecting
 `Metrics` gets them all the same, recording on a meter nothing exports.
 
+## In this section
+
+### Basics
+
+- [Traces](/opentelemetry/traces/) — the span every request, job and tick
+  opens, W3C propagation and sampling.
+- [Logs](/opentelemetry/logs/) — the record shape, the ids every line
+  carries, a level per layer and JSON for prod.
+
+### All options
+
+- [The operation log](/opentelemetry/operation-log/) — one line per unit of
+  work, what each edge's line names, and the HTTP access log.
+- [Metrics](/opentelemetry/metrics/) — counters, histograms and gauges a
+  provider records through `Arc<Metrics>`.
+- [OpenTelemetry configuration](/opentelemetry/configuration/) — the
+  `OTEL_*` variables, and the TLS, timeouts and headers an encrypted export
+  runs on.
+
 ## Reference
 
 - `crates/nest-rs-opentelemetry/` — `OpenTelemetry::init`,
@@ -197,10 +216,6 @@ nothing of telemetry: it logs through the console the boot installs, under
 
 ## Going further
 
-- [Traces](/opentelemetry/traces/) — the spans this exporter ships, and
-  what each edge opens.
-- [Logs](/opentelemetry/logs/) — the record shape, and the ids every line
-  carries.
 - [Correlation](/fundamentals/correlation/) — the trace context underneath,
   which waits on no crate.
 - [Server-Timing](/server-timing/) — the companion header summarising a

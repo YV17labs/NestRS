@@ -99,6 +99,28 @@ The exporter reads the variables the OpenTelemetry specification names —
 them, and the TLS an export runs over, is on
 [OpenTelemetry configuration](/opentelemetry/configuration/).
 
+## See it on your machine
+
+The framework builds no dashboard: any OTLP backend reads what it exports, and
+reads it in the conventions' names its own dashboards expect. For a first look,
+Grafana's open-source all-in-one image — Tempo, Prometheus, Loki and Grafana in
+one container — takes the export as it comes:
+
+```bash frame="terminal"
+docker run --rm -p 3000:3000 -p 4318:4318 grafana/otel-lgtm:0.40.0
+```
+
+```bash frame="terminal"
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_METRIC_EXPORT_INTERVAL=5000 nestrs run dev api
+```
+
+Send the app a few requests, then open `http://localhost:3000`: each request's
+trace, its statements and Redis commands under it, in Tempo; the durations the
+framework records ([Metrics](/opentelemetry/metrics/#what-every-unit-records-on-its-own))
+and the process's own in Prometheus; the log lines in Loki, joined to their trace
+by `trace_id`. The export goes over plain HTTP to this machine's loopback, which
+the boot honours without a word.
+
 ## Feature flags
 
 `nest-rs-opentelemetry` ships one feature of its own, which you never name: the

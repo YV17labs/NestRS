@@ -112,6 +112,7 @@ mod app_lifecycle;
 mod audience;
 mod backoff;
 mod budget;
+pub mod client_operation;
 mod close;
 mod container;
 pub(crate) mod cycle_guard;
@@ -259,6 +260,7 @@ pub mod __private {
         AnswerRefusal, Audience, FileRefusal, RefusedAnswer, WireRow, answering, as_pushed,
         audience, for_others, is_pushed, refuse_answer,
     };
+    pub use crate::client_operation::__private::set_client_recorder;
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,
         declaring_site, enter_import, leave_import, overrides_any, reading, record_absent_optional,

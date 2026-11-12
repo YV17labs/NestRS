@@ -170,6 +170,39 @@ constructor: no interceptor, and no header the access line reads.
 Toggle the line with `<PREFIX>_HTTP__ACCESS_LOG=false`; nothing about propagation
 or OTLP export changes.
 
+## Statements and commands
+
+Once traces or metrics export, every statement the app's Postgres pool sends and
+every command a Redis connection sends is a **client operation**, as the
+database conventions name it: a `client` span under the unit that sent it, and
+a point in `db.client.operation.duration`.
+
+| Sent | Span name | Attributes |
+|---|---|---|
+| a Postgres statement | its summary, `SELECT posts` | `db.system.name` (`postgresql`), `db.namespace`, `db.operation.name`, `db.collection.name`, `db.query.summary`, `server.address`, `server.port` |
+| a Redis command | the command, `GET` | `db.system.name` (`redis`), `db.namespace` (the database index), `db.operation.name`, `server.address` and `server.port` on one server |
+| a Redis pipeline | `BATCH`, or `BATCH GET` when every command is one | the same, and `db.operation.batch.size` |
+
+- **What a statement does, never what it says.** The summary is read off the
+  SQL's operation and the first table it names, skipping its literals, comments
+  and quoted text; `db.query.text` is not exported, since a hand-written
+  statement may carry a value in its text. A Redis command is named by its
+  first word, never a key or an argument.
+- **A failure says its class.** A Redis refusal records its code (`ERR`,
+  `NOSCRIPT`, `WRONGTYPE`) as `error.type`; a failed statement records `_OTHER`,
+  since sea-orm reports a failure without its error.
+- **A span only under a unit.** An operation sent outside every traced unit —
+  a queue worker's poll, the outbox relay's claim — records its duration and no
+  span, so a backend is not handed a root trace per poll.
+- **Nothing is timed where nothing records.** With traces and metrics both off,
+  no driver reads the clock.
+
+sea-orm times what it sends through `execute`, `query_one` and `query_all`,
+which is every statement `Repo` sends; `execute_unprepared` and `stream` go
+untimed, so a savepoint is not seen. A blocking Redis read
+(`XREADGROUP … BLOCK`) is timed for as long as it waited: read its
+`db.operation.name` apart.
+
 ## Going further
 
 - [Logs](/opentelemetry/logs/) — the structured fields on the span.

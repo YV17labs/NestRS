@@ -29,6 +29,7 @@ use redis::{
 };
 
 use crate::cluster::{ClusterLink, SlotLink};
+use crate::commands::{Sent, Timing, batch_failure, command_failure};
 use crate::error::RedisError;
 use crate::instance::{RedisInstance, instance_phrase, typed_import};
 use crate::script::{Invocation, RedisScript};
@@ -307,6 +308,17 @@ impl<I: Instance> RedisConnection<I> {
     }
 }
 
+impl<I> RedisConnection<I> {
+    /// The server a command is sent to, where one server serves them all: a
+    /// Sentinel's primary and a Cluster's nodes change under the link.
+    fn server(&self) -> Option<(&str, u16)> {
+        match &self.link {
+            Link::Standalone(link) => link.server(),
+            Link::Sentinel(_) | Link::Cluster(_) | Link::Slot(_) => None,
+        }
+    }
+}
+
 impl<I: Instance> nest_rs_core::CarriesRemedy for RedisConnection<I> {
     fn remedy() -> Cow<'static, str> {
         format!(
@@ -321,14 +333,23 @@ impl<I: Instance> nest_rs_core::CarriesRemedy for RedisConnection<I> {
 impl<I: Instance> ConnectionLike for RedisConnection<I> {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
         let budget = self.budget;
-        let link = &self.link;
         Box::pin(async move {
-            match link {
+            let timing = Timing::start();
+            let answer = match &self.link {
                 Link::Standalone(link) => link.send(cmd, budget).await,
                 Link::Sentinel(link) => link.send(cmd, budget).await,
                 Link::Cluster(link) => link.send(cmd, budget).await,
                 Link::Slot(link) => link.send(cmd, budget).await,
+            };
+            if let Some(timing) = timing {
+                timing.record(
+                    Sent::command(cmd),
+                    self.get_db(),
+                    self.server(),
+                    command_failure(&answer),
+                );
             }
+            answer
         })
     }
 
@@ -339,14 +360,23 @@ impl<I: Instance> ConnectionLike for RedisConnection<I> {
         count: usize,
     ) -> RedisFuture<'a, Vec<Value>> {
         let budget = self.budget;
-        let link = &self.link;
         Box::pin(async move {
-            match link {
+            let timing = Timing::start();
+            let answers = match &self.link {
                 Link::Standalone(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Sentinel(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Cluster(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Slot(link) => link.send_pipeline(pipeline, offset, count, budget).await,
+            };
+            if let Some(timing) = timing {
+                timing.record(
+                    Sent::batch(pipeline, offset, count),
+                    self.get_db(),
+                    self.server(),
+                    batch_failure(&answers),
+                );
             }
+            answers
         })
     }
 

@@ -30,6 +30,7 @@
 )]
 
 mod cluster;
+mod commands;
 mod connection;
 mod correlation;
 #[path = "../harness/mod.rs"]

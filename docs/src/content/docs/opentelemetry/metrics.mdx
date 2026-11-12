@@ -55,6 +55,12 @@ its points per second, splits them on `http.response.status_code` or
 GraphQL, WebSocket, scheduled and event units record no duration: no
 convention names one for them, and their spans carry their timings.
 
+Each statement the Postgres pool sends and each command a Redis connection
+sends is timed the same way, in `db.client.operation.duration`, keyed by the
+database it ran on and what it did — the statement's operation, table and
+summary, the Redis command — into the buckets the database conventions advise,
+`[0.001, 0.005, … 10]` seconds ([Statements and commands](/opentelemetry/traces/#statements-and-commands)).
+
 A package's unit declares its own with `unit!`'s `duration:`, keyed by fields
 its span declares, and records in it the same way
 ([the operation log](/opentelemetry/operation-log/)).

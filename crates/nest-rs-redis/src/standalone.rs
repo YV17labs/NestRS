@@ -147,6 +147,15 @@ impl StandaloneLink {
         self.client.get_connection_info().redis_settings().db()
     }
 
+    /// The host and port the URL names, where it names one over TCP.
+    pub(crate) fn server(&self) -> Option<(&str, u16)> {
+        match self.client.get_connection_info().addr() {
+            redis::ConnectionAddr::Tcp(host, port)
+            | redis::ConnectionAddr::TcpTls { host, port, .. } => Some((host, *port)),
+            _ => None,
+        }
+    }
+
     /// A manager of its own from the link's client, opened within the budget.
     async fn open_manager(&self) -> Result<ConnectionManager, redis::RedisError> {
         answered(

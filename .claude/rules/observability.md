@@ -74,6 +74,10 @@ peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
   set. A unit no convention gives a duration declares none
   (`.claude/decisions/unit-duration-from-its-span.md`). Each declaring edge's
   suite proves its span fills every field the duration is keyed by.
+- **What a driver sends is a client operation** (`nest_rs_core::client_operation`):
+  timed by the driver only while something records them, named and keyed by what
+  the operation does — a statement's summary, a command's name — never by a value
+  it carries, and a span only under a traced unit.
 
 ## Propagation — task, process and response
 

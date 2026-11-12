@@ -81,6 +81,14 @@ impl OpenTelemetry {
             // Seeded here rather than mounted by a module: a queue worker imports no
             // transport.
             crate::linker::install();
+            let traces_export = matches!(
+                exporters.summary.destinations[0],
+                crate::otlp::Destination::Endpoint(_)
+            );
+            crate::client_operations::install(
+                traces_export.then_some(&exporters.tracer_provider),
+                exporters.meter_provider.as_ref(),
+            );
 
             // A filter per layer, so a unit's duration is counted whatever the
             // console writes. An absent layer keeps one too: unfiltered, `None`

@@ -26,7 +26,11 @@ pub const TARGET: &str = "nest_rs::opentelemetry";
 
 #[cfg(feature = "otlp")]
 mod attribute;
+#[cfg(feature = "otlp")]
+mod client_operations;
 mod config;
+#[cfg(feature = "otlp")]
+mod durations;
 mod error;
 #[cfg(feature = "otlp")]
 mod id_generator;

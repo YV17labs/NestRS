@@ -57,6 +57,7 @@
 pub const TARGET: &str = "nest_rs::redis";
 
 mod cluster;
+mod commands;
 mod config;
 mod connection;
 mod error;

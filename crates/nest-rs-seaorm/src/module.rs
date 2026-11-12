@@ -18,6 +18,7 @@ use sea_orm::{
 use crate::SeaOrmConfig;
 use crate::config::{DEFAULT_CONNECT_TIMEOUT, PGSSLROOTCERT, TrustRoot};
 use crate::error::ConnectError;
+use crate::statements::Statements;
 
 /// Where the substrate's variables live: `<PREFIX>_SEAORM__*`.
 const NAMESPACE: &str = <SeaOrmConfig as Namespaced>::NAMESPACE;
@@ -57,7 +58,9 @@ impl Module for SeaOrmModule {
             .provide_factory_after::<DatabaseConnection, (SeaOrmConfig,), _, _>(
                 |container| async move {
                     let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;
-                    connect(&config, config.app_connect_options()?).await
+                    let mut db = connect(&config, config.app_connect_options()?).await?;
+                    Statements::time(&mut db, &config.probe_options()?);
+                    Ok(db)
                 },
             )
             .provide_close::<DatabaseConnection, _, _>(|db| async move { close(&db).await })

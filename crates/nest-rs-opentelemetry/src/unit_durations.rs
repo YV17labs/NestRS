@@ -8,14 +8,11 @@
 //! units it records, and by which fields, is what each unit declares
 //! (`UnitDuration`), read as `operation_span!` creates the span.
 
-use std::collections::HashMap;
 use std::fmt;
-use std::sync::{PoisonError, RwLock};
 use std::time::Instant;
 
 use nest_rs_core::operation_log::{MetricAttribute, Unit, UnitDuration};
-use opentelemetry::metrics::{Histogram, Meter, MeterProvider as _};
-use opentelemetry::{InstrumentationScope, KeyValue, StringValue, Value};
+use opentelemetry::{KeyValue, StringValue, Value};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
@@ -25,60 +22,15 @@ use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::{Context, Filter, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
-/// The instrumentation scope the framework's own instruments are recorded
-/// under: the crate an app installs.
-const SCOPE: &str = "nest-rs";
-
-/// The bucket boundaries, in seconds, the HTTP and messaging conventions
-/// advise for a duration; the MCP conventions advise none.
-const BOUNDARIES: [f64; 14] = [
-    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
-];
-
-/// The unit a duration is in, as the conventions write it.
-const SECONDS: &str = "s";
+use crate::durations::Durations;
 
 /// Records each measured unit's duration in the histogram it declares.
-pub(crate) struct UnitDurations {
-    meter: Meter,
-    histograms: RwLock<HashMap<&'static str, Histogram<f64>>>,
-}
+pub(crate) struct UnitDurations(Durations);
 
 impl UnitDurations {
     /// Record on `provider`, under the framework's scope.
     pub(crate) fn new(provider: &SdkMeterProvider) -> Self {
-        let scope = InstrumentationScope::builder(SCOPE)
-            .with_version(env!("CARGO_PKG_VERSION"))
-            .build();
-        Self {
-            meter: provider.meter_with_scope(scope),
-            histograms: RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// The histogram `duration` names, made the first time a unit records in it.
-    fn histogram(&self, duration: &'static UnitDuration) -> Histogram<f64> {
-        if let Some(made) = self
-            .histograms
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(duration.name())
-        {
-            return made.clone();
-        }
-        self.histograms
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(duration.name())
-            .or_insert_with(|| {
-                self.meter
-                    .f64_histogram(duration.name())
-                    .with_unit(SECONDS)
-                    .with_description(duration.description())
-                    .with_boundaries(BOUNDARIES.to_vec())
-                    .build()
-            })
-            .clone()
+        Self(Durations::new(provider))
     }
 }
 
@@ -118,7 +70,8 @@ where
         let Some(timing) = span.extensions_mut().remove::<Timing>() else {
             return;
         };
-        self.histogram(timing.duration)
+        self.0
+            .histogram(timing.duration.name(), timing.duration.description())
             .record(timing.opened.elapsed().as_secs_f64(), &timing.attributes);
     }
 }
@@ -264,6 +217,7 @@ mod tests {
     use tracing_subscriber::layer::SubscriberExt as _;
 
     use super::*;
+    use crate::durations::{REQUEST_BOUNDARIES, SCOPE, SECONDS};
 
     /// One data point of the probe's duration: its attributes, sorted, and
     /// how many units it counts.
@@ -351,7 +305,7 @@ mod tests {
             .data_points()
             .flat_map(|point| point.bounds().collect::<Vec<_>>())
             .collect();
-        assert_eq!(bounds, BOUNDARIES.to_vec());
+        assert_eq!(bounds, REQUEST_BOUNDARIES.to_vec());
     }
 
     #[test]

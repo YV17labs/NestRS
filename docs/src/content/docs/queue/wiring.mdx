@@ -44,7 +44,7 @@ writes it; `RedisModule::for_root(RedisConfig { url, .. })` supplies that URL as
 **base** the environment overlays — so a deployment setting `<PREFIX>_REDIS__URL`
 still wins, field by field ([the dual-path rule](/configuration/pinning/#the-dual-path-rule)).
 One connection, one variable, named for the crate that parses it: a
-throttler-only app sets the same `<PREFIX>_REDIS__URL`. See [fundamentals/modules](/fundamentals/modules/) for the
+throttler-only app sets the same `<PREFIX>_REDIS__URL`. See [Module boot](/fundamentals/module-boot/) for the
 four boot phases that resolve the connection before any transport attaches.
 
 <Aside type="note">

@@ -86,7 +86,7 @@ IPv6 link shares a bucket, the way every host behind one IPv4 NAT already does.
 
 The list is `<PREFIX>_HTTP__TRUSTED_PROXIES`, on the transport, not on the
 throttler: which proxies a deployment believes decides who *every* request is
-attributed to — the [`ClientIp`](/http/extractors/) extractor's answer as much
+attributed to — the [`ClientIp`](/http/client-ip/) extractor's answer as much
 as the rate-limit bucket's. One list, so the extractor and the bucket can never
 attribute a request to different callers. No log line names that caller: the
 refusal's line — `guard denied the request` on `nest_rs::throttler`, `reason =
@@ -105,5 +105,5 @@ range its pods move within. Direct exposure: leave `TRUSTED_PROXIES` empty.
 - [Rate limiting](/rate-limiting/) — the guard, its limit and its stores.
 - [HTTP configuration](/http/configuration/) — `TRUSTED_PROXIES`, which every
   request's client is read through.
-- [Extractors](/http/extractors/) — `ClientIp`, the same client a handler
+- [Client IP](/http/client-ip/) — `ClientIp`, the same client a handler
   reads.

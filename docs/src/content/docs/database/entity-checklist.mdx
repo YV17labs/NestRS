@@ -38,7 +38,7 @@ from [Entities](/database/entities/).
 | `validate(…)` | What makes a value of it invalid at the edge? | [Pipes](/fundamentals/pipes/) |
 | `default = …` | Is it a constant the server decides, stored when an insert leaves it unset? | [Entity inputs](/database/inputs/#write-side--inputs-and-validation) |
 | `via = "…"` | On a `has_many`, which of the child's foreign keys does it follow? | [Entities](/database/entities/) |
-| `complexity = …` | Does resolving it cost more than a column read? | [Query limits](/graphql/query-limits/) |
+| `complexity = …` | Does resolving it cost more than a column read? | [Field complexity](/graphql/field-complexity/) |
 
 An enum column takes [`#[wire_enum]`](/database/entities/#enum-columns) — it
 carries the wire derives, so the field can be `#[expose]`d like any scalar.

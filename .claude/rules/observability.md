@@ -67,6 +67,13 @@ peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
 - **An app records metrics through `nest_rs::opentelemetry::Metrics`**, whose
   instruments the OpenTelemetry Metrics API names; no `opentelemetry` type
   reaches its code.
+- **A unit's duration is its edge's convention's histogram**, declared beside
+  the unit (`unit!`'s `duration:`) and recorded from its span whatever the
+  console or the sampler keeps, keyed by the server's values alone: a field
+  holding what a client sent is `MetricAttribute::known`, `_OTHER` outside its
+  set. A unit no convention gives a duration declares none
+  (`.claude/decisions/unit-duration-from-its-span.md`). Each declaring edge's
+  suite proves its span fills every field the duration is keyed by.
 
 ## Propagation — task, process and response
 

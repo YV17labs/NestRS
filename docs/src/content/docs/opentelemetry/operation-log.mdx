@@ -75,7 +75,12 @@ declares `nestrs_kafka.message`, opens its span with the framework's
 it too. The edge words, the kernel's `lifecycle` and the harness's `testing`
 stay the framework's, and
 the [naming rule](/semver/#naming-a-package) roots everything else a package
-names at its crate. There used to be
+names at its crate. A package whose unit has a duration histogram declares it
+beside the unit, `duration:` a `UnitDuration` naming the instrument and the span
+fields it is keyed by — `MetricAttribute::bounded` for a value the package
+bounds, `MetricAttribute::known` for one a client sent, read through the set it
+may take — and every unit is recorded in it, as an edge's are
+([Metrics](/opentelemetry/metrics/#what-every-unit-records-on-its-own)). There used to be
 two vocabularies for these units — the spans said `http.request` while
 the lines said `request served` — so an operator learned the set twice and a
 query could pick the wrong one.

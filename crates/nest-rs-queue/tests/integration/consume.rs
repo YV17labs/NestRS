@@ -2516,3 +2516,24 @@ async fn a_method_answering_a_job_error_keeps_its_disposition() {
     };
     assert_eq!(error.to_string(), "the clip was withdrawn");
 }
+
+/// Every field a job's duration is keyed by is one a failed attempt's span
+/// fills: one it never filled would key every duration without it.
+#[tokio::test]
+async fn every_field_a_jobs_duration_is_keyed_by_is_one_its_span_fills() {
+    let logs = two_attempts(json!({ "file": "x.wav" })).await;
+
+    let duration = nest_rs_queue::unit::JOB
+        .duration()
+        .expect("a job's duration is recorded");
+    for span in job_spans(&logs) {
+        for attribute in duration.attributes() {
+            assert!(
+                span.field(attribute.field()).is_some(),
+                "{}: {:?}",
+                attribute.field(),
+                span.fields,
+            );
+        }
+    }
+}

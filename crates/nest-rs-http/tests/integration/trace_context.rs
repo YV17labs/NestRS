@@ -306,3 +306,27 @@ async fn only_a_server_error_exports_its_span_failed() {
         assert_eq!(span.field("http.response.status_code"), Some(code));
     }
 }
+
+/// Every field a request's duration is keyed by is one its span fills: one it
+/// never filled would key every duration without it.
+#[tokio::test]
+async fn every_field_a_requests_duration_is_keyed_by_is_one_its_span_fills() {
+    let logs = LogCapture::install();
+    let client = boot::<OrgsModule>().await;
+
+    client.get("/jobs/7/broken").send().await;
+
+    let request = nest_rs_http::unit::REQUEST;
+    let span = logs.expect_span(request.target(), request.name());
+    let duration = request
+        .duration()
+        .expect("a request's duration is recorded");
+    for attribute in duration.attributes() {
+        assert!(
+            span.field(attribute.field()).is_some(),
+            "{}: {:?}",
+            attribute.field(),
+            span.fields,
+        );
+    }
+}

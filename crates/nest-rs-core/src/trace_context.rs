@@ -527,6 +527,7 @@ pub(crate) mod __private {
     use std::sync::atomic::Ordering;
 
     use super::{Correlation, SpanId, TraceFlags, TraceId};
+    use crate::operation_log::Unit;
     use crate::request_scope::current_correlation_with;
 
     /// Record the sampling decision an installed sampler made, leaving the
@@ -554,9 +555,17 @@ pub(crate) mod __private {
         current_correlation_with(Correlation::clone)
     }
 
+    /// The span about to be created: the ids it belongs to, and the unit it
+    /// opens where `operation_span!` creates it.
+    #[derive(Clone, Copy)]
+    struct Pending {
+        ids: (TraceId, SpanId),
+        unit: Option<&'static Unit>,
+    }
+
     tokio::task_local! {
-        /// The ids the span about to be created belongs to — see [`with_pending_ids`].
-        static PENDING_IDS: (TraceId, SpanId);
+        /// The span about to be created — see [`with_pending_ids`].
+        static PENDING: Pending;
     }
 
     /// Publish this unit of work's ids for the duration of **creating and
@@ -566,13 +575,38 @@ pub(crate) mod __private {
     /// A scope of its own because the generator runs inside `info_span!`, before
     /// the edge installs the request context.
     pub fn with_pending_ids<T>(correlation: &Correlation, create: impl FnOnce() -> T) -> T {
-        PENDING_IDS.sync_scope((correlation.trace_id(), correlation.span_id()), create)
+        pending_scope(correlation, None, create)
+    }
+
+    /// [`with_pending_ids`], publishing as well the `unit` the span opens, so
+    /// a layer reading what the unit declares reads it as the span is created.
+    pub fn with_pending_unit<T>(
+        unit: &'static Unit,
+        correlation: &Correlation,
+        create: impl FnOnce() -> T,
+    ) -> T {
+        pending_scope(correlation, Some(unit), create)
+    }
+
+    fn pending_scope<T>(
+        correlation: &Correlation,
+        unit: Option<&'static Unit>,
+        create: impl FnOnce() -> T,
+    ) -> T {
+        let ids = (correlation.trace_id(), correlation.span_id());
+        PENDING.sync_scope(Pending { ids, unit }, create)
     }
 
     /// The ids the span being created belongs to, or `None` outside
     /// [`with_pending_ids`].
     pub fn pending_ids() -> Option<(TraceId, SpanId)> {
-        PENDING_IDS.try_with(|ids| *ids).ok()
+        PENDING.try_with(|pending| pending.ids).ok()
+    }
+
+    /// The unit the span being created opens, or `None` outside
+    /// [`with_pending_unit`].
+    pub fn pending_unit() -> Option<&'static Unit> {
+        PENDING.try_with(|pending| pending.unit).ok().flatten()
     }
 
     /// What an observability stack does to a span the framework just opened.
@@ -660,7 +694,7 @@ macro_rules! operation_span {
         let __correlation = &$correlation;
         // The link runs inside the pending ids: an exporter may start its span
         // only when first asked for it, and must start it under these ids.
-        let __span = $crate::__private::with_pending_ids(__correlation, || {
+        let __span = $crate::__private::with_pending_unit(const { &$unit }, __correlation, || {
             let __span = $crate::tracing::info_span!(
                 target: $unit.target(),
                 $unit.name(),
@@ -1014,5 +1048,42 @@ mod tests {
         assert!(current_trace_id().is_none());
         assert!(current_span_id().is_none());
         assert!(current_traceparent().is_none());
+    }
+
+    /// A layer reads the unit a span opens while `tracing` creates it, and
+    /// nothing is pending once it is created.
+    #[test]
+    fn the_unit_a_span_opens_is_pending_while_the_span_is_created() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::{Context, SubscriberExt as _};
+
+        #[derive(Clone, Default)]
+        struct Seen(Arc<Mutex<Option<&'static str>>>);
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Seen {
+            fn on_new_span(
+                &self,
+                _: &tracing::span::Attributes<'_>,
+                _: &tracing::span::Id,
+                _: Context<'_, S>,
+            ) {
+                *self.0.lock().expect("the seen unit") =
+                    __private::pending_unit().map(crate::operation_log::Unit::name);
+            }
+        }
+
+        let seen = Seen::default();
+        let subscriber = tracing_subscriber::registry().with(seen.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            drop(crate::operation_span!(
+                crate::unit::HOOK,
+                &Correlation::minted(None)
+            ));
+            assert!(__private::pending_unit().is_none());
+        });
+
+        assert_eq!(
+            *seen.0.lock().expect("the seen unit"),
+            Some(crate::unit::HOOK.name()),
+        );
     }
 }

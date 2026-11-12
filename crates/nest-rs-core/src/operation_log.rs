@@ -58,6 +58,7 @@ pub struct Unit {
     target: &'static str,
     kind: Kind,
     edge: Option<Edge>,
+    duration: Option<&'static UnitDuration>,
 }
 
 impl Unit {
@@ -86,6 +87,109 @@ impl Unit {
     pub const fn edge(&self) -> Option<Edge> {
         self.edge
     }
+
+    /// The histogram this unit's duration is recorded in, when its edge's
+    /// telemetry conventions name one.
+    pub const fn duration(&self) -> Option<&'static UnitDuration> {
+        self.duration
+    }
+}
+
+/// The histogram a [`Unit`]'s duration is recorded in, named as its edge's
+/// telemetry conventions name it and keyed by fields of the unit's span.
+///
+/// Handed to [`unit!`](macro@crate::unit) as `duration:`; an observability
+/// stack records every such unit's span, from its opening to its close, in
+/// seconds, whatever the console writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitDuration {
+    name: &'static str,
+    description: &'static str,
+    attributes: &'static [MetricAttribute],
+}
+
+impl UnitDuration {
+    /// The histogram `name`, described by `description`, keyed by `attributes`.
+    pub const fn new(
+        name: &'static str,
+        description: &'static str,
+        attributes: &'static [MetricAttribute],
+    ) -> Self {
+        Self {
+            name,
+            description,
+            attributes,
+        }
+    }
+
+    /// The instrument's name, as the conventions spell it
+    /// (`http.server.request.duration`).
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// What the instrument measures, as the conventions describe it.
+    pub const fn description(&self) -> &'static str {
+        self.description
+    }
+
+    /// The span fields each recorded duration is keyed by.
+    pub const fn attributes(&self) -> &'static [MetricAttribute] {
+        self.attributes
+    }
+}
+
+/// One span field a [`UnitDuration`] is keyed by.
+///
+/// Each value of a metric attribute is a series a backend keeps, so only a
+/// value from a set the server bounds keys one: a field holding what a client
+/// sent is read through the set it may take, anything else as [`OTHER`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MetricAttribute {
+    field: &'static str,
+    known: Option<&'static [&'static str]>,
+}
+
+impl MetricAttribute {
+    /// `field` as the span holds it: a value the server chose from a set it
+    /// bounds — a route template, a method the conventions know, a status code.
+    pub const fn bounded(field: &'static str) -> Self {
+        Self { field, known: None }
+    }
+
+    /// `field` where its value is one of `known`, and [`OTHER`] otherwise: a
+    /// field the conventions record as the client sent it.
+    pub const fn known(field: &'static str, known: &'static [&'static str]) -> Self {
+        Self {
+            field,
+            known: Some(known),
+        }
+    }
+
+    /// The span field, and the metric attribute's key.
+    pub const fn field(&self) -> &'static str {
+        self.field
+    }
+
+    /// Whether the span's value keys a duration as it is, the field being one
+    /// the server bounds.
+    pub const fn is_bounded(&self) -> bool {
+        self.known.is_none()
+    }
+
+    /// For a field read through a known set, the member the span's `value`
+    /// equals, or [`OTHER`]; `None` for a [`bounded`](Self::bounded) field,
+    /// whose value keys a duration as the span holds it.
+    pub fn known_value(&self, value: &str) -> Option<&'static str> {
+        let known = self.known?;
+        Some(
+            known
+                .iter()
+                .find(|member| **member == value)
+                .copied()
+                .unwrap_or(OTHER),
+        )
+    }
 }
 
 /// The crate that declares the kernel's units.
@@ -105,8 +209,8 @@ const HARNESS_WORD: &str = "testing";
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use super::{
-        Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, Unit, eq_bytes, is_crate_root,
-        is_edge_root, is_lib_name,
+        Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, Unit, UnitDuration, eq_bytes,
+        is_crate_root, is_edge_root, is_lib_name,
     };
 
     /// Evaluated in a `const` by [`unit!`](macro@crate::unit), which passes the
@@ -164,6 +268,7 @@ pub(crate) mod __private {
                 target,
                 kind,
                 edge: None,
+                duration: None,
             };
         }
 
@@ -179,6 +284,7 @@ pub(crate) mod __private {
                 target,
                 kind,
                 edge: None,
+                duration: None,
             };
         }
 
@@ -210,6 +316,7 @@ pub(crate) mod __private {
                 target,
                 kind,
                 edge: known,
+                duration: None,
             };
         }
 
@@ -240,6 +347,16 @@ pub(crate) mod __private {
             target,
             kind,
             edge: None,
+            duration: None,
+        }
+    }
+
+    /// `unit`, its duration recorded in `duration` — evaluated in a `const` by
+    /// [`unit!`](macro@crate::unit)'s `duration:`.
+    pub const fn measured_unit(unit: Unit, duration: &'static UnitDuration) -> Unit {
+        Unit {
+            duration: Some(duration),
+            ..unit
         }
     }
 
@@ -480,7 +597,8 @@ impl<L: Line> Drop for FiledOnce<L> {
 /// Declare one [`Unit`] of this crate —
 /// `pub const REQUEST: Unit = nest_rs_core::unit!("http.request", target:
 /// crate::target::HTTP, kind: Server);`, compiled in `nest_rs_http::unit`'s
-/// example.
+/// example — and, after `duration:`, the [`UnitDuration`] its edge's telemetry
+/// conventions record it in.
 ///
 /// The declaring crate (`CARGO_PKG_NAME`, `-` read as `_`) decides the tier:
 ///
@@ -508,6 +626,18 @@ macro_rules! unit {
             $target,
             $crate::operation_log::Kind::$kind,
             $name,
+        );
+        __UNIT
+    }};
+    ($name:literal, target: $target:expr, kind: $kind:ident, duration: $duration:expr $(,)?) => {{
+        const __UNIT: $crate::operation_log::Unit = $crate::__private::measured_unit(
+            $crate::__private::declare_unit(
+                ::core::env!("CARGO_PKG_NAME"),
+                $target,
+                $crate::operation_log::Kind::$kind,
+                $name,
+            ),
+            &$duration,
         );
         __UNIT
     }};
@@ -873,5 +1003,49 @@ mod tests {
                 "{name} from {owner} on {target}: {refused}"
             );
         }
+    }
+
+    const MEASURED: UnitDuration = UnitDuration::new(
+        "lifecycle.hook.duration",
+        "Duration of a hook.",
+        &[
+            MetricAttribute::bounded("hook.phase"),
+            MetricAttribute::known("hook.verb", &["read", "write"]),
+        ],
+    );
+
+    #[test]
+    fn a_unit_declared_with_a_duration_carries_it_and_one_without_carries_none() {
+        let measured = __private::measured_unit(
+            __private::declare_unit(
+                "nest-rs-core",
+                "nest_rs::lifecycle",
+                Kind::Internal,
+                "lifecycle.hook",
+            ),
+            &MEASURED,
+        );
+        assert_eq!(measured.duration(), Some(&MEASURED));
+        assert_eq!(measured.name(), crate::unit::HOOK.name());
+        assert_eq!(crate::unit::HOOK.duration(), None);
+    }
+
+    #[test]
+    fn a_bounded_attribute_keys_a_duration_with_the_spans_own_value() {
+        let [phase, _] = MEASURED.attributes() else {
+            panic!("two attributes");
+        };
+        assert!(phase.is_bounded());
+        assert_eq!(phase.known_value("init"), None);
+    }
+
+    #[test]
+    fn a_known_attribute_keys_a_value_outside_its_set_as_other() {
+        let [_, verb] = MEASURED.attributes() else {
+            panic!("two attributes");
+        };
+        assert!(!verb.is_bounded());
+        assert_eq!(verb.known_value("read"), Some("read"));
+        assert_eq!(verb.known_value("anything-a-caller-sends"), Some(OTHER));
     }
 }

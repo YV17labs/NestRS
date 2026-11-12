@@ -28,10 +28,12 @@ Three signal types ship in one crate, behind one line of `main`:
   console **and** to OTel logs (via
   [`opentelemetry-appender-tracing`](https://crates.io/crates/opentelemetry-appender-tracing))
   with structured fields, configurable level per layer, and JSON for prod.
-- **[Metrics](/opentelemetry/metrics/)** — inject `Arc<Metrics>` and record on
-  counters / histograms / gauges, named as the OpenTelemetry Metrics API names
-  them; metrics batch on a `PeriodicReader` and export through the same OTLP
-  endpoint as the traces.
+- **[Metrics](/opentelemetry/metrics/)** — every HTTP request, queue job and
+  MCP operation is timed in the histogram its semantic conventions name,
+  counted whatever the console or the sampler keeps; inject `Arc<Metrics>` and
+  record on counters / histograms / gauges of your own, named as the
+  OpenTelemetry Metrics API names them; metrics batch on a `PeriodicReader` and
+  export through the same OTLP endpoint as the traces.
 
 ## Install
 

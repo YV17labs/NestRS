@@ -21,11 +21,29 @@
 //! assert_eq!(nest_rs_http::unit::REQUEST.name(), "http.request");
 //! ```
 
-use nest_rs_core::operation_log::Unit;
+use nest_rs_core::operation_log::{MetricAttribute, Unit, UnitDuration};
 
 /// One HTTP request, filed once the response body has been written.
-pub const REQUEST: Unit =
-    nest_rs_core::unit!("http.request", target: crate::target::HTTP, kind: Server);
+pub const REQUEST: Unit = nest_rs_core::unit!(
+    "http.request",
+    target: crate::target::HTTP,
+    kind: Server,
+    duration: REQUEST_DURATION,
+);
+
+/// The HTTP conventions' server duration, keyed by what the span says in the
+/// server's words: the known method, the route template, never the path.
+const REQUEST_DURATION: UnitDuration = UnitDuration::new(
+    "http.server.request.duration",
+    "Duration of HTTP server requests.",
+    &[
+        MetricAttribute::bounded("http.request.method"),
+        MetricAttribute::bounded("url.scheme"),
+        MetricAttribute::bounded("http.route"),
+        MetricAttribute::bounded("http.response.status_code"),
+        MetricAttribute::bounded("error.type"),
+    ],
+);
 
 #[cfg(test)]
 mod tests {

@@ -36,11 +36,11 @@ const ACCEPTED: &str = "HTTP/1.1 200 OK\r\ncontent-type: application/x-protobuf\
 
 /// One export a collector read: where it was posted, its headers and its body.
 #[derive(Clone)]
-struct Received {
-    path: String,
+pub(crate) struct Received {
+    pub(crate) path: String,
     /// Every header line, name and value lowercased.
     headers: Vec<(String, String)>,
-    body: Vec<u8>,
+    pub(crate) body: Vec<u8>,
 }
 
 impl Received {
@@ -68,14 +68,14 @@ impl std::fmt::Debug for Received {
 
 /// An OTLP/HTTP collector over TLS on loopback, on a runtime of its own, every
 /// export it reads kept.
-struct Collector {
+pub(crate) struct Collector {
     addr: SocketAddr,
     exports: Arc<Mutex<Vec<Received>>>,
 }
 
 impl Collector {
     /// A collector taking every export.
-    fn serving() -> Self {
+    pub(crate) fn serving() -> Self {
         Self::serving_to(Behaviour::Answer(ACCEPTED.to_owned()), None)
     }
 
@@ -172,7 +172,7 @@ impl Collector {
     }
 
     /// Every export read so far.
-    fn received(&self) -> Vec<Received> {
+    pub(crate) fn received(&self) -> Vec<Received> {
         self.exports.lock().expect("the exports").clone()
     }
 }
@@ -193,7 +193,7 @@ fn export_through(otel: OpenTelemetry) {
 
 /// `OpenTelemetry::init_with` exporting to `collector`, trusting [`AUTHORITY`]
 /// through `OTEL_EXPORTER_OTLP_CERTIFICATE`, with `vars` over it.
-fn trusting(collector: &Collector, vars: &[(&str, &str)]) -> OpenTelemetry {
+pub(crate) fn trusting(collector: &Collector, vars: &[(&str, &str)]) -> OpenTelemetry {
     let endpoint = collector.endpoint();
     let scratch = tempfile::tempdir().expect("a scratch directory");
     let authority = written(&scratch, "authority.pem", AUTHORITY.pem());

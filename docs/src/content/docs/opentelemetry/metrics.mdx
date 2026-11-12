@@ -22,6 +22,43 @@ importing it registered first — registered before, it fails the boot. The
 import beside each injection is what puts the module first. In a suite, which
 never runs `main`, `Metrics` record on a meter nothing exports.
 
+## What every unit records on its own
+
+Before an app records anything, the framework times each unit of work whose
+edge's semantic conventions name a duration histogram for it, so a backend's
+ready-made HTTP, messaging and MCP dashboards light up with nothing written:
+
+| Unit | Histogram | Keyed by |
+|---|---|---|
+| `http.request` | `http.server.request.duration` | `http.request.method`, `url.scheme`, `http.route`, `http.response.status_code`, `error.type` |
+| `queue.job` | `messaging.process.duration` | `messaging.system`, `messaging.operation.name`, `messaging.destination.name`, `error.type` |
+| `mcp.operation` | `mcp.server.operation.duration` | `mcp.method.name`, `rpc.response.status_code`, `error.type` |
+
+One histogram is the rate, the errors and the latency at once: a backend counts
+its points per second, splits them on `http.response.status_code` or
+`error.type`, and reads its percentiles off the buckets, the
+`[0.005, 0.01, … 10]` seconds the HTTP and messaging conventions advise.
+
+- **Every unit is counted.** The durations come from the unit's span, under a
+  filter of their own: a console filtered to `RUST_LOG=warn` and a sampler
+  keeping one trace in a hundred count every request all the same, where a
+  collector deriving metrics from spans counts the ones it was sent.
+- **Every key is the server's.** `http.route` is the template, never the path;
+  a method outside the HTTP conventions' known set is `_OTHER`; an MCP method
+  only the client named — a custom one — reads `_OTHER` too, though the span
+  keeps it as sent. A client cannot mint a series.
+- **A binary exporting no metric pays nothing.** The layer is installed only
+  when the metrics export, and `OTEL_METRICS_EXPORTER=none` turns it off with
+  them. The instruments are recorded under the instrumentation scope `nest-rs`
+  and the framework's version.
+
+GraphQL, WebSocket, scheduled and event units record no duration: no
+convention names one for them, and their spans carry their timings.
+
+A package's unit declares its own with `unit!`'s `duration:`, keyed by fields
+its span declares, and records in it the same way
+([the operation log](/opentelemetry/operation-log/)).
+
 ## A first counter
 
 Ask `Metrics` for the instrument by name, then record on it. The first call

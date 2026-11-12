@@ -593,6 +593,25 @@ async fn an_operation_line_names_nothing_only_the_client_named() {
     );
     assert_eq!(span("tasks/get").field("mcp.operation.name"), None);
     span("marked/custom");
+
+    let operation = nest_rs_mcp::unit::OPERATION;
+    let spans: Vec<_> = logs
+        .spans()
+        .into_iter()
+        .filter(|span| span.target == operation.target() && span.name == operation.name())
+        .collect();
+    let duration = operation
+        .duration()
+        .expect("an operation's duration is recorded");
+    for attribute in duration.attributes() {
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.field(attribute.field()).is_some()),
+            "an operation's span fills {}: {spans:#?}",
+            attribute.field(),
+        );
+    }
 }
 
 const REFUSALS: &str = "/mcp/refusals";

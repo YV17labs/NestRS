@@ -17,6 +17,8 @@ mod metrics;
 mod module;
 #[cfg(feature = "otlp")]
 mod otlp;
+#[cfg(feature = "otlp")]
+mod unit_durations;
 
 use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;

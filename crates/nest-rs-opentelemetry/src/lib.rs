@@ -8,7 +8,9 @@
 //! returned guard flushes on drop, so it must outlive `main`.
 //!
 //! That line is the whole wiring: no module to import, nothing for a suite to
-//! call. Under the `otlp` feature, `OpenTelemetryModule` provides `Metrics`
+//! call. Once the metrics export, every unit of work whose edge's conventions
+//! name a duration histogram is timed in it, whatever the console writes. Under
+//! the `otlp` feature, `OpenTelemetryModule` provides `Metrics`
 //! to the module whose provider injects them, where an app records its
 //! measurements through instruments named by the OpenTelemetry Metrics API —
 //! `Counter`, `UpDownCounter`, `Histogram`, `Gauge` — with no `opentelemetry`
@@ -43,6 +45,8 @@ mod propagators;
 mod signal;
 #[cfg(test)]
 mod testing;
+#[cfg(feature = "otlp")]
+mod unit_durations;
 
 #[cfg(feature = "otlp")]
 pub use attribute::{Attribute, AttributeValue};

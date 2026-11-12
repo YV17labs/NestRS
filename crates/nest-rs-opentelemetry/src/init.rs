@@ -82,22 +82,28 @@ impl OpenTelemetry {
             // transport.
             crate::linker::install();
 
-            // Bridge only when an exporter is present; otherwise it pays the
-            // per-event cost just to drop the event.
-            let appender_layer = match exporters.logger_provider.as_ref() {
-                Some(lp) => Some(
-                    opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(lp)
-                        .with_filter(log_filter(&console.filter)),
-                ),
-                None => None,
-            };
+            // A filter per layer, so a unit's duration is counted whatever the
+            // console writes. An absent layer keeps one too: unfiltered, `None`
+            // reads as a layer enabling every callsite.
+            let appender_layer = exporters
+                .logger_provider
+                .as_ref()
+                .map(opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new)
+                .with_filter(log_filter(&console.filter));
+            let unit_durations = exporters
+                .meter_provider
+                .as_ref()
+                .map(crate::unit_durations::UnitDurations::new)
+                .with_filter(crate::unit_durations::MeasuredUnits::when(
+                    exporters.meter_provider.is_some(),
+                ));
 
             if !install_global_subscriber(
                 Registry::default()
-                    .with(filter)
-                    .with(console_layer)
-                    .with(otel_layer)
-                    .with(appender_layer),
+                    .with(console_layer.with_filter(filter))
+                    .with(otel_layer.with_filter(log_filter(&console.filter)))
+                    .with(appender_layer)
+                    .with(unit_durations),
             ) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }

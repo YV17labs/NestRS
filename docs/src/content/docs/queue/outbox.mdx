@@ -43,7 +43,8 @@ when records waited past the stall warning. Delivery stays at least once
 ## Filed after the commit
 
 A job pushed inside a transaction waits in the outbox table until that
-transaction commits. The relay then claims committed records with `FOR UPDATE SKIP LOCKED`, so replicas never
+transaction commits. The relay
+then claims committed records with `FOR UPDATE SKIP LOCKED`, so replicas never
 share one, files them, and deletes what was filed. A relay that dies between
 the push and its delete leaves the record to the next pass, which sends the
 same job again: the push script files it once while the queue holds it

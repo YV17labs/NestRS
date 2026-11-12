@@ -94,6 +94,7 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
     let mut serialized = Vec::new();
     let mut schema_fns = Vec::new();
     let mut answered = Vec::new();
+    let withholdable = withholdable_doc();
 
     for field in model.fields.iter().filter(|f| f.in_output_struct()) {
         let name = &field.ident;
@@ -125,9 +126,8 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
                 let (schema_fn, body) = nullable_schema_fn(field, &base, format);
                 let schema_with = format!("{output}::{schema_fn}");
                 schema_fns.push(body);
-                let doc = withholdable_doc();
                 decls.push(quote! {
-                    #doc
+                    #withholdable
                     #complexity
                     #guard
                     #[schemars(schema_with = #schema_with)]
@@ -138,8 +138,7 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
                 });
             }
             (false, Some(column)) => {
-                let doc = withholdable_doc();
-                decls.push(quote! { #doc #complexity #guard pub #name: #base });
+                decls.push(quote! { #withholdable #complexity #guard pub #name: #base });
                 inits.push(quote! {
                     #name: if __judgement.permits(Column::#column) {
                         #value

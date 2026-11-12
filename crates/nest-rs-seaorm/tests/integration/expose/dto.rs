@@ -278,17 +278,14 @@ fn the_schema_says_which_columns_a_grant_may_withhold() {
 
 /// What each property of a JSON Schema object says it is, sorted by key.
 #[cfg(feature = "graphql")]
-fn descriptions(schema: &serde_json::Value) -> Vec<(String, Option<String>)> {
+fn descriptions(schema: &serde_json::Value) -> Vec<(&str, Option<&str>)> {
     let mut said: Vec<_> = schema["properties"]
         .as_object()
         .expect("an object's properties")
         .iter()
-        .map(|(key, property)| {
-            let description = property["description"].as_str().map(str::to_owned);
-            (key.clone(), description)
-        })
+        .map(|(key, property)| (key.as_str(), property["description"].as_str()))
         .collect();
-    said.sort();
+    said.sort_unstable();
     said
 }
 
@@ -309,16 +306,16 @@ async fn each_column_a_grant_may_withhold_says_so_in_every_edge_s_schema() {
         }
     }
 
-    let withholdable = || Some(nest_rs_seaorm::__withholdable_doc!().to_owned());
-    let said_of = |filed_at: &str| {
+    let withholdable = Some(nest_rs_seaorm::__withholdable_doc!());
+    let said_of = |filed_at| {
         let mut said = vec![
-            ("id".to_owned(), None),
-            ("title".to_owned(), None),
-            ("judge".to_owned(), withholdable()),
-            (filed_at.to_owned(), withholdable()),
-            ("note".to_owned(), withholdable()),
+            ("id", None),
+            ("title", None),
+            ("judge", withholdable),
+            (filed_at, withholdable),
+            ("note", withholdable),
         ];
-        said.sort();
+        said.sort_unstable();
         said
     };
     let wire = said_of("filed_at");
@@ -338,16 +335,16 @@ async fn each_column_a_grant_may_withhold_says_so_in_every_edge_s_schema() {
         .into_result()
         .expect("introspection answers");
     let introspected = introspected.data.into_json().expect("the answer is JSON");
-    let mut fields: Vec<(String, Option<String>)> = introspected["__type"]["fields"]
+    let mut fields: Vec<_> = introspected["__type"]["fields"]
         .as_array()
         .expect("the object's fields")
         .iter()
         .map(|field| {
-            let name = field["name"].as_str().expect("a field's name").to_owned();
-            (name, field["description"].as_str().map(str::to_owned))
+            let name = field["name"].as_str().expect("a field's name");
+            (name, field["description"].as_str())
         })
         .collect();
-    fields.sort();
+    fields.sort_unstable();
     assert_eq!(fields, said_of("filedAt"), "GraphQL: {introspected}");
 }
 

@@ -2141,14 +2141,12 @@ mod tests {
     /// what it names past the bound still lifts every action.
     #[test]
     fn a_cover_search_past_its_bound_keeps_a_set_lifting_every_choice() {
-        let per_action: Vec<Vec<Vec<String>>> = (0..4)
-            .map(|action| {
-                (0..40)
-                    .map(|at| vec![format!("a{action}:{at}")])
-                    .chain([vec!["shared".to_owned()]])
-                    .collect()
-            })
-            .collect();
+        let per_action: Vec<Vec<Vec<String>>> = Vec::from_fn(4, |action| {
+            (0..40)
+                .map(|at| vec![format!("a{action}:{at}")])
+                .chain([vec!["shared".to_owned()]])
+                .collect()
+        });
         let choices: Vec<&[Vec<String>]> = per_action.iter().map(Vec::as_slice).collect();
         let named = smallest_cover(&choices);
         for grants in &choices {

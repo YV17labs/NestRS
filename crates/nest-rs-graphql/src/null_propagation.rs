@@ -829,7 +829,7 @@ mod tests {
         }
 
         async fn many(&self, count: usize) -> Vec<Leaf> {
-            (0..count).map(|_| Leaf).collect()
+            Vec::from_fn(count, |_| Leaf)
         }
 
         async fn grid(&self) -> Vec<Option<Vec<Leaf>>> {

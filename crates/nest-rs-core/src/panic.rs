@@ -492,7 +492,7 @@ mod tests {
     fn only_the_most_recent_panics_keep_where_they_happened() {
         let oldest = payload("oldest");
         remember(oldest.as_ref(), seen("oldest", "src/old.rs:1:1"));
-        let newer: Vec<_> = (0..RECENT_PANICS).map(|_| payload("newer")).collect();
+        let newer = Vec::from_fn(RECENT_PANICS, |_| payload("newer"));
         for unit in &newer {
             remember(unit.as_ref(), seen("newer", "src/new.rs:1:1"));
         }

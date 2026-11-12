@@ -16,7 +16,7 @@ use crate::{Carry, Then, Until, config, proxied, proxy, storage, unique};
 async fn stored(label: &str) -> (Storage, String, Vec<u8>) {
     let direct = storage().await;
     let key = unique(label);
-    let body: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+    let body = Vec::from_fn(1024 * 1024, |i| (i % 251) as u8);
     direct
         .put_bytes(&key, body.clone(), "application/octet-stream")
         .await

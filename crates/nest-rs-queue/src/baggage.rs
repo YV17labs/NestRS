@@ -151,12 +151,7 @@ mod tests {
 
     #[test]
     fn a_list_past_what_every_platform_propagates_is_oversized() {
-        let members = |count: usize| {
-            (0..count)
-                .map(|n| format!("k{n}=v"))
-                .collect::<Vec<_>>()
-                .join(",")
-        };
+        let members = |count: usize| Vec::from_fn(count, |n| format!("k{n}=v")).join(",");
         assert!(Baggage::parse(&members(MAX_MEMBERS)).is_ok());
         assert_eq!(
             Baggage::parse(&members(MAX_MEMBERS + 1)),

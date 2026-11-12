@@ -721,14 +721,12 @@ mod tests {
     /// number would keep or drop a whole burst together.
     #[test]
     fn the_right_most_seven_bytes_of_ids_minted_back_to_back_are_no_count() {
-        let tails: Vec<u64> = (0..4096)
-            .map(|_| {
-                let bytes = TraceId::mint().to_bytes();
-                u64::from_be_bytes([
-                    0, bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-                ])
-            })
-            .collect();
+        let tails = Vec::from_fn(4096, |_| {
+            let bytes = TraceId::mint().to_bytes();
+            u64::from_be_bytes([
+                0, bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+            ])
+        });
         let counted = tails
             .windows(2)
             .filter(|pair| (pair[1] >> 32).wrapping_sub(pair[0] >> 32) & 0xff_ffff == 1)
@@ -906,9 +904,7 @@ mod tests {
     fn an_over_long_tracestate_is_truncated_by_whole_members_not_dropped() {
         let small = "a=1,b=2,c=3";
         let oversize = format!("fat={}", "z".repeat(TraceState::OVERSIZE_MEMBER));
-        let filler: Vec<String> = (0..20)
-            .map(|i| format!("v{i}={}", "y".repeat(40)))
-            .collect();
+        let filler = Vec::from_fn(20, |i| format!("v{i}={}", "y".repeat(40)));
         let raw = format!("{small},{oversize},{}", filler.join(","));
         assert!(raw.len() > TraceState::MAX_LEN);
 

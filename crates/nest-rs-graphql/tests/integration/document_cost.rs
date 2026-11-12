@@ -61,7 +61,7 @@ impl ExpansionResolver {
     #[query]
     #[public]
     async fn rows(&self) -> Vec<Row> {
-        (0..ROWS).map(|_| Row).collect()
+        Vec::from_fn(ROWS, |_| Row)
     }
 
     #[query]

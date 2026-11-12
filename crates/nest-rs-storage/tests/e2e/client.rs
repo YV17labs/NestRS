@@ -434,7 +434,7 @@ async fn a_cancelled_upload_discards_its_parts_instead_of_leaving_them_billed() 
 async fn an_upload_moving_slower_than_the_read_bound_completes() {
     let direct = storage().await;
     let key = unique("paced.bin");
-    let body: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+    let body = Vec::from_fn(1024 * 1024, |i| (i % 251) as u8);
     // 16 KiB every 10 ms: the megabyte takes well over three read bounds.
     let (proxy, _) = proxy(|_| Carry {
         request_pace: Some(16 * 1024),

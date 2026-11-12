@@ -192,15 +192,13 @@ async fn app_less_child() -> anyhow::Result<()> {
 )]
 async fn file_lines_nobody_reads() {
     let filed = tokio::time::timeout(Duration::from_secs(10), async {
-        let tasks: Vec<_> = (0..TASKS)
-            .map(|task| {
-                tokio::spawn(async move {
-                    for line in 0..LINES / TASKS {
-                        tracing::info!(target: FIXTURE_TARGET, task, line, "a line the console may drop");
-                    }
-                })
+        let tasks = Vec::from_fn(TASKS, |task| {
+            tokio::spawn(async move {
+                for line in 0..LINES / TASKS {
+                    tracing::info!(target: FIXTURE_TARGET, task, line, "a line the console may drop");
+                }
             })
-            .collect();
+        });
         for task in tasks {
             let _ = task.await;
         }

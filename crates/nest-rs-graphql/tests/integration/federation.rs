@@ -1243,10 +1243,8 @@ async fn a_variables_default_counts_against_the_representations_ceiling() {
     let app = TestApp::for_module::<CappedModule>()
         .await
         .expect("a subgraph boots");
-    let references = (0..10)
-        .map(|id| format!(r#"{{ __typename: "Widget", id: {id} }}"#))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let references =
+        Vec::from_fn(10, |id| format!(r#"{{ __typename: "Widget", id: {id} }}"#)).join(", ");
     let query = format!(
         "query($reps: [_Any!]! = [{references}]) {{ \
          _entities(representations: $reps) {{ ... on Widget {{ id }} }} }}"
@@ -1460,12 +1458,10 @@ async fn aliased_entity_calls_are_counted_together() {
         .await
         .expect("a subgraph with a pinned ceiling boots");
 
-    let aliases = (0..3)
-        .map(|index| {
-            format!("a{index}: _entities(representations: $reps) {{ ... on Widget {{ label }} }}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let aliases = Vec::from_fn(3, |index| {
+        format!("a{index}: _entities(representations: $reps) {{ ... on Widget {{ label }} }}")
+    })
+    .join("\n");
     let resp = app
         .http()
         .post("/graphql")

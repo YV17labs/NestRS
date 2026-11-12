@@ -112,7 +112,7 @@ async fn a_file_changed_on_disk_is_served_as_it_now_is() {
 #[tokio::test]
 async fn a_large_file_is_streamed_whole_and_in_part() {
     let dir = site();
-    let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    let bytes = Vec::from_fn(200_000, |i| (i % 251) as u8);
     std::fs::write(dir.path().join("assets/blob.bin"), &bytes).unwrap();
     let app = serve(dir.path(), StaticFilesConfig::default()).await;
 

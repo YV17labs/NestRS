@@ -321,7 +321,7 @@ impl LibraryResolver {
     #[query]
     #[authorize(Read, book::Entity)]
     async fn three_books(&self) -> GqlResult<Vec<book::Book>> {
-        Ok((0..3).map(|_| book::Book::from(&book_row())).collect())
+        Ok(Vec::from_fn(3, |_| book::Book::from(&book_row())))
     }
 
     #[query]

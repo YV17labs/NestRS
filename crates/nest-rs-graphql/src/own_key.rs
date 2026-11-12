@@ -717,21 +717,19 @@ mod tests {
         let document = parse_query("{ fine { __nestrs_key: fine } fine { fine @skip(if: true) } }")
             .expect("parses");
         let (_, operation) = selected_operation(&document, None).expect("one operation");
-        let drawn: Vec<OwnKey> = (0..2)
-            .map(|_| {
-                let own_key = OwnKey::default();
-                own_key
-                    .give(
-                        &document,
-                        &operation.node,
-                        &registry(),
-                        &Variables::default(),
-                        DocumentLimits::UNBOUNDED,
-                    )
-                    .expect("nothing refused");
-                own_key
-            })
-            .collect();
+        let drawn = Vec::from_fn(2, |_| {
+            let own_key = OwnKey::default();
+            own_key
+                .give(
+                    &document,
+                    &operation.node,
+                    &registry(),
+                    &Variables::default(),
+                    DocumentLimits::UNBOUNDED,
+                )
+                .expect("nothing refused");
+            own_key
+        });
         let keys: Vec<&str> = drawn
             .iter()
             .map(|own_key| own_key.0.get().expect("a key given").as_str())

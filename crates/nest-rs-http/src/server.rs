@@ -979,9 +979,9 @@ mod tests {
         let logs = LogCapture::install();
         let mut backoff = AcceptBackoff::default();
         let emfile = io::Error::from_raw_os_error(EMFILE);
-        let delays: Vec<u128> = (0..10)
-            .map(|_| backoff.failed(&emfile).expect("backs off").as_millis())
-            .collect();
+        let delays = Vec::from_fn(10, |_| {
+            backoff.failed(&emfile).expect("backs off").as_millis()
+        });
         assert_eq!(delays, [5, 10, 20, 40, 80, 160, 320, 640, 1000, 1000]);
         let warned = logs.expect_one(crate::target::HTTP, "accept failed; backing off");
         assert_eq!(warned.level, "warn");

@@ -336,7 +336,7 @@ mod tests {
     fn retries_climb_the_curve_and_start_over_once_a_call_answers() {
         let backoff = Backoff::new(Duration::from_millis(250), Duration::from_secs(5));
         let mut retries = Retries::new(backoff, 7);
-        let climbed: Vec<Duration> = (0..3).map(|_| retries.next_wait()).collect();
+        let climbed = Vec::from_fn(3, |_| retries.next_wait());
         assert_eq!(
             climbed,
             [1, 2, 3].map(|attempt| backoff.wait(nth(attempt), 7)),

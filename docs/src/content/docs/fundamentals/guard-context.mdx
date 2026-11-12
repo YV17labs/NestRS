@@ -98,9 +98,12 @@ reads it — and every request reads that one copy, so it is
 same type does not shadow it. A method holds one value of a type, and so does
 its controller: a second would be read by nothing, so the compiler refuses it
 when each expression names its type (`Roles(..)`), and the boot when one hides
-it (`Roles::new(..)`), naming the type and where. Because the global pool runs post-routing in the route's guard stage (above), a
-global guard reads `#[meta(...)]` too — the route's declaration is carried
-before the chain runs, and it holds `#[public]` below as well.
+it (`Roles::new(..)`), naming the type and where. The reader resolves by
+`TypeId`, so two values of one underlying shape that must coexist are wrapped
+in distinct newtypes, each declared once per level. Because the global pool
+runs post-routing in the route's guard stage (above), a global guard reads
+`#[meta(...)]` too — the route's declaration is carried before the chain runs,
+and it holds `#[public]` below as well.
 
 `ThrottlerGuard` reads a route's quota this way — the demo's `POST /login`
 declares `#[meta(Throttle::per_minute(10))]` beside `#[use_guards(ThrottlerGuard)]`:

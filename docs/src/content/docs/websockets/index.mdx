@@ -168,10 +168,6 @@ well, since a browser cannot set headers on a `WebSocket` handshake.
 
 - [Messages](/websockets/messages/) — the envelope shape, the handler's
   signature, payload validation, and the layers a message runs.
-- [Message posture](/websockets/posture/) — the upgrade's guards, `#[public]`
-  and `#[authorize]` on a message.
-- [Replies and error frames](/websockets/replies/) — the `Result`/`Err`
-  return contract, and what an error frame says.
 - [Guards](/websockets/guards/) — authenticate at the upgrade, gate
   per-message envelopes, and the two scopes that split.
 - [Rooms](/websockets/rooms/) — `WsClient::join` / `leave` / `broadcast` /
@@ -179,6 +175,10 @@ well, since a browser cannot set headers on a `WebSocket` handshake.
 
 ### All options
 
+- [Message posture](/websockets/posture/) — the upgrade's guards, `#[public]`
+  and `#[authorize]` on a message.
+- [Replies and error frames](/websockets/replies/) — the `Result`/`Err`
+  return contract, and what an error frame says.
 - [Namespaces](/websockets/namespaces/) — several gateways with isolated
   registries via `WsServer<N>` markers.
 - [Server-side push](/websockets/server-push/) — reaching connected clients

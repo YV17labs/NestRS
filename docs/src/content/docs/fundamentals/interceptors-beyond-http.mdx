@@ -1,6 +1,6 @@
 ---
 title: Interceptors beyond HTTP
-description: "One interceptor around GraphQL fields, WebSocket messages, MCP operations, jobs, ticks and listener calls — and what each edge's unit runs."
+description: "An interceptor around each GraphQL root field, the three GraphQL places that run less, and where every other edge says what its unit runs."
 sidebar:
   order: 8.5
 ---
@@ -17,9 +17,9 @@ request.
 Each root field of a GraphQL operation — a `#[query]`, a `#[mutation]`, an
 `#[entity]`, and the federation fields `_service` and `_entities` — is a unit
 of its own, `graphql.field`, inside the `/graphql` request that carried it.
-The app's interceptors, the resolver's and the field's own run around it, after its guards and its class gate, exactly as
-around a route. `cx.unit()` names the unit, and `GraphqlView` says which field
-and the role it plays:
+The app's interceptors, the resolver's and the field's own run around it, after
+its guards and its class gate, exactly as around a route. `cx.unit()` names the
+unit, and `GraphqlView` says which field and the role it plays:
 
 ```rust title="apps/api/src/interceptor.rs"
 use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable};

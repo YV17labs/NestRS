@@ -442,10 +442,8 @@ impl<'a> Marks<'a> {
 /// A key for one request: the process's secret hash keys over a count of the keys
 /// drawn, so no two requests share one and no caller can foresee it.
 ///
-/// The answer loses the key from every object it holds, a scalar's value among
-/// them, which no read of the document could tell apart: async-graphql (`7.2.1`)
-/// runs no `SameResponseShape` (§5.3.2), so one response key may answer a scalar
-/// under one type condition and an object under another. Neither a document nor a
+/// The answer loses the key from every object it holds, read off the answer alone,
+/// so a scalar's value answering an object loses it too: neither a document nor a
 /// stored value spells a drawn key but by a 64-bit guess.
 fn drawn_key() -> Name {
     static SEED: LazyLock<RandomState> = LazyLock::new(RandomState::new);

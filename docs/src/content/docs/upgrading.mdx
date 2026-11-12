@@ -1460,6 +1460,12 @@ lists what the boot, a log or the wire shows when one is missed.
   arguments under different type conditions**, `{ a: user { id } ... on Query { a: org {
   id } } }`, reads an `INVALID_ARGUMENT` refusal at the copy that differs and runs
   nothing, where it answered both fields under one key. Give each copy its own alias.
+- **A GraphQL document selecting one key twice at one place in two shapes**, whichever
+  types its copies are selected on, `{ search { ... on User { x: name } ... on Org { x:
+  size } } }` with `name: String!` and `size: Int!`, reads an `INVALID_ARGUMENT` refusal,
+  `the operation selects "x" more than once at one place with different response
+  shapes`, at the copy that differs, and runs nothing, where it answered a string for one
+  row and a number for the next. Give each copy its own alias.
 - **A GraphQL subscription whose root names other than one field** — a second root
   field, `subscription { a b }`, one twice, one through a fragment, or one under `@skip`
   or `@include` — reads an `INVALID_ARGUMENT` refusal, `the subscription selects "b"

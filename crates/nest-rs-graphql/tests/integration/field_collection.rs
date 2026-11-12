@@ -3,7 +3,8 @@
 //! validation into one it answers as the specification reads — a mutation's root
 //! field selected twice runs once, the copies of a list of lists merge, and a type
 //! condition on a union applies wherever a member of it is resolved — and the
-//! rewritten document passes every check the one sent would have.
+//! rewritten document passes every check the one sent would have; copies of one key
+//! that no one field answers, or that answer in two shapes, are refused.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -38,6 +39,7 @@ struct Vault {
 struct Leaf {
     fine: i32,
     leaf: i32,
+    name: String,
 }
 
 /// A [`Node`] no union holds.
@@ -68,7 +70,11 @@ fn cell() -> Cell {
 }
 
 fn leaf() -> Leaf {
-    Leaf { fine: 2, leaf: 2 }
+    Leaf {
+        fine: 2,
+        leaf: 2,
+        name: "leaf".to_owned(),
+    }
 }
 
 fn stone() -> Stone {
@@ -459,6 +465,40 @@ async fn copies_naming_different_fields_under_different_conditions_are_refused()
         json!({ "data": { "eithers": [{ "x": 1 }, { "x": 2 }] } }),
         "copies no one value meets name what they will"
     );
+}
+
+/// What copies answering in two shapes are refused with.
+fn misshapen(key: &str) -> String {
+    format!(
+        r#"the operation selects "{key}" more than once at one place with different response shapes"#
+    )
+}
+
+/// Copies of one key answering in two shapes are refused, as §5.3.2
+/// *SameResponseShape* reads, whichever type each is selected on: async-graphql
+/// 7.2.1's validation runs no such rule, and answered a number for one row and a
+/// string for the next.
+#[tokio::test]
+async fn copies_answering_in_two_shapes_are_refused() {
+    let app = boot::<CellModule>().await;
+    for document in [
+        "{ eithers { ... on Cell { x: fine } ... on Leaf { x: name } } }",
+        "{ eithers { ... on Cell { x: broken } ... on Leaf { x: leaf } } }",
+        "{ eithers { ... on Cell { x: inner { fine } } ... on Leaf { x: fine } } }",
+        "{ eithers { ...C ...L } } fragment C on Cell { x: fine } fragment L on Leaf { x: name }",
+    ] {
+        let answer = query(&app, document).await;
+        assert_eq!(answer["data"], Value::Null, "{document}: {answer}");
+        assert_eq!(
+            answer["errors"][0]["message"],
+            misshapen("x"),
+            "{document}: {answer}"
+        );
+        assert_eq!(
+            answer["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
+            "{document}: {answer}"
+        );
+    }
 }
 
 /// Where one type's copies of a key merge into a field per type, every other type's

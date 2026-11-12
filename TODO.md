@@ -128,16 +128,6 @@ SDL and an MCP tool's output schema, whatever the posture of the unit answering 
   environment of its own running nginx, Envoy and HAProxy in front of an app,
   its suite run by hand, a new service the owner admits first. *read*
 
-**GraphQL**
-- async-graphql 7.2.1 runs no `SameResponseShape` (GraphQL §5.3.2): copies of one key
-  under conditions on two object types answer in two shapes, `{ results { ... on User {
-  x: name } ... on Org { x: size } } }` a string for one row and a number for the next,
-  where the specification refuses the document. Close: in the read
-  `crates/nest-rs-graphql/src/field_collection.rs` makes of a place's copies, compare the
-  declared shape of each key's copies across the types the place may hold, and refuse as
-  it refuses copies naming different fields. *read* (`overlapping_fields_can_be_merged.rs`
-  compares names and arguments alone)
-
 **WebSocket and MCP**
 - An MCP session's `ping` rides its stream, so it is asked only while the
   transport can write that stream: a client gone with the kernel's send buffer
@@ -271,8 +261,15 @@ own count of what it copies, held to `max_complexity` at its largest, counting
 copies a merge inside a copy per type then folds into one, so such a document can
 be refused a field per fold below the limit (closing it: a separate bound on the
 work, twice the limit and the document, with the limit read on the finished
-rewrite); the demo chart's `checksum/secret`, one sum over every Secret the
-chart writes, which an install handing the chart one weak secret and nothing
+rewrite); copies of one GraphQL key in one shape naming different fields, under a
+condition on an interface or a union and one on an object no value of it is,
+`{ results { ... on Named { x: name } ... on Org { x: title } } }`, each value
+answering its own field where §5.3.2 refuses the document, the name rule reading
+the copies one value meets rather than their parents' types
+(`graphql-transactions.md`, 2026-11-12; closing it: comparing each pair of copies,
+two objects' exclusivity inherited from the copies above them, which grows as the
+square of a key's copies at a place); the demo chart's `checksum/secret`, one
+sum over every Secret the chart writes, which an install handing the chart one weak secret and nothing
 else (every other app on an `existingSecret`) publishes unsalted to whoever
 reads its pods (closing it: a salt kept in the cluster, which `helm
 template` cannot read); the demo's Helm chart, linted and rendered by hand and
@@ -299,8 +296,8 @@ that union is resolved, `Fields::add_set`; a later copy of a list of lists
 dropped, `insert_value` joining list items only where they are objects; these
 three the framework collects meanwhile, rewriting the document before
 validation; `OverlappingFieldsCanBeMerged` comparing copies under one type
-condition alone, which the framework refuses meanwhile, and running no
-`SameResponseShape`; a `Json` scalar whose value fails to serialize answered
+condition alone, and running no `SameResponseShape`, both of which the framework
+refuses meanwhile; a `Json` scalar whose value fails to serialize answered
 `null` with no error, `Json::resolve`, which the framework answers meanwhile as
 its root field's refusal); redis-rs (`PipelineSink` loses a
 read error with nothing in flight; a command sent as its connection's driver

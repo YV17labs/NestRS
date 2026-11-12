@@ -23,7 +23,8 @@
 //!   type its position resolves (`Fields::add_set`, so one on a union is rewritten
 //!   where a member of it is resolved), `OverlappingFieldsCanBeMerged` comparing
 //!   copies under one type condition alone (so copies naming different fields are
-//!   refused), the parse `Request::set_parsed_query` caches being the one validated
+//!   refused) and no rule comparing their shapes (so copies answering in two shapes
+//!   are refused), the parse `Request::set_parsed_query` caches being the one validated
 //!   and executed, `check_recursive_depth` counting an inline fragment as a spread,
 //!   and complexity and depth counting every field the document holds;
 //! - `src/own_key.rs`: `null` for an object with no key, what finishes after a

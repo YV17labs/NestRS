@@ -23,7 +23,10 @@
 //! rewritten condition cannot apply to stays under it, where nothing runs it.
 //! Complexity and depth count what runs. Copies naming different fields or
 //! arguments, which no one field answers, are refused, as is a copy the rewrite
-//! could not merge.
+//! could not merge, and so are copies answering in two shapes whatever types they
+//! are selected on, which async-graphql's validation never compares (§5.3.2
+//! *SameResponseShape*): a key a document selects once anywhere has no copy, so only
+//! a document a first walk finds naming a key twice in one set is read for them.
 //!
 //! What the rewrite copies is held to what a document may add, as what its fragments
 //! repeat is (`document_cost.rs`): copies per member of a union or per type of a
@@ -59,8 +62,9 @@ use crate::operation_units::{RECURSIVE_DEPTH, is_condition, is_skipped};
 /// copy that differs: copies naming different fields or arguments, at a mutation's
 /// root or where a list of lists stands, and, in a document that could not be
 /// rewritten, a mutation's root field selected twice or a list of lists selected
-/// twice otherwise. async-graphql's refusal of a document past `max_complexity`,
-/// for a rewrite that would write past `limits`.
+/// twice otherwise; then copies answering in two shapes, wherever they stand.
+/// async-graphql's refusal of a document past `max_complexity`, for a rewrite that
+/// would write past `limits`.
 pub(crate) fn collected(
     document: &ExecutableDocument,
     operation: &OperationDefinition,
@@ -72,9 +76,38 @@ pub(crate) fn collected(
         return Ok(None);
     };
     let fragments = &document.fragments;
-    if !needs_collecting(fragments, operation, root, registry, variables) {
-        return Ok(None);
+    let set = &operation.selection_set;
+    let glance = Glance::of(fragments, registry, &set.node);
+    let collected = match needs_collecting(fragments, operation, root, registry, variables, &glance)
+    {
+        true => as_collected(document, operation, root, registry, variables, limits)?,
+        false => None,
+    };
+    // Only a key twice in one set makes copies.
+    if glance.twice
+        && let Some((key, at)) = Shapes::new(fragments, registry).misshapen(&[(set, root)], 0)
+    {
+        return Err(misshapen(key, at));
     }
+    Ok(collected)
+}
+
+/// `document` with `operation`, selecting on `root`, rewritten as §6.3.2 collects
+/// it; `None` when it stands as sent, which only a document validation refuses comes
+/// to.
+///
+/// # Errors
+///
+/// What [`collected`] refuses but copies answering in two shapes.
+fn as_collected(
+    document: &ExecutableDocument,
+    operation: &OperationDefinition,
+    root: &str,
+    registry: &Registry,
+    variables: &Variables,
+    limits: DocumentLimits,
+) -> Result<Option<ExecutableDocument>, ServerError> {
+    let fragments = &document.fragments;
     let mut collection = Collection {
         registry,
         variables,
@@ -112,14 +145,15 @@ fn root_type(registry: &Registry, ty: OperationType) -> Option<&str> {
 /// a mutation's root selecting one key or spreading one fragment twice, a condition
 /// on a union no engine rule applies where a member of it may be resolved, or copies
 /// of a key at one place that no one field answers or that a list of lists stands
-/// at and selecting otherwise. The schema's types are read only for a document a
-/// glance finds naming a union in a condition, or a key twice in one set.
+/// at and selecting otherwise. The schema's types are read only for a document
+/// `glance` found naming a union in a condition, or a key twice in one set.
 fn needs_collecting(
     fragments: &HashMap<Name, Positioned<FragmentDefinition>>,
     operation: &OperationDefinition,
     root: &str,
     registry: &Registry,
     variables: &Variables,
+    glance: &Glance,
 ) -> bool {
     let set = &operation.selection_set;
     if operation.ty == OperationType::Mutation
@@ -129,7 +163,6 @@ fn needs_collecting(
     {
         return true;
     }
-    let glance = Glance::of(fragments, registry, &set.node);
     if glance.unions
         && Divergence::new(fragments, registry, variables).in_set(
             &set.node,
@@ -316,6 +349,14 @@ fn uncollected(
 fn unlike(key: &str, at: Pos) -> ServerError {
     crate::error::invalid_argument(format!(
         r#"the operation selects "{key}" more than once at one place with different fields or arguments"#
+    ))
+    .into_server_error(at)
+}
+
+/// The refusal of `key`, whose copy at `at` answers in another shape than the first.
+fn misshapen(key: &str, at: Pos) -> ServerError {
+    crate::error::invalid_argument(format!(
+        r#"the operation selects "{key}" more than once at one place with different response shapes"#
     ))
     .into_server_error(at)
 }
@@ -735,7 +776,7 @@ impl<'a> Copies<'a> {
             for set in copies {
                 self.collect(&set.node, concrete, depth, &mut fields);
             }
-            for (key, group) in by_key(fields) {
+            for (key, group) in by_key(fields, |field| *field) {
                 let first = group[0];
                 let Some(declared) = declared(registry, concrete, &first.node.name.node) else {
                     // `__typename`, or a field validation refuses.
@@ -914,19 +955,202 @@ impl<'a> Copies<'a> {
     }
 }
 
-/// `fields` by response key, in the order they are first selected, one field
-/// selected through one fragment spread twice standing once.
-fn by_key<'a>(fields: Vec<&'a Positioned<Field>>) -> IndexMap<&'a str, Vec<&'a Positioned<Field>>> {
-    let mut seen = HashSet::with_capacity(fields.len());
-    let mut keys: IndexMap<&'a str, Vec<&'a Positioned<Field>>> = IndexMap::new();
-    for field in fields {
+/// `selected` by the response key of the field each is, in the order they are first
+/// selected, one field selected through one fragment spread twice standing once.
+fn by_key<'a, T>(
+    selected: Vec<T>,
+    field: impl Fn(&T) -> &'a Positioned<Field>,
+) -> IndexMap<&'a str, Vec<T>> {
+    let mut seen = HashSet::with_capacity(selected.len());
+    let mut keys: IndexMap<&'a str, Vec<T>> = IndexMap::new();
+    for one in selected {
+        let field = field(&one);
         if seen.insert(field.pos) {
             keys.entry(field.node.response_key().node.as_str())
                 .or_default()
-                .push(field);
+                .push(one);
         }
     }
     keys
+}
+
+/// A field a place selects, and the type it is selected on.
+type Selected<'a> = (&'a Positioned<Field>, &'a str);
+
+/// What each response key answers at each place of a document, compared across its
+/// copies as §5.3.2 *SameResponseShape* reads: every copy, whichever type it is
+/// selected on and whatever directive it carries, since a document's validity is no
+/// variable's, and below copies of objects, the copies their selections merge. Each
+/// place is read once, and each fragment's fields once.
+struct Shapes<'a> {
+    fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
+    registry: &'a Registry,
+    /// The fields each fragment selects.
+    spread: HashMap<&'a str, Vec<Selected<'a>>>,
+    /// The fragments being read: a cycle, which validation refuses, ends there.
+    expanding: Vec<&'a str>,
+    /// The places of one set read, by where it opens.
+    read_alone: HashSet<Pos>,
+    /// The places of several sets read, by where their sets open.
+    read: HashSet<Vec<Pos>>,
+}
+
+impl<'a> Shapes<'a> {
+    fn new(
+        fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
+        registry: &'a Registry,
+    ) -> Self {
+        Self {
+            fragments,
+            registry,
+            spread: HashMap::new(),
+            expanding: Vec::new(),
+            read_alone: HashSet::new(),
+            read: HashSet::new(),
+        }
+    }
+
+    /// Whether `place` is read for the first time.
+    fn first_read(&mut self, place: &[(&'a Positioned<SelectionSet>, &'a str)]) -> bool {
+        match place {
+            [(set, _)] => self.read_alone.insert(set.pos),
+            _ => self
+                .read
+                .insert(place.iter().map(|(set, _)| set.pos).collect()),
+        }
+    }
+
+    /// The first copy, at the place the sets `place` merge into or below it, answering
+    /// in another shape than the first copy of its key there: that key, and where the
+    /// copy stands. Each set comes with the type it is selected on.
+    fn misshapen(
+        &mut self,
+        place: &[(&'a Positioned<SelectionSet>, &'a str)],
+        depth: usize,
+    ) -> Option<(&'a str, Pos)> {
+        if depth > RECURSIVE_DEPTH || !self.first_read(place) {
+            return None;
+        }
+        let mut fields = Vec::new();
+        for &(set, on) in place {
+            self.selected(&set.node, on, depth, &mut fields);
+        }
+        let registry = self.registry;
+        for (key, copies) in by_key(fields, |&(field, _)| field) {
+            if let [(field, _)] = copies[..]
+                && field.node.selection_set.node.items.is_empty()
+            {
+                continue;
+            }
+            // A field the schema does not declare there is validation's to refuse.
+            let mut answering = copies.into_iter().filter_map(|(field, on)| {
+                answered_type(registry, on, &field.node.name.node).map(|ty| (field, ty))
+            });
+            let Some((first, shape)) = answering.next() else {
+                continue;
+            };
+            let leaf = registry
+                .types
+                .get(MetaTypeName::concrete_typename(shape))
+                .is_some_and(MetaType::is_leaf);
+            let mut below = Vec::new();
+            for (copy, ty) in std::iter::once((first, shape)).chain(answering) {
+                if ty != shape && !same_shape(registry, shape, ty) {
+                    return Some((key, copy.pos));
+                }
+                if !leaf && !copy.node.selection_set.node.items.is_empty() {
+                    below.push((
+                        &copy.node.selection_set,
+                        MetaTypeName::concrete_typename(ty),
+                    ));
+                }
+            }
+            if !below.is_empty()
+                && let Some(found) = self.misshapen(&below, depth + 1)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// The fields `set`, selected on `on`, holds through its fragments, each with the
+    /// type it is selected on, whatever its conditions and directives.
+    fn selected(
+        &mut self,
+        set: &'a SelectionSet,
+        on: &'a str,
+        depth: usize,
+        fields: &mut Vec<Selected<'a>>,
+    ) {
+        if depth > RECURSIVE_DEPTH {
+            return;
+        }
+        for selection in &set.items {
+            match &selection.node {
+                Selection::Field(field) => fields.push((field, on)),
+                Selection::InlineFragment(fragment) => {
+                    let on = fragment
+                        .node
+                        .type_condition
+                        .as_ref()
+                        .map_or(on, |condition| condition.node.on.node.as_str());
+                    self.selected(&fragment.node.selection_set.node, on, depth + 1, fields);
+                }
+                Selection::FragmentSpread(spread) => {
+                    let name = spread.node.fragment_name.node.as_str();
+                    fields.extend_from_slice(self.fragment_selected(name, depth + 1));
+                }
+            }
+        }
+    }
+
+    /// The fields fragment `name` selects, read once: one still being read, a cycle
+    /// validation refuses, selects nothing.
+    fn fragment_selected(&mut self, name: &'a str, depth: usize) -> &[Selected<'a>] {
+        let fragments = self.fragments;
+        if !self.spread.contains_key(name)
+            && !self.expanding.contains(&name)
+            && let Some(fragment) = fragments.get(name)
+        {
+            self.expanding.push(name);
+            let mut fields = Vec::new();
+            let on = fragment.node.type_condition.node.on.node.as_str();
+            self.selected(&fragment.node.selection_set.node, on, depth, &mut fields);
+            self.expanding.pop();
+            self.spread.insert(name, fields);
+        }
+        self.spread.get(name).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// The type field `name` of `on` answers, as the schema declares it there:
+/// `__typename` answers a name on every type.
+fn answered_type<'r>(registry: &'r Registry, on: &str, name: &str) -> Option<&'r str> {
+    match name {
+        "__typename" => Some("String!"),
+        _ => declared(registry, on, name).map(|declared| declared.ty.as_str()),
+    }
+}
+
+/// Whether two declared types answer in one shape where they stand, as §5.3.2
+/// *SameResponseShape* compares them: one nullability and one list wrapping, at each
+/// level of a list, then one scalar or enum, or an object, an interface or a union
+/// each, whose selections are compared below.
+fn same_shape(registry: &Registry, mut a: &str, mut b: &str) -> bool {
+    loop {
+        match (MetaTypeName::create(a), MetaTypeName::create(b)) {
+            (MetaTypeName::NonNull(a_item), MetaTypeName::NonNull(b_item))
+            | (MetaTypeName::List(a_item), MetaTypeName::List(b_item)) => {
+                (a, b) = (a_item, b_item);
+            }
+            (MetaTypeName::Named(a), MetaTypeName::Named(b)) => {
+                let leaf = |name| registry.types.get(name).is_some_and(MetaType::is_leaf);
+                return a == b || !(leaf(a) || leaf(b));
+            }
+            _ => return false,
+        }
+    }
 }
 
 /// What part of a document holds that a copy of it copies: its fields, and the text
@@ -2690,6 +2914,334 @@ mod tests {
         let past = thread_cpu_time() - started;
         assert!(matches!(collected, Ok(Some(_))), "the copies merge");
         assert!(past < parsing * 4, "parsed in {parsing:?}, then {past:?}");
+    }
+
+    /// A schema whose union holds two objects answering every shape §5.3.2
+    /// *SameResponseShape* tells apart: nullability, list wrapping and its items', a
+    /// scalar or an enum by its name, a leaf or an object.
+    mod shapes {
+        use async_graphql::registry::{MetaTypeName, Registry};
+        use async_graphql::{Enum, Interface, Object, OutputType, SimpleObject, Union};
+
+        #[derive(Enum, Clone, Copy, PartialEq, Eq)]
+        pub(super) enum Tone {
+            Light,
+        }
+
+        #[derive(Enum, Clone, Copy, PartialEq, Eq)]
+        pub(super) enum Mood {
+            Calm,
+        }
+
+        #[derive(SimpleObject)]
+        pub(super) struct User {
+            name: String,
+            nick: Option<String>,
+            tone: Tone,
+            tags: Vec<String>,
+            rows: Vec<Vec<String>>,
+            best: Option<Box<User>>,
+            found: Vec<Found>,
+        }
+
+        #[derive(SimpleObject)]
+        pub(super) struct Org {
+            size: i32,
+            title: String,
+            shade: Tone,
+            mood: Mood,
+            aliases: Vec<String>,
+            labels: Vec<Option<String>>,
+            owner: Option<User>,
+            seat: Option<Seat>,
+        }
+
+        #[derive(SimpleObject)]
+        pub(super) struct Seat {
+            name: String,
+        }
+
+        #[derive(Union)]
+        pub(super) enum Found {
+            User(User),
+            Org(Org),
+        }
+
+        #[derive(Interface)]
+        #[graphql(field(name = "name", ty = "&String"))]
+        pub(super) enum Named {
+            User(User),
+        }
+
+        fn user() -> User {
+            User {
+                name: "Ada".to_owned(),
+                nick: None,
+                tone: Tone::Light,
+                tags: Vec::new(),
+                rows: Vec::new(),
+                best: None,
+                found: Vec::new(),
+            }
+        }
+
+        fn org() -> Org {
+            Org {
+                size: 3,
+                title: "Analytical".to_owned(),
+                shade: Tone::Light,
+                mood: Mood::Calm,
+                aliases: Vec::new(),
+                labels: Vec::new(),
+                owner: None,
+                seat: None,
+            }
+        }
+
+        pub(super) struct Query;
+
+        #[Object]
+        impl Query {
+            async fn results(&self) -> Vec<Found> {
+                vec![Found::User(user()), Found::Org(org())]
+            }
+
+            async fn named(&self) -> Option<Named> {
+                None
+            }
+        }
+
+        pub(super) fn registry() -> Registry {
+            let mut registry = Registry::default();
+            let root = Query::create_type_info(&mut registry);
+            registry.query_type = MetaTypeName::concrete_typename(&root).to_owned();
+            registry
+        }
+    }
+
+    /// What copies of `key` answering in two shapes are refused with.
+    fn misshapen_said(key: &str) -> String {
+        format!(
+            r#"the operation selects "{key}" more than once at one place with different response shapes"#
+        )
+    }
+
+    /// What collecting `text` against [`shapes`], `variables` sent, refuses it with.
+    fn shapes_refusal(text: &str, variables: serde_json::Value) -> Option<String> {
+        let document = parse_query(text).expect("the document parses");
+        let (_, operation) = selected_operation(&document, None).expect("an operation");
+        collected(
+            &document,
+            &operation.node,
+            &shapes::registry(),
+            &Variables::from_json(variables),
+            deployed(),
+        )
+        .err()
+        .map(|refusal| refusal.message)
+    }
+
+    /// Pins why copies answering in two shapes are refused: async-graphql 7.2.1 runs no
+    /// `SameResponseShape` (§5.3.2), and answers each row in its own. A bump that
+    /// refuses the document fails here, and the read can go.
+    #[tokio::test]
+    async fn async_graphql_answers_one_key_in_two_shapes() {
+        let schema = Schema::new(
+            shapes::Query,
+            async_graphql::EmptyMutation,
+            EmptySubscription,
+        );
+        let response = schema
+            .execute("{ results { ... on User { x: name } ... on Org { x: size } } }")
+            .await;
+        assert!(response.errors.is_empty(), "{response:?}");
+        assert_eq!(
+            response.data.into_json().expect("plain JSON"),
+            json!({ "results": [{ "x": "Ada" }, { "x": 3 }] })
+        );
+    }
+
+    /// Copies of one key whose declared types answer in two shapes — by nullability, by
+    /// list wrapping or its items', by the scalar or enum they name, a leaf beside an
+    /// object, and below copies of objects a key whose own copies do — are refused,
+    /// whichever type each is selected on: through fragments, under a directive leaving
+    /// one out, below copies merged, inside a condition a rewrite reads, at any depth.
+    #[test]
+    fn copies_answering_in_two_shapes_are_refused() {
+        for (document, key) in [
+            (
+                "{ results { ... on User { x: name } ... on Org { x: size } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { x: nick } ... on Org { x: title } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { x: tags } ... on Org { x: title } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { x: tags } ... on Org { x: labels } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { x: rows } ... on Org { x: aliases } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { x: tone } ... on Org { x: mood } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { x: name } ... on Org { x: shade } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { x: best { name } } ... on Org { x: title } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { x: nick } ... on Org { x: seat { name } } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { x: __typename } ... on Org { x: size } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { p: best { y: name } } ... on Org { p: owner { y: nick } } } }",
+                "y",
+            ),
+            (
+                "{ results { ... on User { p: best { y: name } } ... on Org { p: owner { ... on User { y: nick } } } } }",
+                "y",
+            ),
+            (
+                "{ results { ...U ...O } } fragment U on User { x: name } fragment O on Org { x: size }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { x: name } } results { ... on Org { x: size } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { found { ... on User { x: name } ... on Org { x: size } } } } }",
+                "x",
+            ),
+            (
+                "{ results { ... on User { best { ... on Found { ... on User { x: name } ... on Org { x: size } } } } } }",
+                "x",
+            ),
+        ] {
+            assert_eq!(
+                shapes_refusal(document, json!({})),
+                Some(misshapen_said(key)),
+                "{document}"
+            );
+        }
+        let document = "query($s: Boolean!) { results { ... on User { x: name } \
+                        ... on Org { x: size @skip(if: $s) } } }";
+        for skipped in [true, false] {
+            assert_eq!(
+                shapes_refusal(document, json!({ "s": skipped })),
+                Some(misshapen_said("x")),
+                "a document's validity is no variable's: {skipped}"
+            );
+        }
+    }
+
+    /// The refusal stands where the copy that differs is written.
+    #[test]
+    fn copies_answering_in_two_shapes_are_refused_at_the_copy_that_differs() {
+        let document = parse_query(
+            "{\n  results {\n    ... on User { x: name }\n    ... on Org { x: size }\n  }\n}",
+        )
+        .expect("parses");
+        let (_, operation) = selected_operation(&document, None).expect("one operation");
+        let refused = collected(
+            &document,
+            &operation.node,
+            &shapes::registry(),
+            &Variables::default(),
+            deployed(),
+        )
+        .expect_err("refused");
+        assert_eq!(
+            refused.locations,
+            [Pos {
+                line: 4,
+                column: 18
+            }]
+        );
+    }
+
+    /// Copies answering in one shape stand, whatever fields they name on types no
+    /// value is both of: an object below each may be of another type, and a key only
+    /// one copy selects below them compares nothing.
+    #[test]
+    fn copies_answering_in_one_shape_stand() {
+        for document in [
+            "{ results { ... on User { x: name } ... on Org { x: title } } }",
+            "{ results { ... on User { x: __typename } ... on Org { x: title } } }",
+            "{ results { ... on User { x: tags } ... on Org { x: aliases } } }",
+            "{ results { ... on User { x: tone } ... on Org { x: shade } } }",
+            "{ results { ... on User { p: best { y: name } } ... on Org { p: seat { y: name } } } }",
+            "{ results { ... on User { p: best { y: tags } } ... on Org { p: seat { z: name } } } }",
+            "{ results { ... on User { x: name } ...O } } fragment O on Org { x: title }",
+            "{ results { __typename ... on User { __typename } } }",
+        ] {
+            assert_eq!(shapes_refusal(document, json!({})), None, "{document}");
+        }
+        assert_eq!(
+            shapes_refusal(
+                "{ results { ...A } } fragment A on User { x: name ...A x: name }",
+                json!({})
+            ),
+            None,
+            "a cycle, validation's to refuse, ends the read"
+        );
+    }
+
+    /// Pins the limit `TODO.md` §5 keeps: copies in one shape naming different fields,
+    /// under a condition on an interface and one on an object no value of it is, answer
+    /// each value its own field, where §5.3.2 refuses the document, its name rule
+    /// reading the copies' parent types where this one reads the copies a value meets.
+    #[test]
+    fn copies_no_value_meets_both_of_stand_whatever_fields_they_name() {
+        assert_eq!(
+            shapes_refusal(
+                "{ results { ... on Named { x: name } ... on Org { x: title } } }",
+                json!({})
+            ),
+            None
+        );
+    }
+
+    /// Copies across types, a wide place of them, are read once each: compared to their
+    /// key's first, in time linear in the place's width.
+    #[test]
+    fn copies_across_types_cost_no_square_of_their_width() {
+        let copies: String = (0..10_000)
+            .map(|_| "... on User { x: name p: best { y: name } } ... on Org { x: title p: seat { y: name } } ")
+            .collect();
+        let text = format!("{{ results {{ {copies}}} }}");
+        let started = thread_cpu_time();
+        let document = parse_query(&text).expect("the document parses");
+        let parsing = thread_cpu_time() - started;
+        let (_, operation) = selected_operation(&document, None).expect("one operation");
+        let (registry, variables) = (shapes::registry(), Variables::default());
+        let started = thread_cpu_time();
+        let collected = collected(
+            &document,
+            &operation.node,
+            &registry,
+            &variables,
+            deployed(),
+        );
+        let past = thread_cpu_time() - started;
+        assert!(matches!(collected, Ok(None)), "every copy in one shape");
+        assert!(past < parsing, "parsed in {parsing:?}, then {past:?}");
     }
 
     /// A schema whose positions nest: `Tile`, an interface every object here

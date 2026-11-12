@@ -278,6 +278,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `async fn hit(&self, key: &str, limit: Throttle) -> Decision` on a rate-limit store of your own | `-> Result<Decision, ThrottlerStoreError>`: your client's failure as `Err(ThrottlerStoreError::new(error))`, never a decision of your own, and no log line |
    | `MaskReplyError::Irreconcilable(serde_json::Error)` | `MaskReplyError::Irreconcilable(DecodeError)` |
    | `ProblemDetails::from_error(status, title, err)` with any `Display` | the same with `&err`, an error, whose decode failure it says without the value; a sentence of your own is `.with_detail(…)` |
+   | `problem.extensions` moved or compared as a `serde_json::Map` | `*problem.extensions`: the map is boxed, so a `Result` carrying the problem stays under clippy's `result_large_err` threshold; indexing, `get` and `insert` read through the box unchanged |
    | `panic_message(payload)` borrowed as a `&str` | an owned `String`, any decode failure in it said without the value |
    | `post: Bind<Update, PostsService>` on a route, `nest_rs::seaorm::Bind` | `#[authorize(Update, bind = PostsService)]` on the route and `post: Authorized<Update, PostEntity>` as its parameter, `nest_rs::seaorm::Authorized`; the route's whole path, its controller's included, names the id alone (`/{id}`, `/{id}/publish`) |
    | `nest_rs::seaorm::graphql::bind::<A, S>(ctx, &id)` or `bind_required::<A, S>(ctx, &id)` in a resolver | `#[authorize(A, bind = S)]` on the operation and an `Authorized<A, E>` parameter, its `id` argument synthesised; a nullable lookup is `#[crud]`'s generated query, or `CrudService::access` in the body |
@@ -398,6 +399,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `container.get_keyed::<T>("x")` | `container.get::<XClient>()`, or `container.get::<Instanced<X, T>>()` |
    | `KeyedDependencyError`, matched after a boot | nothing: a missing type is `AccessGraphError` or `MissingDependencyError` |
    | `RedisError::InvalidUrl { endpoint, source }`, `ConfigNotResolvedError { type_name }` in a pattern | the same ending in `..`: each holds more |
+   | a `RedisError` variant's `source` moved out as a `redis::RedisError`, or found in its chain with `downcast_ref::<redis::RedisError>()` | `*source`, and `downcast_ref::<Box<redis::RedisError>>()`: the client's error is boxed, so a `Result` carrying a `RedisError` stays under clippy's `result_large_err` threshold, and the bare type's downcast now finds nothing; a method reads through the box unchanged |
 
    A module of your own that owns a config, written by hand:
 

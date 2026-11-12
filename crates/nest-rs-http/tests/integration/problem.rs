@@ -77,10 +77,6 @@ impl DecodeController {
     /// A problem built from the error by the framework's own constructor.
     #[post("/problem")]
     #[public]
-    #[expect(
-        clippy::result_large_err,
-        reason = "the problem itself is the route's error here; an app's route returns `nest_rs::http::Result`, whose `HttpError` is one pointer"
-    )]
     async fn problem(&self, body: RawBody) -> std::result::Result<String, ProblemDetails> {
         let amount: u64 = serde_json::from_slice(&body).map_err(|err| {
             ProblemDetails::from_error(StatusCode::BAD_REQUEST, "Bad Request", &err)
@@ -273,10 +269,6 @@ impl FailureController {
     /// The problem document itself returned as the error.
     #[get("/document")]
     #[public]
-    #[expect(
-        clippy::result_large_err,
-        reason = "the problem itself is the route's error here; an app's route returns `nest_rs::http::Result`, whose `HttpError` is one pointer"
-    )]
     async fn document(&self) -> std::result::Result<String, ProblemDetails> {
         Err(ProblemDetails::internal())
     }

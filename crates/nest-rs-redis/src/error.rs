@@ -13,7 +13,8 @@ use thiserror::Error;
 /// `<PREFIX>_REDIS__CACHE__URL` for `Cache` — never a value. Such a field is
 /// the variable's key, lowercased and its unit dropped, then `_var`
 /// (`CONNECT_TIMEOUT_SECS` is `connect_timeout_var`), or `_vars` for a group of
-/// keys sharing a prefix (`tls_vars`).
+/// keys sharing a prefix (`tls_vars`). The client's own error is boxed in its
+/// `source`, so the chain holds it as a `Box<redis::RedisError>`.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RedisError {
@@ -27,7 +28,7 @@ pub enum RedisError {
         url_var: String,
         /// Why the client rejected it.
         #[source]
-        source: redis::RedisError,
+        source: Box<redis::RedisError>,
     },
 
     /// A URL asking for RESP3 (`protocol=resp3`): every binding reads Redis's
@@ -122,7 +123,7 @@ pub enum RedisError {
         /// The client's error, when the refusal came from a connection attempt
         /// or from building the client rather than from checking the material.
         #[source]
-        source: Option<redis::RedisError>,
+        source: Option<Box<redis::RedisError>>,
     },
 
     /// Redis answered, and refused in a way every attempt would repeat —
@@ -136,7 +137,7 @@ pub enum RedisError {
         url_var: String,
         /// What Redis answered.
         #[source]
-        source: redis::RedisError,
+        source: Box<redis::RedisError>,
     },
 
     /// Redis refused to select the database the URL names, for a reason every
@@ -157,7 +158,7 @@ pub enum RedisError {
         url_var: String,
         /// What Redis answered.
         #[source]
-        source: redis::RedisError,
+        source: Box<redis::RedisError>,
     },
 
     /// The URL declares a topology other than the one the server it reached
@@ -198,7 +199,7 @@ pub enum RedisError {
         connect_timeout_var: String,
         /// The last sentinel's failure, when one failed outright.
         #[source]
-        source: Option<redis::RedisError>,
+        source: Option<Box<redis::RedisError>>,
     },
 
     /// The sentinels answered, and none knew a primary by the name the URL gives
@@ -240,7 +241,7 @@ pub enum RedisError {
         connect_timeout_var: String,
         /// Redis's last answer.
         #[source]
-        source: redis::RedisError,
+        source: Box<redis::RedisError>,
     },
 
     /// The connect budget elapsed with the backend still unreachable.
@@ -262,9 +263,13 @@ pub enum RedisError {
         /// The last transport failure, when the budget ran out after an
         /// outright error rather than mid-attempt.
         #[source]
-        source: Option<redis::RedisError>,
+        source: Option<Box<redis::RedisError>>,
     },
 }
+
+// clippy's `result_large_err` refuses, at its default threshold, a `Result`
+// whose error is 128 bytes or more, and `RedisConnection::connect` returns this one.
+const _: () = assert!(size_of::<RedisError>() < 128);
 
 /// Why one round of asking the sentinels found no primary to keep — each may
 /// clear, so the next round follows within the budget.

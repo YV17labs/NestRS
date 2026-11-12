@@ -401,10 +401,6 @@ pub(crate) fn said<'a, E: std::error::Error + 'static>(
 /// over [`Backoff::RECONNECT`]'s curve drawn from `seed` — every replica's
 /// own, so replicas that lost Valkey together do not dial it again together —
 /// each attempt [`said`].
-#[expect(
-    clippy::result_large_err,
-    reason = "a dial attempt runs at boot and on reconnection, never per command: its refusal's size costs no request"
-)]
 pub(crate) async fn proved<T, E, F, Fut>(
     instance: &RedisInstance,
     budget: Duration,
@@ -443,7 +439,7 @@ pub(crate) fn spent(
             budget,
             attempts,
             connect_timeout_var: instance.connect_timeout_var(),
-            source,
+            source: Box::new(source),
         },
         source => RedisError::Unreachable {
             endpoint,
@@ -451,7 +447,7 @@ pub(crate) fn spent(
             attempts,
             url_var: instance.url_var(),
             connect_timeout_var: instance.connect_timeout_var(),
-            source,
+            source: source.map(Box::new),
         },
     }
 }
@@ -488,7 +484,7 @@ pub(crate) fn node_client(
         .map_err(|source| RedisError::InvalidUrl {
             endpoint: endpoint.clone(),
             url_var: instance.url_var(),
-            source,
+            source: Box::new(source),
         })?
         .set_redis_settings(settings);
     open_client(instance, info, certificates, &endpoint, budget)
@@ -522,14 +518,14 @@ pub(crate) fn open_client(
         None => redis::Client::open(info).map_err(|source| RedisError::InvalidUrl {
             endpoint: endpoint.to_owned(),
             url_var: instance.url_var(),
-            source,
+            source: Box::new(source),
         }),
         Some(certificates) => {
             redis::Client::build_with_tls(info, certificates.clone()).map_err(|source| {
                 RedisError::TlsRefused {
                     endpoint: endpoint.to_owned(),
                     reason: tls::unusable_material(instance),
-                    source: Some(source),
+                    source: Some(Box::new(source)),
                 }
             })
         }
@@ -548,7 +544,7 @@ pub(crate) fn classify(
         return Attempt::Refused(RedisError::TlsRefused {
             reason: tls::remedy(instance, &source),
             endpoint: endpoint.to_owned(),
-            source: Some(source),
+            source: Some(Box::new(source)),
         });
     }
     if database_refused(&source) {
@@ -556,14 +552,14 @@ pub(crate) fn classify(
             endpoint: endpoint.to_owned(),
             database,
             url_var: instance.url_var(),
-            source,
+            source: Box::new(source),
         });
     }
     if refused(&source) {
         return Attempt::Refused(RedisError::Refused {
             endpoint: endpoint.to_owned(),
             url_var: instance.url_var(),
-            source,
+            source: Box::new(source),
         });
     }
     Attempt::Failed(source)

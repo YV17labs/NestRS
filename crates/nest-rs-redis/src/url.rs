@@ -166,7 +166,7 @@ impl Refusal {
             Self::Invalid(source) => RedisError::InvalidUrl {
                 endpoint,
                 url_var: instance.url_var(),
-                source,
+                source: Box::new(source),
             },
             Self::Resp3 => RedisError::UnsupportedProtocol {
                 endpoint,

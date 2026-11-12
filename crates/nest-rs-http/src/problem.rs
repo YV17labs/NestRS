@@ -71,8 +71,13 @@ pub struct ProblemDetails {
     pub instance: Option<String>,
     /// RFC 9457 **extension members**, flattened alongside the standard fields.
     #[serde(flatten)]
-    pub extensions: serde_json::Map<String, serde_json::Value>,
+    pub extensions: Box<serde_json::Map<String, serde_json::Value>>,
 }
+
+// clippy's `result_large_err` refuses, at its default threshold, a `Result`
+// whose error is 128 bytes or more, and an app's handler returns this one; the
+// map is boxed because `serde_json/preserve_order` triples its size.
+const _: () = assert!(size_of::<ProblemDetails>() < 128);
 
 fn serialize_status<S: serde::Serializer>(
     status: &StatusCode,
@@ -183,7 +188,7 @@ impl ProblemDetails {
             status,
             detail: None,
             instance: None,
-            extensions: serde_json::Map::new(),
+            extensions: Box::default(),
         }
     }
 

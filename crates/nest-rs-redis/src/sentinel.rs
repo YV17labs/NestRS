@@ -294,10 +294,6 @@ impl Sentinels {
     /// One round: each sentinel asked in turn, from the one that answered
     /// last, for the primary's address, and the primary it names proved with
     /// `HELLO` — within `within`.
-    #[expect(
-        clippy::result_large_err,
-        reason = "a dial attempt runs at boot and on reconnection, never per command: its refusal's size costs no request"
-    )]
     async fn resolve(
         &self,
         within: Duration,
@@ -372,10 +368,6 @@ impl Sentinels {
 
     /// A connection to the address the sentinels named, kept once `HELLO` says
     /// it is a primary and it answers a `PING`.
-    #[expect(
-        clippy::result_large_err,
-        reason = "a dial attempt runs at boot and on reconnection, never per command: its refusal's size costs no request"
-    )]
     async fn open_primary(
         &self,
         primary: &NodeAddr,
@@ -454,7 +446,7 @@ impl Sentinels {
                 attempts,
                 url_var: self.instance.url_var(),
                 connect_timeout_var: self.instance.connect_timeout_var(),
-                source,
+                source: source.map(Box::new),
             },
         }
     }

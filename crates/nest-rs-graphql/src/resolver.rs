@@ -17,6 +17,7 @@ use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
+use std::mem::DropGuard;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -858,7 +859,9 @@ pub(crate) fn build_schema(
         container.clone(),
         batches.clone(),
     )?);
-    let _reset = ReachableResetGuard::set(reachable);
+    let _reset = DropGuard::new(REACHABLE.replace(Some(reachable)), |outer| {
+        REACHABLE.set(outer);
+    });
     let mut builder = Schema::build(
         DiscoveredQuery::from_registry(&container),
         DiscoveredMutation::from_registry(&container),
@@ -890,24 +893,6 @@ pub(crate) fn build_schema(
         builder = builder.enable_federation();
     }
     Ok(builder.finish())
-}
-
-/// RAII swap on [`REACHABLE`]: install on construction, restore (not clear) on
-/// drop — so a nested build cannot strand the outer build's set.
-struct ReachableResetGuard(Option<Arc<ReachableProviders>>);
-
-impl ReachableResetGuard {
-    fn set(new: Arc<ReachableProviders>) -> Self {
-        let previous = REACHABLE.with(|cell| cell.replace(Some(new)));
-        Self(previous)
-    }
-}
-
-impl Drop for ReachableResetGuard {
-    fn drop(&mut self) {
-        let previous = self.0.take();
-        REACHABLE.with(|cell| *cell.borrow_mut() = previous);
-    }
 }
 
 /// Render the composed schema as SDL, sorted: link-time iteration order is not

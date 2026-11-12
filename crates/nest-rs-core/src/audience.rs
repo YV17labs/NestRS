@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 use std::fmt;
+use std::mem::DropGuard;
 use std::thread::LocalKey;
 
 use crate::handler::Handler;
@@ -124,13 +125,7 @@ fn holding<C: Copy + 'static, T>(
     value: C,
     run: impl FnOnce() -> T,
 ) -> T {
-    struct Restore<C: Copy + 'static>(&'static LocalKey<Cell<C>>, C);
-    impl<C: Copy + 'static> Drop for Restore<C> {
-        fn drop(&mut self) {
-            self.0.with(|cell| cell.set(self.1));
-        }
-    }
-    let _restore = Restore(cell, cell.with(|cell| cell.replace(value)));
+    let _restore = DropGuard::new(cell.replace(value), |held| cell.set(held));
     run()
 }
 

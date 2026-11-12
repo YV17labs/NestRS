@@ -15,6 +15,7 @@
 
 use std::any::TypeId;
 use std::cell::RefCell;
+use std::mem::DropGuard;
 use std::sync::Arc;
 
 use async_graphql::dataloader::DataLoader;
@@ -199,22 +200,6 @@ thread_local! {
     static SEEDING: RefCell<Option<tracing::Span>> = const { RefCell::new(None) };
 }
 
-/// Holds a request's [`BatchSpan`] in [`SEEDING`] while its loaders are
-/// seeded, and restores what was held before on drop, even on a panic.
-struct Seeding(Option<tracing::Span>);
-
-impl Seeding {
-    fn hold(span: Option<tracing::Span>) -> Self {
-        Self(SEEDING.replace(span))
-    }
-}
-
-impl Drop for Seeding {
-    fn drop(&mut self) {
-        SEEDING.set(self.0.take());
-    }
-}
-
 /// What seeds every discovered DataLoader into each GraphQL request.
 pub(crate) struct LoaderSeeds {
     container: Container,
@@ -260,7 +245,7 @@ impl LoaderSeeds {
         let held = held_by::<BatchSpan>(&request.data).map(|held| held.0.clone());
         // An ancestor of the current span cannot be entered again, so the
         // spawners read it off the seeding instead.
-        let _seeding = Seeding::hold(held);
+        let _seeding = DropGuard::new(SEEDING.replace(held), |outer| SEEDING.set(outer));
         for seed in self.seeds.iter() {
             request = seed(&self.container, &self.batches, request);
         }

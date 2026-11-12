@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::mem::DropGuard;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -31,16 +32,10 @@ thread_local! {
     static PINNED_BY: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-/// Run `resolve` with `site` as the import that pinned the config it resolves.
+/// Run `resolve` with `site` as the import that pinned the config it resolves,
+/// and the outer site back after it, an unwind included.
 pub(crate) fn pinned_by<T>(site: Option<String>, resolve: impl FnOnce() -> T) -> T {
-    /// Restores the outer site even if `resolve` unwinds.
-    struct Site(Option<String>);
-    impl Drop for Site {
-        fn drop(&mut self) {
-            PINNED_BY.with(|cell| *cell.borrow_mut() = self.0.take());
-        }
-    }
-    let _outer = Site(PINNED_BY.with(|cell| cell.replace(site)));
+    let _outer = DropGuard::new(PINNED_BY.replace(site), |outer| PINNED_BY.set(outer));
     resolve()
 }
 
@@ -61,22 +56,16 @@ struct Owner {
 /// and `("social", "GOOGLE__CLIENT_ID")` are one variable. A namespace read with
 /// no `Config` behind it is not covered.
 pub(crate) fn claiming<C: 'static, T>(load: impl FnOnce() -> T) -> (T, Result<(), ConfigError>) {
-    /// Restores the outer window even if `from_env` unwinds.
-    struct Window(Option<BTreeSet<String>>);
-    impl Drop for Window {
-        fn drop(&mut self) {
-            READING.with(|cell| *cell.borrow_mut() = self.0.take());
-        }
-    }
-
     // `TypeId` decides: `type_name` is documented as not unique.
     let owner = Owner {
         id: std::any::TypeId::of::<C>(),
         name: std::any::type_name::<C>(),
     };
-    let outer = Window(READING.with(|cell| cell.replace(Some(BTreeSet::new()))));
+    let outer = DropGuard::new(READING.replace(Some(BTreeSet::new())), |outer| {
+        READING.set(outer);
+    });
     let value = load();
-    let read = READING.with(|cell| cell.take()).unwrap_or_default();
+    let read = READING.take().unwrap_or_default();
     drop(outer);
 
     let mut claimed = CLAIMED.lock().unwrap_or_else(PoisonError::into_inner);

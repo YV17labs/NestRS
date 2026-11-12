@@ -189,7 +189,7 @@ bare import reads it from the environment alone; `for_root` pins a config,
 defaults in code that the real environment can
 still override **per field** — never a lock — while the `.env` files no longer
 reach that namespace at all, see
-[the dual-path rule](/configuration/#the-dual-path-rule). For the imports above:
+[the dual-path rule](/configuration/pinning/#the-dual-path-rule). For the imports above:
 
 ```rust title="apps/blog/src/module.rs"
 SeaOrmModule

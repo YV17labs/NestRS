@@ -179,7 +179,7 @@ lists what the boot, a log or the wire shows when one is missed.
    `ACME_` for `NESTRS_`. Every
    one of them — every namespaced variable, in fact — can now be given as a file
    instead, through its `_FILE` spelling; see the
-   [ConfigService API](/configuration/#configservice-api). A name you miss is not
+   [ConfigService API](/configuration/variables/#configservice-api). A name you miss is not
    silent: the boot names it and its new spelling, as shown
    [below](#what-fails-if-you-get-it-wrong).
 
@@ -355,7 +355,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `McpModule::for_root(McpOptions { server: Some(identity), .. })` | `McpModule::for_root(identity)` |
    | `McpModule::for_root(McpOptions { config: Some(cfg), server: Some(identity) })` | `McpModule::for_root((identity, cfg))` — the declaration first, the config last; `McpAccess::Public` leads when the app opens the endpoint, `(McpAccess::Public, identity, cfg)` |
    | `env.get("KEY")` and `env.list("KEY", default)` in a `from_env` | `env.get("KEY")?` and `env.list("KEY", default)?` — a `_FILE` read can fail |
-   | `env.seconds("KEY", base)`, or any `env.*` reader asked for a key ending in `_SECS` or `_MS` | a `DurationBounds::secs(…)` or `DurationBounds::millis(…)` declared beside the config and named on the field, `#[config(bounds = …)]`; a hand-written overlay binds it once, `BoundedSetting::new(RANGE, Field::new("KEY", "MyConfig::field"))`, and reads `SETTING.read(env, base)?`; see [Configuration](/configuration/#configservice-api) |
+   | `env.seconds("KEY", base)`, or any `env.*` reader asked for a key ending in `_SECS` or `_MS` | a `DurationBounds::secs(…)` or `DurationBounds::millis(…)` declared beside the config and named on the field, `#[config(bounds = …)]`; a hand-written overlay binds it once, `BoundedSetting::new(RANGE, Field::new("KEY", "MyConfig::field"))`, and reads `SETTING.read(env, base)?`; see [Configuration](/configuration/variables/#configservice-api) |
    | `serde_json::from_str` over a structured variable in a `from_env` of your own | `env.json::<T>("KEY")?`, which refuses it naming the variable, where it failed and the type it expected, never the value |
    | `setting.shown()` in a refusal of your own | `setting.refuse("<what was expected>")` — the variable is named, the value never |
    | `OpenTelemetryConfig::from_env(name)` returning `Result<_, ConfigError>` | it returns `Result<_, OpenTelemetryError>`; a `ConfigError` of its own variables is inside `OpenTelemetryError::Config` |
@@ -1984,7 +1984,7 @@ lists what the boot, a log or the wire shows when one is missed.
   Rename what the `read_as` names, every row of step 3 said the same way. The
   report, and what it leaves silent, is
   described under
-  [A variable nothing reads](/configuration/env-reference/#a-variable-nothing-reads).
+  [A variable nothing reads](/configuration/unread-variables/).
 - **A module listing an edge's host, in a binary not meant to serve that edge**,
   now serves it, because the host brings what its edge runs on: a binary reaching
   a module that lists a controller listens on `<PREFIX>_HTTP__PORT`, and one

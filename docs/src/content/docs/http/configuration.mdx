@@ -45,7 +45,7 @@ A pin takes the whole `<PREFIX>_HTTP__*` namespace off the `.env` cascade —
 every field, the ones `..Default::default()` filled included. The real
 environment still overrides any field, but a key in a `.env` file no longer
 reaches this config, and the boot names each such key at `warn`
-([the dual-path rule](/configuration/#the-dual-path-rule)). So the `.env`
+([the dual-path rule](/configuration/pinning/#the-dual-path-rule)). So the `.env`
 examples on this page reach an app that pins nothing — the scaffold's —
 and a pinning app reads them from the real environment alone.
 
@@ -124,7 +124,7 @@ the boot — a half-configured TLS is a deployment mistake, not a silent
 fall back to plaintext. Setting both spellings of one half — `TLS_CERT` and
 `TLS_CERT_FILE` — in the same tier fails the boot too, naming both, since
 nothing says which was meant. Across tiers the process environment chooses,
-[as it does for every variable](/configuration/#configservice-api).
+[as it does for every variable](/configuration/variables/#configservice-api).
 
 ```bash frame="terminal"
 # Inline (suits k8s secrets, systemd EnvironmentFile, …)

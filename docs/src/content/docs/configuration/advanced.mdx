@@ -1,10 +1,9 @@
 ---
 title: "Advanced configuration"
-description: "When a field's type cannot say how it reads — a reader of your own, a rule spanning the whole struct, a development surface, a hand-written overlay."
+description: "When a field's type cannot say how it reads — a reader of your own, a rule spanning the whole struct, a hand-written overlay."
 sidebar:
   order: 5
 ---
-
 
 `#[config]` reads each field by its type, and a field's own `#[config(…)]`
 covers a duration, a JSON value and a count. Three things push a config past
@@ -218,85 +217,9 @@ parameters, so it names the client and not the accepted set. That set is
 `audio:transcode`, the scopes the app's rules gate on — and the demo's
 `apps/auth/.env.development` lists it beside the variable.
 
-
-## A development surface
-
-A config has one base, its `Default`, and what a development run opens is a
-value in it. Plain HTTP, public documentation, a committed artifact's emit, a
-seed: each is a `nest_rs::config::Surface` field, `ByProfile` in `Default`. The
-code asks where it uses it, the framework's at the boot and the seed below on
-its tick, so a process resolves it once it knows what it declares, and a process
-that declares no `<PREFIX>_ENV` runs as production and opens nothing.
-
-```rust title="crates/features/src/audio/config.rs"
-use nest_rs::config::{Surface, config};
-
-#[config(namespace = "audio")]
-#[derive(Clone, Default)]
-pub struct AudioConfig {
-    pub synthetic_seed: Surface,
-}
-
-impl AudioConfig {
-    pub fn seeds(&self) -> bool {
-        self.synthetic_seed.is_open()
-    }
-}
-```
-
-```rust title="crates/features/src/audio/schedule/tasks.rs — the check"
-if !self.config.seeds() {
-    return Ok(());
-}
-```
-
-| The field holds | `development` | `test` | `staging`, `production`, undeclared |
-|---|---|---|---|
-| `ByProfile`, read with `is_open()` | open | open | closed |
-| `ByProfile`, read with `writes()` | open | closed | closed |
-| `Open`, or `true` from the variable | open | open | open |
-| `Closed`, or `false` from the variable | closed | closed | closed |
-
-`writes()` is an emit's reader: under `test`, parallel suites would rewrite a
-committed file. The framework's storage, OpenAPI, GraphQL and Server-Timing
-configs use the same type, and each says at `warn`, where the value takes effect,
-when a deployment opens one: plain HTTP to a store, a public surface, an emit.
-`opened_in_deployment()` is the question they ask, the deployed profile it is open
-in, so a seed of your own says itself the same way, in the check its tick makes,
-once however often the tick asks:
-
-```rust title="crates/features/src/audio/config.rs — the check, with its line"
-static SEED_OPEN_SAID: Once = Once::new();
-
-impl AudioConfig {
-    pub fn seeds(&self) -> bool {
-        if let Some(environment) = self.synthetic_seed.opened_in_deployment() {
-            SEED_OPEN_SAID.call_once(|| {
-                tracing::warn!(
-                    target: TARGET,
-                    environment = environment.as_str(),
-                    "{SEED_OPEN}",
-                );
-            });
-        }
-        self.synthetic_seed.is_open()
-    }
-}
-```
-
-The profile is read where the value is used, never in the overlay: the overlay
-also runs over a value pinned in code, and a profile rule there would silently
-rewrite a deliberate choice. A written `Open` or `Closed` is never touched, and
-a pin of any other field over `..Default::default()` leaves the surface to the
-profile.
-
-An address or a credential is never one, in any profile: no `Default` names a
-database, a Redis, a store or the pair to reach it. The profile's `.env` file
-does — `nestrs new` writes `compose.yml`'s services into `.env.development` and
-`.env.test` — and a deployment names its own. The same file holds a value that
-differs by profile and opens nothing, a pool size or a level.
-
 ## Going further
 
 - [Configuration](/configuration/) — the overlay `#[config]` derives and the dual-path rule.
 - [Testing configuration](/configuration/testing/) — `MapSource` / `ConfigService::with_vars`.
+- [Development surfaces](/configuration/surfaces/) — what a development run
+  opens, resolved by profile where it is used.

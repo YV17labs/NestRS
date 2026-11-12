@@ -5,97 +5,37 @@ sidebar:
   order: 6
 ---
 
-Every framework module reads its config from a namespaced env prefix
-**and** from a pinned struct — the framework-wide **dual-path rule**
-([Configuration](/configuration/#the-dual-path-rule)). The variable name is
-`<PREFIX>_<NAMESPACE>__<KEY>` (double underscore between namespace and key). This
-page lists the variables; each maps one-to-one to a field on the module's
-config struct, so anything here is also settable in code. Exported into the
-real environment, one works even when the app pins its neighbours in
-`module.rs`, field by field; written in a `.env` file, it reaches no config
-whose namespace the app pins in code at all, and the boot names it as
-shadowed ([the dual-path rule](/configuration/#the-dual-path-rule)).
+Every framework module reads its config from a namespaced env prefix **and**
+from a pinned struct — the framework-wide **dual-path rule**
+([Pinning a config](/configuration/pinning/#the-dual-path-rule)). The variable name is
+`<PREFIX>_<NAMESPACE>__<KEY>` (double underscore between namespace and key).
+This page lists the variables; each maps one-to-one to a field on the module's
+config struct, so anything here is also settable in code. Exported into the real
+environment, one works even when the app pins its neighbours in `module.rs`,
+field by field; written in a `.env` file, it reaches no config whose namespace
+the app pins in code at all, and the boot names it as shadowed.
 
 `NESTRS` is the default prefix. An app that declared its own
-([Your own prefix](/configuration/#your-own-prefix)) reads every name below
+([Your own prefix](/configuration/variables/#your-own-prefix)) reads every name below
 with that prefix instead — `ACME_HTTP__PORT`, `ACME_LOG_FORMAT` — and the
 `NESTRS_` spellings resolve nothing.
 
 **Every namespaced variable can also be given as a file.**
 `<PREFIX>_<NAMESPACE>__<KEY>_FILE` names a file whose content is the value — the
-form a mounted secret takes, [read the same way for every key](/configuration/#configservice-api).
+form a mounted secret takes, [read the same way for every key](/configuration/variables/#configservice-api).
 The tables below name the `_FILE` spelling only where a key is usually given
 that way.
 
-**Every TLS client reads the same three keys.** In each namespace whose module
-opens a TLS connection — `redis`, `storage`, `authn`, `oauth__client` —
-`TLS_CA_CERT` names the
-authorities the peer's certificate must chain to, replacing the system's, and
-`TLS_CERT` / `TLS_KEY` the certificate and key presented to a peer that
-requires one, both or neither. They are the keys of the config's `tls` field,
-and a config of your own holds its `ClientTls` under that name too: under any
-other, the boot refuses the field rather than read variables its refusals
-would never name. The certificate is verified whatever is set, and
-a client that cannot present a certificate fails the boot rather than ignoring
-one. Each is read at the start, so a renewed file takes effect at the next one
-([rotating a file](/configuration/#configservice-api)). OpenTelemetry's
-exporter reads the specification's own instead, below.
+**Each part of a name is read, never chosen**: the namespace is the path of the
+crate that parses it, a named instance inserts its name after the vendor, and
+every TLS client reads the same three keys, `TLS_CA_CERT`, `TLS_CERT` and
+`TLS_KEY` ([namespaces, instances and TLS keys](/configuration/variables/#namespaces-instances-and-tls-keys)).
 
-**The namespace is the path of the crate that parses it — never chosen.** It is
-the same stem the config type is named from: the crate's word, then the
-binding folder's when the config sits in one, joined by `__`. `HttpConfig` reads
-`<PREFIX>_HTTP__*`; `SeaOrmConfig` reads `<PREFIX>_SEAORM__*`; `RedisQueueConfig`
-(in `nest-rs-redis`'s `queue/` folder) reads `<PREFIX>_REDIS__QUEUE__*`;
-`GithubSocialConfig` reads `<PREFIX>_SOCIAL__GITHUB__*`. A crate in a family puts
-the family first: `OAuthClientConfig`, in `nest-rs-oauth-client`, reads
-`<PREFIX>_OAUTH__CLIENT__*` — the same string as its path,
-`nest_rs::oauth::client`. So from any variable on
-this page you can name the type and the file that parse it, and from any
-`<X>Module::for_root` in a composition root you can name its variables: the
-vendor is in the variable exactly when it is in the type. That is also why there
-is no `<PREFIX>_DATABASE__URL` — the universal convention, but a word that names
-neither the crate nor the type, so a reader could not find the code from it.
+## Logging and OpenTelemetry
 
-**A named instance inserts its name after the vendor.** A module an app opens
-more than once reads one namespace per
-[instance](/fundamentals/instances/): the
-default reads the namespace above, and the instance `#[instance] struct Cache`
-reads it with `CACHE` after the vendor — `<PREFIX>_<VENDOR>__CACHE__*`, and a
-binding of it `<PREFIX>_<VENDOR>__CACHE__<PORT>__*`: vendor, instance, port, in
-that order. An instance whose namespace another config already declares fails the
-boot naming both.
-
-## Logging — `RUST_LOG` and `<PREFIX>_LOG_*`
-
-The baseline console logger is part of `nest-rs-core` — no module to
-import, no config struct. It reads three process-level variables:
-
-| Key | Meaning |
-|---|---|
-| `RUST_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`), the ecosystem's variable, so no prefix renames it; default `info`. A library that quotes a client's payload or a secret is [clamped](/opentelemetry/logs/#the-libraries-the-framework-wires) until a directive names it |
-| `<PREFIX>_LOG_FORMAT` | `text` or `json`; defaults to `text` under a declared development or test profile, `json` otherwise — a deployment and an undeclared process alike, whatever the cargo build profile |
-| `<PREFIX>_LOG_SOURCE_LOCATION` | append the emitting `file:line` to each event — default `false` |
-
-Unset or blank keeps the default. A value that does not parse stops the
-boot, naming the variable and never its value — a mistyped
-`<PREFIX>_LOG_FORMAT=jsno` is said, never quietly replaced by the profile's
-default.
-
-`<PREFIX>_LOG`, the filter's second name before 7.0, is read by nothing: set —
-by a `.env` file or the deployment — it is said once at `warn` on
-`nest_rs::app` (`variable read by nothing since 7.0`, naming `RUST_LOG` as `read_as`),
-and the filter is `RUST_LOG`'s. A real `RUST_LOG` in the shell outranks one a
-committed `.env` writes, as every real variable outranks the files.
-
-A `text` line is coloured only on a terminal: piped or written to a file it
-carries no escape code, and `NO_COLOR` set to anything but empty turns the
-colour off on a terminal too ([no-color.org](https://no-color.org)).
-
-An app that installs its own subscriber first (e.g. through
-[OpenTelemetry](/opentelemetry/)) keeps it — the baseline logger only
-activates when none is set. The same three variables drive the console
-layer of the [OpenTelemetry](/opentelemetry/) subscriber too, so log
-config survives adopting or dropping the observability stack.
+The console's `RUST_LOG`, `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION`,
+and the specification's `OTEL_*`, belong to no namespace:
+[logging and telemetry variables](/configuration/telemetry-variables/).
 
 ## `http` — `<PREFIX>_HTTP__*`
 
@@ -215,41 +155,6 @@ Read once `StaticFilesModule` is imported, and pinned through its `for_root`
 | `PATH` | where the files answer, outside the global prefix and after every route — default `/`. A literal path the router matches as written: an empty, `.` or `..` segment, template syntax (`{` `}`), what the router reads as a parameter (`:` `*` `<`), `%`, `?`, `#` or `\` is refused |
 | `SPA_FALLBACK` | answer a browser's navigation that no file matches with the root's `index.html` — default `false`. A request that does not ask for a page, or whose last segment names a file, still gets the `404` problem document |
 | `MAX_AGE_SECS` | `Cache-Control: public, max-age` on every file but an HTML document, from `1` to a year (`31536000`); `0` or unset revalidates every file (`no-cache`), the default |
-
-## `opentelemetry` — the specification's `OTEL_*`
-
-OpenTelemetry reads the variables its
-[specification](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/)
-names, unprefixed like `RUST_LOG`, over what `OpenTelemetryConfig` pins
-([OpenTelemetry configuration](/opentelemetry/configuration/)).
-
-| Variable | Meaning |
-|---|---|
-| `OTEL_SERVICE_NAME` | service name; default the binary's package name, or `unknown_service:<executable>` in a binary `#[nest_rs::main]` did not start. Empty reads as unset; blank fails the boot |
-| `OTEL_RESOURCE_ATTRIBUTES` | resource attributes, `key=value` comma-separated, each key and value percent-decoded (`%2C` for a comma, `%3D` for `=`): `service.version` (default the binary's package version), `deployment.environment.name`, `service.instance.id` (default a fresh UUIDv7); a member with no `=`, an empty key, an escape that does not decode or an empty or blank `service.name` fails the boot |
-| `OTEL_SDK_DISABLED` | `true`, in any case, switches every signal off whatever the endpoints and selectors say; anything else leaves the SDK on, a value neither `true` nor `false` said at `warn` |
-| `OTEL_TRACES_EXPORTER` · `OTEL_METRICS_EXPORTER` · `OTEL_LOGS_EXPORTER` | `otlp` (default) or `none`, in any case, or a comma-separated list of `otlp`: `none` switches the signal off whatever endpoint names it. Any exporter this crate does not build (`console`, `zipkin`, `prometheus`), `none` beside `otlp`, or `otlp` named with no endpoint for the signal fails the boot |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | collector base endpoint, each signal appending `/v1/traces`, `/v1/metrics`, `/v1/logs` (unset ⇒ no export): `http://` exports in plaintext, which a deployed profile says once per signal at `warn` off the loopback, `https://` over TLS alone, a loopback host dialled past any proxy the environment names; another scheme, a value that does not parse as a URL, userinfo (a credential goes in `OTEL_EXPORTER_OTLP_HEADERS`), a query on this base, or a query in an `http://` endpoint on a host other than loopback fails the boot, and so does any endpoint, a pinned one included, for a signal not switched off in a binary built without the `otlp` feature |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` · `_METRICS_ENDPOINT` · `_LOGS_ENDPOINT` | one signal's endpoint, used as given, its query kept, over the base |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` (and per signal) | `http/protobuf`, the one protocol exported; any other fails the boot |
-| `OTEL_EXPORTER_OTLP_COMPRESSION` (and per signal) | `gzip` or `none` (default), in any case; `zstd` or any other fails the boot |
-| `OTEL_EXPORTER_OTLP_HEADERS` (and per signal) | `key=value` headers every export carries, read as the SDK reads them, a signal's own set empty read as unset; a pair the SDK would drop (no `=`, an empty key or value, an invalid name), or any header beside an `http://` endpoint on a host other than loopback, fails the boot |
-| `OTEL_PROPAGATORS` | `tracecontext,baggage` (default), what the framework propagates; any other format, a list leaving one out, or `none` fails the boot |
-| `OTEL_CONFIG_FILE` | not read — the Rust SDK has no file configuration — so set, it fails the boot |
-| `OTEL_TRACES_SAMPLER` · `OTEL_TRACES_SAMPLER_ARG` | the sampler and its argument, as the SDK reads them; default parent-based, every trace. A sampler the SDK does not build (`jaeger_remote`, `xray`), a name not in lowercase, or an argument that is not a number between 0 and 1 fails the boot; an argument a sampler takes none of is ignored and said |
-| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | `cumulative` (default), `delta` or `lowmemory`, in any case; any other fails the boot |
-| `OTEL_METRIC_EXPORT_INTERVAL` | metric export period in milliseconds, from `1000` to `3600000` (default `60000`); outside, or not a whole number, fails the boot |
-| `OTEL_EXPORTER_OTLP_TIMEOUT` (and per signal) | one export's bound in milliseconds (default `10000`), `0` no limit; not a whole number fails the boot |
-| `OTEL_METRIC_EXPORT_TIMEOUT` · `OTEL_BSP_EXPORT_TIMEOUT` · `OTEL_BLRP_EXPORT_TIMEOUT` | the metric reader's, the batch span processor's and the batch log processor's bound on one export in milliseconds (default `30000`), the earlier of it and the exporter's cutting it, `0` no limit; not a whole number, or both at `0`, fails the boot |
-| `OTEL_BSP_SCHEDULE_DELAY` · `OTEL_BSP_MAX_QUEUE_SIZE` · `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (and the `OTEL_BLRP_*` three) | the batch processors' delay in milliseconds, queue and batch sizes, read by the SDK; not a whole number, digits alone as the SDK reads it, a size of `0`, a batch above its queue, a delay under 1 ms (on which the SDK's worker polls without pause) or a queue above 1,048,576 (allocated whole when the processor starts) fails the boot |
-| `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` · `OTEL_SPAN_EVENT_COUNT_LIMIT` · `OTEL_SPAN_LINK_COUNT_LIMIT` · `OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT` · `OTEL_LINK_ATTRIBUTE_COUNT_LIMIT` | a span's attribute, event and link counts and an event's and a link's attribute counts (default `128` each), the three attribute counts falling back on `OTEL_ATTRIBUTE_COUNT_LIMIT`; not a whole number fails the boot |
-| `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT` · `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT` · `OTEL_LOGRECORD_ATTRIBUTE_*` · `OTEL_METRICS_EXEMPLAR_FILTER` · `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION` · `OTEL_LOG_LEVEL` · `OTEL_BSP_MAX_CONCURRENT_EXPORTS` · `OTEL_EXPORTER_OTLP_INSECURE` (and per signal) | served by no crate this build links: set, each is said once at `warn`, unless its value names what the build does (`always_off`, `explicit_bucket_histogram`, `1`, `false`); `OTEL_LOG_LEVEL`'s subject follows `RUST_LOG`, and the `INSECURE` flags apply to gRPC alone, since over OTLP/HTTP the endpoint's scheme decides |
-| `OTEL_EXPORTER_OTLP_CERTIFICATE` (and per signal) | path to the PEM authorities an `https://` collector's certificate must chain to, replacing the system's. Holding no certificate, or beside an `http://` endpoint, fails the boot |
-| `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` / `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and per signal) | paths to the PEM client certificate chain, leaf first, and its private key, presented to a collector that requires one. Both or neither; beside an `http://` endpoint, they fail the boot |
-
-The console layer reads [`RUST_LOG` and `<PREFIX>_LOG_*`](#logging--rust_log-and-prefix_log_)
-above, over a config pinned through `init_with` too — there are no
-OTel-specific log variables.
 
 ## `authn` — `<PREFIX>_AUTHN__*`
 
@@ -377,56 +282,6 @@ way their section is, so the page is named rather than left to a search:
 | `ws` | [WebSockets](/websockets/) |
 | `sign_in` | the demo feature library — [the Publish workspace](/publish/) |
 
-## A variable nothing reads
-
-A variable under the prefix that no config reads used to cost the deployment
-its value in silence: a misspelled key, or a name a release renamed, left the
-default in place and nothing said so. The boot now does, once per variable, at
-`warn` on `nest_rs::config`, by name and never by value:
-
-| Message | When | Fields |
-|---|---|---|
-| `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough, or the one key it names once renamed (`HSTS` for `SECURITY_HEADERS_HSTS`) |
-| `variable read by nothing since 7.0` | the key is one 7.0 retired, every row of [the upgrading guide's table](/upgrading/), which the crate that retired it declares and the namespace that reads it now was read (`<PREFIX>_HTTP__CORS_EXPOSED`, `<PREFIX>_OAUTH_RESOURCE__RESOURCE`, `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`) — the words OpenTelemetry's retired namespace and the console's `<PREFIX>_LOG` are said in too | `variable`, `namespace` — the one reading it now — and `read_as`, the variable it became, when it became one |
-| `config variable from the .env cascade shadowed by a config pinned in code; export it into the real environment, or set it in the pin` | a `.env` file sets a key a config reads, but the app pinned that config in code (`Module::for_root(cfg)`), which cuts its whole namespace off the cascade | `variable`, `namespace`, and `pinned_by` — the import that pinned it, `` `HttpModule::for_root(..)` at `imports[4]` of `ApiModule` `` |
-| `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary read — other separators (`<PREFIX>_REDIS_QUEUE__LEASE_SECS` for `redis__queue`, `<PREFIX>_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`<PREFIX>_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment of six letters or more, a family member's included (`<PREFIX>_SEAROM__URL`, `<PREFIX>_OAUTH__RESOURSE__RESOURCE`) — **and its key is one that namespace reads**, or one edit from one | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
-
-Everything else stays silent, and that is the design. One `.env` serves several
-binaries (what is one app's alone sits in its own
-[`apps/<app>/.env`](/configuration/env-cascade/#an-apps-own-files)), so a
-namespace this binary does not read, and that is no near miss of
-one it does, is another binary's — and a near miss is held to both halves of the
-variable for that reason. A namespace under six letters has no room for a typo
-that is not also a word (`auth` and `authz` beside `authn`, `es` beside `ws`), so
-only its separators and its case count; and a misspelled namespace still carries
-the key the deployment meant, which the near namespace reads, while another
-binary's variable carries its own — `<PREFIX>_OPENAI__API_KEY` beside a linked
-`openapi` names no key `openapi` reads, and stays silent. A key holding
-`__` under a namespace it does read is a sub-namespace another binary links —
-`redis__queue` under `redis` — reported only when it is a near miss of a key
-read here. The framework's process-level names, `<PREFIX>_LOG_FORMAT`,
-`<PREFIX>_LOG_SOURCE_LOCATION`, `<PREFIX>_ENV` and `NESTRS_ENV_PREFIX`, are
-never reported; the retired `<PREFIX>_LOG` is said by the console itself.
-
-A retired key whose loss would leave a policy weaker than the one set is no
-line: the boot refuses it, `<VAR> is read by nothing since 7.0 — set <NEW>: <why>`
-— a security header's flat key (`<PREFIX>_HTTP__HSTS`), which would go unsent, and
-`<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION`, whose successor is its opposite. Under a
-config pinned in code, the pin holds the policy and cuts its namespace off the
-`.env` cascade, so such a key in a `.env` file is said retired like any other, while
-one the deployment sets is still refused.
-
-The check runs where each config is read, against the keys its overlay
-actually asked for — the namespace's misspellings included, at that same read,
-ended by an error or not, so a renamed required variable is named before the
-boot error its absence causes. A key read only behind a branch — `HttpCors` reads its other
-keys only when `CORS_ORIGINS` is set — is therefore reported exactly when the
-deployment did not take the branch, which is when it does nothing. A read made
-before any subscriber listens waits for the first read that has one, and a
-deployment that filters `nest_rs::config` out pays nothing for the scan.
-[Upgrading from 6.x](/upgrading/#what-fails-if-you-get-it-wrong) shows what it
-prints for a boot that kept a renamed variable.
-
 ## The `.env` cascade
 
 Values resolve highest-first: real env > pinned in `module.rs` (for its whole
@@ -434,10 +289,12 @@ namespace) > the app's own `apps/<app>/.env*`, under `development` and `test`
 alone > `.env.<<PREFIX>_ENV>.local` > `.env.local` > `.env.<<PREFIX>_ENV>` >
 `.env`, and a process that leaves `<PREFIX>_ENV` unset runs as production. See
 [the env cascade](/configuration/env-cascade/#the-active-environment) for the files and
-[the dual-path rule](/configuration/#the-dual-path-rule) for where a pinned
+[the dual-path rule](/configuration/pinning/#the-dual-path-rule) for where a pinned
 value sits.
 
 ## Going further
 
 - [Configuration](/configuration/) — the typed `#[config]` derive and dual-path rule.
 - [The env cascade](/configuration/env-cascade/) — layering and precedence.
+- [Variables nothing reads](/configuration/unread-variables/) — what the boot
+  says of a variable under the prefix that no config reads.

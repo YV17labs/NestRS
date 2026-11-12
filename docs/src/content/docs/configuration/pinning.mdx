@@ -1,0 +1,161 @@
+---
+title: Pinning a config
+description: "The dual-path rule — every field from the environment and from code — and for_root, the one seam that pins a framework module's config."
+sidebar:
+  order: 1.1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A framework module reads its config from the environment the moment your app
+imports it. Pinning is the other path: a value written in code, the base the
+environment overlays. This page is how the two compose, field by field, and the
+one seam each module offers for it.
+
+
+## The dual-path rule
+
+Every field a module's config exposes must be reachable two ways:
+
+1. The pinned struct, passed to `Module::for_root(MyConfig { ... })` —
+   programmatic, type-checked, comes from code.
+2. The `<PREFIX>_<NS>__<FIELD>` environment variable its name spells, which
+   `#[config]` reads for every field — so no field can be left out.
+
+That is the framework-wide rule for every `nest-rs-*` module. An env-only
+field can't be set from a config file; a code-only field can't be
+overridden in deployment. Both, always.
+
+**And the two compose per field, not per struct — in the deployment.** A
+pinned struct is the **base** the real process environment overlays, never the
+final answer. So this:
+
+```rust title="apps/api/src/module.rs"
+HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
+```
+
+turns compression on and leaves every `<PREFIX>_HTTP__*` variable the
+deployment exports live: `<PREFIX>_HTTP__PORT=3555` on the process moves the
+port, `<PREFIX>_HTTP__TLS_CERT_FILE` still turns on TLS.
+
+**The `.env` cascade is another matter: a pin cuts its whole namespace off
+it.** Once any field is pinned, no `<PREFIX>_HTTP__*` key in a `.env` file
+reaches the config — the field you chose and the ones `..Default::default()`
+filled alike. A pin is a deliberate choice by the app's author, a file
+committed next to the code must not undo it silently, and Rust cannot tell a
+field you set to its default from one the struct update filled, so the cut is
+the whole namespace. It is never silent: the boot files one `warn` on
+`nest_rs::config` per key a file sets there —
+`config variable from the .env cascade shadowed by a config pinned in code` —
+naming the variable and the import that pinned it, never the value, so you
+either export the key into the real environment or move its value into the
+pin.
+
+So pin only what the code means. A setting that varies by machine or by app —
+a port, an origin list, a certificate path — belongs in a `.env` file, the
+app's own when it identifies one app of a workspace
+([an app's own files](/configuration/env-cascade/#an-apps-own-files)), and
+the module is imported with nothing pinned: bare, as every controller brings
+`HttpModule`. That is what `nestrs new` scaffolds, and what every demo app does.
+
+The full precedence chain, highest first:
+
+| Tier | Wins over | Why |
+|---|---|---|
+| Real process environment | everything | The deployment is the last word — it is the only tier the code cannot see. |
+| Pinned in code (`for_root`) | `.env` for its whole namespace, defaults | A deliberate choice by the app's author; each `.env` key it shadows is named at boot. |
+| The `.env` cascade | defaults | Committed beside the code, so it reads as another default and defers to a pin. An app's own `apps/<app>/.env*` sits over the root's under `development` and `test`. |
+| `Default` | — | The one base every config has; what a development run opens is a [`Surface`](/configuration/surfaces/) in it, resolved where it is used. |
+
+<Aside type="note">
+Need a value nothing can override — a test that must not read the ambient
+environment? Seed it on the builder: `App::builder().provide(cfg)`. A seed
+short-circuits the factory that resolves the config, so it is the one hard
+pin — of the value, never of the checks: it is held to the same ranges and
+validation as a read value before anything reads it. See [Overriding in
+tests](/configuration/testing/).
+</Aside>
+
+## One seam per module
+
+Every module is imported bare to read its variables — `HttpModule`,
+`SeaOrmModule`, `RedisModule::<Cache>` for a named instance — and
+`Module::for_root(x)` is the **only** way to pin one, `x` **one** value
+carrying everything the app pins about it. There is no builder chain to
+continue on the result, no second constructor on the module type, and no
+`None` to pass: nothing pinned is the bare import. So "how do I configure
+this?" has one answer per module, readable in one expression.
+
+**The bare import reads, `for_root` pins, and nothing registers.** A config
+loads the moment a provider of a module your app imports asks for it —
+`#[inject] config: Arc<C>` is the whole declaration. Every `nest-rs-*` module
+that owns a config reads it from its bare import and gives you a `for_root` to
+pin it from; there is no second seam, so a config's value never depends on
+import order.
+
+**Your own feature modules write neither.** You own the struct, so its
+`impl Default` is already your in-code path; that is precisely what a
+framework module cannot offer, and what its `for_root` exists to replace. Add
+one the day another crate must pin your config — four lines with `ConfigSetup`
+— not before.
+
+The converse keeps the seam from spreading: a module that owns **no** config of
+its own gets no `for_root`. `SocialModule` is the case — each social provider
+carries its own `#[config]`, discovered along with the provider, so the module
+has nothing to be configured about and stays a bare import, as does each
+provider's own module (`GithubSocialModule`).
+
+You cannot get this wrong quietly. A pinned base supersedes the environment-only
+factory a bare import queues, wherever the two fall in `imports`; and two pinned
+bases for one config fail the boot naming it.
+
+Most modules take the config itself:
+
+```rust title="apps/api/src/module.rs"
+GraphqlModule::for_root(GraphqlConfig { max_depth: Some(12), ..Default::default() }),
+HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
+```
+
+A pin closes nothing it does not name: under `development`, the GraphQL line
+above keeps its playground, its introspection and its schema on disk, and in a
+deployment it opens none of them.
+
+A module that also carries a declaration with **no env twin** — the app's own
+MCP identity, its opening, the folder static files serve from the binary —
+takes that declaration alone, or before the config as a tuple, so the two
+still travel in one value:
+
+```rust title="apps/api/src/module.rs"
+McpModule::for_root(McpIdentity { title: Some("Acme assistant".into()), ..Default::default() }),
+// or, pinning the server too:
+McpModule::for_root((
+    McpIdentity { title: Some("Acme assistant".into()), ..Default::default() },
+    McpConfig { allowed_hosts: vec!["mcp.example.com".into()], ..Default::default() },
+)),
+```
+
+Declaring the identity pins nothing: the config is pinned only when it is in
+the value, so the `.env` cascade keeps outranking the defaults for a call site
+that declares an identity alone.
+
+A module an app can open more than once — one resource per
+[instance](/fundamentals/instances/) —
+names the instance as a type argument where it is imported bare, and in the
+value where it is pinned: the config alone for the default, the marker and the
+config for a named one. Each instance pins once, and reads its own variables
+(`<PREFIX>_<VENDOR>__CACHE__*`, see the
+[env-var reference](/configuration/env-reference/)):
+
+```rust title="apps/api/src/module.rs"
+BucketModule,                                  // the default instance
+BucketModule::<Cache>,                         // the `cache` instance
+BucketModule::for_root((Archive, archive())),  // the `archive` instance, pinned
+```
+## Going further
+
+- [Configuration](/configuration/) — the typed `#[config]` struct and how a
+  provider loads it.
+- [The .env cascade](/configuration/env-cascade/) — the files a pin cuts its
+  namespace off.
+- [Overriding in tests](/configuration/testing/) — the seed that pins a value
+  nothing overrides.

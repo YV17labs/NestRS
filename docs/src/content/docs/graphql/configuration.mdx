@@ -13,7 +13,7 @@ at the app's root pins a *base* those variables still overlay, field by field. E
 pin host behaviour in code, leave secrets and per-environment toggles to env.
 `Default` is production-safe: the mount path is `/graphql`, and the playground,
 introspection and the SDL emit are each a
-[`Surface`](/configuration/advanced/#a-development-surface) left to the profile.
+[`Surface`](/configuration/surfaces/) left to the profile.
 A declared development or test profile opens them: the playground serves and
 introspection answers, and a development run writes the schema beside the app's
 manifest. A process that declares no `<PREFIX>_ENV` runs as production and opens

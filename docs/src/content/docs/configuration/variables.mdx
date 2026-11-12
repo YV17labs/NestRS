@@ -1,0 +1,209 @@
+---
+title: Variables
+description: "How a variable is named — your own prefix, the crate's namespace, an instance's — and how it is read: from a file, as a secret, as a structured value."
+sidebar:
+  order: 1.2
+---
+
+Every framework variable is `<PREFIX>_<NAMESPACE>__<KEY>`, and none of the three
+parts is chosen at random: the prefix is the deployment's, the namespace the path
+of the crate that reads it, the key its field's name. This page is how each part
+is decided, and how `ConfigService` reads the value it names.
+
+
+## Your own prefix
+
+`NESTRS` is a default, not a fixture. Name your own once and every framework
+variable follows — `ACME_ENV`, `ACME_LOG_FORMAT`, `ACME_HTTP__PORT`,
+`ACME_SEAORM__URL`:
+
+```yaml title="compose.yml"
+environment:
+  NESTRS_ENV_PREFIX: ACME
+  ACME_SEAORM__URL: postgres://…
+```
+
+There is exactly one place to write it, and it is an environment variable
+because the prefix belongs to the *deployment*, not to the source: the same
+image runs in staging and in production, and each container names its own
+variables. The CLI reads the same variable from its own environment, so
+`nestrs doctor` and `nestrs g auth` speak your names, not ours.
+
+`nestrs new acme --env-prefix ACME` sets it in the generated `Justfile` — which
+is what `nestrs run` starts every process through — and writes the `.env`
+cascade under the new names. Your own image and your deployment must set it
+too; it belongs to the process, not to a file it reads.
+
+Three things are worth knowing:
+
+- **It must be set on the process, before it starts.** The prefix selects the
+  `.env` cascade and configures logging before `main` builds anything, so a
+  `.env` file cannot carry it — it is read too late to have chosen itself. The
+  framework aborts naming the prefix it resolved, never the file's value, rather than
+  let the rename silently not happen.
+- **It is a rename, not an alias.** Once set, `NESTRS_HTTP__PORT` is just
+  another variable in the environment — inert. That is deliberate: a stale
+  value silently winning is the failure mode a fallback would create.
+- **`RUST_LOG` and `OTEL_*` keep their names.** They belong to the ecosystem,
+  not to us — the OpenTelemetry specification names `OTEL_*`, and every SDK and
+  operator reads it — and so, for the same reason, does `NESTRS_ENV_PREFIX`
+  itself: it is the one name no prefix can rename.
+
+The value is checked on the first read (uppercase ASCII, digits and
+underscores, no trailing `_` — the framework supplies the separator), and a
+malformed one aborts rather than fall back to `NESTRS`, which would be just as
+wrong and silent.
+
+## Namespaces, instances and TLS keys
+
+**The namespace is the path of the crate that parses it — never chosen.** It is
+the same stem the config type is named from: the crate's word, then the
+binding folder's when the config sits in one, joined by `__`. `HttpConfig` reads
+`<PREFIX>_HTTP__*`; `SeaOrmConfig` reads `<PREFIX>_SEAORM__*`; `RedisQueueConfig`
+(in `nest-rs-redis`'s `queue/` folder) reads `<PREFIX>_REDIS__QUEUE__*`;
+`GithubSocialConfig` reads `<PREFIX>_SOCIAL__GITHUB__*`. A crate in a family puts
+the family first: `OAuthClientConfig`, in `nest-rs-oauth-client`, reads
+`<PREFIX>_OAUTH__CLIENT__*` — the same string as its path,
+`nest_rs::oauth::client`. So from any variable on
+[the reference](/configuration/env-reference/) you can name the type and the file that parse it, and from any
+`<X>Module::for_root` in a composition root you can name its variables: the
+vendor is in the variable exactly when it is in the type. That is also why there
+is no `<PREFIX>_DATABASE__URL` — the universal convention, but a word that names
+neither the crate nor the type, so a reader could not find the code from it.
+
+**A named instance inserts its name after the vendor.** A module an app opens
+more than once reads one namespace per
+[instance](/fundamentals/instances/): the
+default reads the namespace above, and the instance `#[instance] struct Cache`
+reads it with `CACHE` after the vendor — `<PREFIX>_<VENDOR>__CACHE__*`, and a
+binding of it `<PREFIX>_<VENDOR>__CACHE__<PORT>__*`: vendor, instance, port, in
+that order. An instance whose namespace another config already declares fails the
+boot naming both.
+
+**Every TLS client reads the same three keys.** In each namespace whose module
+opens a TLS connection — `redis`, `storage`, `authn`, `oauth__client` —
+`TLS_CA_CERT` names the
+authorities the peer's certificate must chain to, replacing the system's, and
+`TLS_CERT` / `TLS_KEY` the certificate and key presented to a peer that
+requires one, both or neither. They are the keys of the config's `tls` field,
+and a config of your own holds its `ClientTls` under that name too: under any
+other, the boot refuses the field rather than read variables its refusals
+would never name. The certificate is verified whatever is set, and
+a client that cannot present a certificate fails the boot rather than ignoring
+one. Each is read at the start, so a renewed file takes effect at the next one
+([rotating a file](#configservice-api)). OpenTelemetry's
+exporter reads the specification's own instead
+([logging and telemetry variables](/configuration/telemetry-variables/#opentelemetry--the-specifications-otel_)).
+
+
+## `ConfigService` API
+
+The reader a `with = path` function — or a hand-written overlay — is handed
+is a thin wrapper around the namespace prefix; the derived overlay reads
+through it too. Every method is sync, and every one that reads a value returns
+a `Result`, because reading can fail before parsing does.
+
+| Method                                         | Reads                                       |
+|------------------------------------------------|---------------------------------------------|
+| `env.get("KEY")?` → `Option<String>`           | `<PREFIX>_<NS>__KEY` as a raw string          |
+| `env.parse::<T>("KEY")?` → `Option<T>`         | Same, parsed via `FromStr`                  |
+| `env.flag("KEY", default)?` → `bool`           | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
+| `env.list("KEY", default)?` → `Vec<String>`    | Comma-separated, trimmed, empties dropped   |
+| `env.json::<T>("KEY")?` → `Option<T>`          | A structured value — a list of records, a map — written as JSON |
+| `env.setting("KEY")?` → `Option<Setting>`      | The raw string and the spelling that supplied it — for a value your own code refuses |
+| `env.material("KEY")?` → `Option<Setting<Material>>` | The bytes as given, and the file they came from — for certificates and keys |
+| `env.var_name("KEY")` → `String`               | The full env-var **name** (for error messages) |
+| `env.spellings("KEY")` → `String`              | Both spellings, `<PREFIX>_<NS>__KEY (or <PREFIX>_<NS>__KEY_FILE)` — for a message naming a setting that was not read |
+
+**A duration is read through its bounds, never through `parse`.** Declare a
+`nest_rs::config::DurationBounds` beside the config with
+`DurationBounds::secs` or `DurationBounds::millis` — a floor and a ceiling,
+each with the sentence a refusal gives, and nothing else — and name it on the
+field, `#[config(bounds = CACHE_TTL)]`, as [the example](/configuration/#a-typed-config--by-example) does: a value
+outside the range fails the boot naming the variable, from the environment or
+pinned in code alike, in the framework's own words. The variable is the
+field's name with the unit `secs` or `millis` chose after it
+(`CACHE_TTL_SECS`), and `#[config]` binds the range to it as
+`PostsConfig::CACHE_TTL`, a `BoundedSetting`: its `key()`, `var(namespace)`
+and `check(namespace, value)` serve every sentence that names the variable
+and every value built in code, so no line types the key — and one range
+serves every field it fits. A count takes a `CountBounds` the same way, on a
+`usize`, a `u32` or an `Option<usize>`. Every `env.*` reader above refuses a `_SECS` or `_MS` key at boot,
+naming `DurationBounds`. A hand-written overlay binds its own once and reads
+through it:
+
+```rust
+const TTL: BoundedSetting<Option<Duration>> =
+    BoundedSetting::new(CACHE_TTL, Field::new("CACHE_TTL", "PostsConfig::cache_ttl"));
+
+let cache_ttl = TTL.read(env, base.cache_ttl)?;
+```
+
+**Every variable can be given as a file.** `<PREFIX>_<NS>__KEY_FILE=/run/secrets/key`
+supplies `KEY` from the file it names — the Docker and Kubernetes secrets
+convention, so a secret never has to sit in the process environment. The file
+must be a regular file of at most a mebibyte; for text, it must be UTF-8 and its
+trailing line breaks are dropped, and a file holding nothing but line breaks is
+unset. An unreadable file fails the boot naming the variable — never its value.
+The file is read once, at the start: a renewed secret, key or client
+certificate takes effect at the next one, so rotate it with a rolling restart.
+The HTTP server's own certificate is the exception, and
+[renews in place](/http/configuration/#renewal-without-a-restart).
+
+**One key, one spelling per tier.** `KEY` and `KEY_FILE` both set in the process
+environment, or both in the `.env` cascade, fail the boot naming both. Between
+the two tiers the deployment chooses: either spelling in the process environment
+— empty included — shadows both spellings in `.env`, exactly as it shadows a
+`.env` value of its own name.
+
+**A value you judge yourself is refused through its `Setting`.** `get` hands
+back the string alone, so a message built around it can only guess which
+spelling was set. `env.setting("KEY")?` keeps both: `setting.refuse(reason)`
+names the variable the deployment actually set, and your `reason` says what was
+expected — `is not a valid HTTP header name` — never the value, inline or read
+from a file: a deployment's configuration is somebody's data, and the boot's
+error is logged. `env.parse` refuses the same way, saying the type it expected
+and dropping the parser's own reason, which may quote its input. A URL is shown
+through `nest_rs::config::endpoint_shown`, which keeps its scheme, host, port
+and path and leaves out the userinfo, query and fragment a credential travels
+in.
+
+**A credential is a `Secret`.** Type a field holding a password, a key or a
+URL that carries one as `nest_rs::core::Secret<String>`: its `Debug` prints
+`<redacted>`, so the config derives `Debug` and a `{:?}` of it in a log line
+holds nothing to steal. A literal still reads `"…".into()`, the field reads its
+variable like any other, and the call that needs the value reads it with
+`expose_secret()`. A `#[validate(length(…))]`
+rule judges the value, and its refusal names the field with the placeholder
+where `validator` would list the value. The framework's own configs hold their
+credentials this way: `SeaOrmConfig::url`, `RedisConfig::url`, the storage
+pair, the JWT secret and private key, every OAuth client secret.
+
+**A structured value is refused without its content, whichever spelling gave
+it.** `#[config(json)]` on a field — `env.json::<T>("KEY")?` in a reader of
+your own — decodes a JSON value as any `Deserialize` type, and
+a value that does not decode fails the boot saying where in it it failed, the
+kind of value found and the type expected — ``invalid value for
+<PREFIX>_OAUTH__SERVER__CLIENTS at `[0].scopes`: invalid type: a string, expected a
+sequence`` — never the value itself, inline or not: a list of records is where a deployment writes
+credentials, such as each OAuth client's secret. Decode one through `json`
+rather than `serde_json::from_str` in a reader of your own, whose error quotes
+what it refused.
+
+Empty strings count as unset, so `FOO=` in a `.env` file does not blank
+an in-code default.
+
+It is an **unset override**, not a no-op: a present-but-empty entry suppresses
+the fallback, so `FOO=` in `.env.local` also masks `FOO=33` in `.env.development`
+and `FOO=11` in `.env`, and the in-code default is what lands. Same for an empty
+value in the real environment. Delete the line to defer to the next layer;
+leave it empty to mean "nothing, whatever the files below say".
+
+## Going further
+
+- [Env-var reference](/configuration/env-reference/) — every variable the
+  framework reads, by namespace.
+- [Pinning a config](/configuration/pinning/) — the in-code path beside the
+  variable, and how the two compose.
+- [Advanced configuration](/configuration/advanced/) — a reader of your own,
+  handed this same `ConfigService`.

@@ -96,7 +96,7 @@ address or a UUID parses as itself, a `bool` accepts the usual spellings
 (`1`/`true`/`yes`/`on` and their negatives), an `Option` keeps its base when
 the variable is unset, a `Vec` reads a comma-separated list, a
 `nest_rs::core::Secret` holds what it reads out of every log, and a
-`nest_rs::config::Surface`, [what a development run opens](/configuration/advanced/#a-development-surface),
+`nest_rs::config::Surface`, [what a development run opens](/configuration/surfaces/),
 reads a boolean as open or closed. A value that does not read fails the boot
 naming the variable, never quoting it — no silent fallback. A type of your own implements `nest_rs::config::FromSetting`,
 three lines saying what a refused value was expected to be.
@@ -129,245 +129,12 @@ rule, on a `CountBounds`: a plain number with its default in `Default`, or an
 
 ## The dual-path rule
 
-Every field a module's config exposes must be reachable two ways:
+Every field a module's config exposes is reachable two ways — pinned in code
+through `Module::for_root(cfg)`, and from the `<PREFIX>_<NS>__<FIELD>` variable
+its name spells — and the two compose per field, the real environment
+overlaying a pin. [Pinning a config](/configuration/pinning/) is the precedence
+chain and the one seam each module offers.
 
-1. The pinned struct, passed to `Module::for_root(MyConfig { ... })` —
-   programmatic, type-checked, comes from code.
-2. The `<PREFIX>_<NS>__<FIELD>` environment variable its name spells, which
-   `#[config]` reads for every field — so no field can be left out.
-
-That is the framework-wide rule for every `nest-rs-*` module. An env-only
-field can't be set from a config file; a code-only field can't be
-overridden in deployment. Both, always.
-
-**And the two compose per field, not per struct — in the deployment.** A
-pinned struct is the **base** the real process environment overlays, never the
-final answer. So this:
-
-```rust title="apps/api/src/module.rs"
-HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
-```
-
-turns compression on and leaves every `<PREFIX>_HTTP__*` variable the
-deployment exports live: `<PREFIX>_HTTP__PORT=3555` on the process moves the
-port, `<PREFIX>_HTTP__TLS_CERT_FILE` still turns on TLS.
-
-**The `.env` cascade is another matter: a pin cuts its whole namespace off
-it.** Once any field is pinned, no `<PREFIX>_HTTP__*` key in a `.env` file
-reaches the config — the field you chose and the ones `..Default::default()`
-filled alike. A pin is a deliberate choice by the app's author, a file
-committed next to the code must not undo it silently, and Rust cannot tell a
-field you set to its default from one the struct update filled, so the cut is
-the whole namespace. It is never silent: the boot files one `warn` on
-`nest_rs::config` per key a file sets there —
-`config variable from the .env cascade shadowed by a config pinned in code` —
-naming the variable and the import that pinned it, never the value, so you
-either export the key into the real environment or move its value into the
-pin.
-
-So pin only what the code means. A setting that varies by machine or by app —
-a port, an origin list, a certificate path — belongs in a `.env` file, the
-app's own when it identifies one app of a workspace
-([an app's own files](/configuration/env-cascade/#an-apps-own-files)), and
-the module is imported with nothing pinned: bare, as every controller brings
-`HttpModule`. That is what `nestrs new` scaffolds, and what every demo app does.
-
-The full precedence chain, highest first:
-
-| Tier | Wins over | Why |
-|---|---|---|
-| Real process environment | everything | The deployment is the last word — it is the only tier the code cannot see. |
-| Pinned in code (`for_root`) | `.env` for its whole namespace, defaults | A deliberate choice by the app's author; each `.env` key it shadows is named at boot. |
-| The `.env` cascade | defaults | Committed beside the code, so it reads as another default and defers to a pin. An app's own `apps/<app>/.env*` sits over the root's under `development` and `test`. |
-| `Default` | — | The one base every config has; what a development run opens is a [`Surface`](/configuration/advanced/#a-development-surface) in it, resolved where it is used. |
-
-<Aside type="note">
-Need a value nothing can override — a test that must not read the ambient
-environment? Seed it on the builder: `App::builder().provide(cfg)`. A seed
-short-circuits the factory that resolves the config, so it is the one hard
-pin — of the value, never of the checks: it is held to the same ranges and
-validation as a read value before anything reads it. See [Overriding in
-tests](/configuration/testing/).
-</Aside>
-
-## One seam per module
-
-Every module is imported bare to read its variables — `HttpModule`,
-`SeaOrmModule`, `RedisModule::<Cache>` for a named instance — and
-`Module::for_root(x)` is the **only** way to pin one, `x` **one** value
-carrying everything the app pins about it. There is no builder chain to
-continue on the result, no second constructor on the module type, and no
-`None` to pass: nothing pinned is the bare import. So "how do I configure
-this?" has one answer per module, readable in one expression.
-
-**The bare import reads, `for_root` pins, and nothing registers.** A config
-loads the moment a provider of a module your app imports asks for it —
-`#[inject] config: Arc<C>` is the whole declaration. Every `nest-rs-*` module
-that owns a config reads it from its bare import and gives you a `for_root` to
-pin it from; there is no second seam, so a config's value never depends on
-import order.
-
-**Your own feature modules write neither.** You own the struct, so its
-`impl Default` is already your in-code path; that is precisely what a
-framework module cannot offer, and what its `for_root` exists to replace. Add
-one the day another crate must pin your config — four lines with `ConfigSetup`
-— not before.
-
-The converse keeps the seam from spreading: a module that owns **no** config of
-its own gets no `for_root`. `SocialModule` is the case — each social provider
-carries its own `#[config]`, discovered along with the provider, so the module
-has nothing to be configured about and stays a bare import, as does each
-provider's own module (`GithubSocialModule`).
-
-You cannot get this wrong quietly. A pinned base supersedes the environment-only
-factory a bare import queues, wherever the two fall in `imports`; and two pinned
-bases for one config fail the boot naming it.
-
-Most modules take the config itself:
-
-```rust title="apps/api/src/module.rs"
-GraphqlModule::for_root(GraphqlConfig { max_depth: Some(12), ..Default::default() }),
-HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
-```
-
-A pin closes nothing it does not name: under `development`, the GraphQL line
-above keeps its playground, its introspection and its schema on disk, and in a
-deployment it opens none of them.
-
-A module that also carries a declaration with **no env twin** — the app's own
-MCP identity, its opening, the folder static files serve from the binary —
-takes that declaration alone, or before the config as a tuple, so the two
-still travel in one value:
-
-```rust title="apps/api/src/module.rs"
-McpModule::for_root(McpIdentity { title: Some("Acme assistant".into()), ..Default::default() }),
-// or, pinning the server too:
-McpModule::for_root((
-    McpIdentity { title: Some("Acme assistant".into()), ..Default::default() },
-    McpConfig { allowed_hosts: vec!["mcp.example.com".into()], ..Default::default() },
-)),
-```
-
-Declaring the identity pins nothing: the config is pinned only when it is in
-the value, so the `.env` cascade keeps outranking the defaults for a call site
-that declares an identity alone.
-
-A module an app can open more than once — one resource per
-[instance](/fundamentals/instances/) —
-names the instance as a type argument where it is imported bare, and in the
-value where it is pinned: the config alone for the default, the marker and the
-config for a named one. Each instance pins once, and reads its own variables
-(`<PREFIX>_<VENDOR>__CACHE__*`, see the
-[env-var reference](/configuration/env-reference/)):
-
-```rust title="apps/api/src/module.rs"
-BucketModule,                                  // the default instance
-BucketModule::<Cache>,                         // the `cache` instance
-BucketModule::for_root((Archive, archive())),  // the `archive` instance, pinned
-```
-
-## `ConfigService` API
-
-The reader a `with = path` function — or a hand-written overlay — is handed
-is a thin wrapper around the namespace prefix; the derived overlay reads
-through it too. Every method is sync, and every one that reads a value returns
-a `Result`, because reading can fail before parsing does.
-
-| Method                                         | Reads                                       |
-|------------------------------------------------|---------------------------------------------|
-| `env.get("KEY")?` → `Option<String>`           | `<PREFIX>_<NS>__KEY` as a raw string          |
-| `env.parse::<T>("KEY")?` → `Option<T>`         | Same, parsed via `FromStr`                  |
-| `env.flag("KEY", default)?` → `bool`           | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
-| `env.list("KEY", default)?` → `Vec<String>`    | Comma-separated, trimmed, empties dropped   |
-| `env.json::<T>("KEY")?` → `Option<T>`          | A structured value — a list of records, a map — written as JSON |
-| `env.setting("KEY")?` → `Option<Setting>`      | The raw string and the spelling that supplied it — for a value your own code refuses |
-| `env.material("KEY")?` → `Option<Setting<Material>>` | The bytes as given, and the file they came from — for certificates and keys |
-| `env.var_name("KEY")` → `String`               | The full env-var **name** (for error messages) |
-| `env.spellings("KEY")` → `String`              | Both spellings, `<PREFIX>_<NS>__KEY (or <PREFIX>_<NS>__KEY_FILE)` — for a message naming a setting that was not read |
-
-**A duration is read through its bounds, never through `parse`.** Declare a
-`nest_rs::config::DurationBounds` beside the config with
-`DurationBounds::secs` or `DurationBounds::millis` — a floor and a ceiling,
-each with the sentence a refusal gives, and nothing else — and name it on the
-field, `#[config(bounds = CACHE_TTL)]`, as the example above does: a value
-outside the range fails the boot naming the variable, from the environment or
-pinned in code alike, in the framework's own words. The variable is the
-field's name with the unit `secs` or `millis` chose after it
-(`CACHE_TTL_SECS`), and `#[config]` binds the range to it as
-`PostsConfig::CACHE_TTL`, a `BoundedSetting`: its `key()`, `var(namespace)`
-and `check(namespace, value)` serve every sentence that names the variable
-and every value built in code, so no line types the key — and one range
-serves every field it fits. A count takes a `CountBounds` the same way, on a
-`usize`, a `u32` or an `Option<usize>`. Every `env.*` reader above refuses a `_SECS` or `_MS` key at boot,
-naming `DurationBounds`. A hand-written overlay binds its own once and reads
-through it:
-
-```rust
-const TTL: BoundedSetting<Option<Duration>> =
-    BoundedSetting::new(CACHE_TTL, Field::new("CACHE_TTL", "PostsConfig::cache_ttl"));
-
-let cache_ttl = TTL.read(env, base.cache_ttl)?;
-```
-
-**Every variable can be given as a file.** `<PREFIX>_<NS>__KEY_FILE=/run/secrets/key`
-supplies `KEY` from the file it names — the Docker and Kubernetes secrets
-convention, so a secret never has to sit in the process environment. The file
-must be a regular file of at most a mebibyte; for text, it must be UTF-8 and its
-trailing line breaks are dropped, and a file holding nothing but line breaks is
-unset. An unreadable file fails the boot naming the variable — never its value.
-The file is read once, at the start: a renewed secret, key or client
-certificate takes effect at the next one, so rotate it with a rolling restart.
-The HTTP server's own certificate is the exception, and
-[renews in place](/http/configuration/#renewal-without-a-restart).
-
-**One key, one spelling per tier.** `KEY` and `KEY_FILE` both set in the process
-environment, or both in the `.env` cascade, fail the boot naming both. Between
-the two tiers the deployment chooses: either spelling in the process environment
-— empty included — shadows both spellings in `.env`, exactly as it shadows a
-`.env` value of its own name.
-
-**A value you judge yourself is refused through its `Setting`.** `get` hands
-back the string alone, so a message built around it can only guess which
-spelling was set. `env.setting("KEY")?` keeps both: `setting.refuse(reason)`
-names the variable the deployment actually set, and your `reason` says what was
-expected — `is not a valid HTTP header name` — never the value, inline or read
-from a file: a deployment's configuration is somebody's data, and the boot's
-error is logged. `env.parse` refuses the same way, saying the type it expected
-and dropping the parser's own reason, which may quote its input. A URL is shown
-through `nest_rs::config::endpoint_shown`, which keeps its scheme, host, port
-and path and leaves out the userinfo, query and fragment a credential travels
-in.
-
-**A credential is a `Secret`.** Type a field holding a password, a key or a
-URL that carries one as `nest_rs::core::Secret<String>`: its `Debug` prints
-`<redacted>`, so the config derives `Debug` and a `{:?}` of it in a log line
-holds nothing to steal. A literal still reads `"…".into()`, the field reads its
-variable like any other, and the call that needs the value reads it with
-`expose_secret()`. A `#[validate(length(…))]`
-rule judges the value, and its refusal names the field with the placeholder
-where `validator` would list the value. The framework's own configs hold their
-credentials this way: `SeaOrmConfig::url`, `RedisConfig::url`, the storage
-pair, the JWT secret and private key, every OAuth client secret.
-
-**A structured value is refused without its content, whichever spelling gave
-it.** `#[config(json)]` on a field — `env.json::<T>("KEY")?` in a reader of
-your own — decodes a JSON value as any `Deserialize` type, and
-a value that does not decode fails the boot saying where in it it failed, the
-kind of value found and the type expected — ``invalid value for
-<PREFIX>_OAUTH__SERVER__CLIENTS at `[0].scopes`: invalid type: a string, expected a
-sequence`` — never the value itself, inline or not: a list of records is where a deployment writes
-credentials, such as each OAuth client's secret. Decode one through `json`
-rather than `serde_json::from_str` in a reader of your own, whose error quotes
-what it refused.
-
-Empty strings count as unset, so `FOO=` in a `.env` file does not blank
-an in-code default.
-
-It is an **unset override**, not a no-op: a present-but-empty entry suppresses
-the fallback, so `FOO=` in `.env.local` also masks `FOO=33` in `.env.development`
-and `FOO=11` in `.env`, and the in-code default is what lands. Same for an empty
-value in the real environment. Delete the line to defer to the next layer;
-leave it empty to mean "nothing, whatever the files below say".
 
 ## Inject it
 
@@ -472,61 +239,29 @@ It is no serde deserializer over the environment either: that would read
 neither a `<KEY>_FILE` secret, nor the tiers a pin narrows, and its errors
 quote the value they refuse.
 
-## Your own prefix
+## Variables and your own prefix
 
-`NESTRS` is a default, not a fixture. Name your own once and every framework
-variable follows — `ACME_ENV`, `ACME_LOG_FORMAT`, `ACME_HTTP__PORT`,
-`ACME_SEAORM__URL`:
-
-```yaml title="compose.yml"
-environment:
-  NESTRS_ENV_PREFIX: ACME
-  ACME_SEAORM__URL: postgres://…
-```
-
-There is exactly one place to write it, and it is an environment variable
-because the prefix belongs to the *deployment*, not to the source: the same
-image runs in staging and in production, and each container names its own
-variables. The CLI reads the same variable from its own environment, so
-`nestrs doctor` and `nestrs g auth` speak your names, not ours.
-
-`nestrs new acme --env-prefix ACME` sets it in the generated `Justfile` — which
-is what `nestrs run` starts every process through — and writes the `.env`
-cascade under the new names. Your own image and your deployment must set it
-too; it belongs to the process, not to a file it reads.
-
-Three things are worth knowing:
-
-- **It must be set on the process, before it starts.** The prefix selects the
-  `.env` cascade and configures logging before `main` builds anything, so a
-  `.env` file cannot carry it — it is read too late to have chosen itself. The
-  framework aborts naming the prefix it resolved, never the file's value, rather than
-  let the rename silently not happen.
-- **It is a rename, not an alias.** Once set, `NESTRS_HTTP__PORT` is just
-  another variable in the environment — inert. That is deliberate: a stale
-  value silently winning is the failure mode a fallback would create.
-- **`RUST_LOG` and `OTEL_*` keep their names.** They belong to the ecosystem,
-  not to us — the OpenTelemetry specification names `OTEL_*`, and every SDK and
-  operator reads it — and so, for the same reason, does `NESTRS_ENV_PREFIX`
-  itself: it is the one name no prefix can rename.
-
-The value is checked on the first read (uppercase ASCII, digits and
-underscores, no trailing `_` — the framework supplies the separator), and a
-malformed one aborts rather than fall back to `NESTRS`, which would be just as
-wrong and silent.
+`NESTRS` is a default: `NESTRS_ENV_PREFIX=ACME`, set on the process, renames every
+framework variable — `ACME_HTTP__PORT`, `ACME_SEAORM__URL`. Each value may come
+from a file (`<PREFIX>_<NS>__KEY_FILE`), and is refused without being quoted:
+[Variables](/configuration/variables/) is how a name is built and a value read.
 
 ## Advanced
 
-A reader of your own (`with = path`), a rule spanning the whole struct, a
-development surface (`Surface`) and a hand-written overlay
-(`from_env = "manual"`) are covered on
+A reader of your own (`with = path`), a rule spanning the whole struct and a
+hand-written overlay (`from_env = "manual"`) are covered on
 [Advanced configuration](/configuration/advanced/), with the real
-`OAuthServerConfig` as the worked example.
+`OAuthServerConfig` as the worked example; what a development run opens, a
+`Surface`, on [Development surfaces](/configuration/surfaces/).
 
 ## In this section
 
 ### Basics
 
+- [Pinning a config](/configuration/pinning/) — the dual-path rule, the
+  precedence chain, and `for_root`, the one seam a module offers.
+- [Variables](/configuration/variables/) — your own prefix, how a namespace is
+  named, and how `ConfigService` reads a value.
 - [The .env cascade](/configuration/env-cascade/) — which files load, in
   what order, and how the active `Environment` selects them.
 
@@ -537,9 +272,15 @@ development surface (`Surface`) and a hand-written overlay
 - [Overriding in tests](/configuration/testing/) — seed pinned values,
   isolate the environment, keep both suites hermetic.
 - [Advanced configuration](/configuration/advanced/) — a reader of your own,
-  whole-struct validation, a development surface, a hand-written overlay.
+  whole-struct validation, a hand-written overlay.
+- [Development surfaces](/configuration/surfaces/) — what a development run
+  opens and a deployment never does.
 - [Env-var reference](/configuration/env-reference/) — every `<PREFIX>_*`
   variable the framework reads, by namespace.
+- [Logging and telemetry variables](/configuration/telemetry-variables/) —
+  `RUST_LOG`, `<PREFIX>_LOG_*` and the specification's `OTEL_*`.
+- [Variables nothing reads](/configuration/unread-variables/) — what the boot
+  says of a misspelled, retired or shadowed variable.
 
 ## Reference
 

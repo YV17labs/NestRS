@@ -85,7 +85,7 @@ environment overlays.
 <Aside type="caution">
 `for_root` is not a hermetic pin. A `<PREFIX>_<NS>__<KEY>` set in the ambient
 environment still wins, per field — that is [the dual-path
-rule](/configuration/#the-dual-path-rule), and it applies to test runs too. When
+rule](/configuration/pinning/#the-dual-path-rule), and it applies to test runs too. When
 a test must not read the environment at all, seed the value with `.provide()`
 (above): a seed short-circuits the resolving factory outright.
 </Aside>

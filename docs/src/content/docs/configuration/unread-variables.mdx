@@ -1,0 +1,63 @@
+---
+title: Variables nothing reads
+description: "What the boot says of a variable under the prefix that no config reads — misspelled, retired, shadowed by a pin — by name, never by value."
+sidebar:
+  order: 6.2
+---
+
+A variable under the prefix that no config reads used to cost the deployment
+its value in silence: a misspelled key, or a name a release renamed, left the
+default in place and nothing said so. The boot now does, once per variable, at
+`warn` on `nest_rs::config`, by name and never by value:
+
+| Message | When | Fields |
+|---|---|---|
+| `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough, or the one key it names once renamed (`HSTS` for `SECURITY_HEADERS_HSTS`) |
+| `variable read by nothing since 7.0` | the key is one 7.0 retired, every row of [the upgrading guide's table](/upgrading/), which the crate that retired it declares and the namespace that reads it now was read (`<PREFIX>_HTTP__CORS_EXPOSED`, `<PREFIX>_OAUTH_RESOURCE__RESOURCE`, `<PREFIX>_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`) — the words OpenTelemetry's retired namespace and the console's `<PREFIX>_LOG` are said in too | `variable`, `namespace` — the one reading it now — and `read_as`, the variable it became, when it became one |
+| `config variable from the .env cascade shadowed by a config pinned in code; export it into the real environment, or set it in the pin` | a `.env` file sets a key a config reads, but the app pinned that config in code (`Module::for_root(cfg)`), which cuts its whole namespace off the cascade | `variable`, `namespace`, and `pinned_by` — the import that pinned it, `` `HttpModule::for_root(..)` at `imports[4]` of `ApiModule` `` |
+| `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary read — other separators (`<PREFIX>_REDIS_QUEUE__LEASE_SECS` for `redis__queue`, `<PREFIX>_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`<PREFIX>_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment of six letters or more, a family member's included (`<PREFIX>_SEAROM__URL`, `<PREFIX>_OAUTH__RESOURSE__RESOURCE`) — **and its key is one that namespace reads**, or one edit from one | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
+
+Everything else stays silent, and that is the design. One `.env` serves several
+binaries (what is one app's alone sits in its own
+[`apps/<app>/.env`](/configuration/env-cascade/#an-apps-own-files)), so a
+namespace this binary does not read, and that is no near miss of
+one it does, is another binary's — and a near miss is held to both halves of the
+variable for that reason. A namespace under six letters has no room for a typo
+that is not also a word (`auth` and `authz` beside `authn`, `es` beside `ws`), so
+only its separators and its case count; and a misspelled namespace still carries
+the key the deployment meant, which the near namespace reads, while another
+binary's variable carries its own — `<PREFIX>_OPENAI__API_KEY` beside a linked
+`openapi` names no key `openapi` reads, and stays silent. A key holding
+`__` under a namespace it does read is a sub-namespace another binary links —
+`redis__queue` under `redis` — reported only when it is a near miss of a key
+read here. The framework's process-level names, `<PREFIX>_LOG_FORMAT`,
+`<PREFIX>_LOG_SOURCE_LOCATION`, `<PREFIX>_ENV` and `NESTRS_ENV_PREFIX`, are
+never reported; the retired `<PREFIX>_LOG` is said by the console itself.
+
+A retired key whose loss would leave a policy weaker than the one set is no
+line: the boot refuses it, `<VAR> is read by nothing since 7.0 — set <NEW>: <why>`
+— a security header's flat key (`<PREFIX>_HTTP__HSTS`), which would go unsent, and
+`<PREFIX>_GRAPHQL__DISABLE_INTROSPECTION`, whose successor is its opposite. Under a
+config pinned in code, the pin holds the policy and cuts its namespace off the
+`.env` cascade, so such a key in a `.env` file is said retired like any other, while
+one the deployment sets is still refused.
+
+The check runs where each config is read, against the keys its overlay
+actually asked for — the namespace's misspellings included, at that same read,
+ended by an error or not, so a renamed required variable is named before the
+boot error its absence causes. A key read only behind a branch — `HttpCors` reads its other
+keys only when `CORS_ORIGINS` is set — is therefore reported exactly when the
+deployment did not take the branch, which is when it does nothing. A read made
+before any subscriber listens waits for the first read that has one, and a
+deployment that filters `nest_rs::config` out pays nothing for the scan.
+[Upgrading from 6.x](/upgrading/#what-fails-if-you-get-it-wrong) shows what it
+prints for a boot that kept a renamed variable.
+
+## Going further
+
+- [Env-var reference](/configuration/env-reference/) — every variable a config
+  does read.
+- [Upgrading from 6.x](/upgrading/#what-fails-if-you-get-it-wrong) — the
+  retired names and the variables that replace them.
+- [Pinning a config](/configuration/pinning/) — the pin that shadows a `.env`
+  key.

@@ -13,7 +13,7 @@ most specific wins, real process env wins over every file, and tests stay
 hermetic.
 
 The cascade is parsed once per process into an in-crate map, and every
-[`ConfigService`](/configuration/#configservice-api) reader consults it under
+[`ConfigService`](/configuration/variables/#configservice-api) reader consults it under
 the real process environment. Nothing in the running app mutates `std::env` —
 `set_var` is unsound against a concurrent read on another thread, so config
 resolution stays side-effect-free by design.
@@ -42,7 +42,7 @@ A value **pinned in code** (`Module::for_root(cfg)`) slots in between: below the
 real process env, above every file — and it takes its whole namespace off the
 files, so the boot names each key a file sets there that it no longer reads.
 The reasoning and the full chain live with
-[the dual-path rule](/configuration/#the-dual-path-rule).
+[the dual-path rule](/configuration/pinning/#the-dual-path-rule).
 
 The convention: anything ending in `.local` is gitignored, everything
 else is committed.
@@ -92,7 +92,7 @@ its fixtures.
 The `<environment>` segment is the variant of `Environment`, read from
 the reserved `<PREFIX>_ENV` variable. It sits **outside** the
 `<PREFIX>_<DOMAIN>__<KEY>` scheme, as the kernel's
-[console settings](/configuration/env-reference/#logging--rust_log-and-prefix_log_),
+[console settings](/configuration/telemetry-variables/#logging--rust_log-and-prefix_log_),
 `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION`, do — the three are
 read before any config exists. `<PREFIX>_ENV` selects which `.env`
 files to load, so it must come from the real process environment, not a
@@ -197,7 +197,7 @@ follows the same scheme:
 
 - `<PREFIX>_` — the deployment's prefix: `NESTRS` unless the process sets
   `NESTRS_ENV_PREFIX`, which renames every variable
-  ([your own prefix](/configuration/#your-own-prefix)).
+  ([your own prefix](/configuration/variables/#your-own-prefix)).
 - `<NAMESPACE>` — the namespace from `#[config(namespace = "…")]`,
   uppercased.
 - `__` — a double underscore separator (single underscores are reserved

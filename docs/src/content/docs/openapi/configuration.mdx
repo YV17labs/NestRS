@@ -50,9 +50,9 @@ OpenApiModule::for_root(OpenApiConfig {
 
 The pinned struct is the *base* `<PREFIX>_OPENAPI__*` overlays, field by field —
 so the deployment can still override any one of them, a single contact or
-license key included. See the [precedence chain](/configuration/#the-dual-path-rule).
+license key included. See the [precedence chain](/configuration/pinning/#the-dual-path-rule).
 
-`enabled` and `emit` are [`Surface`](/configuration/advanced/#a-development-surface)s,
+`enabled` and `emit` are [`Surface`](/configuration/surfaces/)s,
 left to the profile by `..Default::default()`, so the documentation stays a
 development surface: served when the process declares development or test,
 closed elsewhere — a process that declares no `<PREFIX>_ENV` included — until

@@ -290,7 +290,7 @@ impl PlannedWrite {
                 if let Some(parent) = path.parent() {
                     let created: Vec<PathBuf> = parent
                         .ancestors()
-                        .take_while(|dir| !dir.as_os_str().is_empty() && !dir.exists())
+                        .take_while(|dir| !dir.is_empty() && !dir.exists())
                         .map(Path::to_path_buf)
                         .collect();
                     fs::create_dir_all(parent)

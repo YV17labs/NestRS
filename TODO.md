@@ -269,7 +269,13 @@ answering its own field where §5.3.2 refuses the document, the name rule readin
 the copies one value meets rather than their parents' types
 (`graphql-transactions.md`, 2026-11-12; closing it: comparing each pair of
 copies, two objects' exclusivity inherited from the copies above them, which
-grows as the square of a key's copies at a place); the demo chart's
+grows as the square of a key's copies at a place); a third-party extractor
+resolving a provider that carries its own boot line, and not implementing
+`CarriesRemedy` itself, refusing the boot with the kernel's sentence rather
+than its provider's, since a parameter is asked through its own type and
+`ResolvesProvider` names the provider only as a `TypeId`, so no blanket impl
+can forward it (`declared-need-refused-at-boot.md`, 2026-11-11; its rustdoc
+tells the extractor's author to forward it, as `Scoped<T>` does); the demo chart's
 `checksum/secret`, one sum over every Secret the chart writes, which an install
 handing the chart one weak secret and nothing
 else (every other app on an `existingSecret`) publishes unsalted to whoever

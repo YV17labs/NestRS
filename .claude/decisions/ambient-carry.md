@@ -180,6 +180,16 @@ capture continues its own unit and keeps every value, installed as captured
 where no context runs at all; a running unit carrying its very values
 installs it untouched, so the per-poll re-entries pay one task-local read.
 
+**2026-11-12 — the loaders cache nothing, so one obstacle stands.** The
+2026-10-17 entry gives as a second obstacle to a mutation's batches on its own
+transaction that a request-scoped DataLoader serves a rolled-back field's row
+from its cache. None does: `#[dataloader]` builds `DataLoader::new`, which
+caches no record, and a key two fields load is fetched twice (seen by a count
+of the batch function's calls, one set of loaders or two). Only the first
+obstacle stands, a batch spawned from inside a field's block that the field
+cannot share while it awaits it; closing it takes a spawner that joins its
+batches before the block settles.
+
 **Refused:**
 
 - **`reenter` folded into `carry` as a seventh `Continuation`.** `carry` runs

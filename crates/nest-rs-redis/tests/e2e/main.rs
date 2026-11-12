@@ -248,14 +248,15 @@ async fn until_answered<T, E: std::fmt::Display, F: Future<Output = Result<T, E>
     what: &str,
     mut call: impl FnMut() -> F,
 ) -> T {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let within = Duration::from_secs(20);
+    let deadline = Instant::now() + within;
     loop {
         match call().await {
             Ok(answer) => return answer,
             Err(_) if Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            Err(refused) => panic!("{what}: still refused after 20s: {refused:#}"),
+            Err(refused) => panic!("{what}: still refused after {within:?}: {refused:#}"),
         }
     }
 }

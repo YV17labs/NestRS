@@ -77,27 +77,22 @@ mod failover {
     /// so the failover is asked again each second until one is taken or another
     /// primary is named.
     async fn failed_over_from(before: &str) -> String {
-        let taken = Cell::new(false);
-        let asked = Cell::new(None::<Instant>);
+        let next_ask = Cell::new(Some(Instant::now()));
         crate::wait_for(Duration::from_secs(30), || async {
             if crate::sentinel_primary().await != before {
                 return true;
             }
-            if taken.get()
-                || asked
-                    .get()
-                    .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
-            {
+            if next_ask.get().is_none_or(|at| Instant::now() < at) {
                 return false;
             }
-            asked.set(Some(Instant::now()));
+            next_ask.set(Some(Instant::now() + Duration::from_secs(1)));
             let forced: redis::RedisResult<()> = redis::cmd("SENTINEL")
                 .arg("FAILOVER")
                 .arg(crate::service_name())
                 .query_async(&mut crate::node(&crate::named_hosts()[0]).await)
                 .await;
             match forced {
-                Ok(()) => taken.set(true),
+                Ok(()) => next_ask.set(None),
                 Err(refused) if matches!(refused.code(), Some("INPROG" | "NOGOODSLAVE")) => {}
                 Err(refused) => panic!("the sentinels fail the primary over: {refused}"),
             }

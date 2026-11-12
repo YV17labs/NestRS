@@ -5,6 +5,8 @@ sidebar:
   order: 4.2
 ---
 
+import { Aside } from '@astrojs/starlight/components';
+
 An app walks one fixed sequence from its boot to its exit, and every provider
 can ask where it stands on it: starting, serving, or draining and why. The
 [lifecycle hooks](/fundamentals/lifecycle/) bracket the serving window;
@@ -156,6 +158,43 @@ since the `blog` feature `nestrs new` writes emits nothing and starts without
 one.
 
 A shutdown hook that must know why the app stops reads `cause()`.
+
+## Running without serving
+
+A migration, a one-shot command, a test: some programs boot the app to do one
+piece of work, never to serve. They take the same way up and the same way down,
+without the transports:
+
+```rust title="apps/blog/src/bin/reindex.rs"
+#[nest_rs::main]
+async fn main() -> anyhow::Result<()> {
+    let app = App::builder().module::<BlogModule>().build().await?;
+    app.init().await?;
+    let reindexed = match app.container().get::<SearchIndex>() {
+        Some(index) => index.rebuild().await,
+        None => Err(anyhow::anyhow!("BlogModule provides no SearchIndex")),
+    };
+    app.close().await;
+    reindexed
+}
+```
+
+`init()` runs the init phases once, as `run()` would. `close()` turns the app
+`Draining` with `StopCause::Closed`, runs the shutdown phases in reverse when
+the init ran, closes the resources and drops the container — the same tail as
+`run()`, inside the same five seconds. It returns nothing: what fails on the
+way down is logged, never handed back. An app dropped without `close()` runs
+none of it. Under `#[nest_rs::main]`, an app that is never served keeps running
+at the first signal, its `stopping()` cancelled, until it closes or a second
+signal exits it.
+
+<Aside type="tip">
+The test harness takes the same path: `TestApp::builder().build()` has run
+the init phases, and `TestApp`, `HeadlessApp` and `WsApp` each have a
+`close()` that tears the app down as `App::close` does — a `HeadlessApp`
+stops the transports it spawned first, within their stop bound — so a test
+can prove its shutdown hooks.
+</Aside>
 
 ## Going further
 

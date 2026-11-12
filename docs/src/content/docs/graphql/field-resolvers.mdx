@@ -162,6 +162,73 @@ You have three honest ways out:
    `#[field_resolver]` and read [Relations](/graphql/relations/)
    instead.
 
+## Own a relation yourself
+
+Leaving a relation field unexposed (no `#[expose]`) keeps auto-emission
+off for that field only. The relation stays declared at the ORM level
+(SeaORM still knows about it), and you can write a hand-rolled
+`#[field_resolver]` if you need a shape the auto-emitted one does not
+give you — a filtered or sorted subset, extra edge fields, a projection.
+Cursor pagination is **not** on that list any more: the auto-emitted
+field already is a connection.
+
+```rust title="crates/features/src/orgs/entity.rs"
+#[expose(name = "Org", service = …, graphql, complex)]
+#[sea_orm::model]
+pub struct Model {
+    #[expose]
+    pub id: Uuid,
+    #[expose]
+    pub name: String,
+
+    // No #[expose] => not auto-resolved; own it with a #[field_resolver].
+    #[sea_orm(has_many)]
+    pub users: HasMany<crate::users::Entity>,
+}
+```
+
+<Aside type="caution">
+**Opting out is per-field.** Leaving one relation unexposed lets a
+`#[field_resolver]` own that field, but every *other* `#[expose]`-emitted
+relation on the same `User` / `Org` type still lives in the auto-emitted
+`#[ComplexObject]`. If you need custom logic on a type that already has
+auto-resolved relations, [the single-`ComplexObject`
+rule](#the-single-complexobject-rule) applies.
+</Aside>
+
+### A custom shape: a filtered relation
+
+When the unexposed relation opens the slot, write the replacement on the resolver.
+With no exposed relation left on the type, `complex` is what serves its
+`#[field_resolver]`s:
+
+```rust title="crates/features/src/orgs/graphql/resolver.rs"
+use std::sync::Arc;
+
+use nest_rs::graphql::async_graphql::Result;
+use nest_rs::graphql::{operations, resolver};
+
+use crate::orgs::Org;
+use crate::users::{User, UsersService};
+
+#[resolver]
+pub struct OrgsResolver {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+
+#[operations]
+impl OrgsResolver {
+    #[field_resolver]
+    async fn admins(&self, parent: &Org) -> Result<Vec<User>> {
+        Ok(self.svc.admins_in_org(parent.id).await?)
+    }
+}
+```
+
+The filter, the service method, and the `User` wire DTO all stay where
+they belong — the resolver only translates between the two.
+
 ## Why the macro picks the parent
 
 `#[field_resolver]` infers the parent type from the first argument after the

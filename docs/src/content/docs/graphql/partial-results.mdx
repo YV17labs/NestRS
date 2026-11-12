@@ -1,0 +1,143 @@
+---
+title: Partial results
+description: "What a failed field does to the answer around it — Option or error, where its null lands, and every error of one response."
+sidebar:
+  order: 7.2
+---
+
+A GraphQL response can answer part of what it was asked: a field that fails
+answers `null` and an error, and the fields around it keep theirs. This page is
+how far that `null` reaches, how to choose the return that bounds it, and the
+document shapes async-graphql would answer otherwise.
+
+## `Option<T>` vs error
+
+`Option<T>` is the right return when an absent value is a *normal*
+outcome (looked something up, found nothing). Reserve errors for
+*abnormal* outcomes (validation failed, DB unreachable, principal
+refused). On the wire:
+
+- `Option<T>` returning `None` → `"data": { "post": null }`,
+  no `errors` block.
+- `Result<T>` returning `Err` → `"errors": [...]`, the field's
+  value is `null`.
+
+`#[crud]`'s generated `user` query follows this rule: an absent row is
+`null` (the 404 equivalent), a denied one or a broken read an error. A
+lookup written by hand reads the same three outcomes off the service's
+`access`:
+
+```rust title="crates/features/src/users/graphql/resolver.rs"
+#[query]
+#[authorize(Read, UserEntity)]
+async fn user(&self, id: String) -> Result<Option<User>> {
+    let id = parse_v7(&id)?;
+    match self.svc.access(Action::Read, id).await.opaque()? {
+        Access::Found(user) => Ok(Some(User::from(&user))),
+        Access::Denied => Err(forbidden()),
+        Access::Missing => Ok(None),
+    }
+}
+```
+
+A subject bound with `#[authorize(Read, bind = UsersService)]` is the
+operation's precondition instead: a missing row answers `NOT_FOUND`, an
+error.
+
+## Where a failed field's `null` lands
+
+A field that fails answers `null`, and its error carries the `path` to it, as
+the GraphQL specification handles a field error (§6.4.4). Its siblings keep
+their answers:
+
+```json
+{
+    "data": { "users": [{ "id": "0192…" }], "bad": null },
+    "errors": [{ "message": "id must be a UUID v7", "path": ["bad"],
+                 "extensions": { "code": "INVALID_ARGUMENT" } }]
+}
+```
+
+That is `{ users { id } bad: user(id: "not-a-uuid") { id } }`, whose `user`
+returns `Result<Option<User>>`, a nullable `User`. A Non-Null field cannot hold
+the `null`: a `Result<T>` is `T!` in the schema, so its parent answers `null` in
+its place, up to the nearest nullable field — and `data` itself answers `null`
+when a Non-Null root field fails. Pick the return by what its failure may cost
+the answer around it: `Result<Option<T>>` keeps its siblings, `Result<T>`
+promises a value wherever its parent has one. The rule holds on `POST`, for each
+operation of a batch, and over the socket. On a mutation, where the `null` lands
+also decides which writes stand: a root field answering `null` rolls back its
+own, and a `null` reaching `data` the whole operation's
+([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
+
+One selection falls outside it, from async-graphql 7.2.1. A field selected on an
+interface type reports its error without a `path`, so its key stays absent, and
+under a mutation its root field's writes stand with the root field's answer:
+select it inside `... on <ConcreteType>` and its error carries the path, so its
+`null` lands.
+
+An object the client selected answers an object, as GraphQL §6.3 reads, even when
+it has no key to answer: `{ org { name @skip(if: true) } }` answers `{"org": {}}`,
+and `{ node { ... on Post { title } } }` over a `Comment` answers `{"node": {}}`, at a
+nullable position as at a Non-Null one; an operation whose every root selection a
+directive leaves out answers `{"data": {}}`. An object selected twice at one place —
+two fragments that each select `org`, or `{ org { name @skip(if: true) } org { id } }`
+— answers what each copy selects, whichever finishes first, and a copy whose every
+field failed answers its `null`s beside what the other copy answered. async-graphql
+7.2.1 answers `null` for an object with no key and keeps the first copy to finish
+past it, so each selection set that could answer none is handed `__typename` under a
+key of its own before validation, which judges nothing new by it, and that key
+leaves the answer before you read it: a document holding no fragment, no directive
+and no object selected twice pays nothing for it.
+
+A document async-graphql 7.2.1 would answer otherwise than GraphQL §6.3.2 reads it
+is rewritten before validation, which judges the rewrite as it would the document
+you sent, and answers as the specification does:
+
+- **A mutation's root field selected twice runs once.**
+  `mutation { a: createPost(input: $p) { id } a: createPost(input: $p) { title } }`,
+  or two fragments each selecting it, writes one post and answers its `id` and
+  `title`, where async-graphql ran each copy's write
+  ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
+- **A list of lists selected twice answers what each copy selects.** With
+  `grid: [[Cell!]!]!`, `{ grid { a } grid { b } }`, or two fragments that each select
+  `grid`, answers each cell's `a` and `b`, at that place or below two copies of its
+  parent, where async-graphql kept one copy's cells.
+- **A condition on a union applies wherever a member of it is resolved.** With
+  `SearchResult` a union of `User` and `Org`,
+  `{ user { ... on SearchResult { ... on User { name } } } }` answers the name, where
+  async-graphql applied the condition only under a field answering `SearchResult`.
+
+Copies of one key naming different fields or arguments are no one field (§5.3.2),
+even under different type conditions, where async-graphql's validation does not
+compare them: the operation runs nothing and answers one `INVALID_ARGUMENT` error at
+the copy that differs, `the operation selects "a" more than once at one place with
+different fields or arguments`. Complexity and depth count the document that runs,
+copies merged counting once ([query limits](/graphql/query-limits/#complexity)), and
+what the rewrite copies is held to the same limits as it writes it
+([what fragments and variables multiply](/graphql/query-limits/#what-fragments-and-variables-multiply)).
+A fragment validation would refuse otherwise once inlined — on a type the schema lacks,
+carrying a directive, spread where it can never apply — is left as you sent it, so its
+refusal names it. A document needing none of this pays one read of its selections.
+
+## Multiple errors in one response
+
+GraphQL allows several errors per response. A query selecting two
+fields, each failing, gets two `errors[]` entries — async-graphql
+collects them automatically across resolver calls. There is no
+"first error wins" semantic; clients see the full set with `path`
+pointing at each failed field.
+
+This matters most for partial-success shapes (one ok, one denied)
+where the client wants the available data plus a clear refusal on the
+rest — the denied field nullable, so that its `null` stands beside the
+data. The framework does not need any code for this — return the
+`Result` from each `#[field_resolver]` and async-graphql does the
+gathering.
+
+## Going further
+
+- [GraphQL errors](/graphql/errors/) — what a failed field's error says.
+- [GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)
+  — the writes a mutation field's `null` rolls back.
+- [Query limits](/graphql/query-limits/) — what the rewrite's copies are held to.

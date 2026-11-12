@@ -238,7 +238,7 @@ boot says at `warn` once it opens the store, naming the endpoint.
   variables, which would bypass the `<PREFIX>_STORAGE__*` namespace.
 - **One store per app.** Named stores, `Storage<I>` beside the default, wait
   for a seam that keeps a generic module's providers in the access graph
-  ([instances](/fundamentals/providers/#instances--one-resource-opened-twice)); the default store's spelling
+  ([instances](/fundamentals/instances/)); the default store's spelling
   stays when they arrive.
 - **An upload is bound by its type, not its size.** `object_store` signs no
   `Content-Length`, so a presigned `PUT` takes any size up to S3's 5 GiB:

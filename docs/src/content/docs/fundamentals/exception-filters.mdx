@@ -215,25 +215,10 @@ That answers `422` with `caught: domain failure: boom`.
 
 ### On a GraphQL field
 
-A resolver binds filters as a controller does — `#[use_exception_filters]` on
-the `#[resolver]` struct or beside a root field — and the app's run there too.
-A field has no reply a filter writes through a view, so a filter answers with
-a `Problem`: the field's error then carries its message and its code under
-`extensions.code`, while the operation's other fields resolve as they would:
-
-```rust title="crates/features/src/orders/graphql/exception_filter.rs"
-#[async_trait]
-impl ExceptionFilter for LedgerConflict {
-    type Exception = LedgerRefused;
-
-    async fn catch(&self, _: &LedgerRefused, _: &mut UnitContext<'_>) -> Caught {
-        Caught::Problem(Problem::new(409, code::CONFLICT).with_detail("the ledger is busy"))
-    }
-}
-```
-
-A `#[field_resolver]` runs only the filters declared on it. What no filter
-answers keeps [GraphQL's own rule](/graphql/errors/).
+A resolver binds filters as a controller does — `#[use_exception_filters]` on the
+`#[resolver]` struct or beside a root field — and a filter answers a field with a
+`Problem`, rendered in GraphQL's own form: [an exception filter answers
+first](/graphql/errors/#an-exception-filter-answers-first).
 
 ### Every error: the catch-all
 
@@ -242,7 +227,10 @@ envelope a product answers every error in. Bound globally, it also shapes
 what no route answers: a `404` for a path nothing serves, a `405` for a
 method a path does not take, an API version the header or media-type
 strategy refuses, and a self-mount's own error, such as `/graphql` refusing
-an oversized batch.
+an oversized batch. A pipe's refusal is one of them: its RFC 9457 `400`
+([validation at the edge](/fundamentals/pipes/#validation-at-the-edge)) answers in
+your API's own envelope (`{ ok: false, error: { ... } }`) through one catch-all
+bound globally, and the error itself stays pure.
 
 ```rust
 #[async_trait]
@@ -293,19 +281,6 @@ interceptor reaches them. The full order is on
 | A catch-all `ExceptionFilter` | A provider | One envelope for every failure, bound on a route, a controller or the app |
 
 Reach for `ToProblem` first.
-
-## Validation envelopes
-
-The framework's pipe error renderer already returns an RFC 9457
-`application/problem+json` body:
-
-```json
-{ "type": "about:blank", "title": "Bad Request", "status": 400, "detail": "…", "code": "INVALID_ARGUMENT", "errors": { /* ... */ } }
-```
-
-If your API uses a different envelope (`{ ok: false, error: { ... } }`), bind
-one catch-all exception filter globally that re-renders it. The error itself
-stays pure.
 
 ## Going further
 

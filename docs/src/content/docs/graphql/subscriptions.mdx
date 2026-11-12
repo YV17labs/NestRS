@@ -5,8 +5,6 @@ sidebar:
   order: 6
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 A subscription is a `#[query]` that answers more than once. You write an
 async method returning a stream, declare the same access posture every
 other operation declares, and the framework serves it over graphql-ws on
@@ -112,146 +110,13 @@ Note what the event carries: the **published row**, not its id and not its wire
 type. An item is pushed, not read through `Repo`, and its judgement decides on the
 whole row. A published fact carries the fact.
 
-## On the wire
+## The socket
 
-The socket speaks [graphql-ws](https://github.com/enisdenjo/graphql-ws)
-on the same URL as the POST endpoint, so a client points at one address. Of
-the subprotocols a client offers in `Sec-WebSocket-Protocol`, the first one
-async-graphql speaks is chosen — `graphql-transport-ws`, or the legacy
-`graphql-ws` — and a handshake offering neither is refused `400`:
-
-```bash frame="terminal"
-$ curl -i --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-    -H 'Sec-WebSocket-Protocol: graphql-transport-ws' \
-    http://localhost:3002/graphql
-HTTP/1.1 101 Switching Protocols
-connection: upgrade
-upgrade: websocket
-sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
-sec-websocket-protocol: graphql-transport-ws
-```
-
-The caller authenticates on the **upgrade** request, with the same
-`Authorization` header a query carries. A plain `GET` on that path still
-serves the playground when it is enabled; the upgrade header is what
-selects the socket. A handshake the server cannot accept is refused as a
-gateway's is ([When the server refuses a
-handshake](/websockets/#when-the-server-refuses-a-handshake)), a `HEAD`
-carrying one included.
-
-A browser never consults CORS before it opens a socket, so the upgrade
-checks the `Origin` header itself (RFC 6455 §10.2), before the guard runs.
-With no CORS policy, a browser page on the server's own origin gets its
-socket; any other gets `403`, and a `warn` on `nest_rs::graphql` says why by
-kind and names the settings that would admit it, never the origin sent or the
-`Host` it was compared to. Once
-`<PREFIX>_HTTP__CORS_ORIGINS` is set, only the origins it lists get one — the
-server's own included, when it serves the page — and the CORS layer's `403`
-files its one `warn` on `nest_rs::http` ([CORS](/http/cors/#cors)). A
-client that sends no `Origin` — anything but a browser — is not concerned.
-
-<Aside type="caution">
-A browser cannot set headers on a WebSocket handshake. Deployments that
-subscribe from a browser terminate the upgrade behind a proxy that adds
-the header, or place the socket behind an authenticated origin. Bearer
-tokens in the `connectionParams` payload are not read.
-</Aside>
-
-## What a socket does and does not inherit
-
-The upgrade establishes the caller; it does not lend the subscription its
-whole request.
-
-| From the upgrade | On the socket |
-|---|---|
-| The principal and its `Ability` | Carried, for the connection's life |
-| The trace and the `actor_id` | Carried — the socket opens one `graphql.subscription` span under the upgrade's trace |
-| A database handle | Carried, always **outside** the upgrade's transaction |
-| `RequestScope` (`Scoped<T>`) | **Not** carried — each operation opens its own |
-
-The middle row is what makes a `Repo`-backed subscription work at all: the
-`101` is answered before the connection task starts, so the request
-boundary's handle is already gone. The socket runs as a pool unit of the
-app's unit-of-work binding instead, so a DataLoader batch under it reads
-through that pool too. Carrying the transaction would pin a pooled connection for hours
-and write through something nobody will commit.
-
-The second row's span covers the **connection**, and a subscription's items run
-in it: a stream has no boundary per item to open one at. A query or a mutation
-sent over the socket is a unit of its own, with its own span (below). See
-[Correlation](/fundamentals/correlation/).
-
-The last row is deliberate too. A request-scoped provider built once at
-connect and shared by every operation for four hours would not be
-request-scoped, so the upgrade's scope stays behind. Each operation the socket
-carries opens a scope of its own instead, as a WebSocket message does: a query
-or a mutation for its unit, a subscription at its opening. A `Scoped<T>`
-parameter resolves there as it does on `POST`, and an `Ambient<Claims>` parameter
-reads the principal the upgrade carried, at the opening.
-
-A subscription's guards, class gate, exception filters and interceptors run at
-its **opening** — the call answering the stream — never per item: each item
-is judged, and that is all it runs.
-
-## Configuration
-
-A subscription socket captures its principal once, at the upgrade, and
-replays it for every item it pushes. `<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS`
-bounds how long that may last — the same control, and the same default of
-four hours, that `<PREFIX>_WS__MAX_CONNECTION_SECS` applies to a gateway
-socket. When it elapses the server ends the socket, so the peer
-re-upgrades, which re-runs the guard chain and re-checks the token's
-`exp`. Set it to `0` to disable the ceiling.
-
-A peer can vanish without a close, and its TCP connection says nothing of it.
-So once a peer has sent nothing for `<PREFIX>_GRAPHQL__PING_INTERVAL_SECS`, the
-server sends it a WebSocket Ping (RFC 6455 §5.5.2), which every client answers
-as it reads, a browser's `WebSocket` included, whatever the subprotocol. Any
-frame from the peer counts as its answer, so a peer that talks is never pinged,
-and one that only listens to its subscriptions is pinged however much they
-send. A peer that sends nothing back within `<PREFIX>_GRAPHQL__PING_TIMEOUT_SECS` is
-taken for gone: its socket is dropped without a close, its subscriptions ended,
-its line filed `cancelled`, and one `warn` on `nest_rs::graphql` names the
-mount by `host` and `path`. Both default to 20 seconds, so a vanished peer is
-released within 40 of its last frame; with the Pings off, it holds its socket
-until this ceiling. A client may still send `graphql-transport-ws`'s own `ping`,
-which the server answers with a `pong`, or a WebSocket Ping, answered too.
-
-A query or a mutation sent over the socket is a unit of its own, as on
-`POST`: a mutation opens its transaction inside the socket's pool unit and
-settles it before its answer is sent, its root fields each in a savepoint
-([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
-
-The server ends a socket the protocol's way, at the ceiling and at the
-shutdown signal alike: each subscription still running gets a `complete`, a
-query or a mutation sent over the socket is answered first, then the socket
-closes with RFC 6455's `1001 Going Away` and a reason saying what to do —
-re-upgrade, or reconnect to a replica still serving. A client that takes
-nothing for `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (60 s) is dropped without a close,
-which no longer reaches it, and one `warn` on `nest_rs::graphql` says so. A
-socket the server ended files its `graphql.subscription` line `cancelled`; one
-its client closed files `ok`, one the protocol refused `error`. A subscription
-whose stream panics closes the socket with `1011 Internal Error` and files
-`panic`.
-
-The socket is bounded in what one client can hold, whatever it is
-authorised for:
-
-| Bound | Variable | Default | Past it |
-|---|---|---|---|
-| A message's size | `<PREFIX>_GRAPHQL__MAX_MESSAGE_BYTES` | 64 KiB, from 1 to a gibibyte | the frame is refused before it is buffered, and the socket closes `1009 Message Too Big`, said at `warn` naming the mount, the cap and the code, never the frame |
-| The wait for `connection_init` | `<PREFIX>_GRAPHQL__CONNECTION_INIT_TIMEOUT_SECS` | 3 s, from 1 to 60 | the socket closes `4408 Connection initialisation timeout` |
-| A peer's silence | `<PREFIX>_GRAPHQL__PING_INTERVAL_SECS` | 20 s, from 1 to 3600, `0` ⇒ none | the server sends it a Ping |
-| The wait for an answer to that Ping | `<PREFIX>_GRAPHQL__PING_TIMEOUT_SECS` | 20 s, from 1 to 3600, never off | the socket is dropped without a close, as its peer's |
-| Operations running at once | `<PREFIX>_GRAPHQL__MAX_SOCKET_OPERATIONS` | 100, from 1 to 10 000, `0` ⇒ unlimited | the `subscribe` is answered an `error` message for its id, and the socket stays |
-
-A `subscribe` reusing the id of an operation still running closes the socket
-`4409 Subscriber already exists`, as graphql-ws requires, rather than
-replacing the running one. Both `44xx` closes file the socket's line `error`.
-
-Everything else is the GraphQL module's own configuration — see
-[Configuration](/graphql/configuration/).
+Subscriptions run over [graphql-ws](https://github.com/enisdenjo/graphql-ws) on
+the URL `POST` is served on, the caller authenticated on the upgrade with the
+same `Authorization` header a query carries. [The subscription
+socket](/graphql/subscription-socket/) is its handshake, what it carries from the
+upgrade, and the bounds it holds.
 
 ## Limits
 

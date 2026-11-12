@@ -157,13 +157,15 @@ container handle to thread, no factory to call.
 
 - [Queries and mutations](/graphql/queries-mutations/) — `#[query]`,
   `#[mutation]`, inputs, outputs, returning typed entities.
+- [Services and context](/graphql/services-and-context/) — the service an
+  operation injects, and the caller, scope and loaders it reads.
 - [Field resolvers](/graphql/field-resolvers/) — custom computed
   fields with `#[field_resolver]`, and the one `ComplexObject`
   caveat to watch for.
 - [Relations resolve themselves](/graphql/relations/) — declare a
   SeaORM relation, get a typed GraphQL field with a batched loader and
   cursor pagination for free.
-- [Errors](/graphql/errors/) — `async_graphql::Error`, extensions,
+- [Errors](/graphql/errors/) — `async_graphql::Error`, `ToProblem`,
   and mapping `ServiceError` to a GraphQL envelope.
 
 ### All options
@@ -172,8 +174,18 @@ container handle to thread, no factory to call.
   emission, playground toggle, mount path.
 - [Subscriptions](/graphql/subscriptions/) — `#[subscription]` over
   graphql-ws, gated at subscribe and filtered per item pushed.
+- [The subscription socket](/graphql/subscription-socket/) — the handshake,
+  what the upgrade lends the socket, and the bounds it holds.
+- [Error codes](/graphql/error-codes/) — `extensions.code`, a problem's type,
+  and the field map keyed by the schema's names.
+- [Partial results](/graphql/partial-results/) — where a failed field's `null`
+  lands, and every error of one response.
 - [Query limits](/graphql/query-limits/) — depth and complexity
   ceilings, and what a rejected query looks like.
+- [Field complexity](/graphql/field-complexity/) — the page factor a relation
+  scores, and the override any field takes.
+- [Federation](/graphql/federation/) — serve the schema as an Apollo
+  Federation subgraph.
 
 ## Reference
 

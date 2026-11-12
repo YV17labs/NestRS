@@ -179,7 +179,7 @@ these pages grants — so it is the deployment's to set.
 
 A cache that lives by evicting cannot share the server the queue runs on, so an
 app that does both opens a second connection: a named
-[instance](/fundamentals/providers/#instances--one-resource-opened-twice). You
+[instance](/fundamentals/instances/). You
 declare its marker, and import the module with it as a type argument —
 `RedisModule::for_root((Cache, cfg))` when you pin its config:
 

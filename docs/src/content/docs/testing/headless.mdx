@@ -111,7 +111,7 @@ A harness app is dropped at the end of its test, and a drop runs no shutdown
 hook and closes nothing. A test that proves a teardown — a hook that
 deregisters, a pool that says goodbye — ends the app with `close()`, which
 `TestApp`, `HeadlessApp` and `WsApp` each have and which tears down exactly as
-[`App::close`](/fundamentals/lifecycle/#running-without-serving) does:
+[`App::close`](/fundamentals/app-state/#running-without-serving) does:
 
 ```rust title="apps/api/tests/e2e/lifecycle.rs"
 let app = TestApp::builder().module::<ApiModule>().build().await?;

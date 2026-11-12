@@ -15,7 +15,7 @@ dependency. Telemetry itself needs no import — `main`'s `OpenTelemetry::init()
 installs the meter the module hands out — so an app recording no metric of its
 own imports the module nowhere. The module installs `Metrics` in its own
 `register`, as `EventsModule` installs `EventBus`, so the access graph gates
-neither way ([What is global](/fundamentals/modules/#what-is-global)): an app
+neither way ([What is global](/fundamentals/module-boot/#what-is-global)): an app
 in which nothing imports it fails the boot naming `OpenTelemetryModule`, and a
 provider whose module skips the import reaches `Metrics` only when a module
 importing it registered first — registered before, it fails the boot. The

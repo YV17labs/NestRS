@@ -97,7 +97,7 @@ mutation {
 - **A `null` that stays below the root field leaves its work standing.** A
   nullable field that fails under it, or a Non-Null one under a nullable
   parent, answers `null` where it lands
-  ([where a failed field's `null` lands](/graphql/errors/#where-a-failed-fields-null-lands)),
+  ([where a failed field's `null` lands](/graphql/partial-results/#where-a-failed-fields-null-lands)),
   and the root field keeps its answer: what the answer reports, the database
   holds.
 - **An answer with no data rolls the whole operation back.** A Non-Null root
@@ -117,7 +117,7 @@ mutation {
   `a: createPost(input: $q)`, by validation's own conflict error, which names
   both; under different type conditions, a fragment's included, by one
   `INVALID_ARGUMENT` error at the copy that differs
-  ([where a failed field's `null` lands](/graphql/errors/#where-a-failed-fields-null-lands)).
+  ([where a failed field's `null` lands](/graphql/partial-results/#where-a-failed-fields-null-lands)).
   A copy `@skip` or `@include` leaves out runs nothing, so it repeats nothing.
 - **A field that never touches the database sends nothing**: its savepoint is
   as lazy as the transaction around it.

@@ -1,0 +1,105 @@
+---
+title: Provider scopes
+description: "Singleton, request or transient: when the container builds a provider, what shares it, and how a handler reaches one that is not a singleton."
+sidebar:
+  order: 3.1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A [provider](/fundamentals/providers/) is built once at boot unless it says
+otherwise. `#[injectable(scope = …)]` picks one of three lifetimes; this page is
+when each is built, what shares it, and how a handler reaches one that is not a
+singleton.
+
+```rust title="three providers, three scopes"
+#[injectable]                    // singleton — default
+pub struct PostsService { /* ... */ }
+
+#[injectable(scope = request)]   // one instance per request
+pub struct RequestLogger { /* ... */ }
+
+#[injectable(scope = transient)] // fresh instance every resolution
+pub struct IdGenerator { /* ... */ }
+```
+
+| Scope | Built | Shared as |
+|-------|-------|-----------|
+| `singleton` (default) | Once at boot | `Arc<T>` everywhere |
+| `request` | Once per request | Cached for that request |
+| `transient` | On every resolution | Never cached |
+
+A type has **one provider, whatever its scope**. Listing it in two modules, or
+registering it once as a singleton and once request-scoped, fails the boot with
+a `DuplicateProviderError` naming both registrations and, when they differ,
+both scopes.
+
+**Singletons** — `PostsService`, `PostsController`, the DB pool: built at
+boot, injected as `Arc<T>`.
+
+## Request-scoped providers
+
+**Request-scoped** — may inject singletons; singletons may **not**
+inject request-scoped types (they exist before any request). Reach them
+through the request boundary, not `#[inject]` on a singleton:
+
+```rust title="crates/features/src/posts/http/controller.rs"
+use nest_rs::core::Scoped;
+
+#[get("/trace")]
+async fn trace(&self, log: Scoped<RequestLogger>) -> String {
+    log.line("listed posts");
+    "ok".into()
+}
+```
+
+**A `Scoped<T>` parameter is inside the access contract**, like an
+`#[inject]` field: `RequestLogger` must be provided by the controller's module
+or a module it imports. One reached through no import fails the boot with an
+`AccessGraphError`, and one no module provides with a
+`MissingDependencyError` naming it — never a `500` at the first request. A
+request-scoped provider is the point of the parameter, so the boot checks where
+it comes from, never its scope. A route or an operation declaring
+`#[authorize(A, bind = S)]` is held the same way for the service `S` it loads
+through, and for the unit of work that load runs in, which
+`SeaOrmDatabaseModule` binds.
+
+HTTP, WebSockets, GraphQL, and MCP each install a fresh request scope per call
+(one per request for HTTP and MCP — every operation one `/mcp` request or one
+GraphQL `POST` carries shares it — one per message for WebSockets, one per
+operation on a graphql-ws socket, a subscription's for as long as it streams).
+Within a scope, request-scoped providers are cached and shared; across scopes,
+fresh instances are built. A WebSocket message, a GraphQL resolver and an MCP
+operation take them as the same parameter a route does, `nest_rs::core::Scoped<T>`
+— no schema argument on GraphQL, and inside the access contract on all four. A
+request-scoped provider may itself inject another request-scoped provider (both
+share the per-request cache); providers waiting on each other fail the boot,
+naming the chain (`ProviderCycleError`).
+
+<Aside type="caution">
+A `#[dataloader]` batch closure runs **off-task** (a spawned future)
+and serves every field of the request, so a request-scoped provider is
+not reachable inside batch computation — a batch carries the request's
+ambient values instead: its trace, the caller's ability, the pool.
+</Aside>
+
+## Transient providers
+
+**Transient** — rebuild on every `Scoped<T>` / `get::<T>()` extraction.
+Use for throw-away per-call state (a one-shot builder — never a
+correlation id, which the framework already carries). A transient that
+depends on itself, directly or through others, fails the boot the same way.
+
+<Aside type="note">
+Most services in `posts/` are **singletons**. Reach for `request` or
+`transient` only when you need per-request or per-call isolation.
+</Aside>
+
+## Going further
+
+- [Providers](/fundamentals/providers/) — what the container builds, and the
+  access graph a `Scoped<T>` parameter joins.
+- [Extractors](/http/extractors/) — `Scoped<T>` on a route, beside the other
+  parameters a handler takes.
+- [Lifecycle](/fundamentals/lifecycle/) — the hooks a singleton runs as the app
+  comes alive and winds down.

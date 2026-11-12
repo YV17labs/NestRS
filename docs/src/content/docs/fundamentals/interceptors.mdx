@@ -32,7 +32,7 @@ of the unit or answering it mints one: an interceptor that does neither does
 not compile. `next.run(cx)` consumes `next`, so the rest of the unit runs once.
 
 <Aside type="caution">
-**Every edge runs them: HTTP routes, [GraphQL fields](#around-a-graphql-field),
+**Every edge runs them: HTTP routes, [GraphQL fields](/fundamentals/interceptors-beyond-http/#around-a-graphql-field),
 [WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes),
 [MCP operations](/mcp/#layers-around-an-operation),
 [jobs](/queue/processors/#layers-around-a-job),
@@ -213,56 +213,9 @@ interceptor never runs before the access decision.
 
 ## Around a GraphQL field
 
-Each root field of a GraphQL operation — a `#[query]`, a `#[mutation]`, an
-`#[entity]`, and the federation fields `_service` and `_entities` — is a unit
-of its own, `graphql.field`, inside the `/graphql` request that carried it.
-The app's interceptors, the resolver's and the field's own run around it, after its guards and its class gate, exactly as
-around a route. `cx.unit()` names the unit, and `GraphqlView` says which field
-and the role it plays:
-
-```rust title="apps/api/src/interceptor.rs"
-use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable};
-use nest_rs::graphql::{GraphqlView, unit};
-
-#[injectable]
-#[derive(Layer)]
-pub struct FieldTiming;
-
-#[async_trait]
-impl Interceptor for FieldTiming {
-    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
-        let started = std::time::Instant::now();
-        let outcome = next.run(cx).await;
-        if cx.unit() == unit::FIELD
-            && let Some(view) = cx.switch_to::<GraphqlView>()
-        {
-            tracing::info!(field = view.field(), elapsed = ?started.elapsed(), "field timed");
-        }
-        outcome
-    }
-}
-```
-
-On a resolver it reads the same as on a controller:
-
-```rust title="crates/features/src/users/graphql/resolver.rs"
-#[resolver]
-#[use_interceptors(FieldTiming)]
-pub struct UsersResolver {
-    #[inject]
-    svc: Arc<UsersService>,
-}
-```
-
-Three places run less, each because of what it is:
-
-- **The `/graphql` request** is an HTTP self-mount: the unit stage runs around
-  it, the handler stage does not — its fields are where the work is.
-- **A `#[field_resolver]`** is no unit: it runs once per parent row, so only
-  the interceptors declared on it run around it, never the app's nor its
-  resolver's. Bind one on the method when a field resolver must be wrapped.
-- **A `#[subscription]`'s** interceptors wrap its opening — the stream it
-  answers — never each item the stream yields.
+Each root field of a GraphQL operation is a unit of its own, `graphql.field`,
+and the app's, the resolver's and the field's own interceptors run around it as
+around a route: [Interceptors beyond HTTP](/fundamentals/interceptors-beyond-http/#around-a-graphql-field).
 
 ## What an interceptor cannot change
 

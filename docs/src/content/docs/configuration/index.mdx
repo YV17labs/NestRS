@@ -253,7 +253,7 @@ the value, so the `.env` cascade keeps outranking the defaults for a call site
 that declares an identity alone.
 
 A module an app can open more than once — one resource per
-[instance](/fundamentals/providers/#instances--one-resource-opened-twice) —
+[instance](/fundamentals/instances/) —
 names the instance as a type argument where it is imported bare, and in the
 value where it is pinned: the config alone for the default, the marker and the
 config for a named one. Each instance pins once, and reads its own variables

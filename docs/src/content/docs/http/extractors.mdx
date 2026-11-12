@@ -20,7 +20,7 @@ the request itself — its URI, a header no DTO names — takes `req: &Request`.
 
 This page is the reference: one extractor, one example, one rule. The
 [Guards](/fundamentals/guards/) for `Ambient<T>` and
-[Providers](/fundamentals/providers/) for `Scoped<T>` — tell the story.
+[Provider scopes](/fundamentals/provider-scopes/) for `Scoped<T>` — tell the story.
 
 ## `Json<T>` — typed JSON in and out
 
@@ -316,7 +316,7 @@ Two contracts hold:
   an opaque `500`, and the type goes to an `error` line on
   `nest_rs::http`, never to the client.
 
-See [Providers](/fundamentals/providers/) for the scope rules — a
+See [Provider scopes](/fundamentals/provider-scopes/) for the scope rules — a
 request-scoped provider may inject singletons and other request-scoped providers,
 one instance each per request; a singleton injects neither.
 
@@ -448,7 +448,7 @@ anonymous caller it signs in, and rate-limited all the same.
 ## Going further
 
 - [Guards](/fundamentals/guards/) — write a guard that attaches `Ambient<T>`.
-- [Providers](/fundamentals/providers/) — request-scoped providers and
+- [Provider scopes](/fundamentals/provider-scopes/) — request-scoped providers and
   the rules `Scoped<T>` reads.
 - [Pipes](/fundamentals/pipes/) — write a pipe and apply it through
   `Piped<P, E>`.

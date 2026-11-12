@@ -269,43 +269,6 @@ boot. An event the hook emits waits for its commit, and each listener runs in a
 transaction of its own. Shutdown hooks run before the pool closes, so they have
 it too. With no database binding imported, a hook runs bare.
 
-## Running without serving
-
-A migration, a one-shot command, a test: some programs boot the app to do one
-piece of work, never to serve. They take the same way up and the same way down,
-without the transports:
-
-```rust title="apps/blog/src/bin/reindex.rs"
-#[nest_rs::main]
-async fn main() -> anyhow::Result<()> {
-    let app = App::builder().module::<BlogModule>().build().await?;
-    app.init().await?;
-    let reindexed = match app.container().get::<SearchIndex>() {
-        Some(index) => index.rebuild().await,
-        None => Err(anyhow::anyhow!("BlogModule provides no SearchIndex")),
-    };
-    app.close().await;
-    reindexed
-}
-```
-
-`init()` runs the init phases once, as `run()` would. `close()` turns the app
-`Draining` with `StopCause::Closed`, runs the shutdown phases in reverse when
-the init ran, closes the resources and drops the container — the same tail as
-`run()`, inside the same five seconds. It returns nothing: what fails on the
-way down is logged, never handed back. An app dropped without `close()` runs
-none of it. Under `#[nest_rs::main]`, an app that is never served keeps running
-at the first signal, its `stopping()` cancelled, until it closes or a second
-signal exits it.
-
-<Aside type="tip">
-The test harness takes the same path: `TestApp::builder().build()` has run
-the init phases, and `TestApp`, `HeadlessApp` and `WsApp` each have a
-`close()` that tears the app down as `App::close` does — a `HeadlessApp`
-stops the transports it spawned first, within their stop bound — so a test
-can prove its shutdown hooks.
-</Aside>
-
 ## Common things a hook does
 
 - **Init** — warm a cache, verify migrations applied, register with a
@@ -326,7 +289,7 @@ a one-method `#[hooks]` block beside the service's main `impl`, shown
 - [Shutdown](/fundamentals/shutdown/) — every bounded step from the signal to
   the exit, the shutdown hooks' budget among them.
 - [App state](/fundamentals/app-state/) — the sequence `App::run` walks, and
-  where the app stands on it.
+  [a program that runs it without serving](/fundamentals/app-state/#running-without-serving).
 - [Providers](/fundamentals/providers/) — the things that own hooks;
   built once, shared as `Arc<T>`.
 - [Testing / e2e](/testing/e2e/) — booting the real `ApiModule`, where

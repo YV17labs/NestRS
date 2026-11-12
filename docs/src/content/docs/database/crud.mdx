@@ -5,8 +5,6 @@ sidebar:
   order: 6
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 A REST CRUD or a GraphQL CRUD is **one attribute** on the controller or
 resolver impl block. `#[crud(service = OrgsService)]` names the entity's
 [`CrudService`](/database/), reaches it through the struct's `#[inject]` field
@@ -152,52 +150,6 @@ impl OrgsController {}
   on every request: mount the resource under a path naming none, or write
   those operations by hand.
 
-## The tenant comes from the grant
-
-`users` is tenant-scoped, and its controller is still one `#[crud]` line: the
-create lands in the caller's org without a handler.
-
-```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)"
-#[crud(
-    service = UsersService,
-    api(
-        get(
-            summary = "Get a user in the caller's org by id",
-            description = "A user outside the caller's org answers 403, an absent one 404."
-        ),
-        // … create(…)
-    ),
-)]
-impl UsersController {}
-```
-
-`CreateUser` carries no `org_id`. The ability's `Create` grant pins it —
-`p.eq(user::Column::OrgId, actor.org_id)` — and `Creatable::create` fills every
-column the caller's `Create` grants pin by equality that the input left unset
-(CASL's `rulesToFields`), then inserts and re-checks the fresh row against the
-same grants in SQL. A grant naming the author too pins both:
-
-```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
-if let Some(author) = actor.sub.user_id() {
-    ab.can(Action::Create, post::Entity)
-        .when(|p| {
-            p.all([
-                p.eq(post::Column::OrgId, actor.org_id),
-                p.eq(post::Column::AuthorId, author),
-            ])
-        })
-        .requires_scope(constants::POSTS_WRITE);
-    // …
-}
-```
-
-The fill never guesses. A column is filled only when every grant constraining
-it pins it to one value; two grants pinning it apart, or one constraining it
-with `is_in`, a comparison or `any`, leave it unset, and the re-check refuses
-the row. A value the input carries is never overwritten: the re-check judges
-it. Constants the server owns, such as a new post's status, are the entity's
-`#[expose(default = …)]` ([Entities](/database/entities/#write-side--inputs-and-validation)).
-
 ## Override one handler, keep the rest
 
 `#[crud]` only generates the operations you did **not** write. Hand-write
@@ -251,137 +203,6 @@ a visible attribute — a parameter type never stands in for it.
 Same override rule — a `create_user` you write takes over its generated twin,
 and the generated `create_user` fills the caller's org exactly as REST's does.
 
-## When the database refuses
-
-A generated operation answers the class a client branches on, the same on both
-edges: a unique violation is a `409` (`CONFLICT`), a row gone before
-the write a `404` (`NOT_FOUND`), a create the row-level re-check rolled back
-a `403` (`FORBIDDEN`), as is a write setting a column
-[a grant's `.fields` withholds](/security/authorization/field-grants/#what-a-write-may-set),
-naming the input's field under `errors`, and a statement Postgres cancelled at its bound
-(`57014`, `<PREFIX>_SEAORM__STATEMENT_TIMEOUT_SECS`) a `503` (`UNAVAILABLE`),
-filed at `warn` — the server could not serve it in time, and another attempt
-may: as the request timeout's own `503` names the budget that ran out, it
-names the statement bound as its wait, `Retry-After` on HTTP and
-`retryAfterSeconds` on GraphQL. Anything else is a `500` under `INTERNAL` —
-the opaque problem document on HTTP, `"internal error"` on GraphQL — and its
-error is filed once at `error` on `nest_rs::orm`, said by its SQLSTATE and the
-constraint, table and column the server named. The server's own message never
-reaches the client or the log, since it quotes the input it refused.
-
-A create or an update a unique key refuses also names what the client can
-fix: the input's fields that key holds, under `errors` on HTTP and
-`extensions.errors` on GraphQL, each as that edge's client spells them
-([GraphQL names a field as its schema does](/graphql/errors/#field-errors-use-the-schemas-names)), in the
-shape a validation failure's fields take, and never the value, the index or the
-table:
-
-```json
-{
-  "type": "about:blank",
-  "title": "Conflict",
-  "status": 409,
-  "code": "CONFLICT",
-  "errors": { "email": [{ "code": "unique" }] }
-}
-```
-
-`SeaOrmDatabaseModule` reads the keys from Postgres's catalog once, at boot, for
-every `#[expose]` entity's table and its partitions — a primary key, a unique
-constraint, a unique index, partial ones included — so naming a field costs the
-request nothing. A key's column the input does not carry is not named (a tenant
-a grant pins, beside the slug the client sent, names `slug`), nor is a column an
-`INCLUDE` adds; a key over an expression (`lower(email)`), or one added after the
-app booted, answers the bare `409`. An input you write by hand names its fields
-through `CreateModel::field_for` and `UpdateModel::field_for`.
-
-A field goes by the name serde reads it under on HTTP, which the `errors` of a validation
-failure share; GraphQL spells the same key as its schema does, so a two-word field is
-named `orgId`.
-
-A service of your own whose `?` turns a `RepoError` into a `ServiceError` answers the bare
-`409` on every edge, an MCP tool's included: that conversion never sees the input. To say
-more, match the key first and answer a sentence of your own:
-`Err(RepoError::UniqueViolation(key)) if key.constraint() == Some("users_email_key")`.
-
-On GraphQL every mutation root field runs in a savepoint of its operation's
-transaction, so a refused statement rolls back that field alone: the field
-answers its class, and the operation's other fields commit — unless the field
-is Non-Null, whose `null` reaches `data` and rolls the whole operation back
-([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
-
-## Bound mutations
-
-A **bound mutation** acts on one existing row the caller already named by
-id — `publish`, `archive`, `confirm`. It declares its posture and the row it
-loads in one attribute, `#[authorize(Action, bind = Service)]`, and receives
-the row as an `Authorized<Action, E>` parameter to hand straight to the
-service — on HTTP, from the route's path:
-
-```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
-    #[post("/{id}/publish")]
-    #[authorize(Update, bind = PostsService)]
-    #[use_guards(PostAuthorGuard)]
-    // …
-    async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>, PostError> {
-        Ok(Json(self.svc.publish(post.into_inner()).await?))
-    }
-```
-
-and on GraphQL, from an `id: String!` argument the attribute synthesises:
-
-```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo, abridged)"
-    #[mutation]
-    #[authorize(Update, bind = PostsService)]
-    #[use_guards(PostAuthorGuard)]
-    async fn publish_post(&self, post: Authorized<Update, PostEntity>) -> Result<Post, PostError> {
-        self.svc.publish(post.into_inner()).await
-    }
-```
-
-`PostAuthorGuard` refuses a token naming no user, on both edges. The service writes
-the publication's audit row through `Creatable`, the `Create` grant on it pinning
-the actor to the caller, so no parameter carries who is publishing; its
-`PostError` answers its `409` or its `CONFLICT` by its own `ToProblem`.
-
-Two pieces, each with one job:
-
-- `#[authorize(Update, bind = PostsService)]` is the **posture** — the class
-  gate before the body and the caller's ability for its reads, the entity derived
-  from `PostsService::Entity` — and the **binding**: it parses the id, runs
-  the row-level access check for `Update` (404 on a missing row, `FORBIDDEN`
-  on a denied one) after the gate, and loads the row. This is the only thing
-  that decides authorization, and it is greppable.
-- `Authorized<Update, PostEntity>` is the **value** — the loaded row, which
-  derefs to the `Model` and gives it up with `into_inner()`.
-
-The action lives **in the type**, so the proof is action-true: a service
-method that takes `Authorized<Update, E>` cannot be handed an
-`Authorized<Read, E>` — a compile error, not a runtime surprise. The
-`Authorized<A, E>` value is also *proof of authorization*: its constructor
-is sealed, mintable only by the binding, so the mutation body can neither
-reach a row the caller could not load nor act under an action it was not
-granted.
-
-<Aside type="caution">
-Posture is **always** the visible `#[authorize]`/`#[public]` — an
-`Authorized<A, E>` parameter is never a posture of its own: written without
-`bind = Service` beside it, it does not compile. Only a guard, via the
-attribute, decides authn/authz; the `Authorized` value is what the decision
-loaded.
-</Aside>
-
-The service is resolved through the request's scope, and the boot checks it
-like an injected one: a controller or resolver whose module does not import
-the service's own fails the boot rather than its first call. On GraphQL the
-synthesised `id` argument means the method must not declare an `id`
-parameter of its own: writing `id: String` alongside it is `E0415: identifier
-'id' is bound more than once in this parameter list`, reported against the
-`#[crud(…)]` attribute on the impl block rather than the method — drop the
-parameter, not the attribute; `id_arg = …` renames the argument. On HTTP the
-id is the one parameter the route's path names, its controller's included, so
-the whole path names it alone.
-
 ## Pagination
 
 | Form              | Surface     | Wire shape                                      |
@@ -397,35 +218,6 @@ An `after` no page issued is refused — a `400` on REST, a field error on
 GraphQL — and never read as the first page.
 
 See [Pagination](/database/pagination/) for the shape end to end.
-
-## By-id binding goes through the service
-
-Every generated `get` / `update` / `delete` calls
-`CrudService::access(action, id)` — not a raw `find_by_id`. The
-authorization is decided in **SQL**, by the same `condition_for` the list
-path joins, so the row a list returns and the row `access` grants cannot
-diverge. [Denied vs missing](/security/authorization/by-id-binding/) is the
-reference for how; here is what a handler sees:
-
-| `Access` outcome    | Meaning                                                     | HTTP  |
-|---------------------|-------------------------------------------------------------|-------|
-| `Access::Found(m)`  | Row exists, action allowed                                   | proceed |
-| `Access::Missing`   | Row does not exist                                           | `404` |
-| `Access::Denied`    | Row exists, action denied by a row-level or field-level rule | `403` |
-
-<Aside type="caution">
-That is a deliberate posture, and it means **`403` confirms the row exists**.
-A caller can tell "no such id" from "not yours" — an existence oracle, which is
-the right default for an API where ids are not secrets and a bare `404` would
-send a legitimate caller hunting for a typo. When ids *are* guessable and their
-existence is itself sensitive, fold `403` into `404`: see
-[Denied vs missing](/security/authorization/by-id-binding/), which is the
-reference for this behaviour.
-</Aside>
-
-`#[crud]` also rejects non-UUID-v7 ids before any load (route-model
-binding's validation half) — a malformed id is `400 Bad Request`, never a
-DB round-trip.
 
 ## Wire it in
 
@@ -450,71 +242,6 @@ Importing only `OrgsModule` (no HTTP module) gives a worker the same
 `OrgsService` without mounting the endpoints — that is the port + adapter
 split this framework is built around.
 
-## Soft delete and timestamps
-
-Opt in on the entity — never imposed on every table (join tables, lookups):
-
-```rust title="crates/features/src/posts/entity.rs"
-#[expose(
-    name = "Post",
-    service = super::service::PostsService,
-    soft_delete,
-    timestamps,
-)]
-pub struct Model {
-    // …
-    #[expose]
-    pub created_at: DateTimeWithTimeZone,
-    #[expose]
-    pub updated_at: DateTimeWithTimeZone,
-    // No #[expose] => hidden on every transport.
-    pub deleted_at: Option<DateTimeWithTimeZone>,
-}
-```
-
-The flag is the whole declaration: the service writes nothing for it.
-`CrudService` carries the **read** half; the write half is opt-in — implement
-`Creatable`, `Updatable`, `Deletable` only for the operations the resource
-offers (the framework cannot infer opt-in per service without specialization).
-These impls are where `#[crud]` reads the entity and the inputs:
-
-```rust title="crates/features/src/posts/service.rs"
-impl CrudService for PostsService {
-    type Entity = Posts;
-}
-
-impl Creatable for PostsService { type Create = CreatePost; }
-impl Updatable for PostsService { type Update = UpdatePost; }
-impl Deletable for PostsService {}
-```
-
-| Concern | Behaviour |
-|---------|-----------|
-| Every `Repo` read and update — `list`, `page`, `access`, a bound subject, relation batches, a custom `Repo::scoped` query, `Repo::unscoped` | ANDs `deleted_at IS NULL` after the ability scope: a deleted row reads as absent |
-| `delete` (via `Deletable`) | `UPDATE … SET deleted_at = now()` — idempotent |
-| Reading a deleted row | `Repo::<E>::with_tombstones(action)` — the one way (admin, retention) |
-| Restoring a deleted row | Not offered in 7.0: `Repo::update` hides a tombstone too; `Repo::restore` is planned for 7.x |
-| Hard purge | `Repo::delete` directly, which reaches a tombstone |
-| `timestamps` flag | Emits `ActiveModelBehavior::before_save`, which stamps `created_at` on insert and `updated_at`, when the entity has one, on every save — **remove** any manual empty `impl ActiveModelBehavior` on the entity |
-
-Migration snippet (Postgres):
-
-```sql title="the migration, in SQL"
-ALTER TABLE post
-  ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  ADD COLUMN deleted_at TIMESTAMPTZ NULL;
-```
-
-A value that must be unique — an email, a name — is unique among the **live**
-rows: give it a partial index (`CREATE UNIQUE INDEX … WHERE deleted_at IS
-NULL`). With a full one, a deleted user's email reads as free everywhere and
-still refuses the next signup with a `409`.
-
-An entity without the flag hard-deletes — the right shape for join tables and
-lookups. `nestrs g resource` scaffolds the flag plus the three columns, and
-the migration creating them beside the entity's own.
-
 ## Reference
 
 - `crates/features/src/orgs/` — the empty-impl exemplar (cursor pagination).
@@ -528,11 +255,13 @@ the migration creating them beside the entity's own.
 
 ## Going further
 
-- [Database](/database/) — `CrudService`, `Repo`, the ambient executor;
-  why every CRUD call goes through the service.
-- [Security](/security/) — `Ability`, `Authorize`, the judged wire row;
-  what makes `Read` / `Create` / `Update` / `Delete` mean what they
-  mean here.
+- [Bound mutations](/database/bound-mutations/) — the access check behind
+  every by-id operation, and a hand-written one on a row named by id.
+- [Database errors](/database/errors/) — what a generated operation answers
+  when the database refuses.
+- [Entity inputs](/database/inputs/) — the bodies a create and an update
+  take, and the tenant a create fills from the grant.
+
 - [OpenAPI](/openapi/) — every generated route ships with an `#[api]`
   summary, the right `tags`, and the response schema of the `#[expose]`d entity,
   so the document at `GET /api-json`

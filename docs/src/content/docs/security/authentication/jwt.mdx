@@ -158,7 +158,7 @@ async fn caller_org(&self, auth: Ambient<Claims>) -> Json<Uuid> {
 ```
 
 A create needs no `Ambient<Claims>` to land in the caller's org: the `Create` grant
-that pins `org_id` also fills it ([CRUD](/database/crud/#the-tenant-comes-from-the-grant)).
+that pins `org_id` also fills it ([Entity inputs](/database/inputs/#the-tenant-comes-from-the-grant)).
 
 ## Signing a token
 

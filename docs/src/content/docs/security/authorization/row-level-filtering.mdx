@@ -226,7 +226,7 @@ another entity — a subquery over `orgs` — takes that entity's own filter fro
 filtered. The select hands out no statement, so `.query()` and `.select_only()`
 do not compile on it, and a raw `Expr::cust` in its filter stays one operand beside
 the ability's, refused when its text would leave it
-([Raw SQL in a filter](/database/repo-and-executor/#raw-sql-in-a-filter)).
+([Raw SQL in a filter](/database/raw-sql/)).
 
 ## Going further
 

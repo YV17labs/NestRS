@@ -1,0 +1,119 @@
+---
+title: Bound mutations
+description: "#[authorize(Action, bind = Service)] on an operation: the row a caller names by id, loaded under its grant, authorized and handed over as proof."
+sidebar:
+  order: 6.1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **bound mutation** acts on one existing row the caller already named by
+id — `publish`, `archive`, `confirm`. It declares its posture and the row it
+loads in one attribute, `#[authorize(Action, bind = Service)]`, and receives
+the row as an `Authorized<Action, E>` parameter to hand straight to the
+service — on HTTP, from the route's path:
+
+```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
+    #[post("/{id}/publish")]
+    #[authorize(Update, bind = PostsService)]
+    #[use_guards(PostAuthorGuard)]
+    // …
+    async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>, PostError> {
+        Ok(Json(self.svc.publish(post.into_inner()).await?))
+    }
+```
+
+and on GraphQL, from an `id: String!` argument the attribute synthesises:
+
+```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo, abridged)"
+    #[mutation]
+    #[authorize(Update, bind = PostsService)]
+    #[use_guards(PostAuthorGuard)]
+    async fn publish_post(&self, post: Authorized<Update, PostEntity>) -> Result<Post, PostError> {
+        self.svc.publish(post.into_inner()).await
+    }
+```
+
+`PostAuthorGuard` refuses a token naming no user, on both edges. The service writes
+the publication's audit row through `Creatable`, the `Create` grant on it pinning
+the actor to the caller, so no parameter carries who is publishing; its
+`PostError` answers its `409` or its `CONFLICT` by its own `ToProblem`.
+
+## The posture and the value
+
+Two pieces, each with one job:
+
+- `#[authorize(Update, bind = PostsService)]` is the **posture** — the class
+  gate before the body and the caller's ability for its reads, the entity derived
+  from `PostsService::Entity` — and the **binding**: it parses the id, runs
+  the row-level access check for `Update` (404 on a missing row, `FORBIDDEN`
+  on a denied one) after the gate, and loads the row. This is the only thing
+  that decides authorization, and it is greppable.
+- `Authorized<Update, PostEntity>` is the **value** — the loaded row, which
+  derefs to the `Model` and gives it up with `into_inner()`.
+
+The action lives **in the type**, so the proof is action-true: a service
+method that takes `Authorized<Update, E>` cannot be handed an
+`Authorized<Read, E>` — a compile error, not a runtime surprise. The
+`Authorized<A, E>` value is also *proof of authorization*: its constructor
+is sealed, mintable only by the binding, so the mutation body can neither
+reach a row the caller could not load nor act under an action it was not
+granted.
+
+<Aside type="caution">
+Posture is **always** the visible `#[authorize]`/`#[public]` — an
+`Authorized<A, E>` parameter is never a posture of its own: written without
+`bind = Service` beside it, it does not compile. Only a guard, via the
+attribute, decides authn/authz; the `Authorized` value is what the decision
+loaded.
+</Aside>
+
+## Resolving the service
+
+The service is resolved through the request's scope, and the boot checks it
+like an injected one: a controller or resolver whose module does not import
+the service's own fails the boot rather than its first call. On GraphQL the
+synthesised `id` argument means the method must not declare an `id`
+parameter of its own: writing `id: String` alongside it is `E0415: identifier
+'id' is bound more than once in this parameter list`, reported against the
+`#[crud(…)]` attribute on the impl block rather than the method — drop the
+parameter, not the attribute; `id_arg = …` renames the argument. On HTTP the
+id is the one parameter the route's path names, its controller's included, so
+the whole path names it alone.
+
+## By-id binding goes through the service
+
+Every generated `get` / `update` / `delete` calls
+`CrudService::access(action, id)` — not a raw `find_by_id`. The
+authorization is decided in **SQL**, by the same `condition_for` the list
+path joins, so the row a list returns and the row `access` grants cannot
+diverge. [Denied vs missing](/security/authorization/by-id-binding/) is the
+reference for how; here is what a handler sees:
+
+| `Access` outcome    | Meaning                                                     | HTTP  |
+|---------------------|-------------------------------------------------------------|-------|
+| `Access::Found(m)`  | Row exists, action allowed                                   | proceed |
+| `Access::Missing`   | Row does not exist                                           | `404` |
+| `Access::Denied`    | Row exists, action denied by a row-level or field-level rule | `403` |
+
+<Aside type="caution">
+That is a deliberate posture, and it means **`403` confirms the row exists**.
+A caller can tell "no such id" from "not yours" — an existence oracle, which is
+the right default for an API where ids are not secrets and a bare `404` would
+send a legitimate caller hunting for a typo. When ids *are* guessable and their
+existence is itself sensitive, fold `403` into `404`: see
+[Denied vs missing](/security/authorization/by-id-binding/), which is the
+reference for this behaviour.
+</Aside>
+
+`#[crud]` also rejects non-UUID-v7 ids before any load (route-model
+binding's validation half) — a malformed id is `400 Bad Request`, never a
+DB round-trip.
+
+## Going further
+
+- [CRUD](/database/crud/) — the generated by-id operations beside a bound one.
+- [Route model binding](/security/authorization/by-id-binding/) — the
+  outcomes of the by-id load, and when to hide existence behind a `404`.
+- [Queries and mutations](/graphql/queries-mutations/) — the GraphQL field
+  the binding synthesises its `id` argument on.

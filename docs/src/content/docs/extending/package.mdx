@@ -144,7 +144,7 @@ A close for a factory's output is attached in `collect`, beside its factory:
 a boot whose later factory fails then closes what the earlier ones opened,
 which a close attached in `register` would never reach. A value the app was
 handed instead — a seed, a test's override — is not yours to close, and the
-kernel skips it. The [database driver page](/database/writing-a-driver/#close-what-it-opened)
+kernel skips it. The [database driver page](/database/binding-a-driver/#close-what-it-opened)
 shows a pool's close that waits for the units still settling.
 
 A resource an app may open more than once is generic over its instance:

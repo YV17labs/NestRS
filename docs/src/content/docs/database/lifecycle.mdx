@@ -1,0 +1,165 @@
+---
+title: Lifecycle columns
+description: The id, created_at, updated_at and deleted_at every entity carries, what timestamps and soft_delete do with them, and the migration behind them.
+sidebar:
+  order: 2.2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Four columns recur on every product entity, and two header flags give them
+their behaviour: `timestamps` stamps the times, and `soft_delete` keeps a
+deleted row as a tombstone every read hides.
+
+## Recommended standard columns
+
+Every product entity in this repo (`org`, `user`, `post`) carries the
+same four columns. Follow the convention unless you have a reason not
+to:
+
+| Column | Type | Role |
+|---|---|---|
+| `id` | `Uuid` | Primary key, `auto_increment = false`. Every insert through `Repo` that leaves it unset gets `Uuid::now_v7()` — time-ordered, index-friendly. |
+| `created_at` | `DateTimeWithTimeZone` | Stamped once on insert by `timestamps`. Read-only on the wire. |
+| `updated_at` | `DateTimeWithTimeZone` | Stamped on every save by `timestamps`. Read-only on the wire. |
+| `deleted_at` | `Option<DateTimeWithTimeZone>` | The soft-delete tombstone. **Left unexposed** — it's server-side state, never a wire field. |
+
+```rust title="crates/features/src/posts/entity.rs"
+#[sea_orm(primary_key, auto_increment = false)]
+#[expose]
+pub id: Uuid,
+// …
+#[expose]
+pub created_at: DateTimeWithTimeZone,
+#[expose]
+pub updated_at: DateTimeWithTimeZone,
+pub deleted_at: Option<DateTimeWithTimeZone>,   // no #[expose] — hidden
+```
+
+`id`, `created_at`, and `updated_at` are exposed **read-only** (bare
+`#[expose]`, no `input(...)`) — the client reads them, never writes
+them. `deleted_at` stays off the wire entirely.
+
+## Lifecycle behaviour
+
+Every exposed entity registers its column defaults — the `Uuid` key's v7
+UUID and each column's `default` — and every insert through `Repo` fills the
+ones the row left unset, `Creatable::create` and `Repo::insert_unscoped`
+alike, after what the caller's grants pin. `timestamps` and `soft_delete` are
+independent flags that emit SeaORM-level behaviour:
+
+- **`timestamps`** emits `ActiveModelBehavior::before_save`, stamping
+  `created_at` on insert and `updated_at`, when the entity has one, on every
+  save, with `chrono::Utc::now().fixed_offset()` — one instant, so a fresh
+  row's two columns are equal.
+- **`soft_delete`** emits `impl SoftDeletable for Entity` and registers
+  the entity, with or without a `service`. `SoftDeletable` is sealed: only
+  the decorator implements it, so the trait never goes without the
+  registration. That is the whole wiring:
+  `Deletable::delete` sets the tombstone instead of erasing the row, and
+  every `Repo` read and update ANDs `deleted_at IS NULL`, so a soft-deleted
+  row is invisible — in lists, by-id loads, relation batches and your own
+  queries alike. `Repo::with_tombstones` is the one read that keeps it. See
+  [below](#soft-delete-and-timestamps).
+
+<Aside type="caution">
+SeaORM requires exactly **one** `ActiveModelBehavior` per entity. The
+macro emits it for you when `timestamps` is set — do not also write
+your own, or the impls collide. With **no** `timestamps`, supply it
+yourself: the empty `impl ActiveModelBehavior for ActiveModel {}`, or one
+carrying your own hooks, which the column defaults never touch. A table no
+transport exposes writes its own too, and its migration gives the key
+`DEFAULT uuidv7()`.
+</Aside>
+
+## Soft delete and timestamps
+
+Opt in on the entity — never imposed on every table (join tables, lookups):
+
+```rust title="crates/features/src/posts/entity.rs"
+#[expose(
+    name = "Post",
+    service = super::service::PostsService,
+    soft_delete,
+    timestamps,
+)]
+pub struct Model {
+    // …
+    #[expose]
+    pub created_at: DateTimeWithTimeZone,
+    #[expose]
+    pub updated_at: DateTimeWithTimeZone,
+    // No #[expose] => hidden on every transport.
+    pub deleted_at: Option<DateTimeWithTimeZone>,
+}
+```
+
+The flag is the whole declaration: the service writes nothing for it.
+`CrudService` carries the **read** half; the write half is opt-in — implement
+`Creatable`, `Updatable`, `Deletable` only for the operations the resource
+offers (the framework cannot infer opt-in per service without specialization).
+These impls are where `#[crud]` reads the entity and the inputs:
+
+```rust title="crates/features/src/posts/service.rs"
+impl CrudService for PostsService {
+    type Entity = Posts;
+}
+
+impl Creatable for PostsService { type Create = CreatePost; }
+impl Updatable for PostsService { type Update = UpdatePost; }
+impl Deletable for PostsService {}
+```
+
+| Concern | Behaviour |
+|---------|-----------|
+| Every `Repo` read and update — `list`, `page`, `access`, a bound subject, relation batches, a custom `Repo::scoped` query, `Repo::unscoped` | ANDs `deleted_at IS NULL` after the ability scope: a deleted row reads as absent |
+| `delete` (via `Deletable`) | `UPDATE … SET deleted_at = now()` — idempotent |
+| Reading a deleted row | `Repo::<E>::with_tombstones(action)` — the one way (admin, retention) |
+| Restoring a deleted row | Not offered in 7.0: `Repo::update` hides a tombstone too; `Repo::restore` is planned for 7.x |
+| Hard purge | `Repo::delete` directly, which reaches a tombstone |
+| `timestamps` flag | Emits `ActiveModelBehavior::before_save`, which stamps `created_at` on insert and `updated_at`, when the entity has one, on every save — **remove** any manual empty `impl ActiveModelBehavior` on the entity |
+
+Migration snippet (Postgres):
+
+```sql title="the migration, in SQL"
+ALTER TABLE post
+  ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ADD COLUMN deleted_at TIMESTAMPTZ NULL;
+```
+
+A value that must be unique — an email, a name — is unique among the **live**
+rows: give it a partial index (`CREATE UNIQUE INDEX … WHERE deleted_at IS
+NULL`). With a full one, a deleted user's email reads as free everywhere and
+still refuses the next signup with a `409`.
+
+An entity without the flag hard-deletes — the right shape for join tables and
+lookups. `nestrs g resource` scaffolds the flag plus the three columns, and
+the migration creating them beside the entity's own.
+
+## The migration
+
+`#[expose]` builds the wire surface; it does **not** create the table.
+The columns it reads must exist in a migration — including the
+lifecycle columns, with their database-side defaults:
+
+```rust title="crates/migrations/src/m20260101_000001_create_post.rs"
+.col(ColumnDef::new(Post::CreatedAt)
+    .timestamp_with_time_zone().not_null()
+    .default(Expr::current_timestamp()))
+.col(ColumnDef::new(Post::UpdatedAt)
+    .timestamp_with_time_zone().not_null()
+    .default(Expr::current_timestamp()))
+.col(ColumnDef::new(Post::DeletedAt)
+    .timestamp_with_time_zone().null())
+```
+
+See [Migrations](/database/migrations/) for writing and running them
+(`nestrs run db up`).
+
+## Going further
+
+- [Entities](/database/entities/) — the header carrying the two flags.
+- [Migrations](/database/migrations/) — writing and running the migration.
+- [Repo and executor](/database/repo-and-executor/) — `with_tombstones`, the
+  one read that keeps a deleted row.

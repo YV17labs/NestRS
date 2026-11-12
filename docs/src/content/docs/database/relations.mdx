@@ -1,0 +1,84 @@
+---
+title: Relations and computed fields
+description: An exposed belongs_to or has_many becomes a field a dataloader resolves; a value computed at query time is a field resolver of yours.
+sidebar:
+  order: 2.3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An entity reaches a client through more than its columns: its exposed
+relations, resolved by dataloaders, and values your own resolvers compute.
+
+## Relations
+
+A SeaORM `belongs_to` / `has_many` field, typed `HasOne<E>` /
+`HasMany<E>` and marked `#[expose]`, becomes a GraphQL field
+**auto-resolved by a dataloader** — no `#[field_resolver]` to write:
+
+```rust title="crates/features/src/users/entity.rs"
+#[sea_orm(belongs_to, from = "org_id", to = "id")]
+#[expose]
+pub org: HasOne<crate::orgs::Entity>,
+
+#[sea_orm(has_many)]
+#[expose]
+pub posts: HasMany<crate::posts::Entity>,
+```
+
+This needs `graphql` **and** `service` on the header. The macro emits
+the PK loader (`<Service>ById`) and, per `belongs_to`, the FK loader
+(`<Service>By<FkCol>`) on the owning side's service, plus the
+`PkLoadable` / `RelatedTo<Parent, Via>` impls that let the inverse side
+reach the loader without naming the other service. The `has_many` side
+is a paged connection (`first` / `after`), one page **per parent**.
+Every batch goes through `Repo::scoped(Action::Read)`, so the ambient
+ability filters relation reads row-level, exactly as on any other query.
+Drop `#[expose]` on a single relation to opt that one field out, and add
+`#[expose(via = "author_id")]` when the child reaches this parent through
+more than one foreign key.
+
+See [GraphQL relations](/graphql/relations/) and
+[Dataloaders](/database/dataloaders/) for the full mechanics, and
+[Query limits](/graphql/query-limits/) for the per-relation complexity
+cost the macro attaches.
+
+## Virtual and computed fields
+
+There is no `#[expose]` "virtual column" attribute — `#[expose]` only
+surfaces real SeaORM columns and relations. For a value computed at
+query time (a derived total, a formatted label, a filtered subset of a
+relation), leave the source unexposed and write a
+`#[field_resolver]` on the resolver instead. Cost it with
+`#[expose(complexity = …)]` on an exposed field, or
+`#[graphql(complexity = …)]` directly on a hand-rolled resolver.
+
+SeaORM itself offers two lower-level mechanisms underneath, neither of
+which `#[expose]` reads — wire them through a `#[field_resolver]` (or a
+hand-shaped HTTP response) if you want them on the wire:
+
+- **A non-persisted field on the `Model`** — `#[sea_orm(ignore)]` keeps
+  a field on the struct but out of the table and every query (set to
+  `Default::default()` on load). Useful for transient state carried on
+  the model.
+- **A value computed by the database** — a `DerivePartialModel` with
+  `#[sea_orm(from_expr = "…")]` selects a SQL expression into a result
+  struct; a plain method on `impl Model` covers values computed in Rust.
+
+See the [official SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/)
+for both.
+
+<Aside type="caution">
+async-graphql allows at most **one** `#[ComplexObject]` per wire type.
+An auto-resolved relation already occupies it, so a custom
+`#[field_resolver]` cannot live next to an auto-resolved relation on
+the same entity — pick one source of `ComplexObject` fields per entity.
+</Aside>
+
+## Going further
+
+- [Entities](/database/entities/) — the header's `graphql` and `service`
+  a relation needs.
+- [Dataloaders](/database/dataloaders/) — the loaders a relation resolves
+  through.
+- [GraphQL relations](/graphql/relations/) — the fields a client selects.

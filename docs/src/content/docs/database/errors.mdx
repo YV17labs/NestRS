@@ -1,0 +1,99 @@
+---
+title: Database errors
+description: What a refused statement answers — the class a client branches on, the input field a unique key names — and the RepoError a service matches.
+sidebar:
+  order: 6.2
+---
+
+A statement the database refuses reaches the client as a class it can branch
+on, never as the server's message, which quotes the row it refused. A service
+reads the same refusal as a `RepoError` it matches.
+
+## When the database refuses
+
+A generated operation answers the class a client branches on, the same on both
+edges: a unique violation is a `409` (`CONFLICT`), a row gone before
+the write a `404` (`NOT_FOUND`), a create the row-level re-check rolled back
+a `403` (`FORBIDDEN`), as is a write setting a column
+[a grant's `.fields` withholds](/security/authorization/field-grants/#what-a-write-may-set),
+naming the input's field under `errors`, and a statement Postgres cancelled at its bound
+(`57014`, `<PREFIX>_SEAORM__STATEMENT_TIMEOUT_SECS`) a `503` (`UNAVAILABLE`),
+filed at `warn` — the server could not serve it in time, and another attempt
+may: as the request timeout's own `503` names the budget that ran out, it
+names the statement bound as its wait, `Retry-After` on HTTP and
+`retryAfterSeconds` on GraphQL. Anything else is a `500` under `INTERNAL` —
+the opaque problem document on HTTP, `"internal error"` on GraphQL — and its
+error is filed once at `error` on `nest_rs::orm`, said by its SQLSTATE and the
+constraint, table and column the server named. The server's own message never
+reaches the client or the log, since it quotes the input it refused.
+
+A create or an update a unique key refuses also names what the client can
+fix: the input's fields that key holds, under `errors` on HTTP and
+`extensions.errors` on GraphQL, each as that edge's client spells them
+([GraphQL names a field as its schema does](/graphql/errors/#field-errors-use-the-schemas-names)), in the
+shape a validation failure's fields take, and never the value, the index or the
+table:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Conflict",
+  "status": 409,
+  "code": "CONFLICT",
+  "errors": { "email": [{ "code": "unique" }] }
+}
+```
+
+`SeaOrmDatabaseModule` reads the keys from Postgres's catalog once, at boot, for
+every `#[expose]` entity's table and its partitions — a primary key, a unique
+constraint, a unique index, partial ones included — so naming a field costs the
+request nothing. A key's column the input does not carry is not named (a tenant
+a grant pins, beside the slug the client sent, names `slug`), nor is a column an
+`INCLUDE` adds; a key over an expression (`lower(email)`), or one added after the
+app booted, answers the bare `409`. An input you write by hand names its fields
+through `CreateModel::field_for` and `UpdateModel::field_for`.
+
+A field goes by the name serde reads it under on HTTP, which the `errors` of a validation
+failure share; GraphQL spells the same key as its schema does, so a two-word field is
+named `orgId`.
+
+A service of your own whose `?` turns a `RepoError` into a `ServiceError` answers the bare
+`409` on every edge, an MCP tool's included: that conversion never sees the input. To say
+more, match the key first and answer a sentence of your own:
+`Err(RepoError::UniqueViolation(key)) if key.constraint() == Some("users_email_key")`.
+
+On GraphQL every mutation root field runs in a savepoint of its operation's
+transaction, so a refused statement rolls back that field alone: the field
+answers its class, and the operation's other fields commit — unless the field
+is Non-Null, whose `null` reaches `data` and rolls the whole operation back
+([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
+
+## What a failure says
+
+Every `Repo` method, every `RepoSelect` and every `CrudService` method answers a
+`RepoError`, and `?` turns it into the `ServiceError` every edge answers. What
+a service decides on is one `match` away — a row a write found gone, a write the
+caller's grants do not cover, a unique or a foreign key and which one, a
+serialization failure worth another attempt, a statement cancelled at its bound:
+
+```rust title="a service reading which key refused the row"
+match self.create_from_active(active).await {
+    Err(RepoError::UniqueViolation(key)) if key.constraint() == Some("users_email_key") => {
+        Err(ServiceError::conflict("that address is registered"))
+    }
+    created => Ok(User::from(&created?)),
+}
+```
+
+A `RepoError` says the failure by its SQLSTATE and the names the server gave —
+`database error 23505 on constraint "users_email_key", table "users"` — never by
+the server's message or its `detail`, which quote the row it refused, whoever
+prints it: a log line, a `{:?}`, an `anyhow` report, a `main` returning it.
+
+## Going further
+
+- [CRUD](/database/crud/) — the generated operations these answers come from.
+- [Transactions](/database/transactions/) — what a refused statement does to
+  the unit of work around it.
+- [GraphQL errors](/graphql/errors/) — how a refused field reads in a GraphQL
+  response.

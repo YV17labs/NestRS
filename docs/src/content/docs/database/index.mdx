@@ -165,7 +165,7 @@ none of them; a write op wired without its trait is a build break, never a
 silent no-op. Every method routes through `Repo` and is filtered by the
 caller's [`Ability`](/security/); a create fills what the caller's `Create`
 grant pins, the tenant first, then checks the fresh row against it
-([CRUD](/database/crud/#the-tenant-comes-from-the-grant)). Custom queries (here: `find_by_title`) sit
+([Entity inputs](/database/inputs/#the-tenant-comes-from-the-grant)). Custom queries (here: `find_by_title`) sit
 beside the inherited ones and stay ability-scoped by going through
 `Repo::<Posts>::scoped(Action::Read)` — an unscoped raw query is the
 documented exception, covered on [Repo and executor](/database/repo-and-executor/).
@@ -216,38 +216,8 @@ variable is named for the crate that parses it, exactly as the type is: from
 `<PREFIX>_SEAORM__URL` you find `SeaOrmConfig`, and from `SeaOrmModule` you find
 the variable.
 
-The boot proves the pool before anything is served. What Postgres refuses on
-every attempt — the user and password, a database it does not have, TLS that
-fails — fails the boot at once, naming `<PREFIX>_SEAORM__URL` and the SQLSTATE.
-Anything else — a server not listening yet, still starting or full, a host
-whose name does not resolve yet — is tried again within
-`<PREFIX>_SEAORM__CONNECT_TIMEOUT_SECS`, each attempt said at `warn` on
-`nest_rs::orm` by host and port, never by the URL, which carries the password;
-past the budget, the boot fails as unreachable, naming what the last attempt
-met.
-
-The URL is read once, at the start, its password with it. The certificate files
-its `sslrootcert`, `sslcert` and `sslkey` name are read each time the pool opens
-a connection, so a renewed one reaches every connection opened after it, while
-those already open keep the certificate they began with.
-
-The authority is read as libpq reads it: the URL's `sslrootcert`, then libpq's
-`PGSSLROOTCERT` beside a URL naming none, each in place of the system's store,
-and the system's store where neither names one or one names libpq's `system`.
-A server the file does not vouch for fails the boot, the refusal naming where
-the authority is named. sqlx keeps the public authorities it compiles in beside
-any of them. `PGSSLCERT` and `PGSSLKEY` present a client certificate beside a
-URL naming neither, as `sslcert` and `sslkey` do. A file any of them names that
-this process cannot read fails the boot at once, naming where it is set, rather
-than being tried again until the budget runs out.
-
-The pool closes when the app ends, after every shutdown hook: each connection
-gets Postgres's goodbye rather than a dropped socket, said before the close
-returns. Every unit of work has settled by then, so one still on its way back
-is waited for half a second at most; one a cut request left running a statement
-is not waited for — sqlx hands it back with no goodbye — so it falls with the
-process, and a `warn` counts it
-([the way down](/fundamentals/shutdown/#the-way-down)).
+How the pool proves itself at boot, verifies TLS and closes with the app is
+on [Database connection](/database/connection/).
 
 ## What the data layer hands you for free
 
@@ -270,6 +240,8 @@ slice inherits, without writing any of them:
 
 - [Entities](/database/entities/) — `#[expose]` on a SeaORM model, and the
   DTO, inputs, schema and loaders it emits.
+- [Entity inputs](/database/inputs/) — the create and update bodies, their
+  validation, and what the server fills.
 - [Entity checklist](/database/entity-checklist/) — every decision one
   entity asks of you, one line each.
 - [Repo and executor](/database/repo-and-executor/) — the ambient executor,
@@ -282,16 +254,34 @@ slice inherits, without writing any of them:
 
 ### All options
 
+- [Lifecycle columns](/database/lifecycle/) — `timestamps`, `soft_delete`, and
+  the four columns every entity carries.
+- [Relations and computed fields](/database/relations/) — exposed relations
+  resolved by dataloaders, and values a resolver computes.
+- [Raw SQL in a filter](/database/raw-sql/) — what `Repo` refuses of a raw
+  condition, and what clippy names.
+- [Bound mutations](/database/bound-mutations/) — a hand-written operation on
+  one row the caller names by id.
+- [Database errors](/database/errors/) — what a refused statement answers, and
+  the `RepoError` a service matches.
 - [Dataloaders](/database/dataloaders/) — `#[dataloader]` batches, and the
   PK and FK loaders `#[expose]` emits.
-- [Transactions](/database/transactions/) — auto-commit, conflict
-  observation, the `retry_on_conflict` primitive.
+- [Transactions](/database/transactions/) — auto-commit, what waits for the
+  commit, atomic blocks.
+- [Job transactions](/database/job-transactions/) — one transaction per queue
+  attempt or tick, and the opt-out.
+- [Serialization conflicts](/database/conflicts/) — conflict observation and
+  the `retry_on_conflict` primitive.
 - [Seeding](/database/seeding/) — idempotent demo data through the seed
   crate.
 - [Database health](/database/health/) — the pool's indicator and the
   readiness probe.
+- [Database connection](/database/connection/) — the pool proved at boot,
+  its TLS, and its close.
 - [Writing a driver](/database/writing-a-driver/) — plugging a non-SeaORM
   store into the same seams.
+- [Binding a database driver](/database/binding-a-driver/) — the module an
+  app imports, and what it owes in production.
 
 ## Going further
 

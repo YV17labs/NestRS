@@ -23,9 +23,11 @@ later migration adds never leaks by omission.
 
 Building your first entity? Start with the
 [tutorial walkthrough](/tutorial/entity/) — it grows a minimal `Post`
-step by step. This page is the **reference**: every header flag, every
-field attribute, relations, validation, lifecycle, and the columns we
-recommend on every entity.
+step by step. This page is the **reference**: every header flag and every
+field attribute. The inputs and their validation are on
+[Entity inputs](/database/inputs/), the lifecycle columns on
+[Lifecycle columns](/database/lifecycle/), and relations on
+[Relations and computed fields](/database/relations/).
 
 ## Anatomy
 
@@ -105,35 +107,6 @@ a set of bare flags.
 | `timestamps` | flag | Emit an `ActiveModelBehavior` that stamps `created_at` on insert and, when the entity has one, `updated_at` on every save. Requires `created_at`: an append-only entity has no `updated_at`. |
 | `soft_delete` | flag | Deletes set `deleted_at`, and every `Repo` read hides a tombstoned row. Requires a `deleted_at: Option<…>` column. |
 | `complex` | flag | Force `#[graphql(complex)]` on the wire DTO. Auto-enabled when `graphql` is set and the entity has auto-resolved relations — you rarely set it by hand. |
-
-## Recommended standard columns
-
-Every product entity in this repo (`org`, `user`, `post`) carries the
-same four columns. Follow the convention unless you have a reason not
-to:
-
-| Column | Type | Role |
-|---|---|---|
-| `id` | `Uuid` | Primary key, `auto_increment = false`. Every insert through `Repo` that leaves it unset gets `Uuid::now_v7()` — time-ordered, index-friendly. |
-| `created_at` | `DateTimeWithTimeZone` | Stamped once on insert by `timestamps`. Read-only on the wire. |
-| `updated_at` | `DateTimeWithTimeZone` | Stamped on every save by `timestamps`. Read-only on the wire. |
-| `deleted_at` | `Option<DateTimeWithTimeZone>` | The soft-delete tombstone. **Left unexposed** — it's server-side state, never a wire field. |
-
-```rust title="crates/features/src/posts/entity.rs"
-#[sea_orm(primary_key, auto_increment = false)]
-#[expose]
-pub id: Uuid,
-// …
-#[expose]
-pub created_at: DateTimeWithTimeZone,
-#[expose]
-pub updated_at: DateTimeWithTimeZone,
-pub deleted_at: Option<DateTimeWithTimeZone>,   // no #[expose] — hidden
-```
-
-`id`, `created_at`, and `updated_at` are exposed **read-only** (bare
-`#[expose]`, no `input(...)`) — the client reads them, never writes
-them. `deleted_at` stays off the wire entirely.
 
 ## Read side — exposure is opt-in
 
@@ -230,180 +203,6 @@ that only crosses HTTP.
 An enum a **hidden** column holds never crosses a wire, so it takes no
 `#[wire_enum]`: SeaORM's derives are its own, as the `users` exemplar's `role`
 shows.
-
-## Write side — inputs and validation
-
-`input(create)` / `input(update)` place a field in the generated
-`Create<Name>` / `Update<Name>` structs. These entity-derived inputs are
-**bare** — no `Dto` or `Input` suffix — because one struct serves the
-service (`type Create`), the REST body, and the GraphQL input at once, so no
-single boundary suffix fits. `validate(...)` attaches a
-[`validator`](https://docs.rs/validator) rule, re-emitted verbatim onto the
-input field:
-
-```rust title="crates/features/src/posts/entity.rs"
-#[expose(input(create, update), validate(length(min = 1)))]
-pub title: String,
-
-#[expose(input(create, update), validate(email))]
-pub email: String,
-```
-
-The input structs derive `Validate`. Validation runs at whichever edge
-decodes one — a `Json<CreatePost>` body, a GraphQL `CreatePost` argument —
-so the service never sees an invalid input. The full rule set
-(`length`, `email`, `range`, `url`, custom validators, …) is the
-`validator` crate's; see its docs for the catalogue.
-
-A custom rule is a function of yours, named by `custom(function = "…")`. It
-returns `validator`'s own error, which `nest_rs::pipes::validator` re-exports at
-the release the framework derives with, so your manifest gains no line:
-
-```rust title="crates/features/src/posts/entity.rs"
-use nest_rs::pipes::validator::ValidationError;
-
-fn not_a_placeholder_title(title: &str) -> Result<(), ValidationError> {
-    if title.eq_ignore_ascii_case("todo") {
-        return Err(ValidationError::new("placeholder_title"));
-    }
-    Ok(())
-}
-```
-
-A **relation** field cannot carry `input(...)` — only scalar columns
-are writable. Set the foreign-key column (`org_id`) as the input, not
-the relation (`org`).
-
-A column the server decides is no input. The tenant and the author come from
-the caller's grants, which a create fills ([CRUD](/database/crud/#the-tenant-comes-from-the-grant));
-a constant takes `default`, which every insert through `Repo` leaving the
-column unset stores:
-
-```rust title="crates/features/src/posts/entities/post.rs (from the demo, abridged)"
-#[expose(default = PostStatus::Draft)]
-pub status: PostStatus,
-```
-
-`default` belongs to a column the create input does not carry, never to the
-primary key, and never to a column `timestamps` stamps; each is a compile
-error.
-
-## Relations
-
-A SeaORM `belongs_to` / `has_many` field, typed `HasOne<E>` /
-`HasMany<E>` and marked `#[expose]`, becomes a GraphQL field
-**auto-resolved by a dataloader** — no `#[field_resolver]` to write:
-
-```rust title="crates/features/src/users/entity.rs"
-#[sea_orm(belongs_to, from = "org_id", to = "id")]
-#[expose]
-pub org: HasOne<crate::orgs::Entity>,
-
-#[sea_orm(has_many)]
-#[expose]
-pub posts: HasMany<crate::posts::Entity>,
-```
-
-This needs `graphql` **and** `service` on the header. The macro emits
-the PK loader (`<Service>ById`) and, per `belongs_to`, the FK loader
-(`<Service>By<FkCol>`) on the owning side's service, plus the
-`PkLoadable` / `RelatedTo<Parent, Via>` impls that let the inverse side
-reach the loader without naming the other service. The `has_many` side
-is a paged connection (`first` / `after`), one page **per parent**.
-Every batch goes through `Repo::scoped(Action::Read)`, so the ambient
-ability filters relation reads row-level, exactly as on any other query.
-Drop `#[expose]` on a single relation to opt that one field out, and add
-`#[expose(via = "author_id")]` when the child reaches this parent through
-more than one foreign key.
-
-See [GraphQL relations](/graphql/relations/) and
-[Dataloaders](/database/dataloaders/) for the full mechanics, and
-[Query limits](/graphql/query-limits/) for the per-relation complexity
-cost the macro attaches.
-
-## Virtual and computed fields
-
-There is no `#[expose]` "virtual column" attribute — `#[expose]` only
-surfaces real SeaORM columns and relations. For a value computed at
-query time (a derived total, a formatted label, a filtered subset of a
-relation), leave the source unexposed and write a
-`#[field_resolver]` on the resolver instead. Cost it with
-`#[expose(complexity = …)]` on an exposed field, or
-`#[graphql(complexity = …)]` directly on a hand-rolled resolver.
-
-SeaORM itself offers two lower-level mechanisms underneath, neither of
-which `#[expose]` reads — wire them through a `#[field_resolver]` (or a
-hand-shaped HTTP response) if you want them on the wire:
-
-- **A non-persisted field on the `Model`** — `#[sea_orm(ignore)]` keeps
-  a field on the struct but out of the table and every query (set to
-  `Default::default()` on load). Useful for transient state carried on
-  the model.
-- **A value computed by the database** — a `DerivePartialModel` with
-  `#[sea_orm(from_expr = "…")]` selects a SQL expression into a result
-  struct; a plain method on `impl Model` covers values computed in Rust.
-
-See the [official SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/)
-for both.
-
-<Aside type="caution">
-async-graphql allows at most **one** `#[ComplexObject]` per wire type.
-An auto-resolved relation already occupies it, so a custom
-`#[field_resolver]` cannot live next to an auto-resolved relation on
-the same entity — pick one source of `ComplexObject` fields per entity.
-</Aside>
-
-## Lifecycle behaviour
-
-Every exposed entity registers its column defaults — the `Uuid` key's v7
-UUID and each column's `default` — and every insert through `Repo` fills the
-ones the row left unset, `Creatable::create` and `Repo::insert_unscoped`
-alike, after what the caller's grants pin. `timestamps` and `soft_delete` are
-independent flags that emit SeaORM-level behaviour:
-
-- **`timestamps`** emits `ActiveModelBehavior::before_save`, stamping
-  `created_at` on insert and `updated_at`, when the entity has one, on every
-  save, with `chrono::Utc::now().fixed_offset()` — one instant, so a fresh
-  row's two columns are equal.
-- **`soft_delete`** emits `impl SoftDeletable for Entity` and registers
-  the entity, with or without a `service`. `SoftDeletable` is sealed: only
-  the decorator implements it, so the trait never goes without the
-  registration. That is the whole wiring:
-  `Deletable::delete` sets the tombstone instead of erasing the row, and
-  every `Repo` read and update ANDs `deleted_at IS NULL`, so a soft-deleted
-  row is invisible — in lists, by-id loads, relation batches and your own
-  queries alike. `Repo::with_tombstones` is the one read that keeps it. See
-  [CRUD](/database/crud/#soft-delete-and-timestamps).
-
-<Aside type="caution">
-SeaORM requires exactly **one** `ActiveModelBehavior` per entity. The
-macro emits it for you when `timestamps` is set — do not also write
-your own, or the impls collide. With **no** `timestamps`, supply it
-yourself: the empty `impl ActiveModelBehavior for ActiveModel {}`, or one
-carrying your own hooks, which the column defaults never touch. A table no
-transport exposes writes its own too, and its migration gives the key
-`DEFAULT uuidv7()`.
-</Aside>
-
-## The migration
-
-`#[expose]` builds the wire surface; it does **not** create the table.
-The columns it reads must exist in a migration — including the
-lifecycle columns, with their database-side defaults:
-
-```rust title="crates/migrations/src/m20260101_000001_create_post.rs"
-.col(ColumnDef::new(Post::CreatedAt)
-    .timestamp_with_time_zone().not_null()
-    .default(Expr::current_timestamp()))
-.col(ColumnDef::new(Post::UpdatedAt)
-    .timestamp_with_time_zone().not_null()
-    .default(Expr::current_timestamp()))
-.col(ColumnDef::new(Post::DeletedAt)
-    .timestamp_with_time_zone().null())
-```
-
-See [Migrations](/database/migrations/) for writing and running them
-(`nestrs run db up`).
 
 ## Field attribute reference
 

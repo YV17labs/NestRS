@@ -1,0 +1,292 @@
+---
+title: Binding a database driver
+description: "The module binding your unit of work: its budgets, the failures it answers, its TLS, the proof it runs at boot, its health check and its tests."
+sidebar:
+  order: 12.1
+---
+
+A database driver is a contract — [Writing a database driver](/database/writing-a-driver/)
+— and a binding: the module an app imports in place of `SeaOrmDatabaseModule`.
+This page walks the binding of `nest-rs-seaorm`, the reference driver, in the
+order every driver page follows.
+
+## The binding
+
+The binding is the module an app imports. It binds your unit of work through
+`provide_unit_of_work`, as `Arc<dyn UnitOfWork>` — a **declaration** carrying
+the port's `BACKEND_REMEDY`, so a second database driver imported beside
+yours fails the boot naming both — and as the unit every lifecycle hook runs
+in. A binding that declares `Arc<dyn UnitOfWork>` by hand still serves every
+edge but leaves every lifecycle hook bare:
+
+```rust title="from nest-rs-seaorm's database binding, abridged"
+impl Module for SeaOrmDatabaseModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        let builder = budgets(BudgetReach::Ambient)
+            .into_iter()
+            .fold(builder, ContainerBuilder::provide_meta);
+        let builder = provide_unit_of_work::<UnitInputs, _, _>(builder, |container| async move {
+            let db = present::<DatabaseConnection>(&container)?;
+            let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;
+            let settles = present::<Settles>(&container)?;
+            let unit_of_work =
+                SeaOrmUnitOfWork::draining_into(Arc::clone(&db), &config, (*settles).clone());
+            // …
+            Ok(Arc::new(unit_of_work) as Arc<dyn UnitOfWork>)
+        })
+        // Installed after the pool, so its close drains every settle still
+        // running before the pool's closes.
+        .provide_factory_after::<Settles, (DatabaseConnection,), _, _>(|_| async {
+            Ok(Settles::default())
+        })
+        .provide_close::<Settles, _, _>(|settles| async move {
+            settles.drain().await;
+            Ok(())
+        });
+        // …
+        builder.import::<SeaOrmModule>()
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        // …
+        builder.import::<SeaOrmModule>()
+    }
+}
+```
+
+`UnitInputs` names the pool and its config, so the boot builds the unit of
+work once both exist, wherever the imports fall. The pool itself is opened by
+the substrate, `SeaOrmModule`, which every SeaORM binding imports bare from both
+phases, so an app writes the binding alone and names the substrate only to pin
+it: its config is settable from `<PREFIX>_SEAORM__*` and from the struct the app
+pins, as every module's is.
+
+### Close what it opened
+
+What the substrate opens, it closes with `provide_close`, by the rules
+[Writing a package](/extending/package/#a-resource-it-opens) gives. The value
+installed last closes first, which is why the binding installs its `Settles`
+after the pool: every unit's settle is drained before the pool says goodbye.
+The pool's close then waits `SHUTDOWN_SETTLE_TIMEOUT`, half a second, for what
+the settled units hand back, and says what it leaves at `warn`.
+
+## Budget and net
+
+Two budgets bound what the pool waits: a connection from the pool, and a
+statement on the server. The binding declares both as **ambient**, since
+every unit reaches the pool through its context rather than by injection —
+so every net around developer code holds them, an authentication guard's
+among them:
+
+```rust title="from nest-rs-seaorm's substrate"
+pub(crate) fn budgets(reach: BudgetReach) -> [Budget; 2] {
+    let declare = |resource, timeout: &BoundedSetting<Duration>, read| {
+        let setting = timeout.var_or_field(NAMESPACE);
+        match reach {
+            BudgetReach::Injected => Budget::of::<DatabaseConnection>(resource, setting, read),
+            BudgetReach::Ambient => Budget::ambient::<DatabaseConnection>(resource, setting, read),
+        }
+    };
+    [
+        declare(
+            "the SeaORM pool",
+            &SeaOrmConfig::CONNECT_TIMEOUT,
+            acquire_budget,
+        ),
+        declare(
+            "the SeaORM statements",
+            &SeaOrmConfig::STATEMENT_TIMEOUT,
+            statement_bound,
+        ),
+    ]
+}
+```
+
+The port's own net is your `settle_net`: SeaORM's is its statement timeout
+plus a second, above every bound the server holds a `COMMIT` to, so it fires
+only on a database that stopped bounding itself.
+
+## When the backend fails
+
+A failure is classified from what the database said, never guessed, because
+a retry replays the whole job body, side effects included:
+
+- **`Unhonoured::retryable`** is for a failure that could end differently —
+  a serialization conflict, a deadlock.
+- **`Unhonoured::deterministic`** is for a constraint violation, or a commit
+  whose outcome you do not know.
+- **A failed statement and a failed commit are not one question.** Inside an
+  open transaction nothing is durable yet, so a connection lost mid-attempt
+  left nothing behind: retryable. At commit the same error means the commit
+  may have landed: deterministic. SeaORM splits them as
+  `retry::is_transient_failure` against `retry::is_retryable_conflict`.
+
+**Say your errors without their values.** A database server words its
+refusal around the input it refused, and every framework log line, a dead
+letter's reason and a client's error frame read an error chain through
+`nest_rs::core::error_message`, which asks each `SafeLink` about a link before
+its `Display`. Submit one:
+
+```rust title="from nest-rs-seaorm's errors, abridged"
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say) }
+
+/// What a sea-orm or sqlx error means, said without a value: a server error by
+/// its SQLSTATE and the names it reported; a variant whose text can hold a value
+/// by its kind alone; every other by its own sentence, which holds none.
+fn say(link: &(dyn std::error::Error + 'static)) -> Option<String> {
+    if let Some(err) = link.downcast_ref::<DbErr>() {
+        return Some(said_db(err));
+    }
+    // …
+}
+```
+
+A link your sayer claims is said by its sentence alone, and nothing below it
+is read. Keep identifiers — a code, a constraint, a table — and drop every
+message: SeaORM says a unique violation as `database error 23505 on
+constraint "users_email_key", table "users"`.
+
+A sayer speaks for one reader. A `{:?}`, an `anyhow` report or a `main` returning
+the error print each link as it is, so a library error that always quotes a value
+is kept as that sentence and never as a source, as `nest_rs::storage` keeps
+object_store's. The port's own errors do the rest: the error you hand
+`AtomicError::Database` or `OutboxError::Database` stays there for your own
+`match`, and every reader of their chain reads it as your sayer says it.
+SeaORM's driver hands them its `RepoError`, which prints no server message
+itself. Hold it
+with a marked value in a test: `nest_rs_testing::printed` is every reader at once.
+
+## TLS
+
+Your store's connections verify the server, with no way to turn it off but an
+explicit plaintext setting. Follow the store's own standard where it has one:
+Postgres's is libpq's URL parameters, so SeaORM reads `sslmode` and
+`sslrootcert` off `<PREFIX>_SEAORM__URL`, verifies by default, and refuses
+every mode that encrypts without verifying:
+
+```rust title="from nest-rs-seaorm's config, abridged"
+match self.parsed()?.get_ssl_mode() {
+    PgSslMode::Prefer if !named => Ok(PgSslMode::VerifyFull),
+    mode @ (PgSslMode::Disable | PgSslMode::VerifyFull) => Ok(mode),
+    unverified if named => Err(Self::refuse_url(format!(
+        "asks Postgres for TLS without verifying its certificate (sslmode={}): write \
+         sslmode=verify-full, with sslrootcert naming the authority that signed the \
+         server's certificate, or sslmode=disable for a server without TLS",
+        // …
+    ))),
+    unverified => Err(ConfigError::parse(PGSSLMODE, /* … */)),
+}
+```
+
+A store with no such standard reads `nest_rs::config::ClientTls` under its
+own namespace, as the [queue driver page](/queue/writing-a-driver/#tls) shows.
+
+## Proof at boot
+
+The boot proves the pool before the app serves: `nest_rs::core::prove` runs
+one attempt after another within the connect budget, on the reconnect curve,
+until one opens and proves the resource, one meets what every attempt would,
+or the budget is spent:
+
+```rust title="from nest-rs-seaorm's substrate, abridged"
+prove(
+    budget,
+    Backoff::RECONNECT,
+    process_seed(),
+    said(&endpoint, budget),
+    |_| {
+        // …
+        async move {
+            // …
+            PgConnection::connect_with(probe)
+                .await
+                .map_err(met)?
+                .close()
+                .await
+                .map_err(met)?;
+            Database::connect(options)
+                .await
+                .map_err(|error| classify(error, endpoint))
+        }
+    },
+)
+.await
+```
+
+`classify` sorts each failure into `Attempt::Refused` — credentials or a
+database the server refuses, TLS that fails — which ends the boot at once,
+and `Attempt::Failed` — a refused connection, a server starting up — which
+the next attempt follows. `said` reports each retry on the driver's own
+target, since a span target is a callsite constant the kernel cannot borrow,
+and names the server by its host and port, never by a URL carrying a
+password.
+
+## Health
+
+A driver ships its readiness check behind its crate's `health` feature, and
+the module that opens its connection attaches it — an `IndicatorEntry` under
+the crate's name, from the `register` of the module its `for_root` imports by
+type, so an app importing `HealthModule` checks it with no import of its own,
+once however many modules open the connection:
+
+```rust title="from nest-rs-seaorm's module.rs and health/indicator.rs"
+impl Module for SeaOrmModule {
+    // …
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        #[cfg(feature = "health")]
+        let builder = crate::health::register::<Self>(builder);
+        builder
+    }
+}
+
+pub(crate) fn register<M: Module>(builder: ContainerBuilder) -> ContainerBuilder {
+    builder
+        .provide_meta(IndicatorEntry::new::<M>(NAME, ProbeKind::Readiness, ping))
+        .provide_meta(IndicatorEntry::new::<M>(NAME, ProbeKind::Startup, ping))
+}
+```
+
+Yours is keyed `nestrs_<technology>` and runs on the readiness and startup
+probes, never on liveness — see
+[an indicator a module attaches](/health/indicators/#an-indicator-a-module-attaches).
+
+## Test it
+
+Your suite boots apps over your binding and proves each obligation above
+against a live server. SeaORM's holds them in `nest-rs-seaorm`'s suites:
+`tests/e2e/unit.rs` for the commit, the rollback, the escaped handle, the
+conflict and the held work under the HTTP edge;
+`tests/integration/database/module.rs` for the request timeout that cuts the
+body and never the commit, and a GraphQL request whose operations each open
+their own unit; and the unit tests of `src/database/module.rs`, among them
+`a_second_unit_of_work_binding_fails_the_boot_in_the_ports_words`, for the
+contest. Each test writes only in what its suite creates: SeaORM's write in
+probe tables of their own, or in a whole database through `EphemeralDatabase`
+— a SeaORM fixture, which `testing` carries only beside the `seaorm`
+capability. Yours creates its own the same way, in your store's terms — a
+database per test, dropped after it, is the plainest — and never writes in the
+database a deployment's URL names. No behaviour kit ships for database drivers
+yet, so these cases are yours to write.
+
+## What the seam carries, and what stays store-native
+
+The SeaORM-typed primitives — `Repo<E>`'s row-level filter through
+`Ability::condition_for`, the `#[expose]` wire row's judgement, the subject
+`bind = Service` loads, `CrudService` — read SeaORM's typed `Column` and
+`EntityTrait`, so a driver
+ships their equivalents in its store's terms: Postgres RLS, an
+ability-derived filter document, a per-collection helper. What every driver
+keeps is the seam's: a transaction per unit of work on every edge, the
+ambient executor across HTTP and the workers, the access graph and the
+module wiring. Its events go on its own target, `nestrs_<technology>`, as
+SeaORM's go on `nest_rs::orm`.
+
+## Going further
+
+- [Writing a database driver](/database/writing-a-driver/) — the executor
+  and the unit of work the binding provides.
+- [Transactions](/database/transactions/) — the boundary each unit settles,
+  seen from the app.
+- [Writing a package](/extending/package/) — the rules every package's
+  resource follows.

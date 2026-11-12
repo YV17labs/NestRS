@@ -25,8 +25,8 @@ from [Entities](/database/entities/).
 | `name` | What is this type called on the wire? Bare, no suffix | [Entities](/database/entities/) |
 | `service` | Which `CrudService` owns it? Omit for a read-only exposure with none | [CRUD](/database/crud/) |
 | `graphql` | Does it appear in the schema, or is it HTTP-only? | [GraphQL](/graphql/) |
-| `timestamps` | Should `created_at` / `updated_at` be maintained for you? | [Entities](/database/entities/) |
-| `soft_delete` | Does `DELETE` tombstone the row instead of erasing it? | [CRUD](/database/crud/) |
+| `timestamps` | Should `created_at` / `updated_at` be maintained for you? | [Lifecycle columns](/database/lifecycle/) |
+| `soft_delete` | Does `DELETE` tombstone the row instead of erasing it? | [Lifecycle columns](/database/lifecycle/#soft-delete-and-timestamps) |
 | `complex` | Does the wire type need a hand-written `#[ComplexObject]` field resolver? | [Field resolvers](/graphql/field-resolvers/) |
 
 ## On each field
@@ -36,7 +36,7 @@ from [Entities](/database/entities/).
 | `#[expose]` | Does this column cross the wire at all? Silence means hidden | [Entities](/database/entities/) |
 | `input(create, update)` | May a client *write* it, and on which operation? | [CRUD](/database/crud/) |
 | `validate(…)` | What makes a value of it invalid at the edge? | [Pipes](/fundamentals/pipes/) |
-| `default = …` | Is it a constant the server decides, stored when an insert leaves it unset? | [Entities](/database/entities/#write-side--inputs-and-validation) |
+| `default = …` | Is it a constant the server decides, stored when an insert leaves it unset? | [Entity inputs](/database/inputs/#write-side--inputs-and-validation) |
 | `via = "…"` | On a `has_many`, which of the child's foreign keys does it follow? | [Entities](/database/entities/) |
 | `complexity = …` | Does resolving it cost more than a column read? | [Query limits](/graphql/query-limits/) |
 
@@ -56,7 +56,7 @@ runtime, and the difference matters when you are deciding what to test:
   does.
 - **A unique column on a `soft_delete` table** answers `409` for a value every
   read calls free, when its index is a full one: index it `WHERE deleted_at IS
-  NULL`. See [CRUD](/database/crud/#soft-delete-and-timestamps).
+  NULL`. See [Lifecycle columns](/database/lifecycle/#soft-delete-and-timestamps).
 
 ## The two you carry yourself
 

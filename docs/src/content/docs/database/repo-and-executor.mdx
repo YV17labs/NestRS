@@ -68,28 +68,6 @@ read that keeps them, for an administrator's view or a retention job. It
 reads only: no `Repo` write brings a deleted row back yet — `Repo::restore`
 is planned for 7.x.
 
-### What a failure says
-
-Every `Repo` method, every `RepoSelect` and every `CrudService` method answers a
-`RepoError`, and `?` turns it into the `ServiceError` every edge answers. What
-a service decides on is one `match` away — a row a write found gone, a write the
-caller's grants do not cover, a unique or a foreign key and which one, a
-serialization failure worth another attempt, a statement cancelled at its bound:
-
-```rust title="a service reading which key refused the row"
-match self.create_from_active(active).await {
-    Err(RepoError::UniqueViolation(key)) if key.constraint() == Some("users_email_key") => {
-        Err(ServiceError::conflict("that address is registered"))
-    }
-    created => Ok(User::from(&created?)),
-}
-```
-
-A `RepoError` says the failure by its SQLSTATE and the names the server gave —
-`database error 23505 on constraint "users_email_key", table "users"` — never by
-the server's message or its `detail`, which quote the row it refused, whoever
-prints it: a log line, a `{:?}`, an `anyhow` report, a `main` returning it.
-
 ### A custom query
 
 `scoped` returns a `RepoSelect<E>`, a query the ability already filters. It
@@ -123,80 +101,8 @@ Outside a unit of work, every `Repo` call returns an
 error naming the bindings that install one — a service called with no ambient
 executor is a wiring bug, not a silent miss.
 
-#### Raw SQL in a filter
-
-`filter` takes what any SeaORM condition is, and sea-query's `Expr::cust` builds
-the same `Expr` a column's `.eq()` does, so no type tells raw text from a
-condition. `Repo` holds it where it lands instead: your condition goes into the
-statement as one parenthesized operand beside the ability's, and its text, read as
-Postgres reads it, has to close every parenthesis, string and quoted identifier it
-opens, with no comment in it. A fragment that does not is refused before any
-statement is sent:
-
-```sql title="what reaches Postgres"
--- .filter(Column::Title.eq(name))
-WHERE "org_id" = $1 AND ("posts"."title" = $2)
-
--- .filter(Expr::cust("1 = 1) OR (1 = 1"))
--- nothing: the query is refused
-```
-
-The refused query runs nothing and answers the opaque `500` every unexpected
-database failure answers, and one `warn` on `nest_rs::orm` names the entity and
-why it was refused (`reason="unbalanced_parenthesis"`), never the text. Text holding an `OR`
-stays inside its parentheses, so a `sea_query::Enum` literal or a hand-written
-`impl Iden` whose text reaches past its column still reads within what the ability
-allows. A page's `extra` condition goes through the same check, and so does an
-order by field; a write refuses a value whose enum type name would leave its
-quotes, alone or at any depth of an array.
-
-What you write when no typed builder reaches it keeps working, with nothing new
-to write: a function call, a full-text search, a string holding a parenthesis. Two
-spellings are refused although Postgres reads them: dollar quoting (`$$…$$`), and a
-backslash in a plain `'…'` string, which escapes the next character wherever a
-server sets `standard_conforming_strings` off. Write `E'…'`, or better, bind the
-value.
-
-Clippy names the same fragments where you write them. The `clippy.toml` `nestrs new`
-writes lists `Expr::cust` and every other call through which sea-query writes text
-unescaped, and `nestrs run lint` runs it with `-D warnings`. Write the condition with
-sea-query's typed builders (`Func::lower`, `PgFunc::to_tsquery`, `Condition`), whose
-values are bound. `PgFunc`'s JSON builders are the exception, a JSON path being
-written as text, so `json_value`, `json_query`, `json_exists` and `json_table` are on
-the list too. Where only raw text can say it, the opening is one line a review finds,
-and a value goes through `cust_with_values`, never into the text:
-
-```rust title="crates/features/src/posts/service.rs"
-#[expect(
-    clippy::disallowed_methods,
-    reason = "full-text search over a generated column; the query is a bound value"
-)]
-let matching = Expr::cust_with_values("search @@ plainto_tsquery($1)", [q]);
-```
-
-A derive's expansion sits beside the item carrying it, where an `#[expect]` on that
-item does not reach. SeaORM's `#[sea_orm(select_as = …, save_as = …, save_array_as =
-…)]` expands to `cast_as`, so the entity's module takes the opening, at the top of its
-file:
-
-```rust title="crates/features/src/tags/entity.rs"
-#![expect(
-    clippy::disallowed_methods,
-    reason = "`select_as` and `save_as` expand to `cast_as`, on a constant type name"
-)]
-```
-
-A `DeriveActiveEnum` on a native enum with no `rs_type` expands to `sea_query::Enum`
-the same way, which takes `clippy::disallowed_types` beside it; with `rs_type =
-"String"` it expands to nothing the list names and needs no opening.
-
-Clippy names calls and types, so a `sea_query::Enum` literal through its full path
-or a glob, and a hand-written `impl Iden` whose `quoted` borrows its text, pass it;
-`Repo`'s check is what holds those.
-
-A project that started before this file has none: copy it from a new scaffold. A
-migration stays free to write raw DDL: `crates/migrations` holds an empty
-`clippy.toml` of its own, since no request's value reaches it.
+A condition written as raw SQL is held where it lands:
+[Raw SQL in a filter](/database/raw-sql/).
 
 ## Under the hood: the ambient executor
 
@@ -292,8 +198,8 @@ or rolls back on the unit's outcome:
 | `Err(_)` from the handler, whatever an exception filter answered | rollback |
 
 A failed mutation never half-persists. See
-[Transactions](/database/transactions/) for the conflict-retry knobs and where
-each boundary sits.
+[Transactions](/database/transactions/) for where each boundary sits, and
+[Serialization conflicts](/database/conflicts/) for the conflict-retry knobs.
 
 <Aside type="caution">
 **Fail-closed on escape.** If a handler `tokio::spawn`s a task that captures
@@ -307,86 +213,8 @@ work after the request, enqueue a job.
 
 ## Workers — same Repo, one transaction per attempt
 
-Queue processors and cron jobs run outside any HTTP request — no method to
-classify, no response to inspect. The worker transport (`#[scheduled]`,
-`#[processor]`) runs every job as a unit of work through the same binding:
-
-```text
-job
-  ↓
-SeaOrmUnitOfWork  ──→ installs a lazy transaction, settled on the job's Ok/Err
-  ↓
-processor body
-```
-
-**A job attempt is atomic by default.** The transaction is lazy — a job
-that never touches the database never opens one — and it commits when the
-job returns `Ok`, rolls back otherwise. That is what makes a **retry**
-safe: a job that failed halfway left nothing behind for the second attempt
-to write again.
-
-**Atomic per attempt is not the same as idempotent per job**, and the
-difference is the queue's, not the transaction's. A backend that delivers
-at least once — which is what a durable queue is — can redeliver a job
-whose attempt *committed*, if the worker died between the commit and the
-acknowledgement. The transaction guarantees you never see half an
-attempt's writes; it cannot promise the body runs once. A job whose
-re-execution would be harmful wants an idempotency key regardless of this
-setting.
-
-**And a retry only happens where it could help.** A job whose body succeeded
-but whose transaction could not be settled is a failed attempt — but *whether
-to re-attempt it* is read from what the database said, never assumed — and
-where it said it. A **statement** inside the attempt that failed on a
-serialization conflict or a deadlock (`40001`, `40P01`), on a pool that never
-handed out a connection, or on one the server closed (`08…`, `57P0…`) is
-retryable: nothing is durable before `COMMIT`, so the framework knows the
-attempt wrote nothing. At the **commit** the reading flips: a constraint checked
-at `COMMIT` fails identically every time, and a commit whose outcome is
-**unknown** — the connection lost mid-`COMMIT` — may have
-landed. Neither of the last two is replayed: a retry re-runs the whole body,
-including every side effect that is not the database's, and the framework only
-promises "nothing left to repeat" for a transaction it knows rolled back. Both
-abort straight to the dead-letter queue, where the failure is visible, instead
-of burning the budget in silence.
-
-A **schedule** has no retry budget and no dead-letter, so `#[every]` /
-`#[cron]` / `#[after]` report the failure at `error` on `nest_rs::schedule`
-and fire again at the next occurrence — the classification is logged rather
-than acted on, because there is nothing there for it to decide.
-
-No caller means no ambient ability, which means `Repo` reads and writes are
-**unscoped** — correct for system work with no principal to scope to. A job
-acting for a principal, or for a visitor, wraps its body in
-`with_ability(ability, body)`, which scopes it to those rules; it only ever
-narrows, so inside a request it intersects with the caller's ability, never
-replaces it.
-
-### The opt-out, and when it is right
-
-`transactional = false` runs the job on the pool, where every statement
-commits on its own:
-
-```rust title="crates/features/src/audio/queue/processor.rs"
-#[process(queue = AudioQueue, retries = 3, transactional = false)]
-async fn transcode(&self, job: TranscodeCommand) -> anyhow::Result<()> { /* ... */ }
-```
-
-The key is the same word on all four job decorators — `#[process]`,
-`#[every]`, `#[cron]`, `#[after]`.
-
-Reach for it when the job **brackets long work that is not the
-database's**: read a row, spend minutes transcoding, write the result. The
-default would hold a pooled connection across the middle. Such a job owns
-its own consistency, and an **idempotency key** is what makes its retry
-safe — the transaction never was.
-
-A job that wants a *narrower* unit than the attempt has two answers: an
-[atomic block](/database/transactions/#atomic-blocks), a savepoint of the attempt's
-transaction that rolls back alone, or `transactional = false`, plus its own idempotency,
-when nothing may be held across the work. `retry_on_conflict` around the ambient
-executor would replay into the transaction the conflict already aborted: it is for a *programmatic* boundary in a service, not for a job body (see
-[Transactions](/database/transactions/)).
+Queue processors and cron jobs reach `Repo` the same way, one transaction per
+attempt: [Job transactions](/database/job-transactions/).
 
 ## The contextless-path exception
 
@@ -397,15 +225,17 @@ through its service like any handler. A truly contextless path has none: a
 one-shot command run between `init()` and `close()`
 ([running without serving](/fundamentals/lifecycle/#running-without-serving)),
 which calls a provider outside every unit. That and the programmatic transaction
-[`retry_on_conflict`](/database/transactions/#the-working-retry-primitive) re-opens are the
+[`retry_on_conflict`](/database/conflicts/#the-working-retry-primitive) re-opens are the
 documented `Repo` bypasses: inject an `Arc<DatabaseConnection>` and call SeaORM directly —
 unscoped, with no ability filter and no transaction. If you find yourself
 reaching for it in a request handler or a hook, something else is wrong.
 
 ## Going further
 
-- [Transactions](/database/transactions/) — auto-commit, conflict
-  observation, the retry primitive.
+- [Transactions](/database/transactions/) — auto-commit, what waits for the
+  commit, atomic blocks.
+- [Serialization conflicts](/database/conflicts/) — conflict observation, the
+  retry primitive.
 - [Row-level filtering](/security/authorization/row-level-filtering/) —
   the ability condition `Repo::scoped` joins in.
 - [Writing a driver](/database/writing-a-driver/) — implementing

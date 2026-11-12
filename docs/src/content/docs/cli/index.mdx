@@ -140,7 +140,7 @@ inert — point `LLVM_COV` and `LLVM_PROFDATA` at your own binaries instead.
 **`clippy.toml`** names raw SQL (`Expr::cust` and every other call writing text
 unescaped) in `nestrs run lint`, where it is written: no type tells it from a
 condition, and `Repo` refuses a fragment that would read past the ability's filter only
-when the query runs ([Raw SQL in a filter](/database/repo-and-executor/#raw-sql-in-a-filter)).
+when the query runs ([Raw SQL in a filter](/database/raw-sql/)).
 `crates/migrations` holds an empty one of its own, which lets a migration write raw DDL.
 
 ### One starter, no template flag

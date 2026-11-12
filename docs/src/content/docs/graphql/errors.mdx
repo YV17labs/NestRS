@@ -170,7 +170,7 @@ is refused, and so is a `Problem` whose status is not a `4xx` or a `5xx`.
 
 `extensions.errors` names a field **as the schema spells it**, so a client matches
 a key to the field it sent. A Rust field `display_name` answers `displayName`, at
-every depth, a validation failure and a [`#[crud]` conflict](/database/crud/#when-the-database-refuses)
+every depth, a validation failure and a [`#[crud]` conflict](/database/errors/#when-the-database-refuses)
 alike, while an input declaring `rename_fields = "snake_case"` keeps `display_name`:
 
 ```json
@@ -225,7 +225,7 @@ violation becomes `Conflict`, a write the caller's grants do not cover
 by its SQLSTATE, never by the server's message. A `#[crud]` operation answers the same classes, a create
 or an update a unique key refuses naming the input's fields that key holds
 under `extensions.errors`
-([When the database refuses](/database/crud/#when-the-database-refuses)), and a
+([When the database refuses](/database/errors/#when-the-database-refuses)), and a
 mutation field answering one rolls back its own writes — the whole operation's,
 when its `null` reaches `data`
 ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).

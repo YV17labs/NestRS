@@ -184,7 +184,7 @@ read:
    code. A `Repo` select hands out no statement, so nothing rewrites what `Repo`
    filtered, and raw SQL in a filter is the one way past it: each `#[expect]` opens
    it, and its text must hold no value; the other two are what clippy cannot name
-   ([Raw SQL in a filter](/database/repo-and-executor/#raw-sql-in-a-filter)).
+   ([Raw SQL in a filter](/database/raw-sql/)).
    `with_ability` needs no
    such read: it only narrows the ability the unit runs under, and nothing
    public widens one — no function installs an executor of its own, and a

@@ -197,7 +197,7 @@ validation, the unit of work's transaction, and the service; the
 The rest of the negative-path matrix — `403` across tenants, field masking,
 transaction rollback on a `5xx` — lives in
 [`api`](/testing/negative-path/) once row-level policy is in play. Copy those
-patterns when you wire [`users`](/tutorial/security/); `blog` grants one blanket
+patterns when you wire [`users`](/tutorial/authorization/); `blog` grants one blanket
 rule, so it has no cross-tenant case to assert yet.
 </Aside>
 
@@ -268,6 +268,6 @@ When you need GraphQL, org scoping, and the full negative-path matrix, open
 
 ## Going further
 
-- [Authenticate and authorize](/tutorial/security/) — the next step: read the policy on `api`, then narrow `blog`'s.
+- [Authenticate and authorize](/tutorial/authorization/) — the next step: read the policy on `api`, before you narrow `blog`'s.
 - [E2E tests](/testing/e2e/) — the reference page for `TestApp`, its throwaway
   database, the bearer it signs and the unit it runs a service in.

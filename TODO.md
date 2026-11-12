@@ -196,14 +196,6 @@ document says of it; what it keeps on purpose is §5's.
   lost with it there as on WebSocket (§5). *seen*
 
 **Docs, bench, tooling**
-- 21 docs pages still exceed the ~300-line budget of `docs/STYLE.md`, every
-  one under `fundamentals/`, `graphql/`, `http/`, `configuration/`,
-  `websockets/` and `tutorial/`, or `coming-from-nestjs.mdx`; the longest
-  are `websockets/messages.mdx` (563), `configuration/index.mdx` (557) and
-  `http/extractors.mdx` (455). `upgrading.mdx` (2772) is the 6.x checklist,
-  one ordered path. Close: split each by subject, as the security, data,
-  queue and operations pages were (`wc -l` over `docs/src/content/docs`).
-  *seen*
 - No run has started the scaffold's `compose.yml`: a unit test reads it as
   YAML against every URL and credential its two profiles boot on, and
   `docker compose config` accepted it by hand (2026-11-08), but its images,

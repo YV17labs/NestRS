@@ -12,15 +12,15 @@ You ship one feature — **`posts`** — into the [**Publish**](/publish/) story
 validation, Postgres, and an e2e test. Each page leaves you with code that
 compiles and a command you can run.
 
-**Pages 1–7 build your `blog`. Pages 8 and 9 read the reference `api`, then
+**Pages 1–7 build your `blog`. Pages 8 to 10 read the reference `api`, and
 apply what it shows to `blog`.** That is a deliberate switch, and worth knowing
 before you reach it: `blog`'s `Post`
 has an id, a title and a body — no tenant column, no relation — because a small
 domain is what makes pages 2 to 7 short. Per-caller row filtering and an
-auto-resolved GraphQL relation both need a domain that has those things, so the
-last two pages walk through the feature that does (`api`'s `users`) rather than
-first sending you to add a column you have no use for. Each ends in your own
-`blog`: page 8 narrows its policy, page 9 adds a GraphQL resolver to `posts`.
+auto-resolved GraphQL relation both need a domain that has those things, so
+pages 8 and 10 walk through the feature that does (`api`'s `users`) rather than
+first sending you to add a column you have no use for. Each leads back to your
+own `blog`: page 9 narrows its policy, page 10 adds a GraphQL resolver to `posts`.
 
 ## What you end up with
 
@@ -116,8 +116,9 @@ If you cloned **this** repository to explore Publish, scaffold `hello` and
   <LinkCard title="5. Persist through Postgres" href="/tutorial/database/" description="Postgres, the post table's migration applied, transactional writes." />
   <LinkCard title="6. Validate inputs" href="/tutorial/validation/" description="The entity's rules at the boundary, 400 on a bad body." />
   <LinkCard title="7. Test it end to end" href="/tutorial/testing/" description="The round trip g resource wrote, against a throwaway database." />
-  <LinkCard title="8. Authenticate and authorize" href="/tutorial/security/" description="Read the reference api: AuthzAbility, the by-id load, response masking — the per-caller access you lived on step 3, then narrow blog's blanket Manage rule yourself." />
-  <LinkCard title="9. Mirror on GraphQL" href="/tutorial/graphql/" description="Read the reference api: a UsersResolver over the same service, ability, and dataloader — then add one to blog's posts." />
+  <LinkCard title="8. Authenticate and authorize" href="/tutorial/authorization/" description="Read the reference api: AuthzAbility, the by-id load, response masking — the per-caller access you lived on step 3." />
+  <LinkCard title="9. Secure your posts" href="/tutorial/security/" description="Narrow blog's blanket Manage rule: anyone signed in reads, only an admin writes, and the suite pins the refusal." />
+  <LinkCard title="10. Mirror on GraphQL" href="/tutorial/graphql/" description="Read the reference api: a UsersResolver over the same service, ability, and dataloader — then add one to blog's posts." />
 </CardGrid>
 
 <Aside type="tip">

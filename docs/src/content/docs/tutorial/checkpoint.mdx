@@ -21,7 +21,7 @@ Your `blog` already carries the two guards `nestrs g resource` wrote, behind
 a policy that grants nothing yet — that is deliberate. To live the payoff now,
 drive the reference [`api`](/publish/) app over `users` and `orgs`. It wires
 the same guards over a real policy, and the wire rows that policy judges — what
-[Authenticate and authorize](/tutorial/security/) reads, before you narrow
+[Authenticate and authorize](/tutorial/authorization/) reads, before you narrow
 your own.
 
 <Steps>
@@ -110,9 +110,10 @@ produced all three is the same thin CRUD shape `nestrs g resource` wrote for
 
 Your `blog` has the same pieces already: the guards on `PostsController`,
 which [Expose over HTTP](/tutorial/http/) reads, and an `AuthzAbility` you
-grant its first rule there. [Authenticate and authorize](/tutorial/security/)
-reads how `api`'s policy scopes rows and masks fields, then narrows yours,
-once your `posts` persists and is tested.
+grant its first rule there. [Authenticate and authorize](/tutorial/authorization/)
+reads how `api`'s policy scopes rows and masks fields, and [Secure your
+posts](/tutorial/security/) narrows yours, once your `posts` persists and is
+tested.
 
 <Aside type="note">
 Living this needs the Publish repo (`auth` + `api` + seeded Postgres).

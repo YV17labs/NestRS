@@ -9,12 +9,12 @@ use crate::generated::{
 };
 
 /// Every tutorial page that edits `blog`, in reading order: the checkpoint
-/// runs the reference `api` and is no step of `blog`'s; `security` and
-/// `graphql` read `api`, then end in `blog`. Each `nestrs new` or `nestrs g`
-/// line of a `bash` block runs from the workspace root; each `rust` block
-/// titled with a bare workspace path is that whole file — the reader's when
-/// the block marks the lines they write (`{…}`), and otherwise what a generator
-/// wrote there. An excerpt takes a title with words in it.
+/// runs the reference `api` and `authorization` reads it, neither a step of
+/// `blog`'s; `graphql` reads `api`, then ends in `blog`. Each `nestrs new` or
+/// `nestrs g` line of a `bash` block runs from the workspace root; each `rust`
+/// block titled with a bare workspace path is that whole file — the reader's
+/// when the block marks the lines they write (`{…}`), and otherwise what a
+/// generator wrote there. An excerpt takes a title with words in it.
 const PAGES: [&str; 8] = [
     "scaffold",
     "entity",

@@ -255,8 +255,7 @@ type Query {
 }
 ```
 
-The development run emits the SDL with nothing to set and no extra binary to
-install. Commit the file and assert on it if you want a drift gate.
+Commit the file and assert on it if you want a drift gate.
 
 ## Now mirror your own `blog`
 
@@ -282,9 +281,6 @@ $ curl -s -H "Authorization: Bearer $TOKEN" \
     http://localhost:3001/graphql
 {"data":{"posts":[{"id":"019f…","title":"Hello"}]}}
 ```
-
-No `User.org` equivalent — that field is the one thing on this page that needs
-a relation `blog` does not have.
 
 ## What the reference feature has
 

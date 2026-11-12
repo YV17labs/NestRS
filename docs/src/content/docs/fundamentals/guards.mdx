@@ -41,7 +41,7 @@ problem document, unless the guard's protocol fixes a refusal of its own: a
 token endpoint's client is refused in RFC 6749 §5.2's words, which
 `ClientAuthenticationGuard` writes through `HttpView::respond` before it
 returns its denial, and the edge serves that answer instead
-([Token endpoint errors](/security/authentication/oauth2/#token-endpoint-errors)).
+([Token endpoint](/security/authentication/oauth2-token-endpoint/)).
 One trait, four edges — the same `#[injectable]` impl gates an HTTP route, a
 GraphQL field, a WebSocket message and an MCP operation
 ([Guards beyond HTTP](/fundamentals/guards-beyond-http/)).

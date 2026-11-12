@@ -1,0 +1,153 @@
+---
+title: Writing a social provider
+description: A SocialProvider of your own — its profile, its config, its module and its registry entry — opened by an import like GitHub's and Google's.
+sidebar:
+  order: 6.1
+---
+
+A provider is real code — the profile shape, and any provider quirk —
+behind a public trait, discovered at link time and opened by its module.
+Three files, four steps.
+
+**1. Implement the trait.** `authorize` and `exchange` default to the
+shared flow, so a standard provider writes only `profile`:
+
+```rust title="crates/features/src/social/provider.rs"
+impl SocialProvider for AcmeProvider {
+    fn key(&self) -> &'static str { "acme" }
+    fn client(&self) -> &OAuthClient { &self.client }
+
+    fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a> {
+        Box::pin(async move {
+            let token = tokens.access_token.expose_secret();
+            let me: AcmeUser = self.client.fetch("https://api.acme.dev/me", token).await?;
+            Ok(SocialProfile::new("acme", me.id.to_string())
+                .with_email(me.email, me.email_verified)
+                .with_name(me.name))
+        })
+    }
+}
+```
+
+A provider whose protocol deviates — a per-request signed client
+secret, or identity carried in the `TokenSet`'s id_token instead of a
+userinfo endpoint — overrides `exchange` too. The trait does not
+change: the override takes the `AuthorizationResponse` the callback already
+matched to its transaction, so it never checks `state` again, and builds what
+it answers with `TokenSet::new(access_token)`, then `with_id_token` and
+`with_refresh_token`.
+
+**2. Declare the config.** A `#[config]` type plus the one question the
+registry asks before it separates *inert* from *misconfigured*:
+
+```rust title="crates/features/src/social/config.rs"
+#[config(namespace = "social__acme")]
+#[derive(Clone, Default)]
+pub struct AcmeSocialConfig {
+    #[validate(length(min = 1))]
+    pub client_id: String,
+    #[validate(length(min = 1))]
+    pub client_secret: Secret<String>,
+    #[validate(length(min = 1))]
+    pub redirect_url: String,
+    #[validate(custom(function = "OAuthClientConfig::validate_scopes"))]
+    pub scopes: Vec<String>,
+    #[config(json)]
+    #[validate(custom(function = "OAuthClientConfig::validate_authorization_parameters"))]
+    pub authorization_parameters: AuthorizationParameters,
+}
+
+impl SocialProviderConfig for AcmeSocialConfig {
+    fn is_unconfigured(&self) -> bool {
+        self.client_id.is_empty()
+            && self.client_secret.expose_secret().is_empty()
+            && self.redirect_url.is_empty()
+    }
+}
+```
+
+Report `false` for a *partially* set config — that is what makes it fail
+`validate` and abort boot instead of vanishing. The client secret is a
+`nest_rs::core::Secret<String>`, as `OAuthClientConfig`'s is, so no `Debug`
+prints it. The redirect is a URL whose userinfo or query may carry a
+credential, so the GitHub and Google configs write their `Debug` and show it
+through `nest_rs::config::endpoint_shown`; yours does the same.
+
+The config also composes the `OAuthClientConfig` the shared client takes:
+your provider's endpoints, the deployment's credentials, its redirect, its scopes
+and its `AuthorizationParameters`. The client checks them again, but under
+`<PREFIX>_OAUTH__CLIENT__*`, names your deployment never set — which is why the
+struct above holds its scopes and parameters by the client's own rules,
+`OAuthClientConfig::validate_scopes` and
+`OAuthClientConfig::validate_authorization_parameters`. Refuse the redirect here
+for the same reason, under your own variable:
+
+```rust title="crates/features/src/social/config.rs"
+impl AcmeSocialConfig {
+    pub(crate) fn oauth2_config(&self) -> Result<OAuthClientConfig, AuthError> {
+        refuse_plaintext_redirect(
+            &self.redirect_url,
+            &format!(
+                "{}, or `AcmeSocialConfig::redirect_url` in code",
+                spellings(Self::NAMESPACE, "REDIRECT_URL")
+            ),
+        )?;
+        Ok(OAuthClientConfig {
+            client_id: self.client_id.clone(),
+            client_secret: self.client_secret.clone(),
+            auth_url: "https://acme.dev/oauth/authorize".into(),
+            token_url: "https://acme.dev/oauth/token".into(),
+            redirect_url: self.redirect_url.clone(),
+            userinfo_url: "https://api.acme.dev/me".into(),
+            scopes: self.scopes.clone(),
+            authorization_parameters: self.authorization_parameters.clone(),
+            tls: ClientTls::default(),
+        })
+    }
+}
+```
+
+**3. Declare the module.** It owns nothing: importing it is what opens the
+provider, and it brings `SocialModule` along.
+
+```rust title="crates/features/src/social/module.rs"
+#[module(imports = [SocialModule])]
+pub struct AcmeSocialModule;
+```
+
+**4. Submit the registry entry.** `SocialProviderEntry::new` names the
+provider and the module that opens it as types, then takes the key, the
+config's namespace and how to build the provider. `resolve_provider` is the
+standard build: a provided instance wins, then a provided config, then the
+environment. The module is the one gate the registry reads.
+
+```rust title="crates/features/src/social/provider.rs"
+nest_rs::core::inventory::submit! {
+    SocialProviderEntry::new::<AcmeProvider, AcmeSocialModule>(
+        "acme",
+        AcmeSocialConfig::NAMESPACE,
+        |container| {
+            resolve_provider::<AcmeProvider, AcmeSocialConfig>(container, |config| {
+                let client = OAuthClient::new(config.oauth2_config()?)
+                    .map_err(|e| anyhow::anyhow!("invalid Acme OAuth2 client config: {e}"))?;
+                Ok(AcmeProvider::new(client))
+            })
+        },
+    )
+}
+```
+
+An app then imports `AcmeSocialModule` and sets
+`<PREFIX>_SOCIAL__ACME__*`. Published as a package of its own, say
+`nestrs-social-acme`, the provider reads its crate's namespace,
+`<PREFIX>_SOCIAL_ACME__*`, and opens the same way: the app's import names
+the crate, so it is linked.
+
+## Going further
+
+- [Social login](/security/authentication/social-login/) — the request flow
+  every provider runs, and the routes that are yours.
+- [OAuth2 client configuration](/security/authentication/oauth2-configuration/)
+  — the `OAuthClientConfig` your config composes.
+- [Writing a package](/extending/package/) — publishing the provider as a
+  crate of its own.

@@ -123,7 +123,7 @@ every `Repo` read does. Two things to notice:
    path joins, evaluated by the same database. One source of truth: the row
    a list query returns and the row `access` grants cannot diverge. It is
    also what makes
-   [relational rules](/security/authorization/policies/#relational-scoping)
+   [relational rules](/security/authorization/predicates/#relational-scoping)
    enforceable here — a `p.related` scope reaches through a join no
    in-memory check could evaluate without loading the parent.
 2. **The authorized path costs one lookup.** The second, unscoped one runs

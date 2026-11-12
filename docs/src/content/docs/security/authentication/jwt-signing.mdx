@@ -1,0 +1,101 @@
+---
+title: Signing a token
+description: "JwtService::sign mints an RFC 9068 access token for this app and sign_for one for another — what each stamps, and what each refuses to mint."
+sidebar:
+  order: 3.1
+---
+
+A login or OAuth callback injects `Arc<JwtService>` and calls `sign`:
+
+```rust title="crates/features/src/authn/service.rs"
+let claims = Claims {
+    sub: Subject::User(user.id),
+    client_id: self.config.client_id.clone(),
+    org_id: user.org_id,
+    roles: user.roles.clone(),
+};
+let token = self.jwt.sign(&claims)?;
+```
+
+`sign` is `Result<String, SignError>`. A token this server cannot mint — a
+verify-only service, EdDSA with no private key or a JWK Set, is the one you will
+meet — is the server's failure, never the caller's: `?` in a route answers the
+opaque `500` and files the chain at `error`, where a `401` would send a client off
+for another credential, and a handler returning it on another edge answers as
+opaquely. A handler has nothing to add. A service holds it as a `#[from]` variant
+of its own error, and a token endpoint's `TokenError` already does. It does not convert into `AuthError`, whose every answer speaks of the
+credential: a login handler `?`-ing both answers `nest_rs::http::Result`, into which
+each converts on its own status.
+`ttl_secs()` is the token's lifetime, `JwtOptions::expires_in` (default one
+hour), so the issuer can return it alongside the token.
+
+## What a token carries
+
+[RFC 9068 §2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2)
+lists the claims every JWT access token carries, and `sign` writes the ones
+only the signer knows: `iat`, the time it signs; `exp`, its lifetime after
+that; `jti`, an identifier no other token shares; and the `aud` and `iss` you
+configured. Your claims name the rest — `sub`, and the `client_id` of the
+OAuth client the token is issued to — and a claim they already carry is kept
+as written: an `exp` of their own outlives or undercuts the signer's.
+
+`sub` is held by the type. `sign` and `sign_for` take a `PrincipalIdentity`, the
+derive your claims already carry for the guard, and a type without it does not
+compile. A claims type holding its subject under another name, or a `sub` that is
+blank, is stamped its `#[principal(actor)]` as `sub`; one naming no subject at all,
+its actor `None` or blank, mints nothing and answers the `SignError` above. So does
+a `sub` that is no string, since
+[RFC 7519 §4.1.2](https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.2) makes
+it one and a verifier reading one refuses anything else: an integer id is written as
+its decimal string, which `#[principal(actor)]` on a field of another name does for
+you. A test forging such a token, to prove your verifier refuses it, hands it to
+[`TestApp::bearer`](/tutorial/testing/), which signs what it is given.
+
+Every claim the specifications register is held the same way, the `SignError`
+naming it: `iss`, `jti`, `client_id` and `acr` are strings; `exp`, `nbf`, `iat` and
+`auth_time` are NumericDates, a JSON number of seconds since the epoch; `aud` is a
+string or an array of them, `amr` an array of strings, and `scope` the list RFC 6749
+§3.3 writes, scope tokens each separated by one space, or empty when the token grants
+none. A registered claim your claims serialize as `null` is left out of the token.
+
+`client_id`, which RFC 9068 §2.2 requires too, is your claims' to name, and `sign`
+and `sign_for` refuse claims naming none — absent, `null` or blank — with the
+`SignError` naming the claim: nothing a claims type already says names its client,
+so the signer reads it off the token it is about to mint. Hold it as a `String`, as
+the demo's claims and `nestrs g auth`'s do, and no literal leaves it out. A machine
+token names the client that authenticated at `/token`; a user's, from `/login` or
+the social callback, names the first-party client the sign-in serves,
+`<PREFIX>_SIGN_IN__CLIENT_ID` (`publish-web` by default), which the boot refuses any
+registered client to hold. An authorization-code grant by that client (RFC 6749
+§4.1, with PKCE) would have it identify itself, where the deployment names it here.
+The development token `nestrs g auth` serves names its own route, `dev-token`.
+
+`sign_handshake`, for a flow's short-lived token, stamps the same but `exp`:
+its claims name their lifetime with `expiry_in(secs)`, and claims naming none
+are refused rather than given the access token's.
+
+## A token for another app
+
+`sign` mints a token for this app itself: its `aud` is this app's own
+audience, the one its verifier requires. An issuer minting a token another app
+will verify names that app instead, with `sign_for`:
+
+```rust title="crates/features/src/sign_in/service.rs"
+let token = self.jwt.sign_for("https://api.example.com", &claims)?;
+```
+
+The resource becomes the token's `aud` and nothing else does, so only the app
+serving it accepts the token — the one a client asked for in the
+[RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) `resource` parameter
+of its token request ([OAuth2](/security/authentication/oauth2-token-endpoint/#the-request)).
+A token for one resource replayed at another is refused there. `sign_for`
+refuses a blank resource, and claims carrying an `aud` of their own.
+
+## Going further
+
+- [JWT](/security/authentication/jwt/) — the strategy verifying what this
+  signs.
+- [Token endpoint](/security/authentication/oauth2-token-endpoint/) — the
+  grant that names the resource `sign_for` mints for.
+- [Split deployment](/security/authentication/split-deployment/) — one
+  issuer holding the private key, every API the public one.

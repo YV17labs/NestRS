@@ -1,0 +1,120 @@
+---
+title: JWT configuration
+description: AuthnConfig — the key that picks HS256, EdDSA or a JWK Set, and the issuer and audience every token names, each set by `<PREFIX>_AUTHN__*` or pinned.
+sidebar:
+  order: 3.2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`AuthnConfig` follows the framework-wide dual-path rule: every field is
+settable from `<PREFIX>_AUTHN__*` env vars **or** from a pinned struct
+passed to `AuthnModule::for_root(config)`.
+
+## `AuthnConfig` fields
+
+| Field | Env var | Notes |
+|-------|---------|-------|
+| `secret` | `<PREFIX>_AUTHN__SECRET` | HS256 shared secret |
+| `private_key` | `<PREFIX>_AUTHN__PRIVATE_KEY`, or a path in `<PREFIX>_AUTHN__PRIVATE_KEY_FILE` | EdDSA PEM, issuer only |
+| `public_key` | `<PREFIX>_AUTHN__PUBLIC_KEY`, or a path in `<PREFIX>_AUTHN__PUBLIC_KEY_FILE` | EdDSA PEM, verifier needs it |
+| `jwks_uri` | `<PREFIX>_AUTHN__JWKS_URI` | An external issuer's JWK Set, `https` only — verify-only, see [Verifying another issuer's tokens](/security/authentication/jwt/#verifying-another-issuers-tokens) |
+| `algorithms` | `<PREFIX>_AUTHN__ALGORITHMS` | Comma-separated JOSE names (`EdDSA,RS256`), each a `nest_rs::authn::Algorithm` — `HS256`, `HS384`, `HS512`, `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384` or `EdDSA`, case and all. Unset: HS256 for a secret, EdDSA for a PEM key, every asymmetric algorithm for a JWK Set. A secret or a PEM key takes exactly one, which must fit it |
+| `tls` | `<PREFIX>_AUTHN__TLS_CA_CERT`, `<PREFIX>_AUTHN__TLS_CERT` and `<PREFIX>_AUTHN__TLS_KEY`, each or a path in its `_FILE` spelling | A `nest_rs::config::ClientTls`: the PEM authorities the JWK Set endpoint's certificate chains to, replacing the system's, and the client certificate presented to an endpoint that requires one. Without `jwks_uri`, fails the boot |
+| `leeway` | `<PREFIX>_AUTHN__LEEWAY_SECS` | Clock skew, default 30 s, at most 300 s — RFC 7519 §4.1.4's "a few minutes" |
+| `audience` | `<PREFIX>_AUTHN__AUDIENCE` | The `aud` this app requires of every token, and stamps on one `sign` mints — never on `sign_for`'s. Required: unset or blank, the boot fails. Under `OAuthResourceModule`, unset is the resource |
+| `issuer` | `<PREFIX>_AUTHN__ISSUER` | The `iss` every token this app mints carries and every token it verifies must name. Required: unset or blank, the boot fails — but under `OAuthResourceModule`, where a token's `iss` must be one of its authorization servers and a set one must be among them; unset there, the app mints no access token |
+| `expires_in` | `<PREFIX>_AUTHN__EXPIRES_IN_SECS` | Minted-token lifetime, default an hour, from 1 second to thirty days. Outside it — from the environment, a pinned `AuthnConfig` or a `JwtOptions` built in code — the boot fails naming the variable |
+| `explicit_typing` | `<PREFIX>_AUTHN__EXPLICIT_TYPING` | RFC 9068 §2.1/§4 — stamp and require `typ: at+jwt`, default `true`. Turn off only for an issuer minting a plain `typ: JWT`, or no `typ` |
+| `allow_any_audience` | `<PREFIX>_AUTHN__ALLOW_ANY_AUDIENCE` | Opt out of §4.1.3, default `false`, standing in for `audience`: the app then mints with `sign_for` alone. Refused beside `audience` and beside `OAuthResourceModule`; `warn`s once per boot |
+
+`AuthnConfig::into_options` walks the four key fields and chooses a
+mode:
+
+- `private_key` + `public_key` → EdDSA (sign and verify). The two are proved
+  one pair at boot: a signature the private key makes has to verify under the
+  public key.
+- `public_key` alone → EdDSA verify-only — a resource server with no
+  private key cannot mint a token even if it wanted to.
+- `secret` alone → HMAC HS256 (both sign and verify).
+- `jwks_uri` alone → verify-only, against the keys an external issuer
+  publishes.
+- nothing → boot fails with `"no JWT key configured"`.
+
+Each field is read on its own, like every other setting, and the combination
+is then judged whole. A `secret` beside either key fails the boot — two signing
+modes, and nothing says which one is meant — whether both come from the
+environment, from `.env`, from code, or the environment beside code. A config
+pinned in code stops `.env` being read for this namespace, so a `.env` value
+never meets a pinned one. A `jwks_uri` beside a secret or a key fails the boot
+the same way. A `private_key` without its `public_key` fails the
+boot too, and so does key material that does not parse as EdDSA PEM, a
+`jwks_uri` that is not `https`, and an `algorithms` entry that does not fit the
+key. Each refusal names the settings that are set.
+
+## Issuer and audience
+
+[RFC 9068 §2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2) has
+every JWT access token carry an `iss` and an `aud`, and
+[§4](https://datatracker.ietf.org/doc/html/rfc9068#section-4) has a resource
+server refuse one whose issuer or audience is not its own — so a `JwtService`
+naming no issuer or no audience, unset or blank, fails the boot, naming each
+setting it lacks, whether it signs or only verifies. A service with neither
+could only mint tokens a resource server refuses, or verify tokens naming no
+one. A scaffolded app names both, its own origin, in `apps/<app>/.env` under
+the development and test profiles; a deployment sets its own.
+
+Under `OAuthResourceModule` both are read off the resource the app serves —
+its `RESOURCE` is the audience, its `AUTHORIZATION_SERVERS` the issuers a
+token may name — so a verifier there sets neither, and a scaffolded app taking
+it on deletes the two lines `nestrs new` wrote in its `apps/<app>/.env`: a set
+`ISSUER` outside those servers fails the boot. A service there that also
+mints access tokens names its own `ISSUER`, one of those servers; without it,
+`sign` and `sign_for` refuse, naming the variable, while its handshakes still
+sign. `allow_any_audience` stands in for the audience, and the app then mints
+only for a resource it names, with `sign_for`.
+
+## HS256, EdDSA or a JWK Set — pick on deployment shape
+
+**HS256** is fine when one binary both issues and verifies tokens.
+Symmetric — anyone with the secret can mint a token. Convenient for
+local development and single-process apps. Set
+`<PREFIX>_AUTHN__SECRET`.
+
+**EdDSA** is the production posture for split deployments. The issuer
+holds the private PEM; every resource server holds the public PEM
+only. Even a compromised resource server cannot mint a token. The
+issuer sets both `PRIVATE_KEY` and `PUBLIC_KEY`; verifiers set only
+`PUBLIC_KEY`.
+
+See [Split deployment](/security/authentication/split-deployment/)
+for the deployment pattern.
+
+**A JWK Set** is the posture when someone else issues the tokens — an
+identity provider you run beside the API or buy as a service. The resource
+server holds no key at all: it reads the ones the issuer publishes, and picks
+up a rotation on its own. Set `<PREFIX>_AUTHN__JWKS_URI`; [JWT](/security/authentication/jwt/#verifying-another-issuers-tokens)
+says what it checks.
+
+```bash
+# generate an EdDSA key pair
+openssl genpkey -algorithm ed25519 -out jwt.pem
+openssl pkey -in jwt.pem -pubout -out jwt.pub
+```
+
+<Aside type="caution">
+A short `ttl` is the first defense against token replay. The
+framework leaves the duration to your app — `JwtOptions::expires_in`
+defaults to one hour. Pair short access tokens with a refresh-token
+endpoint when the UX demands long sessions. See
+[Threat model](/security/threat-model/) for what JWT does and does
+not catch.
+</Aside>
+
+## Going further
+
+- [JWT](/security/authentication/jwt/) — the strategy this configures.
+- [Split deployment](/security/authentication/split-deployment/) — the keys
+  of an issuer and its verifiers.
+- [External identity provider](/security/authentication/external-identity-provider/)
+  — a JWK Set, end to end with better-auth.

@@ -5,8 +5,6 @@ sidebar:
   order: 3
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 JSON Web Tokens are the framework's default bearer credential.
 `JwtStrategy<C>` is generic over the claims type — your app picks the
 shape, the framework verifies the signature, checks expiry, and hands
@@ -66,10 +64,10 @@ With those set, `JwtService` signs and verifies against the same
 secret: `AuthnGuard` returns a 401 without a valid
 `Authorization: Bearer` token and attaches the claims otherwise. An app
 naming no issuer or no audience does not start
-([RFC 9068](#issuer-and-audience)); a scaffolded one names both, its own
+([RFC 9068](/security/authentication/jwt-configuration/#issuer-and-audience)); a scaffolded one names both, its own
 origin, in `apps/<app>/.env`. Every other knob is optional — the full env
-table and the HS256-vs-EdDSA decision come
-[later on this page](#configuration).
+table and the HS256-vs-EdDSA decision are on
+[JWT configuration](/security/authentication/jwt-configuration/).
 
 ## What `JwtStrategy` does
 
@@ -146,7 +144,7 @@ back by its shape, a UUID being a user. The registry of your clients therefore
 refuses a client id a UUID parses, so no client passes for a user (RFC 9068
 §5): with `nest_rs::oauth::server`, a module-init hook of yours over
 `OAuthServerConfig`, since the scheme reading a subject is yours
-([OAuth 2.0](/security/authentication/oauth2/#the-registry-is-the-frameworks-the-policy-yours)).
+([Token endpoint](/security/authentication/oauth2-token-endpoint/#the-registry-is-the-frameworks-the-policy-yours)).
 A route writing a user's row reads `claims.sub.user_id()`, which a client
 answers with `None`. `nestrs g auth` writes the enum, its conversions
 and the struct with its derive.
@@ -164,87 +162,9 @@ that pins `org_id` also fills it ([CRUD](/database/crud/#the-tenant-comes-from-t
 
 ## Signing a token
 
-A login or OAuth callback injects `Arc<JwtService>` and calls `sign`:
-
-```rust title="crates/features/src/authn/service.rs"
-let claims = Claims {
-    sub: Subject::User(user.id),
-    client_id: self.config.client_id.clone(),
-    org_id: user.org_id,
-    roles: user.roles.clone(),
-};
-let token = self.jwt.sign(&claims)?;
-```
-
-`sign` is `Result<String, SignError>`. A token this server cannot mint — a
-verify-only service, EdDSA with no private key or a JWK Set, is the one you will
-meet — is the server's failure, never the caller's: `?` in a route answers the
-opaque `500` and files the chain at `error`, where a `401` would send a client off
-for another credential, and a handler returning it on another edge answers as
-opaquely. A handler has nothing to add. A service holds it as a `#[from]` variant
-of its own error, and a token endpoint's `TokenError` already does. It does not convert into `AuthError`, whose every answer speaks of the
-credential: a login handler `?`-ing both answers `nest_rs::http::Result`, into which
-each converts on its own status.
-`ttl_secs()` is the token's lifetime, `JwtOptions::expires_in` (default one
-hour), so the issuer can return it alongside the token.
-
-[RFC 9068 §2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2)
-lists the claims every JWT access token carries, and `sign` writes the ones
-only the signer knows: `iat`, the time it signs; `exp`, its lifetime after
-that; `jti`, an identifier no other token shares; and the `aud` and `iss` you
-configured. Your claims name the rest — `sub`, and the `client_id` of the
-OAuth client the token is issued to — and a claim they already carry is kept
-as written: an `exp` of their own outlives or undercuts the signer's.
-
-`sub` is held by the type. `sign` and `sign_for` take a `PrincipalIdentity`, the
-derive your claims already carry for the guard, and a type without it does not
-compile. A claims type holding its subject under another name, or a `sub` that is
-blank, is stamped its `#[principal(actor)]` as `sub`; one naming no subject at all,
-its actor `None` or blank, mints nothing and answers the `SignError` above. So does
-a `sub` that is no string, since
-[RFC 7519 §4.1.2](https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.2) makes
-it one and a verifier reading one refuses anything else: an integer id is written as
-its decimal string, which `#[principal(actor)]` on a field of another name does for
-you. A test forging such a token, to prove your verifier refuses it, hands it to
-[`TestApp::bearer`](/tutorial/testing/), which signs what it is given.
-
-Every claim the specifications register is held the same way, the `SignError`
-naming it: `iss`, `jti`, `client_id` and `acr` are strings; `exp`, `nbf`, `iat` and
-`auth_time` are NumericDates, a JSON number of seconds since the epoch; `aud` is a
-string or an array of them, `amr` an array of strings, and `scope` the list RFC 6749
-§3.3 writes, scope tokens each separated by one space, or empty when the token grants
-none. A registered claim your claims serialize as `null` is left out of the token.
-
-`client_id`, which RFC 9068 §2.2 requires too, is your claims' to name, and `sign`
-and `sign_for` refuse claims naming none — absent, `null` or blank — with the
-`SignError` naming the claim: nothing a claims type already says names its client,
-so the signer reads it off the token it is about to mint. Hold it as a `String`, as
-the demo's claims and `nestrs g auth`'s do, and no literal leaves it out. A machine
-token names the client that authenticated at `/token`; a user's, from `/login` or
-the social callback, names the first-party client the sign-in serves,
-`<PREFIX>_SIGN_IN__CLIENT_ID` (`publish-web` by default), which the boot refuses any
-registered client to hold. An authorization-code grant by that client (RFC 6749
-§4.1, with PKCE) would have it identify itself, where the deployment names it here.
-The development token `nestrs g auth` serves names its own route, `dev-token`.
-
-`sign_handshake`, for a flow's short-lived token, stamps the same but `exp`:
-its claims name their lifetime with `expiry_in(secs)`, and claims naming none
-are refused rather than given the access token's.
-
-`sign` mints a token for this app itself: its `aud` is this app's own
-audience, the one its verifier requires. An issuer minting a token another app
-will verify names that app instead, with `sign_for`:
-
-```rust title="crates/features/src/sign_in/service.rs"
-let token = self.jwt.sign_for("https://api.example.com", &claims)?;
-```
-
-The resource becomes the token's `aud` and nothing else does, so only the app
-serving it accepts the token — the one a client asked for in the
-[RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) `resource` parameter
-of its token request ([OAuth2](/security/authentication/oauth2/#the-request)).
-A token for one resource replayed at another is refused there. `sign_for`
-refuses a blank resource, and claims carrying an `aud` of their own.
+A login or OAuth callback injects `Arc<JwtService>` and calls `sign`; what it
+stamps, what it refuses to mint and `sign_for`'s audience are on
+[Signing a token](/security/authentication/jwt-signing/).
 
 ## Verifying outside the guard
 
@@ -274,107 +194,9 @@ name, so a second line from the service would double-count every denial.
 
 ## Configuration
 
-`AuthnConfig` follows the framework-wide dual-path rule: every field is
-settable from `<PREFIX>_AUTHN__*` env vars **or** from a pinned struct
-passed to `AuthnModule::for_root(config)`.
-
-| Field | Env var | Notes |
-|-------|---------|-------|
-| `secret` | `<PREFIX>_AUTHN__SECRET` | HS256 shared secret |
-| `private_key` | `<PREFIX>_AUTHN__PRIVATE_KEY`, or a path in `<PREFIX>_AUTHN__PRIVATE_KEY_FILE` | EdDSA PEM, issuer only |
-| `public_key` | `<PREFIX>_AUTHN__PUBLIC_KEY`, or a path in `<PREFIX>_AUTHN__PUBLIC_KEY_FILE` | EdDSA PEM, verifier needs it |
-| `jwks_uri` | `<PREFIX>_AUTHN__JWKS_URI` | An external issuer's JWK Set, `https` only — verify-only, see [below](#verifying-another-issuers-tokens) |
-| `algorithms` | `<PREFIX>_AUTHN__ALGORITHMS` | Comma-separated JOSE names (`EdDSA,RS256`), each a `nest_rs::authn::Algorithm` — `HS256`, `HS384`, `HS512`, `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384` or `EdDSA`, case and all. Unset: HS256 for a secret, EdDSA for a PEM key, every asymmetric algorithm for a JWK Set. A secret or a PEM key takes exactly one, which must fit it |
-| `tls` | `<PREFIX>_AUTHN__TLS_CA_CERT`, `<PREFIX>_AUTHN__TLS_CERT` and `<PREFIX>_AUTHN__TLS_KEY`, each or a path in its `_FILE` spelling | A `nest_rs::config::ClientTls`: the PEM authorities the JWK Set endpoint's certificate chains to, replacing the system's, and the client certificate presented to an endpoint that requires one. Without `jwks_uri`, fails the boot |
-| `leeway` | `<PREFIX>_AUTHN__LEEWAY_SECS` | Clock skew, default 30 s, at most 300 s — RFC 7519 §4.1.4's "a few minutes" |
-| `audience` | `<PREFIX>_AUTHN__AUDIENCE` | The `aud` this app requires of every token, and stamps on one `sign` mints — never on `sign_for`'s. Required: unset or blank, the boot fails. Under `OAuthResourceModule`, unset is the resource |
-| `issuer` | `<PREFIX>_AUTHN__ISSUER` | The `iss` every token this app mints carries and every token it verifies must name. Required: unset or blank, the boot fails — but under `OAuthResourceModule`, where a token's `iss` must be one of its authorization servers and a set one must be among them; unset there, the app mints no access token |
-| `expires_in` | `<PREFIX>_AUTHN__EXPIRES_IN_SECS` | Minted-token lifetime, default an hour, from 1 second to thirty days. Outside it — from the environment, a pinned `AuthnConfig` or a `JwtOptions` built in code — the boot fails naming the variable |
-| `explicit_typing` | `<PREFIX>_AUTHN__EXPLICIT_TYPING` | RFC 9068 §2.1/§4 — stamp and require `typ: at+jwt`, default `true`. Turn off only for an issuer minting a plain `typ: JWT`, or no `typ` |
-| `allow_any_audience` | `<PREFIX>_AUTHN__ALLOW_ANY_AUDIENCE` | Opt out of §4.1.3, default `false`, standing in for `audience`: the app then mints with `sign_for` alone. Refused beside `audience` and beside `OAuthResourceModule`; `warn`s once per boot |
-
-`AuthnConfig::into_options` walks the four key fields and chooses a
-mode:
-
-- `private_key` + `public_key` → EdDSA (sign and verify). The two are proved
-  one pair at boot: a signature the private key makes has to verify under the
-  public key.
-- `public_key` alone → EdDSA verify-only — a resource server with no
-  private key cannot mint a token even if it wanted to.
-- `secret` alone → HMAC HS256 (both sign and verify).
-- `jwks_uri` alone → verify-only, against the keys an external issuer
-  publishes.
-- nothing → boot fails with `"no JWT key configured"`.
-
-Each field is read on its own, like every other setting, and the combination
-is then judged whole. A `secret` beside either key fails the boot — two signing
-modes, and nothing says which one is meant — whether both come from the
-environment, from `.env`, from code, or the environment beside code. A config
-pinned in code stops `.env` being read for this namespace, so a `.env` value
-never meets a pinned one. A `jwks_uri` beside a secret or a key fails the boot
-the same way. A `private_key` without its `public_key` fails the
-boot too, and so does key material that does not parse as EdDSA PEM, a
-`jwks_uri` that is not `https`, and an `algorithms` entry that does not fit the
-key. Each refusal names the settings that are set.
-
-### Issuer and audience
-
-[RFC 9068 §2.2](https://datatracker.ietf.org/doc/html/rfc9068#section-2.2) has
-every JWT access token carry an `iss` and an `aud`, and
-[§4](https://datatracker.ietf.org/doc/html/rfc9068#section-4) has a resource
-server refuse one whose issuer or audience is not its own — so a `JwtService`
-naming no issuer or no audience, unset or blank, fails the boot, naming each
-setting it lacks, whether it signs or only verifies. A service with neither
-could only mint tokens a resource server refuses, or verify tokens naming no
-one. A scaffolded app names both, its own origin, in `apps/<app>/.env` under
-the development and test profiles; a deployment sets its own.
-
-Under `OAuthResourceModule` both are read off the resource the app serves —
-its `RESOURCE` is the audience, its `AUTHORIZATION_SERVERS` the issuers a
-token may name — so a verifier there sets neither, and a scaffolded app taking
-it on deletes the two lines `nestrs new` wrote in its `apps/<app>/.env`: a set
-`ISSUER` outside those servers fails the boot. A service there that also
-mints access tokens names its own `ISSUER`, one of those servers; without it,
-`sign` and `sign_for` refuse, naming the variable, while its handshakes still
-sign. `allow_any_audience` stands in for the audience, and the app then mints
-only for a resource it names, with `sign_for`.
-
-## HS256, EdDSA or a JWK Set — pick on deployment shape
-
-**HS256** is fine when one binary both issues and verifies tokens.
-Symmetric — anyone with the secret can mint a token. Convenient for
-local development and single-process apps. Set
-`<PREFIX>_AUTHN__SECRET`.
-
-**EdDSA** is the production posture for split deployments. The issuer
-holds the private PEM; every resource server holds the public PEM
-only. Even a compromised resource server cannot mint a token. The
-issuer sets both `PRIVATE_KEY` and `PUBLIC_KEY`; verifiers set only
-`PUBLIC_KEY`.
-
-See [Split deployment](/security/authentication/split-deployment/)
-for the deployment pattern.
-
-**A JWK Set** is the posture when someone else issues the tokens — an
-identity provider you run beside the API or buy as a service. The resource
-server holds no key at all: it reads the ones the issuer publishes, and picks
-up a rotation on its own. Set `<PREFIX>_AUTHN__JWKS_URI`; the
-[next section](#verifying-another-issuers-tokens) says what it checks.
-
-```bash
-# generate an EdDSA key pair
-openssl genpkey -algorithm ed25519 -out jwt.pem
-openssl pkey -in jwt.pem -pubout -out jwt.pub
-```
-
-<Aside type="caution">
-A short `ttl` is the first defense against token replay. The
-framework leaves the duration to your app — `JwtOptions::expires_in`
-defaults to one hour. Pair short access tokens with a refresh-token
-endpoint when the UX demands long sessions. See
-[Threat model](/security/threat-model/) for what JWT does and does
-not catch.
-</Aside>
+Every `AuthnConfig` field, the key mode its keys pick, the issuer and audience
+it requires and the choice between HS256, EdDSA and a JWK Set are on
+[JWT configuration](/security/authentication/jwt-configuration/).
 
 ## Verifying another issuer's tokens
 
@@ -444,11 +266,11 @@ fixes it in its `error` chain; the fetch follows no redirect.
 
 ## Going further
 
+- [JWT configuration](/security/authentication/jwt-configuration/) — the
+  keys, the issuer and the audience a verifier requires.
 - [Split deployment](/security/authentication/split-deployment/)
   — the split-deploy pattern that pairs with EdDSA.
 - [External identity provider](/security/authentication/external-identity-provider/)
   — the JWK Set path, end to end with better-auth.
-- [OAuth2](/security/authentication/oauth2/) — the JWT issuer is
-  often the OAuth callback.
 - [Authorization](/security/authorization/) — once the claims land on
   the request, the authz layer builds an `Ability` from them.

@@ -1,0 +1,231 @@
+---
+title: Token endpoint
+description: An app issuing tokens answers RFC 6749's token endpoint in its words — the client authenticated by a guard, the request read whole, each refusal §5.2's.
+sidebar:
+  order: 4.2
+---
+
+An app that issues tokens answers its token endpoint in RFC 6749's words,
+never in the problem documents the rest of the edge speaks: a conforming
+client — `OAuthClient` among them — parses §5.2's JSON and nothing else.
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features oauth-server
+```
+
+## Wire it in
+
+`nest_rs::oauth::server` carries all three refusals. `ClientAuthenticationGuard`
+authenticates the client, `AccessTokenRequest` reads the request, and
+`TokenError` is what the handler itself refuses. The clients it registers are
+`OAuthServerConfig<P>`'s, under `<PREFIX>_OAUTH__SERVER__CLIENTS` — a JSON
+array, or its `_FILE` — generic over the payload `P` each client carries,
+your own type: `OAuthServerModule::<P>` registers it, and the
+boot refuses a registry that could serve no token or the wrong one (none, a
+client with no resource, a duplicate or empty id, an empty secret), naming
+each client by its id. The import also provides what authenticates a client
+against that registry, `ClientGuard<P>`, so the demo's endpoint is the whole
+protocol bound, with no guard of its own declared:
+
+```rust title="crates/features/src/sign_in/module.rs (from the demo)"
+use nest_rs::core::module;
+use nest_rs::oauth::server::OAuthServerModule;
+use nest_rs::social::SocialModule;
+
+use super::config::ClientPayload;
+use super::service::SignInService;
+use crate::users::UsersModule;
+
+#[module(
+    imports = [
+        nest_rs::authn::AuthnModule,
+        OAuthServerModule::<ClientPayload>,
+        UsersModule,
+        SocialModule,
+    ],
+    providers = [SignInService],
+)]
+pub struct SignInModule;
+```
+
+```rust title="crates/features/src/sign_in/http/controller.rs (from the demo, abridged)"
+#[post("/token")]
+#[use_guards(ThrottlerGuard, ClientGuard<ClientPayload>)]
+#[meta(Throttle::per_minute(10))]
+#[api(
+    summary = "OAuth2 token endpoint (client_credentials)",
+    tags("OAuth2"),
+    error(500 = TokenError)
+)]
+async fn token(
+    &self,
+    client: Ambient<AuthenticatedClient>,
+    request: AccessTokenRequest,
+) -> Result<AccessTokenResponse> {
+    Ok(self.svc.grant_client_credentials(&request, &client)?)
+}
+```
+
+A module listing `ClientSecretBasicStrategy<P>` or `ClientGuard<P>` beside the
+import registers it twice, and the boot names both registrations.
+
+## The registry is the framework's, the policy yours
+
+What the registry refuses at boot is what makes it serve no token or the
+wrong one, whatever the product — a scope outside
+[§3.3's grammar](https://datatracker.ietf.org/doc/html/rfc6749#section-3.3) among
+them, named by its client and never quoted. What only your product can judge — a scope
+none of your rules gates on, a `client_id` your subject scheme would read as
+a user's (RFC 9068 §5) — is a check of yours over the same registry, run in a
+module-init hook and refused in the registry's own words, so the boot names
+the variable it was read from:
+
+```rust title="crates/features/src/sign_in/service.rs (from the demo, abridged)"
+#[hooks]
+impl SignInService {
+    #[on_module_init]
+    async fn refuse_clients_outside_the_policy(&self) -> nest_rs::core::anyhow::Result<()> {
+        registered_within_policy(&self.clients).map_err(|errors| {
+            ConfigError::validation(OAuthServerConfig::<ClientPayload>::NAMESPACE, errors).into()
+        })
+    }
+}
+```
+
+`registered_within_policy` is the demo's own function: it refuses each
+client by its id, `clients[<id>].scopes` or `clients[<id>].client_id`, never
+its secret.
+
+## The client
+
+`ClientGuard<P>` is `ClientAuthenticationGuard<ClientSecretBasicStrategy<P>>`.
+`ClientAuthenticationGuard<S>` runs a `Strategy` —
+`ClientSecretBasicStrategy<P>` reads HTTP Basic and checks it, in constant
+time, against the registry — the way
+`AuthnGuard` runs one: under the same bound, a panic contained, the client
+attached as the request's principal (`Ambient<AuthenticatedClient<P>>`) and
+named as its `actor_id`. What differs is the refusal, decided by how the
+client tried, which the guard reads off the request's head alone:
+
+| The client | Answer |
+|------------|--------|
+| used the `Authorization` header — any scheme, decodable or not — and was refused | `401`, `WWW-Authenticate: Basic realm="authorization server"`, `{"error":"invalid_client"}` |
+| sent no `Authorization` header — no credentials, or `client_secret` in the body | `400`, `{"error":"invalid_client"}`, no challenge |
+| could not be evaluated — its store did not answer, the strategy outlived its bound or panicked | `503`, `{"error":"server_error"}`, the store's `Retry-After` when it gave one |
+
+An unknown client and a wrong secret read the same bytes. The body is never
+read for credentials: Basic is the method §2.3.1 makes every server support,
+and the body's `client_secret_post` the one it calls "NOT RECOMMENDED", so a
+client using it is told its method is not supported, §5.2's
+`400 invalid_client`. `#[public]` opens nothing here — every client
+authenticates at a token endpoint (§3.2.1). Each refusal files one `warn`,
+the edge's `guard denied the request` on `nest_rs::oauth::server`, its
+`reason` the strategy's and its `error` chain naming the method attempted,
+never the client.
+
+The route's [OpenAPI document](/openapi/) says the same: `security` names
+`basicAuth`, and each status the guard answers carries `TokenError`'s body,
+`error` and its `error_description`, so a generated client authenticates with the
+right scheme and reads the refusal it is sent. The `server_error` your handler
+answers at `500` sits beside the opaque one with
+`#[api(error(500 = TokenError))]`.
+
+## The request
+
+`AccessTokenRequest` is a handler parameter that reads the form §4.4.2
+fixes, and the request's only reader: it derives no `Deserialize`, so a
+`Form<AccessTokenRequest>` that would skip the refusals below does not
+compile. A request that does not parse is §5.2's `invalid_request`, its
+`error_description` saying where, never what it held:
+
+| The request | `error_description` |
+|-------------|---------------------|
+| no `grant_type`, or `grant_type=` — §3.2 reads an empty parameter as omitted | ``form field `grant_type`: missing`` |
+| `grant_type` twice | ``form field `grant_type`: duplicate`` |
+| a `grant_type` the endpoint does not serve — `password`, a URN, `Client_Credentials` | none: §5.2's `unsupported_grant_type` |
+| a JSON body, or any other that is no form | ``the request's content type is not `application/x-www-form-urlencoded` `` |
+| `client_secret` or `client_assertion` in the body beside the `Authorization` header | ``the client authenticates by more than one mechanism: the `Authorization` header and the body`` |
+
+A grant the endpoint serves is read into `GrantType`, named off the IANA
+registry's values (`client_credentials` today), so a handler never compares a
+string; any other is refused before the handler runs. `scope` is §3.3's list,
+read into its tokens; the client the guard attached grants it with
+`AuthenticatedClient::scope_for`, strictly: none asked is its whole
+registration, a scope it is not registered for refuses the request whole as
+`invalid_scope`, a repeat is granted once. `scope=` asks for no scope, and a
+parameter the request does not define is ignored (§3.2). What the transport refuses before a parameter is read keeps
+the edge's answer: a body past the cap its `413`, a `GET` the router's
+`405`, and the throttler's `429`, the protection §2.3.1 asks of a token
+endpoint without fixing its shape. The route's document lists each as it answers:
+§5.2's body on the request's `400`, a problem document on that `413`.
+
+`resource` is the one parameter that may repeat: [RFC 8707
+§2](https://datatracker.ietf.org/doc/html/rfc8707#section-2) lets a client name
+every resource its token is for, and `AccessTokenRequest::resource` holds each
+in the order sent. Which one the token is minted for is the issuer's to say.
+A `RegisteredClient` lists the resources it may have tokens for, and the
+authenticated client chooses among them:
+
+```rust title="crates/features/src/sign_in/service.rs (from the demo, abridged)"
+let scopes = client.scope_for(scope)?;
+let audience = client.audience_for(resource)?;
+```
+
+`audience_for` answers the resource requested when the client is registered for
+it, exactly, and the client's only resource when the request names none.
+Anything else is `invalid_target`: a resource it is not registered for, none
+among several, and two at once — a token naming two audiences is accepted by
+each, and so a deputy of each at the other. `sign_for` writes the resource
+into the token's `aud`, so only the server serving it accepts the token
+([JWT](/security/authentication/jwt/#signing-a-token)). Each refusal of
+`scope_for` and `audience_for`, like the request's own
+`unsupported_grant_type`, files one `warn`, `token request refused` on
+`nest_rs::oauth::server`, its `reason` the wire code, the client its
+`actor_id`, never what it asked for.
+
+## The handler
+
+What the handler refuses is a `TokenError`, the same envelope with §5.1's
+`no-store` and `no-cache`:
+
+| Variant | Wire string | Status |
+|---------|-------------|--------|
+| `InvalidRequest` | `invalid_request` | 400 |
+| `UnsupportedGrant` | `unsupported_grant_type` | 400 |
+| `InvalidGrant` | `invalid_grant` | 400 |
+| `UnauthorizedClient` | `unauthorized_client` | 400 |
+| `InvalidScope` | `invalid_scope` | 400 |
+| `InvalidTarget` | `invalid_target` — RFC 8707 §2's | 400 |
+| `InvalidClient(ClientSecretBasic)` | `invalid_client` | 401, with `WWW-Authenticate: Basic realm="authorization server"` |
+| `InvalidClient(ClientSecretPost)`, `InvalidClient(None)` | `invalid_client` | 400 |
+| `Sign(inner)` | `server_error` | 500 |
+| `Server(inner)` | `server_error` | 503 |
+
+`InvalidClient` says how the client tried to authenticate, as a
+`TokenEndpointAuthMethod` — RFC 7591's `token_endpoint_auth_method` values —
+because that decides the answer: a `Basic` challenge to a request that
+never used HTTP authentication would have a browser carrying a public
+client prompt its user for a password. No `401` leaves without a challenge.
+The guard answers through this one rendering, so a client refused by the
+guard and one a handler refuses read the same bytes.
+
+The `Sign` variant collapses any internal signing failure to the
+opaque RFC code on the wire; the `SignError` it holds stays attached
+for `tracing`, and `?` on a `sign_for` converts into it. `Server` is a dependency the grant needed — the identity
+store — that did not answer: no failure of the client's nor of this
+server's code, so a `503` (RFC 9110 §15.6.4) the client may retry, and
+the same opaque code. A rename of these strings breaks every conforming
+client — they are wire contracts, not display strings.
+
+## Going further
+
+- [OAuth2](/security/authentication/oauth2/) — the client side of the same
+  protocol, and the callback answering an `AccessTokenResponse`.
+- [Signing a token](/security/authentication/jwt-signing/) — `sign_for`, the
+  audience a granted token names.
+- [Split deployment](/security/authentication/split-deployment/) — the issuer
+  this endpoint runs on, apart from the APIs it serves.
+- [OAuth scopes](/security/authorization/scopes/) — the scopes a client is
+  registered for, and the rules that gate on them.

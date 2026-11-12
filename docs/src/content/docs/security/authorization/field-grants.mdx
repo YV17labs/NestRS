@@ -1,0 +1,114 @@
+---
+title: Field grants
+description: .fields narrows a grant to columns — the ones a reply shows the caller, and the ones a write may set.
+sidebar:
+  order: 2.2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`.fields([cols])` restricts what a wire row holds to a set of columns. A
+rule without `.fields` permits every field. The judgement unions the
+permitted fields across every matching grant — so an admin grant
+with no `.fields` clears the field restriction even if a narrower
+grant existed. A column a grant on `Read` may leave out is declared
+`#[expose(nullable)]`, or is an `Option`; leaving out any other fails
+`build()` naming it.
+
+```rust title="crates/features/src/authz/ability.rs"
+ab.can(Action::Read, user::Entity)
+    .when(|p| p.eq(user::Column::OrgId, actor.org_id))
+    .fields([user::Column::Id, user::Column::Name]);
+```
+
+A member reads `id` and `name`; every other exposed column of the wire
+row the member's request builds reads `null` — including columns the wire
+type exposes that the member should not see.
+
+A grant names a column, not a spelling of it: `.fields([post::Column::Headline])`
+keeps `headline` on the wire whatever `#[sea_orm(column_name = …)]` calls it in the
+table.
+
+## What a write may set
+
+On a grant a write reads — `Update`, `Create`, or `Manage`, which covers both —
+`.fields` is the list of columns that write may set:
+
+```rust title="crates/features/src/authz/ability.rs"
+ab.can(Action::Update, post::Entity)
+    .when(|p| p.eq(post::Column::AuthorId, author))
+    .fields([post::Column::Id, post::Column::Title, post::Column::Body]);
+```
+
+The author may rewrite a post and never its `status`. A write setting a column no
+grant permits answers `403`, `FORBIDDEN`, before a hook runs or a statement leaves:
+a `#[crud]` operation names the input's field, as its client spells it, and a
+service's `?` on `ServiceError` names the column in `detail`.
+
+```json
+{ "type": "about:blank", "title": "Forbidden", "status": 403, "code": "FORBIDDEN",
+  "errors": { "status": [{ "code": "forbidden" }] } }
+```
+
+An input you write by hand names its fields through `CreateModel::field_for` and
+`UpdateModel::field_for`, as it does on a unique conflict.
+
+The write costs no extra round trip: the grants go in the statement's own `WHERE`, or
+the re-check of a create, so a relational rule is decided exactly, and atomically with
+the write.
+
+Skip `.fields` and a write sets what it likes, in the statement it always sent.
+With it, a few things are never held against the caller:
+
+- **The key.** It addresses the row. `.when` is what holds it.
+- **What the server fills.** What `before_save` stamps, what a `Create` grant pins,
+  what a default seeds, and a soft delete's `deleted_at`.
+- **A null on a create.** An input lowers a member the client left out to one, so
+  it writes nothing the caller chose.
+- **A column a replacement carries back.** `#[crud]`'s update is a `PUT`, whose input
+  carries every writable field, so a client narrowed to `title` still sends `body`.
+  Left as it stands, it is no write: it stays out of the statement, and so leaves
+  what another writer put there since.
+
+That last one holds only for a column the caller may read. Comparing one it may not
+would tell it what the row holds, so such a column counts as written whatever its
+value, and the input refuses the same way every time. A caller who may not read
+`body` cannot use a `PUT` carrying it: give that caller a route of its own, or take
+`body` out of `input(update)`.
+
+As with a reply, a row's columns are the union of the grants it meets, so two grants
+conjoin per column:
+
+```rust title="crates/features/src/authz/ability.rs"
+ab.can(Action::Update, post::Entity)
+    .when(|p| p.eq(post::Column::AuthorId, author))
+    .fields([post::Column::Title]);
+ab.can(Action::Update, post::Entity)
+    .when(|p| p.eq(post::Column::OrgId, actor.org_id))
+    .fields([post::Column::Status]);
+```
+
+A write of `title` alone needs a post by the author; one of `title` and `status`, a
+post by the author in the org. A row its grants do not permit each column on is outside
+the caller's scope, as any other: `RepoError::NotFound`, a `404`.
+
+<Aside type="caution">
+A write's reply still shows that write's own grant: `.fields([Title])` on `Update`
+answers `{ "title": … }`. List `Id` to read the key back. `Read`'s list does not
+narrow it, so a write with no list of its own answers every exposed column. On GraphQL
+a selection naming a column the grant withholds is refused, so the field's savepoint
+rolls the write back.
+</Aside>
+
+A job holds no ability, so no column is withheld from it, and `with_ability` narrows
+it to a principal's. A service setting a server-decided column under a narrowed grant
+adds the column to the grant, or moves it to `before_save`: there is no other way past
+the list.
+
+## Going further
+
+- [Policies](/security/authorization/policies/) — the grants a field list
+  narrows.
+- [Response masking](/security/authorization/response-masking/) — how
+  `.fields(...)` reaches the response body.
+- [CRUD](/database/crud/) — the generated writes a field list holds.

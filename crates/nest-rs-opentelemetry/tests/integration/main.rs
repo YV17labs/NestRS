@@ -18,6 +18,8 @@ mod module;
 #[cfg(feature = "otlp")]
 mod otlp;
 #[cfg(feature = "otlp")]
+mod process_metrics;
+#[cfg(feature = "otlp")]
 mod reqwest_middleware;
 #[cfg(feature = "otlp")]
 mod unit_durations;

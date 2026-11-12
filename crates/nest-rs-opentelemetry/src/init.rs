@@ -76,7 +76,13 @@ impl OpenTelemetry {
 
         #[cfg(feature = "otlp")]
         {
+            let started = std::time::Instant::now();
             let exporters = crate::otlp::build(&config)?;
+            if let Some(provider) = &exporters.meter_provider {
+                let meter = crate::durations::framework_meter(provider);
+                crate::process_metrics::ProcessMetrics::observe(&meter, started);
+                crate::tokio_metrics::TokioMetrics::observe(&meter);
+            }
             let otel_layer = tracing_opentelemetry::layer().with_tracer(exporters.tracer);
             // Seeded here rather than mounted by a module: a queue worker imports no
             // transport.

@@ -3109,6 +3109,7 @@ dependencies = [
  "async-trait",
  "figment",
  "http",
+ "libc",
  "log",
  "nest-rs-config",
  "nest-rs-core",

@@ -65,6 +65,32 @@ A package's unit declares its own with `unit!`'s `duration:`, keyed by fields
 its span declares, and records in it the same way
 ([the operation log](/opentelemetry/operation-log/)).
 
+## The process and its runtime
+
+The same export carries what the process and its async runtime say of
+themselves, read at each export and never between:
+
+| Instrument | What it reads |
+|---|---|
+| `process.cpu.time` | CPU seconds, by `cpu.mode`: `user`, `system` |
+| `process.uptime` | seconds since `OpenTelemetry::init` ran, at the top of `main` |
+| `process.unix.file_descriptor.count` | descriptors held open |
+| `process.memory.usage`, `process.memory.virtual` | resident and virtual bytes — Linux |
+| `process.thread.count` | threads — Linux |
+| `tokio.worker.count` | the runtime's worker threads |
+| `tokio.task.count` | tasks alive on it |
+| `tokio.global_queue.length` | tasks waiting in the queue every worker takes from |
+| `tokio.worker.busy_time` | seconds the workers spent running tasks |
+
+The `process.*` names are the OpenTelemetry process conventions'. No convention
+names a tokio runtime, so its four follow the conventions' runtime metrics
+(`dotnet.thread_pool.*`) under `tokio.`: a backend reads the runtime's
+saturation as `rate(tokio.worker.busy_time) / tokio.worker.count`, Node's event
+loop utilisation in Rust's words, and a growing `tokio.global_queue.length` as
+work waiting for a worker. Memory and threads are read off `/proc`, so a macOS
+development host exports neither; the scheduling latency tokio counts only
+under `tokio_unstable` is not exported.
+
 ## A first counter
 
 Ask `Metrics` for the instrument by name, then record on it. The first call

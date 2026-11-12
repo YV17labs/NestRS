@@ -2926,6 +2926,7 @@ version = "7.0.0"
 dependencies = [
  "async-trait",
  "http",
+ "libc",
  "nest-rs-config",
  "nest-rs-core",
  "opentelemetry",
@@ -2936,6 +2937,7 @@ dependencies = [
  "reqwest",
  "reqwest-middleware",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",

@@ -9,7 +9,7 @@ use crate::otlp::{Collector, trusting};
 
 /// Whether `body` holds `needle`: an OTLP/protobuf export writes a metric's
 /// name as its bytes.
-fn holds(body: &[u8], needle: &[u8]) -> bool {
+pub(crate) fn holds(body: &[u8], needle: &[u8]) -> bool {
     body.windows(needle.len()).any(|window| window == needle)
 }
 

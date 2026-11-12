@@ -33,6 +33,8 @@ otlp = [
     "dep:reqwest-middleware",
     "dep:async-trait",
     "dep:http",
+    "dep:tokio",
+    "dep:libc",
     "nest-rs-config/reqwest",
 ]
 
@@ -69,6 +71,10 @@ reqwest = { workspace = true, features = ["blocking"], optional = true }
 reqwest-middleware = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
+# The runtime's own metrics, read off the runtime `init` runs on.
+tokio = { workspace = true, optional = true }
+# The process's CPU time, which std has no reader for.
+libc = { workspace = true, optional = true }
 
 [dev-dependencies]
 # `TestAuthority` issues the certificate the collector double presents over TLS.

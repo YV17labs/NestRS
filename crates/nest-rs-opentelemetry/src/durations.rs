@@ -36,11 +36,8 @@ pub(crate) struct Durations {
 impl Durations {
     /// Record on `provider`, under the framework's scope.
     pub(crate) fn new(provider: &SdkMeterProvider) -> Self {
-        let scope = InstrumentationScope::builder(SCOPE)
-            .with_version(env!("CARGO_PKG_VERSION"))
-            .build();
         Self {
-            meter: provider.meter_with_scope(scope),
+            meter: framework_meter(provider),
             histograms: RwLock::new(HashMap::new()),
         }
     }
@@ -74,6 +71,15 @@ impl Durations {
             })
             .clone()
     }
+}
+
+/// The meter the framework's own instruments are made on, under its scope.
+pub(crate) fn framework_meter(provider: &SdkMeterProvider) -> Meter {
+    provider.meter_with_scope(
+        InstrumentationScope::builder(SCOPE)
+            .with_version(env!("CARGO_PKG_VERSION"))
+            .build(),
+    )
 }
 
 /// The boundaries the conventions naming `name` advise.

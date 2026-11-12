@@ -203,9 +203,11 @@ pub struct McpConfig {
     #[config(bounds = PING_INTERVAL_BOUNDS)]
     pub ping_interval: Option<Duration>,
     /// How long a ping waits for any message back; past it the client is taken
-    /// for gone and its session closed, its place under
-    /// [`max_concurrent_sessions`](Self::max_concurrent_sessions) freed and its
-    /// streams ended. A client that vanished while holding its stream is so
+    /// for gone and its session closed, its streams ended, its next request
+    /// answered `404`, and its place under
+    /// [`max_concurrent_sessions`](Self::max_concurrent_sessions) freed — five
+    /// seconds later when a call still runs on it, which rmcp then cancels. A
+    /// client that vanished while holding its stream is so
     /// released within the interval and this timeout of its last message — timed
     /// apart from the stream, so a stream the transport can no longer write,
     /// which no `ping` reaches, ends there too. Read

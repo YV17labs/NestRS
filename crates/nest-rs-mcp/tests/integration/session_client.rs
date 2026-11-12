@@ -2,6 +2,7 @@
 //! client sends but a ping's answer, any of the server's a stream carries to it —
 //! or while a call waits on its answer; past the idle timeout of that, it closes.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -164,4 +165,53 @@ async fn a_call_resumed_and_outlasting_the_idle_timeout_is_answered() {
         "{answered}"
     );
     assert!(served(&app, WRITING, &session).await, "the session lives");
+}
+
+/// A session given up with a call in flight ends for its client at once: its
+/// requests read `404`, as one the mount does not hold, and nothing is filed as
+/// failed; rmcp gives that call five seconds, then cancels it, and the place
+/// frees.
+#[tokio::test(start_paused = true)]
+async fn a_session_given_up_with_a_call_in_flight_reads_as_one_the_mount_does_not_hold() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = Arc::new(
+        writing(McpConfig {
+            operation_timeout: None,
+            session_idle_timeout: Duration::from_secs(3600),
+            ..one_place()
+        })
+        .await,
+    );
+    let session = open_session(app.http(), WRITING, None).await;
+    let mut listening = hold_stream(&app, WRITING, &session).await;
+    let in_flight = tokio::spawn({
+        let app = Arc::clone(&app);
+        let session = session.clone();
+        async move { call(&app, WRITING, &session, "wait").await }
+    });
+    while listening.next().await.is_some() {}
+
+    let refused = post_message(
+        app.http(),
+        WRITING,
+        Some(&session),
+        None,
+        &serde_json::json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/list" }),
+    )
+    .await;
+    refused.assert_status(nest_rs_http::StatusCode::NOT_FOUND);
+    logs.expect_none("nest_rs::mcp", "mcp session manager failed");
+
+    assert!(
+        !opens_a_session(&app, WRITING).await,
+        "held while rmcp waits on the call"
+    );
+    nest_rs_testing::wait_for(Duration::from_secs(6), || opens_a_session(&app, WRITING)).await;
+    let cancelled = logs
+        .find("nest_rs::operation", "mcp.operation")
+        .into_iter()
+        .filter(|line| line.field("outcome").as_deref() == Some("cancelled"))
+        .count();
+    assert_eq!(cancelled, 1, "the call is cancelled");
+    in_flight.await.expect("the call's stream ends");
 }

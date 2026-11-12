@@ -81,11 +81,11 @@ async fn a_client_answering_no_ping_loses_its_session_within_the_interval_and_th
     assert!(ended.is_none(), "nothing more on the stream: {ended:?}");
     assert_eq!(start.elapsed(), INTERVAL + TIMEOUT);
 
-    nest_rs_testing::wait_for(Duration::from_secs(1), || async {
-        !served(&app, PINGED, &session).await
-    })
-    .await;
-    open_session(app.http(), PINGED, None).await;
+    assert!(
+        !served(&app, PINGED, &session).await,
+        "the session is closed"
+    );
+    nest_rs_testing::wait_for(Duration::from_secs(1), || opens_a_session(&app, PINGED)).await;
     let closed = logs.expect_one(
         "nest_rs::mcp",
         "mcp session closed: the client sent nothing back within the ping timeout",

@@ -59,10 +59,11 @@ client has sent nothing for `ping_interval`, the server writes MCP's own `ping`
 request on that stream, which every client answers as it reads (the
 specification's *Ping* utility), and any message from the client counts, so a
 client that talks is never asked. One that sends nothing back within
-`ping_timeout` is taken for gone: its session closes, its place frees, its
-streams end, and one `warn` on `nest_rs::mcp` — `mcp session closed: the client
-sent nothing back within the ping timeout` — names the mount by `host` and
-`path`. A client that vanished holding its stream is so released within 40
+`ping_timeout` is taken for gone: its session closes, its streams end, its next
+request is answered `404`, its place frees — five seconds later when a call still
+runs on it, which rmcp then cancels — and one `warn` on `nest_rs::mcp` — `mcp
+session closed: the client sent nothing back within the ping timeout` — names
+the mount by `host` and `path`. A client that vanished holding its stream is so released within 40
 seconds of its last message. The wait is timed apart from the stream, so a stream
 the transport can no longer write holds nothing past it either: a client that
 stopped reading while the server pushed, or vanished with the kernel's send

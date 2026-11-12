@@ -82,6 +82,12 @@ impl SessionClient {
         self.opened + Duration::from_nanos(self.used.load(Ordering::Relaxed))
     }
 
+    /// Whether the session was ended: rmcp may still hold it, until it stops
+    /// serving it.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.end.is_cancelled()
+    }
+
     /// The streams the session holds, however a holder left the lock.
     fn streams(&self) -> std::sync::MutexGuard<'_, Vec<Arc<HeldStream>>> {
         self.streams.lock().unwrap_or_else(PoisonError::into_inner)

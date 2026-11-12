@@ -169,6 +169,13 @@ fn foreign(call: &'static str) -> SessionsError {
     SessionsError::Unknown
 }
 
+/// [`SessionsError::Unknown`], the request being answered refused a session
+/// the mount does not hold, as rmcp refuses one: `404`, and no line.
+fn unknown() -> SessionsError {
+    refuse(Refused::Unknown);
+    SessionsError::Unknown
+}
+
 /// What a refusal for a principal naming no subject tells the operator.
 const NO_SUBJECT_HINT: &str = "return the verified credential's subject from \
                                PrincipalIdentity::actor_id (RFC 9068 §2.2 requires `sub`); a \
@@ -348,27 +355,38 @@ impl BoundedSessions {
     }
 
     /// Refuse, at `call`, the request being answered a session another
-    /// principal opened; one this manager does not hold is rmcp's to refuse.
-    /// A request admitted to its own session is its client heard, and the
-    /// session used unless it answers a ping.
+    /// principal opened, and, as one it does not hold, a session the mount
+    /// ended that rmcp still holds while a call on it drains; one this manager
+    /// does not hold is rmcp's to refuse. A request admitted to its own session
+    /// is its client heard, and the session used unless it answers a ping.
     fn admit(&self, id: &SessionId, call: &'static str, pinged: bool) -> Result<(), SessionsError> {
-        let admitted = match self
+        let foreign_owner = match self
             .bound
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .get(id)
         {
-            Some(live) if is_caller(&live.owner) => {
+            Some(live) if !is_caller(&live.owner) => true,
+            Some(live) if live.client.is_closed() => return Err(unknown()),
+            Some(live) => {
                 live.client.heard();
                 if !pinged {
                     live.client.used();
                 }
-                true
+                false
             }
-            Some(_) => false,
-            None => true,
+            None => false,
         };
-        if admitted { Ok(()) } else { Err(foreign(call)) }
+        if foreign_owner {
+            Err(foreign(call))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Whether the mount ended session `id`, which rmcp may still hold.
+    fn ended(&self, id: &SessionId) -> bool {
+        self.client(id).is_some_and(|client| client.is_closed())
     }
 
     /// The client of session `id`, if this manager holds it.
@@ -390,9 +408,9 @@ impl BoundedSessions {
     }
 
     /// Whether a client's `DELETE` may close session `id`: one bound to its
-    /// principal, here or in the app's store. Any other is refused as
-    /// unknown, which rmcp would answer `202`, so a `DELETE` never says
-    /// whether another principal's session exists.
+    /// principal, here or in the app's store, and not ended already. Any other
+    /// is refused as unknown, which rmcp would answer `202`, so a `DELETE`
+    /// never says whether another principal's session exists.
     async fn admit_close(&self, id: &SessionId) -> Result<(), SessionsError> {
         let mut bound = self.bound_to_caller(id);
         // Held elsewhere: rmcp deletes it from the app's store next.
@@ -406,12 +424,10 @@ impl BoundedSessions {
                 .map(|(owner, _)| is_caller(&owner));
         }
         match bound {
+            Some(true) if self.ended(id) => Err(unknown()),
             Some(true) => Ok(()),
             Some(false) => Err(foreign("close_session")),
-            None => {
-                refuse(Refused::Unknown);
-                Err(SessionsError::Unknown)
-            }
+            None => Err(unknown()),
         }
     }
 }

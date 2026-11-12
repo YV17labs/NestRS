@@ -179,7 +179,10 @@ What the mount does, rmcp's `SessionConfig::keep_alive` off:
   receiver where the session reaches it, so a worker held by a write to a stream
   nobody reads fails that write, reads its token and stops, and rmcp's close
   frees the place — whoever ends it: the watch, the stream finding its client
-  silent, a `DELETE`, rmcp itself.
+  silent, a `DELETE`, rmcp itself. A call still running delays that close by
+  rmcp's five seconds, then is cancelled; meanwhile the mount answers the
+  session's requests as one it does not hold, `404` (seen: rmcp answered `500`
+  and the mount filed an `error`).
 - **What a stream carries to its client is use**, so a client listening while
   the server's messages reach it keeps its session, as with rmcp; a ping and its
   answer stay none.

@@ -250,13 +250,18 @@ renewal cases failed 14 of 20 case runs under 2.5 s stalls and none of 20 under
 1.5 s; the lost settle's earlier spelling, which waited for the give-up, failed
 2 of 10 under 3.5 s stalls, and one waiting for the stream to empty on the
 default budget none of the 11 runs a stall reached (14 stalls in 20 runs). The
-queue page's confinement, on the one-second lease and the suite's 500 ms
-budget, stayed green through 48 stalls of 1.5 s in ten runs: not reproduced, it
-stays there. The failovers failed 7 of 40 runs under 1.5 s stalls and none of
-11 bare, never on a count or a lapse: a boot or a push past the suite's budget,
-and Sentinel refusing the forced failover, `INPROG` (their own failover begun,
-past their two-second `down-after-milliseconds`) or `NOGOODSLAVE` (no replica
-they would promote yet). Moving a failover's app to the default budget was
+spelling kept, on the suite's budget, failed 4 of 10 runs under three 3.5 s
+stalls, all three inside its wait for the second ask and past that wait's
+ten-second guard, the behaviour right, and none of 10 under three of 2.5 s: a
+stall wakes the process past the deadline before the worker's ask has run, so
+that guard, a hang's alone, is twenty seconds. The queue page's confinement, on
+the one-second lease and the suite's 500 ms budget, stayed green through 48
+stalls of 1.5 s in ten runs: not reproduced, it stays there. The failovers
+failed 7 of 40 runs under 1.5 s stalls and none of 11 bare, never on a count or
+a lapse: a boot or a push past the suite's budget, and Sentinel refusing the
+forced failover, `INPROG` (their own failover begun, past their two-second
+`down-after-milliseconds`) or `NOGOODSLAVE` (no replica they would promote
+yet). Moving a failover's app to the default budget was
 refused: its subject is the app leaving the frozen primary, which a call cut at
 the suite's budget does within the freeze, where one on ten seconds would wait
 the freeze out and write to the old primary as it wakes, before its demotion

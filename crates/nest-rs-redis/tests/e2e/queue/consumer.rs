@@ -1497,9 +1497,10 @@ mod standalone {
         GATE.add_permits(1);
         crate::wait_until(Duration::from_secs(10), || GATED.finished(run) == 1).await;
         // Said each time an ask fails: twice, the settle and its ask again
-        // each ran on Redis and lost its answer at the proxy.
+        // each ran on Redis and lost its answer at the proxy. Its guard is the
+        // widest: a loaded runner's stalls pile up in the test's longest wait.
         let retrying = "job outcome not recorded yet; retrying";
-        crate::wait_until(Duration::from_secs(10), || {
+        crate::wait_until(Duration::from_secs(20), || {
             logs.find(nest_rs_queue::TARGET, retrying).len() >= 2
         })
         .await;

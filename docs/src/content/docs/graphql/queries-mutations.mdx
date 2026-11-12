@@ -241,13 +241,6 @@ hold null at "ids[1]".` A [variable pipe](/fundamentals/global-pipes/) runs firs
 directive reads what it made of a variable; a default is the document's own, and
 no pipe is handed it.
 
-## Reading the request context
-
-What the request needs beyond the document — the caller a guard attached
-(`Ambient<T>`), a request-scoped provider (`Scoped<T>`), a batch loader
-(`&DataLoader<L>`) — is a parameter, as on a route, and no schema argument:
-[Services and context](/graphql/services-and-context/#reading-the-request-context).
-
 ## Returning a `Result`
 
 A resolver method may return `T` or `async_graphql::Result<T>` — both
@@ -270,12 +263,14 @@ async fn user(&self, id: String) -> Result<User> {
 The full error story (extensions, codes, mapping `ServiceError`) is
 on its own page: [Errors](/graphql/errors/).
 
-## Injecting a service
+## The service and the request context
 
-A resolver reaches its data through the service it injects, `svc: Arc<UsersService>`,
-each operation declaring the posture it is gated by:
-[Services and context](/graphql/services-and-context/) shows a guarded resolver over
-`UsersService`.
+A resolver reaches its data through the service it injects,
+`svc: Arc<UsersService>`, each operation declaring the posture it is gated by.
+What the request carries beyond the document — the caller a guard attached
+(`Ambient<T>`), a request-scoped provider (`Scoped<T>`), a batch loader
+(`&DataLoader<L>`) — is a parameter, as on a route, and no schema argument.
+[Services and context](/graphql/services-and-context/) shows both.
 
 ## Going further
 

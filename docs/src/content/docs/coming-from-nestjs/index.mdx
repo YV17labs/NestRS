@@ -164,7 +164,7 @@ the environment overlays. Pinning `compression` in `HttpConfig` leaves
 pin outranks every `.env` file committed beside the code — for its whole
 namespace, and the boot names each key it shadows; it does not outrank a
 variable actually present in the environment at startup — the full chain is on
-[Configuration](/configuration/pinning/#the-dual-path-rule).
+[Pinning a config](/configuration/pinning/#the-dual-path-rule).
 
 That is what pays off in a container. The image ships one binary with sane pins. The deployment then moves any
 knob through the `env` block of a Compose file or a Kubernetes Deployment,
@@ -174,9 +174,10 @@ malformed value is boot-fatal and names the variable, so a bad ConfigMap fails
 the readiness probe instead of surfacing as a mystery three requests later.
 
 <Aside type="note">
-  The rule and the struct-as-contract live on
-  [Configuration](/configuration/pinning/#the-dual-path-rule); every variable the
-  framework reads is in the [env reference](/configuration/env-reference/).
+  The rule lives on [Pinning a config](/configuration/pinning/#the-dual-path-rule)
+  and the struct-as-contract on
+  [Configuration](/configuration/#why-the-struct-is-the-contract); every variable
+  the framework reads is in the [env reference](/configuration/env-reference/).
 </Aside>
 
 ## What runs differently

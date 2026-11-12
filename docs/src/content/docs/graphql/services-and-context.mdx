@@ -56,9 +56,9 @@ impl UsersResolver {
 `CreateUser`'s rules run before the body, as they do for the generated
 `create_user`: the edge holds every argument it decodes to them, so
 `Creatable::create` has nothing left to check. It takes the caller's org from
-the `Create` grant that pins it, so the mutation reads no principal. The service stays the single audited choke point to the database.
-The
-resolver only translates between the wire shape and the service —
+the `Create` grant that pins it, so the mutation reads no principal. The service
+stays the single audited choke point to the database. The resolver only
+translates between the wire shape and the service —
 `#[authorize(Action, Entity)]` is each operation's access posture,
 gating the call against the ambient ability, each row it answers judged
 for the caller as it is built. The `#[use_guards(AuthzGuard)]` binding on the

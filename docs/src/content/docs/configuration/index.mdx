@@ -86,8 +86,7 @@ Three pieces do the heavy lifting:
 - **`#[validate(...)]`** attributes run after the load — `#[config]`
   carries the `Validate` derive itself. A failure aborts boot naming the
   field. A rule the derive cannot express is the one case for a hand-written
-  `impl Validate` — see the [Advanced section](#advanced) at the end of this
-  page.
+  `impl Validate` — see [Advanced configuration](/configuration/advanced/).
 
 **The field's type chooses its reader.** A number, a string, a path, an
 address or a UUID parses as itself, a `bool` accepts the usual spellings

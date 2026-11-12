@@ -183,9 +183,10 @@ impl ExceptionFilter for LedgerConflict {
 }
 ```
 
-A `#[field_resolver]` runs only the filters declared on it. The chain behind a `5xx` the filter answers is filed as for any other; one it
-answers `4xx` files nothing. A field that failed stays failed, so a mutation
-field's savepoint rolls back whatever the filter answered.
+A `#[field_resolver]` runs only the filters declared on it. The chain behind a
+`5xx` the filter answers is filed as for any other; one it answers `4xx` files
+nothing. A field that failed stays failed, so a mutation field's savepoint rolls
+back whatever the filter answered.
 
 ## Authorization denials
 

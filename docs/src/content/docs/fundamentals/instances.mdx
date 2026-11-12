@@ -19,17 +19,21 @@ pub struct Cache;
 
 The marker's name is its ident in snake case — `Cache` reads `cache`, read and
 never chosen — and the default instance, `Unnamed`, is the one an app gets
-without naming any. A module that can be opened once per instance takes the
-marker as a type argument where it is imported bare — `RedisModule` for the
-default, `RedisModule::<Cache>` for the named one — and in the value where its
-`for_root` pins it: `x` for the default, `(Cache, x)` for the named one. Its config then reads `<PREFIX>_<VENDOR>__CACHE__*` (the vendor first,
-then the instance), and its resource is injected as `Arc<Resource<Cache>>`
-beside the default's `Arc<Resource>` — Redis is one:
-`RedisModule::<Cache>` opens
+without naming any.
+
+A module that can be opened once per instance takes the marker as a type
+argument where it is imported bare — `RedisModule` for the default,
+`RedisModule::<Cache>` for the named one — and in the value where its
+`for_root` pins it: `x` for the default, `(Cache, x)` for the named one. Its
+config then reads `<PREFIX>_<VENDOR>__CACHE__*` (the vendor first, then the
+instance), and its resource is injected as `Arc<Resource<Cache>>` beside the
+default's `Arc<Resource>` — Redis is one: `RedisModule::<Cache>` opens
 [a second Valkey](/queue/topologies/#a-second-valkey), injected as
 `Arc<RedisConnection<Cache>>`. Each instance pins its config once; two
-instances never contest. A module generic over the instance is written by
-hand (`impl<I: Instance> Module for …`), since `#[module]` is not generic:
+instances never contest.
+
+A module generic over the instance is written by hand
+(`impl<I: Instance> Module for …`), since `#[module]` is not generic:
 `ForInstance` in `nest_rs::config` shows one whole, and its resource carries the
 import a refusal names (`CarriesRemedy`, on
 [Providers](/fundamentals/providers/#a-dependency-nothing-provides)).
@@ -46,9 +50,8 @@ value must keep its own type, seed it under a marker,
 ## A resource, never a database
 
 A module takes an instance only for a **resource an app opens more than
-once**, never a database:
-`Repo` holds one connection per binary, and a second database is a second
-project. An open, extensible set discovered at runtime — a plugin registry,
+once**, never a database: `Repo` holds one connection per binary, and a second
+database is a second project. An open, extensible set discovered at runtime — a plugin registry,
 the social-login providers — is the opposite case: its members are not known
 in advance and each carries real code, so it uses the inventory-discovery seam
 (a public trait + `inventory::submit!`); see
@@ -61,5 +64,5 @@ example.
   its type, and the refusal an unopened instance reads.
 - [A second Valkey](/queue/topologies/#a-second-valkey) — `RedisModule::<Cache>`
   beside the queue's server, end to end.
-- [Configuration](/configuration/) — the namespace an instance's variables read
-  under.
+- [Variables](/configuration/variables/#namespaces-instances-and-tls-keys) — the
+  namespace an instance's variables read under.

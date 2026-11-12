@@ -135,8 +135,9 @@ type does not declare, so such a payload is an error frame.
 
 A malformed payload (wrong shape, missing fields) is treated as a
 dispatch error: the connection stays open, the client receives an error
-frame on the same event name ([error frames](/websockets/replies/)), naming where the payload failed
-and never its value — ``invalid payload for `message` at `text`: missing``. A
+frame on the same event name ([error frames](/websockets/replies/)), naming where
+the payload failed and never its value —
+``invalid payload for `message` at `text`: missing``. A
 payload type declaring `validator` rules is held to them as it decodes, and a
 custom transform binds a [pipe](/fundamentals/pipes/) on the payload argument,
 `Piped<P>` — either rejection is an error frame, and the handler body never

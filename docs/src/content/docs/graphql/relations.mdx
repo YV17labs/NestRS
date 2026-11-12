@@ -194,9 +194,8 @@ saying so at `warn` on `nest_rs::orm`.
 ## Fanout-aware complexity
 
 A relation's field scores what it resolves: a `HasMany` its page times each row,
-`first.unwrap_or(20).clamp(1, 100) as usize * child_complexity`, a `BelongsTo`
-the additive default. [Field complexity](/graphql/field-complexity/) is the
-formula, and `#[expose(complexity = …)]` its
+a `BelongsTo` the additive default. [Field complexity](/graphql/field-complexity/)
+is the formula, and `#[expose(complexity = …)]` its
 [override](/graphql/field-complexity/#override-on-the-field).
 
 ## Opt out: leave a single relation unexposed

@@ -6,13 +6,11 @@ sidebar:
 ---
 
 An [interceptor](/fundamentals/interceptors/) is written once and wraps a unit
-on every edge: a GraphQL field, a
-[WebSocket message](/websockets/messages/#interceptors-filters-and-pipes), an
-[MCP operation](/mcp/#layers-around-an-operation), a
-[job](/queue/processors/#layers-around-a-job), a [tick](/schedule/ticks/#layers-around-a-tick)
-and a [listener call](/events/dispatch/#layers-around-a-listener-call). Each
-edge's page says what its unit runs; GraphQL's is here, since a field is the unit
-inside a request.
+on every edge: a GraphQL field, a WebSocket message, an MCP operation, a job, a
+tick and a listener call. Each edge's page says what its unit runs, and
+[what each edge runs](/fundamentals/request-lifecycle/#what-each-edge-runs)
+links them side by side; GraphQL's is here, since a field is the unit inside a
+request.
 
 ## Around a GraphQL field
 

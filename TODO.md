@@ -101,30 +101,30 @@ document says of it; what it keeps on purpose is §5's.
 ## 3. Known gaps by area
 
 **Weak proofs and flaky tests**
-- A test of the Redis suite's own counting no run on its one-second lease,
-  the failovers and the KEDA confinement, may fail under a stall past about
-  two thirds of it, the behaviour right; neither was driven under stalls: the
-  KEDA one ends, in about 0.3 s, before a driver in the dev container finds
-  its process, and the failovers run alone on their topology. Correlation,
+- A test of the Redis suite's own counting no run on its one-second lease —
+  the two failovers and the queue page's confinement
+  (`queue::layout::the_queue_pages_rules_are_exact_for_a_producer_and_a_worker`)
+  — may fail under a stall past about two thirds of it, or past the 500 ms
+  budget its apps hold a push to, the behaviour right; none was driven under
+  stalls. The KEDA rule's test holds no lease and pushes nothing. Correlation,
   trim and the entry deleted while delivered did not reproduce it: ten runs
-  each under 1.5 s stalls from the test's boot, every one green. Close: a
-  driver the test signals its start to, then each driven, and one seen red
-  moved to the suite's three-second lease, as the queue kit's two renewal
-  cases and the lost settle moved. *read*
-- The Redis suite's three tests on its three-second lease count a job's runs:
-  the queue kit's `a_long_attempt_keeps_its_lease_and_runs_once` and
+  each under 1.5 s stalls from the test's boot, every one green. Close: each
+  driven under a nextest target runner that starts the test as its child and
+  stops it by its own PID from its first instant, and one seen red moved to
+  the suite's three-second lease, or its producer to the default budget. *read*
+- The queue kit's two renewal cases on Redis,
+  `a_long_attempt_keeps_its_lease_and_runs_once` and
   `a_lease_lost_under_a_live_worker_cuts_its_attempt_and_the_holder_decides`
-  (`KitLease::Brief`), and the lost settle
-  (`standalone::a_settle_whose_answer_is_lost_still_ended_the_job_once`). A
-  renewal goes a third into the lease, so a runner stalled past two seconds
-  lapses it and the job runs again, the behaviour right: every suite stays
-  green under a stall of up to about two seconds, not more. Seen at the
-  one-second lease, 1.5 s stalls lapsing the long attempt's in 30 of 30 runs;
-  at three seconds, 10 of 10 green under the same stalls; a stall past two
-  seconds was not driven. Close: a longer lease, `KitLease::Brief` on Redis
-  and the suite's renewed lease, which lengthens the long attempt (its hold is
-  half again the lease) and the lost settle (its wait is twice the lease) with
-  it, each among the suite's slowest tests. *read*
+  (`KitLease::Brief`, the suite's three-second `LEASE_RENEWED`), fail under a
+  runner stalled past two seconds, two thirds of the lease, the behaviour
+  right: the worker wakes past its lease and cuts its own attempt, whatever
+  the backend. Seen in process, the kit over the in-memory backend on real
+  time with the same lease: 2.5 s stalls failed 5 of 10 case runs, 1.5 s
+  stalls none. How long a hosted runner stalls under the suite's load is not
+  measured. Close: both driven on Redis past two seconds, the longest stall
+  measured under CI's load shape (four CPUs, `just test`), and the lease kept
+  when that stall is well under two seconds, or lengthened with the long
+  attempt's hold cut to one lease and a reclaim look. *seen* (in process)
 - A `HELLO` sent as its connection's driver ends is neither answered nor
   dropped (B-200), and no test strands one on a real connection: the window
   lies inside `redis` 1.8's send, between `Sender::reserve` granting a permit

@@ -223,3 +223,23 @@ since a longer lease lengthens each of them with it; and a test counting no
 run on the one-second lease, past about two thirds of it, which correlation,
 trim and the entry deleted while delivered did not show in ten runs each
 under 1.5 s stalls, the failovers and the KEDA confinement left undriven.
+
+**2026-11-11, the lost settle waits for what Redis holds, not for its lease:**
+the lost settle held the renewed lease of three seconds only because it waited
+for its worker to give the settle up, at the lease's end, which it says at
+`error` — the port's line, proven in process on paused time
+(`a_settle_failing_past_its_lease_is_said_and_the_job_left_to_its_lease`), so a
+second copy on Redis, and one a stall past two thirds of the lease fails. It
+now runs on the queue's default lease and the suite's 500 ms budget, so each
+lost answer fails its ask within the budget: the test waits for the worker to
+say twice that it asks again — the settle and its ask again each ran on Redis
+and lost its answer — then for the stream to empty, then lapses what is held
+and looks: nothing it waits on follows a lease, and a stall lapses nothing
+short of twenty seconds. The renewal is the one thing a test still waits out,
+so the kit's two renewal cases keep the renewed lease. A stall past two thirds
+of it fails each with the behaviour right — the worker wakes past its lease and
+cuts its own attempt, whatever the backend: the kit over the in-memory backend
+on real time with Redis's three-second lease failed 5 of 10 case runs under
+2.5 s stalls and none under 1.5 s stalls, each stall driven by a nextest target
+runner that starts the test as its child and stops it by its own PID from its
+first instant.

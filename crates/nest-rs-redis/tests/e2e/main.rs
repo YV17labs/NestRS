@@ -1175,7 +1175,7 @@ async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
 const LEASE_LAPSED: Duration = Duration::from_secs(1);
 
 /// The lease of a test counting a job's runs that waits it out while renewals
-/// keep it — a renewal, or a settle retried to the lease's end: a few seconds,
+/// keep it — the queue kit's two whose subject is a renewal: a few seconds,
 /// since a renewal goes a third into it, so a runner stalled under two seconds
 /// lapses nothing.
 const LEASE_RENEWED: Duration = Duration::from_secs(3);

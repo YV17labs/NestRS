@@ -176,12 +176,16 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   connection's default budget (`patient_replica_on`), and a lapse it is about it
   forces (`RedisKit`'s `idle`): on the suite's one-second lease a stalled runner
   sees the job run again, which at-least-once allows, so no count is asserted
-  across a lapse the test did not force. One waiting a lease out — a renewal,
-  a settle retried to the lease's end — holds the suite's renewed lease of a
-  few seconds (`LEASE_RENEWED`): a renewal goes a third into it, so a stall
-  under the other two thirds lapses nothing. The queue kit's cases do the same
-  on `KitLease::Lasting`, through the backend's `lapse` and `take`, and the two
-  whose subject is a renewal on `KitLease::Brief`. A connection of the suite's
+  across a lapse the test did not force. What follows a worker's call, it reads
+  off what Redis holds, never off the worker giving the call up at its lease's
+  end; one whose subject is a call failing keeps the suite's budget on that
+  default lease, so the call fails and is asked again well inside it (a settle
+  whose answer is lost). A renewal alone is waited out, on the
+  suite's renewed lease of a few seconds (`LEASE_RENEWED`): a renewal goes a
+  third into it, so a stall under the other two thirds lapses nothing. The
+  queue kit's cases do the same on `KitLease::Lasting`, through the backend's
+  `lapse` and `take`, and the two whose subject is a renewal on
+  `KitLease::Brief`. A connection of the suite's
   own opens and is answered within the framework's default budget
   (`suite_connection`, `at_default_budget`), wide of a stall; one telling a
   frozen node apart keeps `redis`'s, or bounds its probe itself.

@@ -1458,14 +1458,18 @@ mod standalone {
     use super::*;
 
     /// A settle that ran on Redis and whose answer was lost: the worker cannot
-    /// tell, and says so at `error`, but the job ended in the script that settled
-    /// it — it never runs again, and the stream holds nothing of it.
+    /// tell and asks it again, but the job ended in the script that settled it
+    /// first — the ask again changes nothing, the stream holds nothing of the
+    /// job, and it never runs again once every lease on its queue lapsed. What
+    /// the worker says once it gives the settle up is the port's, proven in
+    /// process.
     ///
-    /// The worker holds the suite's brief lease, so a runner stalled between
-    /// the delivery and the settle reclaims nothing, and the settle it retries
-    /// until that lease would lapse gives up within the test's wait; the lapse
-    /// that follows is the test's, and a worker of its own looks past it. The
-    /// lost answer waits out the suite's budget, the worker's alone.
+    /// The worker holds the queue's default lease, so a runner stalled between
+    /// the delivery and the settle lapses nothing, and the suite's budget, so
+    /// each lost answer fails its ask within it: the test waits for the second
+    /// ask to fail, never for the worker to give the settle up at its lease's
+    /// end. The lapse that follows is the test's, and a worker of its own looks
+    /// past it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_settle_whose_answer_is_lost_still_ended_the_job_once() {
         let logs = nest_rs_testing::LogCapture::install_global();
@@ -1476,9 +1480,7 @@ mod standalone {
         let replica = crate::replica_of::<GatedModule>(
             HeadlessApp::builder()
                 .provide(crate::through(proxy.url()))
-                .provide(RedisQueueConfig {
-                    lease: crate::LEASE_RENEWED,
-                })
+                .provide(RedisQueueConfig::default())
                 .provide(nest_rs_queue::QueueConfig {
                     shutdown_timeout: crate::WINDOW,
                 }),
@@ -1494,12 +1496,15 @@ mod standalone {
         proxy.mute();
         GATE.add_permits(1);
         crate::wait_until(Duration::from_secs(10), || GATED.finished(run) == 1).await;
-        let unconfirmed = "job outcome not confirmed; unless it was written, the job runs again once its lease lapses";
-        // The worker said it could not confirm the outcome: it retries the
-        // settle until the lease would lapse, a lease past its last renewal at
-        // the latest, so the wait follows the lease.
-        crate::wait_until(crate::LEASE_RENEWED * 2, || {
-            !logs.find(nest_rs_queue::TARGET, unconfirmed).is_empty()
+        // Said each time an ask fails: twice, the settle and its ask again
+        // each ran on Redis and lost its answer at the proxy.
+        let retrying = "job outcome not recorded yet; retrying";
+        crate::wait_until(Duration::from_secs(10), || {
+            logs.find(nest_rs_queue::TARGET, retrying).len() >= 2
+        })
+        .await;
+        crate::wait_for(Duration::from_secs(10), || async {
+            crate::filed(queue).await == 0
         })
         .await;
         // A delivery the settle had not ended would be reclaimed by the first
@@ -1511,7 +1516,6 @@ mod standalone {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         assert_eq!(GATED.of(run).len(), 1, "the job ran once");
-        assert_eq!(crate::filed(queue).await, 0, "the settle ended it on Redis");
         looking.worker.shutdown().await.expect("clean shutdown");
         drop(replica);
         crate::forget(queue).await;

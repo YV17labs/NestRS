@@ -256,6 +256,7 @@ export default defineConfig({
             { label: 'Why not axum?', slug: 'why-not-axum' },
             { label: 'Benchmarks', slug: 'benchmarks' },
             { label: 'Coming from NestJS', slug: 'coming-from-nestjs' },
+            { label: 'What runs differently from NestJS', slug: 'coming-from-nestjs/what-runs-differently' },
             { label: 'Getting started', slug: 'getting-started' },
             { label: 'The demo apps (Publish)', slug: 'publish' },
             { label: 'Semver policy', slug: 'semver' },

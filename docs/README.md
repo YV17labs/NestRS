@@ -60,7 +60,7 @@ to build something.
 
 ```
 Start here      index, whats-new, why, why-not-axum, benchmarks,
-                coming-from-nestjs, getting-started, publish, semver, upgrading
+                coming-from-nestjs/, getting-started, publish, semver, upgrading
 CLI             cli/
 Tutorial        build a posts feature end to end
 Fundamentals    architecture, fundamentals/

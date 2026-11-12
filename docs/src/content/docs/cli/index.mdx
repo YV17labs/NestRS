@@ -30,7 +30,7 @@ nestrs version
 A binary, so it is the one thing that does not come through the `nest-rs`
 umbrella — there is no `--features cli`.
 
-Requires **Rust 1.97+** (edition 2024). That single install is all you need: the
+Requires **Rust 1.100+** (edition 2024). That single install is all you need: the
 first time you call [`nestrs run`](#running-tasks), the CLI installs the dev
 toolchain it drives — `just`, `bacon`, `cargo-nextest`, `cargo-llvm-cov` — once.
 Run **`nestrs doctor`** after install to check the Rust toolchain and list
@@ -122,7 +122,7 @@ nestrs g resource posts title:string body:text --app blog
 
 
 **`rust-toolchain.toml`** is what makes every recipe run on a project minutes
-old. It pins Rust 1.97 as the toolchain `channel`, plus three components, each
+old. It pins Rust 1.100 as the toolchain `channel`, plus three components, each
 because a recipe shells out to it:
 
 - **`clippy` and `rustfmt`** are what `nestrs run lint` runs. Undeclared, they

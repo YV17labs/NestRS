@@ -19,5 +19,4 @@ note: required by a bound in `__nestrs_assert_guard_capability`
 29 | #[resolver]
    | ^^^^^^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
 30 | #[use_guards(HttpOnlyGuard)]
-   |              ------------- required by a bound in this function
    = note: this error originates in the attribute macro `resolver` (in Nightly builds, run with -Z macro-backtrace for more info)

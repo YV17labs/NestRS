@@ -2,7 +2,9 @@ error[E0277]: `post::Model` has no rows to deny or narrow: `cannot`, `when` and 
   --> tests/integration/diagnostics/authz/model_denied_by_cannot.rs:25:8
    |
 25 |     ab.cannot(Action::Delete, post::Model { id: Default::default() });
-   |        ^^^^^^ not a SeaORM entity
+   |        ^^^^^^                 -------------------------------------- `post::Model` doesn't satisfy the trait bound
+   |        |
+   |        not a SeaORM entity
    |
 help: the trait `RowSubject` is not implemented for `post::Model`
   --> tests/integration/diagnostics/authz/model_denied_by_cannot.rs:12:5
@@ -13,5 +15,7 @@ help: the trait `RowSubject` is not implemented for `post::Model`
 note: required by a bound in `AbilityBuilder::cannot`
   --> $WORKSPACE/crates/nest-rs-authz/src/builder.rs
    |
+   | impl AbilityBuilder {
+...
    |     pub fn cannot<E: RowSubject>(
    |                      ^^^^^^^^^^ required by this bound in `AbilityBuilder::cannot`

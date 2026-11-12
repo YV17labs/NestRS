@@ -10,7 +10,7 @@ use crate::client::Storage;
 use crate::config::StorageConfig;
 use crate::store::Store;
 
-/// Provides the [`Storage`](crate::Storage) client over the store
+/// Provides the [`Storage`] client over the store
 /// [`StorageConfig::url`] names, opened and proved at boot. Import it to inject
 /// `Storage` for presigned URLs, uploads and metadata reads.
 #[module(

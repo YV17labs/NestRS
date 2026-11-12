@@ -5,7 +5,7 @@
 #   docker run --rm -p 3001:3001 -e NESTRS_HTTP__PORT=3001 nestrs /usr/local/bin/auth
 # A container names its port: the production profile reads no apps/<app>/.env.
 
-ARG RUST_VERSION=1.97
+ARG RUST_VERSION=1.100
 ARG CARGO_CHEF_VERSION=0.1.77
 
 # --- chef ---------------------------------------------------------------------

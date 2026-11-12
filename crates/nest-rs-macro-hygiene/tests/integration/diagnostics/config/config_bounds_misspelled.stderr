@@ -1,15 +1,17 @@
 error[E0425]: cannot find value `WINDOWW` in this scope
   --> tests/integration/diagnostics/config/config_bounds_misspelled.rs:17:23
    |
+17 |     #[config(bounds = WINDOWW)]
+   |                       ^^^^^^^ not found in this scope
+   |
+note: similarly named constant `WINDOW` defined here
+  --> tests/integration/diagnostics/config/config_bounds_misspelled.rs:9:1
+   |
  9 | / const WINDOW: DurationBounds = DurationBounds::secs(
 10 | |     Floor::Units(Bound::new(1, "a shorter window counts nothing")),
 11 | |     Bound::new(3600, "past an hour it is a unit slip"),
 12 | | );
-   | |__- similarly named constant `WINDOW` defined here
-...
-17 |       #[config(bounds = WINDOWW)]
-   |                         ^^^^^^^
-   |
+   | |__^
 help: a constant with a similar name exists
    |
 17 -     #[config(bounds = WINDOWW)]

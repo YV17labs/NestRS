@@ -22,5 +22,7 @@ help: the following other types implement trait `nest_rs::core::__private::ForRo
 note: required by a bound in `OAuthResourceModule::for_root`
  --> $WORKSPACE/crates/nest-rs-oauth-resource/src/module.rs
   |
+  | impl OAuthResourceModule {
+...
   |     pub fn for_root(declared: impl ForRootValue<OAuthResourceSetup>) -> OAuthResourceSetup {
   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `OAuthResourceModule::for_root`

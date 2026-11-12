@@ -180,3 +180,12 @@ floor below the fix lets an app resolve it, so rmcp's floor is 3.9. aws-lc-rs an
 rust-embed take their newest minors, as every requirement does (2026-10-27,
 above); every lockfile was re-resolved whole, the owner lifting the run's
 refusal of `cargo update` for this change.
+
+## 2026-11-12 — `public = true` is still unstable in 1.100
+
+The workspace moves to Rust 1.100 (`manifests-ci.md`, *Workspaces and
+toolchain*), and Cargo's own marker still is not there: cargo 1.100.0 reads
+`b = { path = "../b", public = true }` as "ignoring `public` on dependency b,
+pass `-Zpublic-dependency` to enable support for it", and none of the 1.98, 1.99
+and 1.100 changelogs stabilises it. The pin's `# public` comment stays the
+marker, as the body says, until a stable cargo reads the key.

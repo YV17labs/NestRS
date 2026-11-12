@@ -1,5 +1,5 @@
 //! Driving an MCP endpoint over streamable HTTP, through a
-//! [`TestApp`](crate::TestApp)'s [`TestClient`] or one over a bare
+//! [`TestApp`]'s [`TestClient`] or one over a bare
 //! `endpoint(..)` mount.
 
 use serde_json::{Value, json};

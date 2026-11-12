@@ -5,11 +5,13 @@ error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a rep
    | ^^^^^^^^^^^^^ this carries every column, hidden ones included
    |
    = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-help: the trait `OutputType` is implemented for `nest_rs::graphql::__private::FieldAnswer<T>`
+help: the trait `OutputType` is conditionally implemented for `nest_rs::graphql::__private::FieldAnswer<T>`
   --> $WORKSPACE/crates/nest-rs-graphql/src/field_answer.rs
    |
    | impl<T: OutputType> OutputType for FieldAnswer<T> {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | ^^^^^^^^----------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |         |
+   |         unsatisfied requirement introduced here: `post::Model: OutputType`
 note: required for `post::Model` to implement `OutputType`
   --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
    |
@@ -29,11 +31,11 @@ error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a rep
    | ^^^^^^^^^^^^^ this carries every column, hidden ones included
    |
    = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-help: the trait `OutputType` is implemented for `post::Model`
+help: the trait `OutputType` is conditionally implemented for `post::Model`
   --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
    |
  8 |     #[expose(name = "Post", graphql)]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied requirement introduced here: `for<'__row> nest_rs::seaorm::__private::HiddenColumns<'__row>: nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>`
 note: required for `post::Model` to implement `OutputType`
   --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
    |
@@ -59,11 +61,11 @@ error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a rep
    |                          ^^^^^^^^^^^ this carries every column, hidden ones included
    |
    = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-help: the trait `InputType` is implemented for `post::Model`
+help: the trait `InputType` is conditionally implemented for `post::Model`
   --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
    |
  8 |     #[expose(name = "Post", graphql)]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied requirement introduced here: `for<'__row> nest_rs::seaorm::__private::HiddenColumns<'__row>: nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>`
 note: required for `post::Model` to implement `InputType`
   --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
    |
@@ -75,6 +77,8 @@ note: required for `post::Model` to implement `InputType`
 note: required by a bound in `ContextBase::<'a, &'a Positioned<nest_rs::graphql::async_graphql::async_graphql_parser::types::Field>>::param_value`
   --> $CARGO/async-graphql-$VERSION/src/context.rs
    |
+   | impl<'a> ContextBase<'a, &'a Positioned<Field>> {
+   |     #[doc(hidden)]
    |     pub fn param_value<T: InputType>(
    |                           ^^^^^^^^^ required by this bound in `ContextBase::<'a, &Positioned<Field>>::param_value`
    = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
@@ -94,8 +98,9 @@ help: the trait `nest_rs::core::__private::CrossesAWire` is not implemented for 
 note: required by a bound in `nest_rs::core::__private::RowProbe::<T>::answered`
   --> $WORKSPACE/crates/nest-rs-core/src/row_probe.rs
    |
+   | impl<T: sea_orm::ModelTrait> RowProbe<T> {
+   |     /// A row: refused, by a bound no type meets.
    |     pub fn answered(&self)
-   |            -------- required by a bound in this associated function
    |     where
    |         T: CrossesAWire,
    |            ^^^^^^^^^^^^ required by this bound in `RowProbe::<T>::answered`
@@ -107,11 +112,11 @@ error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a rep
    |                          ^^^^^^^^^^^ this carries every column, hidden ones included
    |
    = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-help: the trait `InputType` is implemented for `post::Model`
+help: the trait `InputType` is conditionally implemented for `post::Model`
   --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
    |
  8 |     #[expose(name = "Post", graphql)]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied requirement introduced here: `for<'__row> nest_rs::seaorm::__private::HiddenColumns<'__row>: nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>`
 note: required for `post::Model` to implement `InputType`
   --> tests/integration/diagnostics/seaorm/resolver_carrying_a_model.rs:8:5
    |

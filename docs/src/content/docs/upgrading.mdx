@@ -49,6 +49,12 @@ lists what the boot, a log or the wire shows when one is missed.
    `redis-schedule` is new, and only a job firing once across replicas needs
    it (step 14). Then, in the same pass:
 
+   - **Move the toolchain to Rust 1.100**, the release 7.0 builds on:
+     `channel = "1.100"` in `rust-toolchain.toml`, `rust-version = "1.100"` in
+     the root `Cargo.toml`, and the `rust` image's tag in a Dockerfile.
+     rustup installs it on the next `cargo` run; an older one makes cargo
+     refuse before it builds anything, naming each `nest-rs` crate and the
+     rustc 1.100 it requires.
    - **Drop `poem`** from `[workspace.dependencies]` and from every member that
      declares it, a test's `[dev-dependencies]` included: nothing a nestrs
      application writes names it (step 8).

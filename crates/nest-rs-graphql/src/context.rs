@@ -280,6 +280,10 @@ pub(crate) fn fold_variables<T: Serialize + DeserializeOwned>(
     clippy::map_err_ignore,
     reason = "the refusal describes the body; the read and decode errors would quote it"
 )]
+#[expect(
+    clippy::result_large_err,
+    reason = "async-graphql's `BatchRequest`, 344 bytes, outweighs the response: boxing the refusal shrinks nothing"
+)]
 async fn read_batch(req: &Request, body: Body) -> Result<BatchRequest, Response> {
     let multipart = req.content_type().filter(|value| {
         value

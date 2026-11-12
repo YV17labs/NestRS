@@ -15,5 +15,7 @@ help: the trait `PrincipalIdentity` is not implemented for `Claims`
 note: required by a bound in `JwtService::sign`
   --> $WORKSPACE/crates/nest-rs-authn/src/service.rs
    |
+   | impl JwtService {
+...
    |     pub fn sign<C: Serialize + PrincipalIdentity>(&self, claims: &C) -> Result<String, SignError> {
    |                                ^^^^^^^^^^^^^^^^^ required by this bound in `JwtService::sign`

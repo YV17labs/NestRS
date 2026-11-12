@@ -579,7 +579,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::float_cmp, reason = "the parsed float is exact")]
     fn test_parse_single_value() {
         check_single_value!(bool, "true", true);
         check_single_value!(bool, "false", false);

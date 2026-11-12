@@ -235,6 +235,10 @@ impl Plan {
     /// The seed's proof runs on a connection of its own: `redis` reports a
     /// failed cluster connection by its text alone, so a refusal every attempt
     /// would repeat is read here, where its cause is still typed.
+    #[expect(
+        clippy::result_large_err,
+        reason = "a dial attempt runs at boot and on reconnection, never per command: its refusal's size costs no request"
+    )]
     async fn prove<I: Instance>(
         &self,
         client: &ClusterClient,
@@ -253,6 +257,10 @@ impl Plan {
 
     /// The first seed that answers decides; one that cannot be reached lets
     /// the next decide.
+    #[expect(
+        clippy::result_large_err,
+        reason = "a dial attempt runs at boot and on reconnection, never per command: its refusal's size costs no request"
+    )]
     async fn prove_a_seed(&self) -> Result<(), Attempt<redis::RedisError, RedisError>> {
         let mut last = None;
         for seed in &self.seeds {

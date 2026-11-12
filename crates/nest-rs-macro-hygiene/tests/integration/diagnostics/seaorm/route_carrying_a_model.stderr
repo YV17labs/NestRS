@@ -26,11 +26,13 @@ error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a rep
    | ^^^^^^^^^ this carries every column, hidden ones included
    |
    = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-help: the trait `FromRequest<'_>` is implemented for `nest_rs::http::Json<T>`
+help: the trait `FromRequest<'_>` is conditionally implemented for `nest_rs::http::Json<T>`
   --> $WORKSPACE/crates/nest-rs-http/src/json.rs
    |
    | impl<'a, T: DeserializeOwned> FromRequest<'a> for Json<T> {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | ^^^^^^^^^^^^----------------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |             |
+   |             unsatisfied requirement introduced here: `post::Model: DeserializeOwned`
 note: required for `post::Model` to implement `for<'de> nest_rs::mcp::rmcp::serde::Deserialize<'de>`
   --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:8:5
    |
@@ -58,8 +60,9 @@ help: the trait `nest_rs::core::__private::CrossesAWire` is not implemented for 
 note: required by a bound in `nest_rs::core::__private::RowProbe::<T>::answered`
   --> $WORKSPACE/crates/nest-rs-core/src/row_probe.rs
    |
+   | impl<T: sea_orm::ModelTrait> RowProbe<T> {
+   |     /// A row: refused, by a bound no type meets.
    |     pub fn answered(&self)
-   |            -------- required by a bound in this associated function
    |     where
    |         T: CrossesAWire,
    |            ^^^^^^^^^^^^ required by this bound in `RowProbe::<T>::answered`
@@ -71,11 +74,11 @@ error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a rep
    | ^^^^^^^^^ this carries every column, hidden ones included
    |
    = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-help: the trait `JsonSchema` is implemented for `post::Model`
+help: the trait `JsonSchema` is conditionally implemented for `post::Model`
   --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:8:5
    |
  8 |     #[expose(name = "Post")]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied requirement introduced here: `for<'__row> nest_rs::seaorm::__private::HiddenColumns<'__row>: nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>`
 note: required for `post::Model` to implement `JsonSchema`
   --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:8:5
    |
@@ -87,8 +90,9 @@ note: required for `post::Model` to implement `JsonSchema`
 note: required by a bound in `nest_rs::http::__private::PayloadProbe::<R>::payload`
   --> $WORKSPACE/crates/nest-rs-http/src/documented_payload.rs
    |
+   | impl<R: DocumentedPayload> PayloadProbe<R> {
+...
    |     pub fn payload(&self) -> Option<SchemaFn>
-   |            ------- required by a bound in this associated function
    |     where
    |         R::Payload: JsonSchema,
    |                     ^^^^^^^^^^ required by this bound in `PayloadProbe::<R>::payload`
@@ -101,11 +105,11 @@ error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a rep
    |                                     ^^^^^^^^^^^ this carries every column, hidden ones included
    |
    = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-help: the trait `JsonSchema` is implemented for `post::Model`
+help: the trait `JsonSchema` is conditionally implemented for `post::Model`
   --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:8:5
    |
  8 |     #[expose(name = "Post")]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied requirement introduced here: `for<'__row> nest_rs::seaorm::__private::HiddenColumns<'__row>: nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>`
 note: required for `post::Model` to implement `JsonSchema`
   --> tests/integration/diagnostics/seaorm/route_carrying_a_model.rs:8:5
    |

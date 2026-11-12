@@ -9,15 +9,16 @@ error[E0277]: `Rc<()>` cannot be sent between threads safely
    |
    = help: within `NotSendSetup`, the trait `std::marker::Send` is not implemented for `Rc<()>`
 note: required because it appears within the type `NotSendSetup`
-  --> tests/integration/diagnostics/core/dynamic_import_not_send.rs:20:8
+  --> tests/integration/diagnostics/core/dynamic_import_not_send.rs:22:5
    |
 20 | struct NotSendSetup {
-   |        ^^^^^^^^^^^^
+21 |     #[allow(dead_code)]
+22 |     local: Rc<()>,
+   |     ^^^^^^^^^^^^^ required by this field
 note: required by a bound in `nest_rs::core::__private::collect_dynamic_import`
   --> $WORKSPACE/crates/nest-rs-core/src/container.rs
    |
    |     pub fn collect_dynamic_import<D>(
-   |            ---------------------- required by a bound in this function
 ...
    |         D: DynamicModule + Send + 'static,
    |                            ^^^^ required by this bound in `collect_dynamic_import`

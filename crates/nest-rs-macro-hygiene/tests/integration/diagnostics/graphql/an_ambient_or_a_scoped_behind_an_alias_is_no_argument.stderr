@@ -20,6 +20,8 @@ error[E0277]: the trait bound `Ambient<Caller>: InputType` is not satisfied
 note: required by a bound in `ContextBase::<'a, &'a Positioned<nest_rs::graphql::async_graphql::async_graphql_parser::types::Field>>::param_value`
   --> $CARGO/async-graphql-$VERSION/src/context.rs
    |
+   | impl<'a> ContextBase<'a, &'a Positioned<Field>> {
+   |     #[doc(hidden)]
    |     pub fn param_value<T: InputType>(
    |                           ^^^^^^^^^ required by this bound in `ContextBase::<'a, &Positioned<Field>>::param_value`
 
@@ -45,6 +47,8 @@ error[E0277]: the trait bound `Scoped<Cart>: InputType` is not satisfied
 note: required by a bound in `ContextBase::<'a, &'a Positioned<nest_rs::graphql::async_graphql::async_graphql_parser::types::Field>>::param_value`
   --> $CARGO/async-graphql-$VERSION/src/context.rs
    |
+   | impl<'a> ContextBase<'a, &'a Positioned<Field>> {
+   |     #[doc(hidden)]
    |     pub fn param_value<T: InputType>(
    |                           ^^^^^^^^^ required by this bound in `ContextBase::<'a, &Positioned<Field>>::param_value`
 
@@ -59,8 +63,9 @@ error[E0277]: `Ambient<Caller>` is read by its name on this edge, and this param
 note: required by a bound in `nest_rs::core::__private::ParamProbe::<T>::decoded`
   --> $WORKSPACE/crates/nest-rs-core/src/param.rs
    |
+   | impl<T: TailParam> ParamProbe<T> {
+...
    |     pub fn decoded(&self)
-   |            ------- required by a bound in this associated function
    |     where
    |         T: ProtocolArgument,
    |            ^^^^^^^^^^^^^^^^ required by this bound in `ParamProbe::<T>::decoded`
@@ -76,8 +81,9 @@ error[E0277]: `Scoped<Cart>` is read by its name on this edge, and this paramete
 note: required by a bound in `nest_rs::core::__private::ParamProbe::<T>::decoded`
   --> $WORKSPACE/crates/nest-rs-core/src/param.rs
    |
+   | impl<T: TailParam> ParamProbe<T> {
+...
    |     pub fn decoded(&self)
-   |            ------- required by a bound in this associated function
    |     where
    |         T: ProtocolArgument,
    |            ^^^^^^^^^^^^^^^^ required by this bound in `ParamProbe::<T>::decoded`

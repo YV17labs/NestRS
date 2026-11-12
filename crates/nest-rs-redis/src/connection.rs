@@ -401,6 +401,10 @@ pub(crate) fn said<'a, E: std::error::Error + 'static>(
 /// over [`Backoff::RECONNECT`]'s curve drawn from `seed` — every replica's
 /// own, so replicas that lost Valkey together do not dial it again together —
 /// each attempt [`said`].
+#[expect(
+    clippy::result_large_err,
+    reason = "a dial attempt runs at boot and on reconnection, never per command: its refusal's size costs no request"
+)]
 pub(crate) async fn proved<T, E, F, Fut>(
     instance: &RedisInstance,
     budget: Duration,

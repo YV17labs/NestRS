@@ -145,7 +145,7 @@ impl OutboxStore for MemoryOutbox {
         let failing = self
             .inner
             .arm_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
             })
             .is_ok();

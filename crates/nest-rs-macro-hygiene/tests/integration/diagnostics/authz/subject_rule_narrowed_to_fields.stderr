@@ -13,8 +13,9 @@ help: the trait `RowSubject` is not implemented for `Exporting`
 note: required by a bound in `RuleSpec::<'_, S>::fields`
   --> $WORKSPACE/crates/nest-rs-authz/src/builder.rs
    |
+   | impl<S: Subject> RuleSpec<'_, S> {
+...
    |     pub fn fields<C: IdenStatic>(mut self, columns: impl IntoIterator<Item = C>) -> Self
-   |            ------ required by a bound in this associated function
    |     where
    |         S: RowSubject<__Column = C>,
    |            ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RuleSpec::<'_, S>::fields`

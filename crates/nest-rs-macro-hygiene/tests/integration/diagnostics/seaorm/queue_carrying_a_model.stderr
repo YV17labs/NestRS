@@ -18,6 +18,8 @@ note: required for `post::Model` to implement `for<'de> nest_rs::mcp::rmcp::serd
 note: required by a bound in `nest_rs::queue::Queue::Job`
   --> $WORKSPACE/crates/nest-rs-queue/src/queue.rs
    |
+   | pub trait Queue: 'static {
+...
    |     type Job: Job;
    |               ^^^ required by this bound in `Queue::Job`
    = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)
@@ -42,6 +44,8 @@ note: required for `post::Model` to implement `for<'de> nest_rs::mcp::rmcp::serd
 note: required by a bound in `nest_rs::queue::Destination::Job`
   --> $WORKSPACE/crates/nest-rs-queue/src/destination.rs
    |
+   | pub trait Destination {
+   |     /// The payload this destination accepts.
    |     type Job: Job;
    |               ^^^ required by this bound in `Destination::Job`
    = note: this error originates in the attribute macro `expose` (in Nightly builds, run with -Z macro-backtrace for more info)

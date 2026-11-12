@@ -9,8 +9,9 @@ error[E0277]: `Ambient<Caller>` is read by its name on this edge, and this param
 note: required by a bound in `nest_rs::core::__private::ParamProbe::<T>::decoded`
   --> $WORKSPACE/crates/nest-rs-core/src/param.rs
    |
+   | impl<T: TailParam> ParamProbe<T> {
+...
    |     pub fn decoded(&self)
-   |            ------- required by a bound in this associated function
    |     where
    |         T: ProtocolArgument,
    |            ^^^^^^^^^^^^^^^^ required by this bound in `ParamProbe::<T>::decoded`

@@ -11,14 +11,7 @@ help: the trait `nest_rs::core::ExceptionFilter` is not implemented for `Forgetf
    | ^^^^^^^^^^^^^^^^
    = note: implement `ExceptionFilter` for it — `type Exception`, the error it catches (`dyn Error + Send + Sync` for every one), and `async fn catch(&self, exception: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught` — beside `Layer`
    = help: the following other types implement trait `GlobalExceptionFilterList`:
-             (A, B, C, D, E, F, G, H)
-             (B, C, D, E, F, G, H)
-             (C, D, E, F, G, H)
-             (D, E, F, G, H)
-             (E, F, G, H)
-             (F, G, H)
-             (G, H)
-             (H,)
+             (T₁, T₂, …, Tₙ) for tuples of arity 1 up to and including 8
    = note: required for `(Forgetful,)` to implement `GlobalExceptionFilterList`
 note: required by a bound in `GlobalExceptionFilters`
   --> $WORKSPACE/crates/nest-rs-core/src/exception_filter.rs

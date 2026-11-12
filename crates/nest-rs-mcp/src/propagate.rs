@@ -887,7 +887,7 @@ impl Line for OperationLine<'_> {
 /// call consumes the parameters.
 macro_rules! request_method {
     (
-        $name:ident ( $($arg:ident : $arg_ty:ty),* ) -> $out:ty,
+        $name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ) -> $out:ty,
         $method:expr,
         $addressed:expr $(,)?
     ) => {
@@ -924,7 +924,7 @@ macro_rules! request_method {
 /// Delegate one notification: the request's context is installed, and
 /// nothing else is.
 macro_rules! notification_method {
-    ($name:ident ( $($arg:ident : $arg_ty:ty),* ), $method:expr $(,)?) => {
+    ($name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ), $method:expr $(,)?) => {
         fn $name(
             &self,
             $($arg: $arg_ty,)*
@@ -1011,14 +1011,16 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
         Addressed::Nothing,
     );
     request_method!(
-        list_resource_templates(request: Option<PaginatedRequestParams>)
-            -> ListResourceTemplatesResult,
+        list_resource_templates(
+            request: Option<PaginatedRequestParams>,
+        ) -> ListResourceTemplatesResult,
         ListResourceTemplatesRequestMethod::VALUE,
         Addressed::Nothing,
     );
     request_method!(
-        read_resource_directory(request: ReadResourceDirectoryRequestParams)
-            -> ReadResourceDirectoryResult,
+        read_resource_directory(
+            request: ReadResourceDirectoryRequestParams,
+        ) -> ReadResourceDirectoryResult,
         ReadResourceDirectoryRequestMethod::VALUE,
         Addressed::Resource(request.uri.clone()),
     );

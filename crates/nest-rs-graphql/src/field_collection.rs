@@ -1619,8 +1619,8 @@ impl Collection<'_> {
                 let added = replacement.len();
                 set.items.splice(index..=index, replacement);
                 // The rewritten selections apply as §6.3.2 reads, and are read below.
-                for at in index..index + added {
-                    self.conditions_of(&mut set.items[at], parent, reaching, depth)?;
+                for item in &mut set.items[index..index + added] {
+                    self.conditions_of(item, parent, reaching, depth)?;
                 }
                 index += added;
                 continue;

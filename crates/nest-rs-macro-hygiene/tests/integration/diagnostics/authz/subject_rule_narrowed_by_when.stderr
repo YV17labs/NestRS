@@ -13,8 +13,9 @@ help: the trait `RowSubject` is not implemented for `Exporting`
 note: required by a bound in `RuleSpec::<'_, S, K>::when`
   --> $WORKSPACE/crates/nest-rs-authz/src/builder.rs
    |
+   | impl<S: Subject, K> RuleSpec<'_, S, K> {
+...
    |     pub fn when(mut self, build: impl FnOnce(PredicateBuilder<S>) -> Predicate<S>) -> Self
-   |            ---- required by a bound in this associated function
    |     where
    |         S: RowSubject,
    |            ^^^^^^^^^^ required by this bound in `RuleSpec::<'_, S, K>::when`

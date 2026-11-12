@@ -81,6 +81,16 @@ mutual TLS, are dev container environments of their own (`CLAUDE.md`, *Testing*)
   starts the same compose file. *seen*
 - **`async-graphql = "=7.2"`'s floor, 7.2.0, never built**: every lockfile
   holds 7.2.1. Close: a minimal-versions resolution.
+- **The demo's and the bench SUT's images build `FROM rust:1.100-slim-trixie`,
+  which Docker Hub did not carry yet** when the toolchain moved to 1.100
+  (2026-11-12, 18:41 UTC: the tag answered `404`, the newest being
+  `1.99.1-slim-trixie`), so neither image builds until Docker's official image
+  follows the release. *seen* Close: `docker pull rust:1.100-slim-trixie`
+  answers, then `docker build -f demo/Dockerfile -t nestrs .` from the root;
+  nothing in the repository changes.
+- **The benchmark page's figures were measured on rustc 1.97.1**, which the page
+  says; the workspace builds on 1.100 since 2026-11-12. Close: the quiet bench
+  (`bench/`) on 1.100, its figures and its toolchain line replaced.
 
 ## 2. Field-level authorization — what the judged row leaves
 

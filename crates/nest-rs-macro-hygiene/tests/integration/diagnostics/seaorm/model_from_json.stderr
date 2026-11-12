@@ -5,11 +5,11 @@ error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a rep
    |                                    ^^^^^^^^^^^ this carries every column, hidden ones included
    |
    = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-help: the trait `nest_rs::mcp::rmcp::serde::Deserialize<'_>` is implemented for `post::Model`
+help: the trait `nest_rs::mcp::rmcp::serde::Deserialize<'_>` is conditionally implemented for `post::Model`
   --> tests/integration/diagnostics/seaorm/model_from_json.rs:8:5
    |
  8 |     #[expose(name = "Post")]
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied requirement introduced here: `for<'__row> nest_rs::seaorm::__private::HiddenColumns<'__row>: nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>`
 note: required for `post::Model` to implement `nest_rs::mcp::rmcp::serde::Deserialize<'_>`
   --> tests/integration/diagnostics/seaorm/model_from_json.rs:8:5
    |
@@ -22,7 +22,6 @@ note: required by a bound in `serde_json::from_str`
   --> $CARGO/serde_json-$VERSION/src/de.rs
    |
    | pub fn from_str<'a, T>(s: &'a str) -> Result<T>
-   |        -------- required by a bound in this function
    | where
    |     T: de::Deserialize<'a>,
    |        ^^^^^^^^^^^^^^^^^^^ required by this bound in `from_str`
@@ -35,13 +34,15 @@ error[E0277]: a row crosses no wire: `fn(post::Model) -> Post` builds what a rep
    |                                    ^^^^^^^^^^^^^^^^ this carries every column, hidden ones included
    |
    = help: the trait `for<'__row> nest_rs::seaorm::__private::AModelCrossesNoWire<fn(post::Model) -> Post>` is not implemented for `nest_rs::seaorm::__private::HiddenColumns<'__row>`
-help: the trait `nest_rs::mcp::rmcp::serde::Deserialize<'_>` is implemented for `Vec<T>`
+help: the trait `nest_rs::mcp::rmcp::serde::Deserialize<'_>` is conditionally implemented for `Vec<T>`
   --> $CARGO/serde_core-$VERSION/src/de/impls.rs
    |
    | / impl<'de, T> Deserialize<'de> for Vec<T>
    | | where
    | |     T: Deserialize<'de>,
-   | |________________________^
+   | |________----------------^
+   |          |
+   |          unsatisfied requirement introduced here: `post::Model: nest_rs::mcp::rmcp::serde::Deserialize<'_>`
 note: required for `post::Model` to implement `nest_rs::mcp::rmcp::serde::Deserialize<'_>`
   --> tests/integration/diagnostics/seaorm/model_from_json.rs:8:5
    |
@@ -56,7 +57,6 @@ note: required by a bound in `serde_json::from_str`
   --> $CARGO/serde_json-$VERSION/src/de.rs
    |
    | pub fn from_str<'a, T>(s: &'a str) -> Result<T>
-   |        -------- required by a bound in this function
    | where
    |     T: de::Deserialize<'a>,
    |        ^^^^^^^^^^^^^^^^^^^ required by this bound in `from_str`

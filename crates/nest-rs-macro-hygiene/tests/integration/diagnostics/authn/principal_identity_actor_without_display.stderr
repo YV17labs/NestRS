@@ -9,8 +9,9 @@ error[E0277]: `Vec<u8>` cannot be the principal's actor: `#[principal(actor)]` r
 note: required by a bound in `nest_rs::authn::__private::ActorRefusal::identifier`
   --> $WORKSPACE/crates/nest-rs-authn/src/principal.rs
    |
+   | pub trait ActorRefusal {
+...
    |     fn identifier(self) -> Option<String>
-   |        ---------- required by a bound in this associated function
    |     where
    |         Self::Field: ActorField;
    |                      ^^^^^^^^^^ required by this bound in `ActorRefusal::identifier`
@@ -26,8 +27,9 @@ error[E0277]: `std::option::Option<Opaque>` cannot be the principal's tenant: `#
 note: required by a bound in `nest_rs::authn::__private::TenantRefusal::identifier`
   --> $WORKSPACE/crates/nest-rs-authn/src/principal.rs
    |
+   | pub trait TenantRefusal {
+...
    |     fn identifier(self) -> Option<String>
-   |        ---------- required by a bound in this associated function
    |     where
    |         Self::Field: TenantField;
    |                      ^^^^^^^^^^^ required by this bound in `TenantRefusal::identifier`

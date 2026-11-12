@@ -57,5 +57,4 @@ note: required by a bound in `nest_rs::http::futures_util::StreamExt::then`
    |                      ^^^^^^ required by this bound in `StreamExt::then`
 ...
    |     fn then<Fut, F>(self, f: F) -> Then<Self, Fut, F>
-   |        ---- required by a bound in this associated function
    = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)

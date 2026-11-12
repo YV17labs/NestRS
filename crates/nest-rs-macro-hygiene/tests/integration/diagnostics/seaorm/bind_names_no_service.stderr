@@ -15,7 +15,6 @@ note: required by a bound in `nest_rs::seaorm::__private::http_bind`
   --> $WORKSPACE/crates/nest-rs-seaorm/src/http/bind.rs
    |
    | pub async fn http_bind<A, S>(
-   |              --------- required by a bound in this function
 ...
    |     S: CrudService + 'static,
    |        ^^^^^^^^^^^ required by this bound in `http_bind`
@@ -37,7 +36,6 @@ note: required by a bound in `nest_rs::seaorm::__private::http_bind`
   --> $WORKSPACE/crates/nest-rs-seaorm/src/http/bind.rs
    |
    | pub async fn http_bind<A, S>(
-   |              --------- required by a bound in this function
 ...
    |     S: CrudService + 'static,
    |        ^^^^^^^^^^^ required by this bound in `http_bind`
@@ -59,7 +57,6 @@ note: required by a bound in `nest_rs::seaorm::__private::bound_entity`
   --> $WORKSPACE/crates/nest-rs-seaorm/src/service.rs
    |
    | pub const fn bound_entity<S, E>()
-   |              ------------ required by a bound in this function
    | where
    |     S: CrudService,
    |        ^^^^^^^^^^^ required by this bound in `bound_entity`

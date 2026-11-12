@@ -1,7 +1,7 @@
 //! Files every scaffold writes (env cascade, gitignore, agent rules, …).
 
 pub(crate) const RUST_TOOLCHAIN: &str = r#"[toolchain]
-channel = "1.97"
+channel = "1.100"
 # `llvm-tools-preview` carries the `llvm-cov` / `llvm-profdata` that
 # `nestrs run test cov` shells out to. It is pinned per toolchain rather than
 # installed once per machine because those binaries only read a `.profraw`

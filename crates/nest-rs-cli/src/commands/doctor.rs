@@ -529,8 +529,8 @@ mod tests {
             "rustc {major}.{minor}.0 (abc 2025-01-01)"
         )));
 
-        assert_eq!(rustc_release("rustc 1.97"), Some((1, 97)));
-        assert_eq!(rustc_release("rustc 1.97.0-nightly (abc)"), Some((1, 97)));
+        assert_eq!(rustc_release("rustc 1.100"), Some((1, 100)));
+        assert_eq!(rustc_release("rustc 1.100.0-nightly (abc)"), Some((1, 100)));
         assert_eq!(rustc_release("rustc 1.x.0 (abc)"), None);
         assert_eq!(rustc_release("rustc 4294967296.0.0"), None);
         assert_eq!(rustc_release("hello world"), None);

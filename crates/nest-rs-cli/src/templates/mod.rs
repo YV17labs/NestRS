@@ -94,6 +94,24 @@ mod tests {
         );
     }
 
+    /// A scaffold builds on the toolchain this CLI is built on: its
+    /// `rust-toolchain.toml` pins that release and its workspace's floor names it,
+    /// so a project minutes old never resolves a framework its pin cannot compile.
+    #[test]
+    fn a_scaffold_pins_the_toolchain_the_cli_is_built_on() {
+        let floor = env!("CARGO_PKG_RUST_VERSION");
+        let toolchain = super::shared::RUST_TOOLCHAIN;
+        assert!(
+            toolchain.contains(&format!("\nchannel = \"{floor}\"\n")),
+            "{toolchain}"
+        );
+        let manifest = super::workspace::ROOT_CARGO;
+        assert!(
+            manifest.contains(&format!("\nrust-version = \"{floor}\"\n")),
+            "{manifest}"
+        );
+    }
+
     /// A suite's console holds what went wrong, whichever level development reads.
     #[test]
     fn the_test_file_keeps_a_suite_to_warnings() {

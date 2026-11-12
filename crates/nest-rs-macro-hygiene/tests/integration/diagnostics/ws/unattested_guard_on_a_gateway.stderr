@@ -32,5 +32,4 @@ note: required by a bound in `__nestrs_assert_guard_capability`
 30 | #[gateway(path = "/ws")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
 31 | #[use_guards(UnattestedGuard)]
-   |              --------------- required by a bound in this function
    = note: this error originates in the attribute macro `gateway` (in Nightly builds, run with -Z macro-backtrace for more info)

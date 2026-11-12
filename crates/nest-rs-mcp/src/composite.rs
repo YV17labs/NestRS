@@ -379,7 +379,7 @@ macro_rules! addressed_by_uri {
 
 /// One notification: delivered to every host.
 macro_rules! broadcast_notification {
-    ($name:ident ( $($arg:ident : $ty:ty),* )) => {
+    ($name:ident ( $($arg:ident : $ty:ty),* $(,)? )) => {
         async fn $name(&self, $($arg: $ty,)* context: NotificationContext<RoleServer>) {
             if let Some(only) = self.single() {
                 return only.host.$name($($arg,)* context).await;

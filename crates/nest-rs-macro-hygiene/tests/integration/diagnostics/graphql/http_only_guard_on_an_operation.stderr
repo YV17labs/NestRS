@@ -20,5 +20,4 @@ note: required by a bound in `__nestrs_assert_guard_capability`
    | ^^^^^^^^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
 ...
 40 |     #[use_guards(HttpOnlyGuard)]
-   |                  ------------- required by a bound in this function
    = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)

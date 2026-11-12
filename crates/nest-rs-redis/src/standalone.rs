@@ -290,6 +290,10 @@ fn client(
 /// client retries silently, refused credentials included. The proof is closed
 /// before the kept connection opens, so an attempt needs one of the server's
 /// `maxclients` slots, not two.
+#[expect(
+    clippy::result_large_err,
+    reason = "a dial attempt runs at boot and on reconnection, never per command: its refusal's size costs no request"
+)]
 async fn prove(
     instance: &RedisInstance,
     client: &redis::Client,

@@ -9,7 +9,6 @@ A gateway's socket opens with a handshake the server may refuse, lives within
 bounds that hold one client to its share, and closes with a code that says why.
 This page is each of those three, in the order a socket meets them.
 
-
 ## What bounds a socket
 
 `WsModule::for_root(WsConfig { .. })` pins these, and `<PREFIX>_WS__*` overlays

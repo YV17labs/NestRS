@@ -6,8 +6,6 @@ sidebar:
   order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 Configuration in nestrs is a typed struct, one file per concern, each field
 read from the `<PREFIX>_<NAMESPACE>__<FIELD>` environment variable its name
 spells. `#[config]` writes that mapping from the struct, the framework loads
@@ -134,7 +132,6 @@ through `Module::for_root(cfg)`, and from the `<PREFIX>_<NS>__<FIELD>` variable
 its name spells — and the two compose per field, the real environment
 overlaying a pin. [Pinning a config](/configuration/pinning/) is the precedence
 chain and the one seam each module offers.
-
 
 ## Inject it
 

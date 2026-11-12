@@ -1,6 +1,6 @@
 ---
 title: Logging and telemetry variables
-description: "The variables no namespace holds — RUST_LOG and <PREFIX>_LOG_* for the console, the specification's OTEL_* for the exporter."
+description: "The variables no namespace holds — `RUST_LOG` and `<PREFIX>_LOG_*` for the console, the specification's `OTEL_*` for the exporter."
 sidebar:
   order: 6.1
 ---
@@ -9,7 +9,6 @@ Two sets of variables sit outside every `<PREFIX>_<NAMESPACE>__*` namespace: the
 console logger's, which `nest-rs-core` reads with no module to import, and
 OpenTelemetry's, which its specification names. Both are read at the start, and
 both keep the ecosystem's names where the ecosystem owns them.
-
 
 ## Logging — `RUST_LOG` and `<PREFIX>_LOG_*`
 

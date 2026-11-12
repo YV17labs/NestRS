@@ -111,7 +111,6 @@ own needs no posture: the guards decide, as on a route. `#[public]` opens one on
 purpose, and `#[authorize(Action, Entity)]` gates it and judges each row it
 answers — [Message posture](/websockets/posture/).
 
-
 ## The payload
 
 Whatever you put in `data` arrives in your handler typed, and held to the
@@ -170,7 +169,6 @@ async fn history(&self) -> Vec<ChatMessageDto> {
 The handler's return type picks the reply: `()` none, `T` one frame on the
 event, `Result` an error frame for an `Err`, whose type decides what the client
 reads — [Replies and error frames](/websockets/replies/).
-
 
 ## Interceptors, filters and pipes
 

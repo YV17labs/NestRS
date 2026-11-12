@@ -197,6 +197,7 @@ mod tests {
 
     use super::*;
     use crate::session_stream::SessionStream;
+    use crate::testing::stream_of;
 
     const IDLE: Duration = Duration::from_secs(50);
     const INTERVAL: Duration = Duration::from_secs(20);
@@ -230,15 +231,8 @@ mod tests {
         let start = Instant::now();
         let (client, end) = watched();
         let (sent, unread) = tokio::sync::mpsc::channel::<ServerSseMessage>(1);
-        let _held = SessionStream::new(
-            futures_util::stream::poll_fn({
-                let mut unread = unread;
-                move |cx| unread.poll_recv(cx)
-            }),
-            Some(Arc::clone(&client)),
-            &pings(),
-            true,
-        );
+        let _held =
+            SessionStream::new(stream_of(unread), Some(Arc::clone(&client)), &pings(), true);
 
         let silence = INTERVAL + TIMEOUT;
         assert!(lives_at(start, silence - Duration::from_millis(1), &end).await);
@@ -258,10 +252,7 @@ mod tests {
         let (client, end) = watched();
         let (answer, waiting) = tokio::sync::mpsc::channel::<ServerSseMessage>(1);
         let mut call = SessionStream::new(
-            futures_util::stream::poll_fn({
-                let mut waiting = waiting;
-                move |cx| waiting.poll_recv(cx)
-            }),
+            stream_of(waiting),
             Some(Arc::clone(&client)),
             &pings(),
             false,

@@ -31,7 +31,8 @@ pub(crate) struct HeldStream {
     /// The client listens on this stream: its `GET`, first or resumed; a
     /// call's stream, resumed or not, is none.
     listening: bool,
-    /// The transport waits on this stream for a call's answer.
+    /// The transport waits on this stream for a call's answer; never on one the
+    /// client listens on.
     awaited: AtomicBool,
     /// The session let go of it: the stream ends, asking nothing more.
     released: AtomicBool,
@@ -46,7 +47,7 @@ impl HeldStream {
     /// Whether a call's answer is awaited on this stream: the transport is
     /// waiting on it, as it does while the call runs.
     pub(crate) fn is_awaited(&self) -> bool {
-        !self.listening && self.awaited.load(Ordering::Relaxed)
+        self.awaited.load(Ordering::Relaxed)
     }
 
     /// Let go of rmcp's stream: the transport reads its end next.
@@ -162,13 +163,16 @@ impl Stream for SessionStream {
                 .swap(polled.is_pending(), Ordering::Relaxed);
         // A message carried to the client, or a call's wait for its answer
         // over: either is use of the session.
-        if (matches!(polled, Poll::Ready(Some(_))) || (waited && polled.is_ready()))
-            && let Some(client) = &this.client
-        {
+        let used = match polled {
+            Poll::Ready(Some(_)) => true,
+            Poll::Ready(None) => {
+                this.ended = true;
+                waited
+            }
+            Poll::Pending => false,
+        };
+        if used && let Some(client) = &this.client {
             client.used();
-        }
-        if let Poll::Ready(None) = polled {
-            this.ended = true;
         }
         polled
     }
@@ -195,6 +199,7 @@ mod tests {
 
     use super::*;
     use crate::ping::is_ping_answer;
+    use crate::testing::stream_of;
 
     const INTERVAL: Duration = Duration::from_secs(20);
     const TIMEOUT: Duration = Duration::from_secs(5);
@@ -320,7 +325,7 @@ mod tests {
         let client = Arc::new(SessionClient::new(CancellationToken::new()));
         let (sent, unread) = tokio::sync::mpsc::channel::<ServerSseMessage>(1);
         let mut stream = SessionStream::new(
-            tokio_stream_of(unread),
+            stream_of(unread),
             Some(Arc::clone(&client)),
             &pings(),
             false,
@@ -332,12 +337,5 @@ mod tests {
         assert!(stream.next().await.is_none());
         let late = SessionStream::new(quiet(), Some(client), &pings(), true);
         assert!(late.held.inner.lock().expect("unpoisoned").is_none());
-    }
-
-    /// `receiver` as a stream.
-    fn tokio_stream_of(
-        mut receiver: tokio::sync::mpsc::Receiver<ServerSseMessage>,
-    ) -> impl Stream<Item = ServerSseMessage> + Send + 'static {
-        futures_util::stream::poll_fn(move |cx| receiver.poll_recv(cx))
     }
 }

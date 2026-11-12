@@ -33,7 +33,7 @@ use nest_rs_database::UnitOfWork;
 /// trying again.
 const SESSION_RETRY_AFTER_SECS: u32 = 5;
 
-// rmcp 3.8 quotes what a client sent at every level, `error` included: the
+// rmcp 3.9 quotes what a client sent at every level, `error` included: the
 // session id a client named, when the session store fails to load it. The
 // mount's sessions and store say its failure lines instead (`sessions.rs`).
 nest_rs_core::inventory::submit! {

@@ -67,7 +67,7 @@ async-compression = { version = "0.4", features = ["tokio", "brotli", "deflate",
 rustls = "0.23"  # public in nest-rs-testing alone
 rustls-native-certs = "0.8"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }
-aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys"] }
+aws-lc-rs = { version = "1.19", default-features = false, features = ["aws-lc-sys"] }
 
 object_store = { version = "0.14", features = ["aws"] }
 http = "1.5"  # public
@@ -130,7 +130,7 @@ trybuild = "1.0"
 
 flate2 = "1.1"
 
-rmcp = { version = "3.8", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }  # public
+rmcp = { version = "3.9", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }  # public
 schemars = { version = "1.2", features = ["uuid1", "chrono04"] }  # public
 
 croner = { version = "4.0", default-features = false }
@@ -182,7 +182,7 @@ criterion = { version = "0.8", default-features = false }
 # The embedded source of `nest-rs-static-files`: a folder compiled into the
 # binary. `debug-embed` embeds in a debug build too, so what a test serves is
 # what a release serves, and the mode reading the folder at runtime never runs.
-rust-embed = { version = "8.13", features = ["debug-embed"] }  # public
+rust-embed = { version = "8.14", features = ["debug-embed"] }  # public
 
 # `=`: macro expansions and sibling crates call `__private`, which semver does
 # not cover.

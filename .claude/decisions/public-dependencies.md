@@ -170,3 +170,13 @@ with `downcast_ref`. They no longer are: a call's error holds the sentence sayin
 them (`storage-port-by-url.md`, this date), so object_store is private with nothing
 of it reachable, and `Init`'s boxed source is what refused the configuration, not a
 contract to read.
+
+## 2026-11-12 — rmcp 3.9, aws-lc-rs 1.19, rust-embed 8.14
+
+`cargo deny` refused both lockfiles on RUSTSEC-2026-0462 (rmcp before 3.9.0: a
+Streamable HTTP client buffers a response body without bound). The framework
+builds rmcp's server alone, but the advisory names the crate's version, and a
+floor below the fix lets an app resolve it, so rmcp's floor is 3.9. aws-lc-rs and
+rust-embed take their newest minors, as every requirement does (2026-10-27,
+above); every lockfile was re-resolved whole, the owner lifting the run's
+refusal of `cargo update` for this change.

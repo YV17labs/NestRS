@@ -55,13 +55,15 @@ use rmcp::model::{
     CancelTaskMethod, CancelTaskParams, CancelledNotificationMethod, CancelledNotificationParam,
     CompleteRequestMethod, CompleteRequestParams, CompleteResult, ConstString, CustomNotification,
     CustomRequest, CustomResult, DiscoverRequestMethod, DiscoverResult, ErrorCode,
-    GetPromptRequestMethod, GetPromptRequestParams, GetPromptResponse, GetTaskMethod,
-    GetTaskParams, GetTaskResult, InitializeRequestParams, InitializeResult,
-    InitializeResultMethod, InitializedNotificationMethod, ListPromptsRequestMethod,
-    ListPromptsResult, ListResourceTemplatesRequestMethod, ListResourceTemplatesResult,
-    ListResourcesRequestMethod, ListResourcesResult, ListToolsRequestMethod, ListToolsResult,
-    PaginatedRequestParams, PingRequestMethod, ProgressNotificationMethod,
-    ProgressNotificationParam, ProtocolVersion, ReadResourceRequestMethod,
+    GetPromptRequestMethod, GetPromptRequestParams, GetPromptResponse, GetSkillRequestMethod,
+    GetSkillRequestParams, GetSkillResult, GetTaskMethod, GetTaskParams, GetTaskResult,
+    InitializeRequestParams, InitializeResult, InitializeResultMethod,
+    InitializedNotificationMethod, ListPromptsRequestMethod, ListPromptsResult,
+    ListResourceTemplatesRequestMethod, ListResourceTemplatesResult, ListResourcesRequestMethod,
+    ListResourcesResult, ListSkillsRequestMethod, ListSkillsResult, ListToolsRequestMethod,
+    ListToolsResult, PaginatedRequestParams, PingRequestMethod, ProgressNotificationMethod,
+    ProgressNotificationParam, ProtocolVersion, ReadResourceDirectoryRequestMethod,
+    ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequestMethod,
     ReadResourceRequestParams, ReadResourceResponse, Reference, RootsListChangedNotificationMethod,
     ServerConfig, SetLevelRequestMethod, SetLevelRequestParams, SubscribeRequestMethod,
     SubscribeRequestParams, SubscriptionFilter, SubscriptionsListenRequestMethod, Tool,
@@ -1015,6 +1017,12 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
         Addressed::Nothing,
     );
     request_method!(
+        read_resource_directory(request: ReadResourceDirectoryRequestParams)
+            -> ReadResourceDirectoryResult,
+        ReadResourceDirectoryRequestMethod::VALUE,
+        Addressed::Resource(request.uri.clone()),
+    );
+    request_method!(
         subscribe(request: SubscribeRequestParams) -> (),
         SubscribeRequestMethod::VALUE,
         Addressed::Resource(request.uri.clone()),
@@ -1023,6 +1031,17 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
         unsubscribe(request: UnsubscribeRequestParams) -> (),
         UnsubscribeRequestMethod::VALUE,
         Addressed::Resource(request.uri.clone()),
+    );
+
+    request_method!(
+        get_skill(request: GetSkillRequestParams) -> GetSkillResult,
+        GetSkillRequestMethod::VALUE,
+        Addressed::Resource(request.uri.clone()),
+    );
+    request_method!(
+        list_skills(request: Option<PaginatedRequestParams>) -> ListSkillsResult,
+        ListSkillsRequestMethod::VALUE,
+        Addressed::Nothing,
     );
 
     request_method!(

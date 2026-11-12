@@ -6,8 +6,8 @@
 //!
 //! | Kind | Methods | Behaviour |
 //! |---|---|---|
-//! | **Listing** | `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list` | Every host is asked; the entries are concatenated in registration order onto the first host's envelope. |
-//! | **Addressed** | `tools/call`, `prompts/get`, `resources/read`, `tasks/*`, `resources/subscribe`, custom methods | Routed to the host that declares the name, whatever it answers; failing that, offered to each host in turn until one does not answer *not-found* — a task, until one holds it; a prompt, to the host whose own listing names it. Refused by all, the first host serving the method answers. |
+//! | **Listing** | `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `skills/list` | Every host is asked; the entries are concatenated in registration order onto the first host's envelope. |
+//! | **Addressed** | `tools/call`, `prompts/get`, `resources/read`, `resources/directory/read`, `skills/get`, `tasks/*`, `resources/subscribe`, custom methods | Routed to the host that declares the name, whatever it answers; failing that, offered to each host in turn until one does not answer *not-found* — a task, until one holds it; a skill or a directory, until one serves its URI; a prompt, to the host whose own listing names it. Refused by all, the first host serving the method answers. |
 //! | **Broadcast** | `logging/setLevel`, every notification | Delivered to every host. |
 //!
 //! Wherever several hosts answer *not-found*, a host that does not serve the
@@ -30,14 +30,17 @@ use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CancelTaskParams, CancelledNotificationParam,
     CompleteRequestParams, CompleteResult, CustomNotification, CustomRequest, CustomResult,
-    DiscoverResult, ErrorCode, GetPromptRequestParams, GetPromptResponse, GetTaskParams,
-    GetTaskResult, InitializeRequestParams, InitializeResult, ListPromptsResult,
-    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
-    ProgressNotificationParam, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-    ServerCapabilities, ServerConfig, SetLevelRequestParams, SubscribeRequestParams,
-    SubscriptionFilter, Tool, UnsubscribeRequestParams, UpdateTaskParams,
+    DiscoverResult, ErrorCode, ExtensionCapabilities, GetPromptRequestParams, GetPromptResponse,
+    GetSkillRequestParams, GetSkillResult, GetTaskParams, GetTaskResult, InitializeRequestParams,
+    InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListSkillsResult, ListToolsResult, PaginatedRequestParams, ProgressNotificationParam,
+    ProtocolVersion, ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult,
+    ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities, ServerConfig,
+    SetLevelRequestParams, SubscribeRequestParams, SubscriptionFilter, Tool,
+    UnsubscribeRequestParams, UpdateTaskParams,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
+use serde_json::Value;
 
 use crate::McpError;
 use crate::error::{opaque_answer, prompt_not_found, refuses_task, refuses_tool};
@@ -222,9 +225,34 @@ where
     }
 }
 
+/// An extension two hosts declare offers what either offers: a flag either
+/// sets is set, as [`or_flag`] reads the built-in capabilities, and a setting
+/// the first did not state is taken from the second.
+fn union_extensions(into: &mut Option<ExtensionCapabilities>, from: Option<ExtensionCapabilities>) {
+    let Some(from) = from else {
+        return;
+    };
+    let into = into.get_or_insert_with(ExtensionCapabilities::default);
+    for (id, settings) in from {
+        let Some(held) = into.get_mut(&id) else {
+            into.insert(id, settings);
+            continue;
+        };
+        for (key, value) in settings {
+            match (held.get_mut(&key), value) {
+                (Some(Value::Bool(held)), Value::Bool(offered)) => *held |= offered,
+                (Some(_), _) => {}
+                (None, value) => {
+                    held.insert(key, value);
+                }
+            }
+        }
+    }
+}
+
 fn merge_capabilities(into: &mut ServerCapabilities, from: ServerCapabilities) {
     union(&mut into.experimental, from.experimental);
-    union(&mut into.extensions, from.extensions);
+    union_extensions(&mut into.extensions, from.extensions);
     union(&mut into.logging, from.logging);
     union(&mut into.completions, from.completions);
     if let Some(prompts) = from.prompts {
@@ -320,6 +348,28 @@ macro_rules! addressed_task {
             }
             self.route_past(
                 |refusal| refuses_task(refusal, &request.task_id),
+                |host| host.$name(request.clone(), context.clone()),
+            )
+            .await
+        }
+    };
+}
+
+/// One SEP-2640 method addressed by URI: routed as [`addressed!`] is, past a
+/// host answering `-32602`, the code the extension gives a URI a host does not
+/// serve, rather than `-32002`.
+macro_rules! addressed_by_uri {
+    ($name:ident ( $req:ty ) -> $out:ty) => {
+        async fn $name(
+            &self,
+            request: $req,
+            context: RequestContext<RoleServer>,
+        ) -> Result<$out, McpError> {
+            if let Some(only) = self.single() {
+                return only.host.$name(request, context).await;
+            }
+            self.route_past(
+                |refusal| refusal.code == ErrorCode::INVALID_PARAMS,
                 |host| host.$name(request.clone(), context.clone()),
             )
             .await
@@ -467,8 +517,14 @@ impl ServerHandler for CompositeHandler {
         resource_templates,
         "resources/templates/list"
     );
+    addressed_by_uri!(
+        read_resource_directory(ReadResourceDirectoryRequestParams) -> ReadResourceDirectoryResult
+    );
     addressed!(subscribe(SubscribeRequestParams) -> ());
     addressed!(unsubscribe(UnsubscribeRequestParams) -> ());
+
+    merged_listing!(list_skills, ListSkillsResult, skills, "skills/list");
+    addressed_by_uri!(get_skill(GetSkillRequestParams) -> GetSkillResult);
 
     /// A host with nothing to complete answers an empty `Ok`, not *not-found*: the
     /// first non-empty completion wins, an empty one or a refusal is the fallback
@@ -699,5 +755,40 @@ mod protocol_intersection {
             vec![older, shared],
             "one host alone keeps its whole list — the merge is what narrows",
         );
+    }
+}
+
+#[cfg(test)]
+mod capability_union {
+    use super::*;
+
+    #[test]
+    fn an_extension_two_hosts_declare_offers_what_either_offers() {
+        let mut merged = ServerCapabilities::builder()
+            .enable_resources()
+            .enable_skills_with_directory_read()
+            .build();
+        let plain = ServerCapabilities::builder()
+            .enable_resources()
+            .enable_skills()
+            .build();
+        merge_capabilities(&mut merged, plain);
+        assert!(
+            merged.supports_directory_read(),
+            "one host's directory reads survive another's plain skills: {merged:?}"
+        );
+
+        let mut merged = ServerCapabilities::builder()
+            .enable_resources()
+            .enable_skills()
+            .build();
+        merge_capabilities(
+            &mut merged,
+            ServerCapabilities::builder()
+                .enable_resources()
+                .enable_skills_with_directory_read()
+                .build(),
+        );
+        assert!(merged.supports_directory_read(), "{merged:?}");
     }
 }

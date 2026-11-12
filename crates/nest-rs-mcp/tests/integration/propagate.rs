@@ -23,11 +23,13 @@ use nest_rs_mcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams,
     CancelledNotificationParam, CompleteRequestParams, CompleteResult, ContentBlock,
     CustomNotification, CustomRequest, CustomResult, DiscoverResult, GetPromptRequestParams,
-    GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskResult, ListPromptsResult,
-    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
-    ProgressNotificationParam, PromptMessage, ProtocolVersion, ReadResourceRequestParams,
-    ReadResourceResponse, ReadResourceResult, ResourceContents, Role, ServerCapabilities,
-    ServerConfig, SetLevelRequestParams, SubscribeRequestParams, SubscriptionFilter, Tool,
+    GetPromptResponse, GetPromptResult, GetSkillRequestParams, GetSkillResult, GetTaskParams,
+    GetTaskResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListSkillsResult, ListToolsResult, PaginatedRequestParams, ProgressNotificationParam,
+    PromptMessage, ProtocolVersion, ReadResourceDirectoryRequestParams,
+    ReadResourceDirectoryResult, ReadResourceRequestParams, ReadResourceResponse,
+    ReadResourceResult, ResourceContents, Role, ServerCapabilities, ServerConfig,
+    SetLevelRequestParams, SubscribeRequestParams, SubscriptionFilter, Tool,
     UnsubscribeRequestParams, UpdateTaskParams,
 };
 use nest_rs_mcp::rmcp::serde_json::{self, json};
@@ -71,6 +73,7 @@ impl ServerHandler for ProbeHandler {
                 .enable_logging()
                 .enable_completions()
                 .enable_tasks()
+                .enable_skills_with_directory_read()
                 .build(),
         )
     }
@@ -182,6 +185,33 @@ impl ServerHandler for ProbeHandler {
     ) -> Result<ListResourceTemplatesResult, McpError> {
         self.mark("list_resource_templates");
         Ok(ListResourceTemplatesResult::default())
+    }
+
+    async fn read_resource_directory(
+        &self,
+        _request: ReadResourceDirectoryRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceDirectoryResult, McpError> {
+        self.mark("read_resource_directory");
+        Err(McpError::invalid_params("no directory", None))
+    }
+
+    async fn list_skills(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListSkillsResult, McpError> {
+        self.mark("list_skills");
+        Ok(ListSkillsResult::default())
+    }
+
+    async fn get_skill(
+        &self,
+        _request: GetSkillRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetSkillResult, McpError> {
+        self.mark("get_skill");
+        Err(McpError::invalid_params("no skill", None))
     }
 
     async fn subscribe(
@@ -297,11 +327,13 @@ const EXPECTED: &[&str] = &[
     "discover",
     "get_info",
     "get_prompt",
+    "get_skill",
     "get_task",
     "get_tool",
     "list_prompts",
     "list_resource_templates",
     "list_resources",
+    "list_skills",
     "list_tools",
     "listen",
     "on_cancelled",
@@ -312,6 +344,7 @@ const EXPECTED: &[&str] = &[
     "on_roots_list_changed",
     "ping",
     "read_resource",
+    "read_resource_directory",
     "set_level",
     "subscribe",
     "supported_protocol_versions",
@@ -377,6 +410,9 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
         ("resources/read", json!({ "uri": "probe://one" })),
         ("resources/subscribe", json!({ "uri": "probe://one" })),
         ("resources/unsubscribe", json!({ "uri": "probe://one" })),
+        ("resources/directory/read", json!({ "uri": "probe://dir/" })),
+        ("skills/list", json!({})),
+        ("skills/get", json!({ "uri": "probe://skill/SKILL.md" })),
         (
             "completion/complete",
             json!({

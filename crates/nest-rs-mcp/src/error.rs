@@ -611,7 +611,7 @@ const PARSE_ERROR: &str = "Parse error";
 /// JSON-RPC 2.0's words for JSON that is no request object (§5.1).
 const INVALID_REQUEST: &str = "Invalid Request";
 
-/// How rmcp 3.8 opens its refusal of a body it cannot read as a JSON-RPC
+/// How rmcp 3.9 opens its refusal of a body it cannot read as a JSON-RPC
 /// message, serde's error after it.
 const UNREAD_MESSAGE: &str = "fail to deserialize request body ";
 
@@ -727,10 +727,10 @@ pub(crate) enum McpPostureError {
 /// MCP's words for a resource the server cannot read.
 const RESOURCE_NOT_FOUND: &str = "Resource not found";
 
-/// rmcp 3.8's answer to a session it does not hold, word for word.
+/// rmcp 3.9's answer to a session it does not hold, word for word.
 pub(crate) const SESSION_NOT_FOUND: &str = "Not Found: Session not found";
 
-/// rmcp 3.8's streamable-HTTP refusals written as text, word for word, that
+/// rmcp 3.9's streamable-HTTP refusals written as text, word for word, that
 /// quote nothing the request carried: what a client needs to fix its call.
 const TRANSPORT_SENTENCES: [&str; 14] = [
     "Not Acceptable: Client must accept both application/json and text/event-stream",
@@ -752,7 +752,7 @@ const TRANSPORT_SENTENCES: [&str; 14] = [
 /// rmcp's refusal of a body past the cap, the configured cap between the two.
 const TOO_LARGE: (&str, &str) = ("Payload Too Large: request body exceeds ", " bytes");
 
-/// rmcp 3.8's JSON-RPC refusals, word for word, that quote nothing the request
+/// rmcp 3.9's JSON-RPC refusals, word for word, that quote nothing the request
 /// carried.
 const TRANSPORT_MESSAGES: [&str; 8] = [
     "Invalid Request: MCP-Protocol-Version header is not valid UTF-8",

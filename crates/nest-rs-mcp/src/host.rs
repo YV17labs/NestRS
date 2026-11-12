@@ -15,12 +15,13 @@ use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CancelTaskParams, CancelledNotificationParam,
     CompleteRequestParams, CompleteResult, CustomNotification, CustomRequest, CustomResult,
-    DiscoverResult, GetPromptRequestParams, GetPromptResponse, GetTaskParams, GetTaskResult,
-    InitializeRequestParams, InitializeResult, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListToolsResult, PaginatedRequestParams, ProgressNotificationParam,
-    ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ServerConfig,
-    SetLevelRequestParams, SubscribeRequestParams, SubscriptionFilter, Tool,
-    UnsubscribeRequestParams, UpdateTaskParams,
+    DiscoverResult, GetPromptRequestParams, GetPromptResponse, GetSkillRequestParams,
+    GetSkillResult, GetTaskParams, GetTaskResult, InitializeRequestParams, InitializeResult,
+    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListSkillsResult,
+    ListToolsResult, PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion,
+    ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequestParams,
+    ReadResourceResponse, ServerConfig, SetLevelRequestParams, SubscribeRequestParams,
+    SubscriptionFilter, Tool, UnsubscribeRequestParams, UpdateTaskParams,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 
@@ -120,8 +121,12 @@ dyn_host! {
         list_resources(request: Option<PaginatedRequestParams>) -> ListResourcesResult,
         list_resource_templates(request: Option<PaginatedRequestParams>)
             -> ListResourceTemplatesResult,
+        read_resource_directory(request: ReadResourceDirectoryRequestParams)
+            -> ReadResourceDirectoryResult,
         subscribe(request: SubscribeRequestParams) -> (),
         unsubscribe(request: UnsubscribeRequestParams) -> (),
+        list_skills(request: Option<PaginatedRequestParams>) -> ListSkillsResult,
+        get_skill(request: GetSkillRequestParams) -> GetSkillResult,
         complete(request: CompleteRequestParams) -> CompleteResult,
         set_level(request: SetLevelRequestParams) -> (),
         get_task(request: GetTaskParams) -> GetTaskResult,

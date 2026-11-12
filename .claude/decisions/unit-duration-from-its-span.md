@@ -7,7 +7,8 @@ ready-made dashboards read — with nothing written, after comparing
 backend of its own.
 
 A unit whose edge's conventions name a duration histogram declares it beside
-the unit (`unit!`'s `duration:`, a `UnitDuration`): `http.request` records in
+the unit (`unit!`'s `duration:`, a `DurationHistogram`, which a client operation
+names too): `http.request` records in
 `http.server.request.duration`, `queue.job` in `messaging.process.duration`,
 `mcp.operation` in `mcp.server.operation.duration`. `nest-rs-opentelemetry`
 installs a layer timing each such span from its opening to its close, keyed by
@@ -23,11 +24,12 @@ Refused:
 - **Recording at the operation line**: HTTP files no line with its access log
   off, and `nest_rs::operation=off` silences every line, so a console setting
   would switch the metrics off.
-- **One filter in front of every layer**: `RUST_LOG=warn` disabled the
-  operation spans, and with them the durations. Each layer carries its filter,
-  the durations theirs (`MeasuredUnits`); an absent layer keeps one too, since
-  `tracing-subscriber` reads an unfiltered `None` as a layer enabling every
-  callsite.
+- **One filter in front of every layer, where the metrics export**:
+  `RUST_LOG=warn` disabled the operation spans, and with them the durations.
+  There the log filter stands in front of the log layers together and the
+  durations carry their own (`MeasuredUnits`); a filter per log layer was
+  refused, since filters that disagree on a callsite leave it to be asked on
+  every event. Where no metric exports, the one filter stays in front of all.
 - **Keying by whatever the span holds**: a span keeps what the conventions
   require as the client sent it (an MCP method only the client named), and a
   metric attribute's every value is a series a backend keeps. A field the

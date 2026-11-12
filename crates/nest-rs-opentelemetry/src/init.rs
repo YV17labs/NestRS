@@ -1,4 +1,6 @@
 #[cfg(feature = "otlp")]
+use tracing::Dispatch;
+#[cfg(feature = "otlp")]
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt;
@@ -66,7 +68,6 @@ impl OpenTelemetry {
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
         let console = config.console()?;
         let filter = log_filter(&console.filter);
-        let console_layer = ConsoleLayer::new(console.format, console.source_location);
         // The boot line says what the console writes: `format` may hold `ByProfile`.
         let log_format = if console.format.writes_json() {
             "json"
@@ -83,42 +84,49 @@ impl OpenTelemetry {
                 crate::process_metrics::ProcessMetrics::observe(&meter, started);
                 crate::tokio_metrics::TokioMetrics::observe(&meter);
             }
-            let otel_layer = tracing_opentelemetry::layer().with_tracer(exporters.tracer);
             // Seeded here rather than mounted by a module: a queue worker imports no
             // transport.
             crate::linker::install();
-            let traces_export = matches!(
-                exporters.summary.destinations[0],
-                crate::otlp::Destination::Endpoint(_)
-            );
             crate::client_operations::install(
-                traces_export.then_some(&exporters.tracer_provider),
+                exporters
+                    .traces_export
+                    .then_some(&exporters.tracer_provider),
                 exporters.meter_provider.as_ref(),
             );
 
-            // A filter per layer, so a unit's duration is counted whatever the
-            // console writes. An absent layer keeps one too: unfiltered, `None`
-            // reads as a layer enabling every callsite.
             let appender_layer = exporters
                 .logger_provider
                 .as_ref()
-                .map(opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new)
-                .with_filter(log_filter(&console.filter));
-            let unit_durations = exporters
-                .meter_provider
-                .as_ref()
-                .map(crate::unit_durations::UnitDurations::new)
-                .with_filter(crate::unit_durations::MeasuredUnits::when(
-                    exporters.meter_provider.is_some(),
-                ));
-
-            if !install_global_subscriber(
-                Registry::default()
-                    .with(console_layer.with_filter(filter))
-                    .with(otel_layer.with_filter(log_filter(&console.filter)))
-                    .with(appender_layer)
-                    .with(unit_durations),
-            ) {
+                .map(opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new);
+            // Where a unit's duration is counted, the log filter stands in
+            // front of the log layers alone, so the durations count whatever
+            // the console writes; elsewhere in front of all, where every
+            // callsite it settles stays settled.
+            let subscriber = match exporters.meter_provider.as_ref() {
+                None => Dispatch::new(
+                    Registry::default()
+                        .with(filter)
+                        .with(ConsoleLayer::new(console.format, console.source_location))
+                        .with(tracing_opentelemetry::layer().with_tracer(exporters.tracer))
+                        .with(appender_layer),
+                ),
+                Some(provider) => Dispatch::new(
+                    Registry::default()
+                        .with(
+                            ConsoleLayer::new(console.format, console.source_location)
+                                .and_then(
+                                    tracing_opentelemetry::layer().with_tracer(exporters.tracer),
+                                )
+                                .and_then(appender_layer)
+                                .with_filter(filter),
+                        )
+                        .with(
+                            crate::unit_durations::UnitDurations::new(provider)
+                                .with_filter(crate::unit_durations::MeasuredUnits),
+                        ),
+                ),
+            };
+            if !install_global_subscriber(subscriber) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
 
@@ -175,7 +183,11 @@ impl OpenTelemetry {
                 nest_rs_core::AppIdentity::current(),
                 &nest_rs_config::env_var,
             )?;
-            if !install_global_subscriber(Registry::default().with(filter).with(console_layer)) {
+            if !install_global_subscriber(
+                Registry::default()
+                    .with(filter)
+                    .with(ConsoleLayer::new(console.format, console.source_location)),
+            ) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
             say_retired_variables();

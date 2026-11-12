@@ -8,37 +8,16 @@
 
 use std::time::SystemTime;
 
-use nest_rs_core::client_operation::{self, ClientDuration, ClientOperation, ClientValue};
+use nest_rs_core::client_operation::{
+    self, ClientOperation, ClientValue, DB_CLIENT_OPERATION_DURATION, DB_COLLECTION_NAME,
+    DB_NAMESPACE, DB_OPERATION_NAME, DB_QUERY_SUMMARY, DB_SYSTEM_NAME, SERVER_ADDRESS, SERVER_PORT,
+};
 use nest_rs_core::operation_log::OTHER;
 use sea_orm::DatabaseConnection;
 use sea_orm::metric::Info;
 use sea_orm::sqlx::postgres::PgConnectOptions;
 
 use crate::query_summary::QuerySummary;
-
-/// The database conventions' client duration, keyed by what a statement does,
-/// to which table, in which database on which server.
-const STATEMENT: ClientDuration = ClientDuration::new(
-    "db.client.operation.duration",
-    "Duration of database client operations.",
-    &[
-        DB_SYSTEM_NAME,
-        DB_NAMESPACE,
-        DB_OPERATION_NAME,
-        DB_COLLECTION_NAME,
-        DB_QUERY_SUMMARY,
-        SERVER_ADDRESS,
-        SERVER_PORT,
-    ],
-);
-
-const DB_SYSTEM_NAME: &str = "db.system.name";
-const DB_NAMESPACE: &str = "db.namespace";
-const DB_OPERATION_NAME: &str = "db.operation.name";
-const DB_COLLECTION_NAME: &str = "db.collection.name";
-const DB_QUERY_SUMMARY: &str = "db.query.summary";
-const SERVER_ADDRESS: &str = "server.address";
-const SERVER_PORT: &str = "server.port";
 
 /// The conventions' name for the database this driver speaks to.
 const POSTGRESQL: &str = "postgresql";
@@ -74,7 +53,7 @@ impl Statements {
     fn record(&self, info: &Info<'_>) {
         let summary = QuerySummary::of(&info.statement.sql);
         let text = summary.as_ref().map(QuerySummary::text);
-        let mut attributes = Vec::with_capacity(STATEMENT.keys().len());
+        let mut attributes = Vec::with_capacity(DB_CLIENT_OPERATION_DURATION.attributes().len());
         attributes.push((DB_SYSTEM_NAME, ClientValue::Text(POSTGRESQL)));
         if let Some(namespace) = &self.namespace {
             attributes.push((DB_NAMESPACE, ClientValue::Text(namespace)));
@@ -92,20 +71,17 @@ impl Statements {
         attributes.push((SERVER_PORT, ClientValue::Integer(self.port)));
 
         let answered = SystemTime::now();
-        let operation = ClientOperation::new(
-            &STATEMENT,
+        // sea-orm reports a failure without its error; the conventions' class
+        // for one with no code readily available is `_OTHER`.
+        ClientOperation::new(
+            &DB_CLIENT_OPERATION_DURATION,
             text.as_deref().unwrap_or(POSTGRESQL),
             answered.checked_sub(info.elapsed).unwrap_or(answered),
             info.elapsed,
             &attributes,
-        );
-        // sea-orm reports a failure without its error; the conventions' class
-        // for one with no code readily available is `_OTHER`.
-        if info.failed {
-            operation.failed(OTHER).record();
-        } else {
-            operation.record();
-        }
+        )
+        .failed(info.failed.then_some(OTHER))
+        .record();
     }
 }
 

@@ -5,13 +5,7 @@
 use nest_rs_core::Correlation;
 use nestrs_unit_probe::TIMED_DURATION;
 
-use crate::otlp::{Collector, trusting};
-
-/// Whether `body` holds `needle`: an OTLP/protobuf export writes a metric's
-/// name as its bytes.
-pub(crate) fn holds(body: &[u8], needle: &[u8]) -> bool {
-    body.windows(needle.len()).any(|window| window == needle)
-}
+use crate::otlp::{Collector, metric_exports, trusting};
 
 #[test]
 fn a_units_duration_is_exported_with_the_console_filtered_to_warn() {
@@ -32,15 +26,11 @@ fn a_units_duration_is_exported_with_the_console_filtered_to_warn() {
     ));
     drop(otel);
 
-    let exports: Vec<_> = collector
-        .received()
-        .into_iter()
-        .filter(|export| export.path == "/v1/metrics")
-        .collect();
+    let exports = metric_exports(&collector);
     assert!(
         exports
             .iter()
-            .any(|export| holds(&export.body, TIMED_DURATION.name().as_bytes())),
+            .any(|export| export.holds(TIMED_DURATION.name())),
         "the duration reached the collector: {exports:?}",
     );
 }

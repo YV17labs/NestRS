@@ -514,7 +514,7 @@ const TOOL_ERROR: &str = "tool_error";
 
 /// The span attribute OpenTelemetry's MCP conventions record a JSON-RPC
 /// error's code under, as a string.
-const RPC_RESPONSE_STATUS_CODE: &str = "rpc.response.status_code";
+pub(crate) const RPC_RESPONSE_STATUS_CODE: &str = "rpc.response.status_code";
 
 /// Whether OpenTelemetry's MCP conventions read `code`, answered by a server,
 /// as a request the caller sent that the server could not serve — a parse
@@ -886,11 +886,7 @@ impl Line for OperationLine<'_> {
 /// states `$addressed`, [`Addressed::Nothing`] out loud; it is read before the
 /// call consumes the parameters.
 macro_rules! request_method {
-    (
-        $name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ) -> $out:ty,
-        $method:expr,
-        $addressed:expr $(,)?
-    ) => {
+    (@delegate $name:ident ( $($arg:ident : $arg_ty:ty),* ) -> $out:ty, $method:expr, $addressed:expr) => {
         fn $name(
             &self,
             $($arg: $arg_ty,)*
@@ -918,6 +914,30 @@ macro_rules! request_method {
                 .map_err(|error| addressed.said_by_kind(&method, error))
             }
         }
+    };
+    // A method the protocol defines keys its duration by name, so it is one the
+    // unit's known set lists: held where the build instantiates the handler.
+    (
+        $name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ) -> $out:ty,
+        $method:path,
+        $addressed:expr $(,)?
+    ) => {
+        request_method!(@delegate $name ( $($arg : $arg_ty),* ) -> $out, {
+            const {
+                ::core::assert!(
+                    crate::unit::is_protocol_method($method),
+                    "a method the protocol defines is listed in `unit::PROTOCOL_METHODS`",
+                )
+            };
+            $method
+        }, $addressed);
+    };
+    (
+        $name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ) -> $out:ty,
+        $method:expr,
+        $addressed:expr $(,)?
+    ) => {
+        request_method!(@delegate $name ( $($arg : $arg_ty),* ) -> $out, $method, $addressed);
     };
 }
 

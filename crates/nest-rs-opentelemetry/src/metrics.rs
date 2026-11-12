@@ -81,29 +81,42 @@ impl Describe {
 }
 
 /// The instruments of one kind made so far, by name.
-struct Made<I>(RwLock<HashMap<&'static str, I>>);
+pub(crate) struct Made<I>(RwLock<HashMap<&'static str, I>>);
 
 impl<I: Clone> Made<I> {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(RwLock::new(HashMap::new()))
     }
 
     /// The instrument named `name`, made by `make` if it is the first asked for.
     fn get_or_make(&self, name: &'static str, make: impl FnOnce() -> I) -> I {
+        self.with(name, make, I::clone)
+    }
+
+    /// `use` run on the instrument named `name`, made by `make` if it is the
+    /// first asked for — under the read lock once it is made, so recording on
+    /// it clones nothing.
+    pub(crate) fn with<R>(
+        &self,
+        name: &'static str,
+        make: impl FnOnce() -> I,
+        r#use: impl FnOnce(&I) -> R,
+    ) -> R {
         if let Some(made) = self
             .0
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .get(name)
         {
-            return made.clone();
+            return r#use(made);
         }
-        self.0
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(name)
-            .or_insert_with(make)
-            .clone()
+        r#use(
+            self.0
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(name)
+                .or_insert_with(make),
+        )
     }
 
     #[cfg(test)]

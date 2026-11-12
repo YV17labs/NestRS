@@ -1,4 +1,5 @@
-use nest_rs::core::operation_log::{MetricAttribute, Unit, UnitDuration};
+use nest_rs::core::duration_histogram::{DurationHistogram, MetricAttribute, REQUEST_BOUNDARIES};
+use nest_rs::core::operation_log::Unit;
 
 /// One piece of the probe's work.
 pub const WORK: Unit = nest_rs::core::unit!(
@@ -17,9 +18,10 @@ pub const TIMED: Unit = nest_rs::core::unit!(
 
 /// What [`TIMED`] records its duration in: a field the probe bounds, one read
 /// through a known set, and one recorded once the work answers.
-pub const TIMED_DURATION: UnitDuration = UnitDuration::new(
+pub const TIMED_DURATION: DurationHistogram = DurationHistogram::new(
     "nestrs_unit_probe.timed.duration",
     "Duration of the probe's timed work.",
+    REQUEST_BOUNDARIES,
     &[
         MetricAttribute::bounded(STEP),
         MetricAttribute::known(VERB, &["read", "write"]),

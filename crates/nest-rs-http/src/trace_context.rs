@@ -158,19 +158,7 @@ impl KnownMethods {
 
 /// `method` as the conventions' known set spells it, if it is one.
 pub(crate) fn conventional(method: &Method) -> Option<&'static str> {
-    Some(match method.as_str() {
-        "CONNECT" => "CONNECT",
-        "DELETE" => "DELETE",
-        "GET" => "GET",
-        "HEAD" => "HEAD",
-        "OPTIONS" => "OPTIONS",
-        "PATCH" => "PATCH",
-        "POST" => "POST",
-        "PUT" => "PUT",
-        "QUERY" => "QUERY",
-        "TRACE" => "TRACE",
-        _ => return None,
-    })
+    nest_rs_core::operation_log::known_verb(method.as_str())
 }
 
 /// Report the trace this service used back to the caller.

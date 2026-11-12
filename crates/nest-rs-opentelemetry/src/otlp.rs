@@ -228,6 +228,8 @@ impl Signal {
 pub(crate) struct Exporters {
     pub tracer: opentelemetry_sdk::trace::Tracer,
     pub tracer_provider: SdkTracerProvider,
+    /// Whether the traces export.
+    pub traces_export: bool,
     /// `Some` only when the metrics export.
     pub meter_provider: Option<SdkMeterProvider>,
     /// `Some` only when the logs export.
@@ -429,6 +431,7 @@ fn build_reading(
     Ok(Exporters {
         tracer,
         tracer_provider,
+        traces_export: traces.is_some(),
         meter_provider,
         logger_provider,
         summary: Summary {

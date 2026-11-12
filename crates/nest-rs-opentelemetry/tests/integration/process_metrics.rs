@@ -4,8 +4,7 @@
 
 use opentelemetry_semantic_conventions::metric::{PROCESS_CPU_TIME, PROCESS_UPTIME};
 
-use crate::otlp::{Collector, trusting};
-use crate::unit_durations::holds;
+use crate::otlp::{Collector, metric_exports, trusting};
 
 #[test]
 fn the_process_and_the_runtime_init_runs_on_are_exported_with_the_metrics() {
@@ -26,11 +25,7 @@ fn the_process_and_the_runtime_init_runs_on_are_exported_with_the_metrics() {
     });
     drop(otel);
 
-    let exports: Vec<_> = collector
-        .received()
-        .into_iter()
-        .filter(|export| export.path == "/v1/metrics")
-        .collect();
+    let exports = metric_exports(&collector);
     for metric in [
         PROCESS_CPU_TIME,
         PROCESS_UPTIME,
@@ -38,9 +33,7 @@ fn the_process_and_the_runtime_init_runs_on_are_exported_with_the_metrics() {
         "tokio.worker.busy_time",
     ] {
         assert!(
-            exports
-                .iter()
-                .any(|export| holds(&export.body, metric.as_bytes())),
+            exports.iter().any(|export| export.holds(metric)),
             "{metric} reached the collector: {exports:?}",
         );
     }

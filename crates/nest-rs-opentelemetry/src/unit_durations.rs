@@ -6,14 +6,18 @@
 //! The layer runs under a filter of its own, so a console filtered to `warn`
 //! and a sampler keeping one trace in a hundred still count every unit. Which
 //! units it records, and by which fields, is what each unit declares
-//! (`UnitDuration`), read as `operation_span!` creates the span.
+//! (`DurationHistogram`), read as `operation_span!` creates the span; a failed
+//! unit's `error.type`, which `operation_span!` declares on every unit, keys it
+//! besides.
 
 use std::fmt;
 use std::time::Instant;
 
-use nest_rs_core::operation_log::{MetricAttribute, Unit, UnitDuration};
+use nest_rs_core::duration_histogram::{DurationHistogram, MetricAttribute};
+use nest_rs_core::operation_log::Unit;
 use opentelemetry::{KeyValue, StringValue, Value};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
+use opentelemetry_semantic_conventions::attribute::ERROR_TYPE;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::subscriber::Interest;
@@ -39,7 +43,7 @@ where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
     fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-        let Some(duration) = measured() else {
+        let Some(declared) = measured() else {
             return;
         };
         let Some(span) = ctx.span(id) else {
@@ -47,8 +51,8 @@ where
         };
         let mut timing = Timing {
             opened: Instant::now(),
-            duration,
-            attributes: Vec::with_capacity(duration.attributes().len()),
+            declared,
+            keyed: vec![None; declared.attributes().len() + 1],
         };
         attrs.record(&mut timing);
         span.extensions_mut().insert(timing);
@@ -70,34 +74,24 @@ where
         let Some(timing) = span.extensions_mut().remove::<Timing>() else {
             return;
         };
+        let seconds = timing.opened.elapsed().as_secs_f64();
         self.0
-            .histogram(timing.duration.name(), timing.duration.description())
-            .record(timing.opened.elapsed().as_secs_f64(), &timing.attributes);
+            .record(timing.declared, seconds, &timing.into_attributes());
     }
 }
 
 /// The duration the unit whose span is being created declares, if any.
-fn measured() -> Option<&'static UnitDuration> {
+fn measured() -> Option<&'static DurationHistogram> {
     nest_rs_core::__private::pending_unit().and_then(Unit::duration)
 }
 
 /// Admits the spans `operation_span!` opens for a unit declaring a duration,
-/// and nothing else, whatever the console's filter says — nothing at all where
-/// no metric exports.
-pub(crate) struct MeasuredUnits {
-    measuring: bool,
-}
-
-impl MeasuredUnits {
-    /// The filter of a binary whose metrics export when `measuring`.
-    pub(crate) const fn when(measuring: bool) -> Self {
-        Self { measuring }
-    }
-}
+/// and nothing else, whatever the console's filter says.
+pub(crate) struct MeasuredUnits;
 
 impl<S> Filter<S> for MeasuredUnits {
     fn enabled(&self, metadata: &Metadata<'_>, _: &Context<'_, S>) -> bool {
-        self.measuring && metadata.is_span() && measured().is_some()
+        metadata.is_span() && measured().is_some()
     }
 
     fn callsite_enabled(&self, metadata: &'static Metadata<'static>) -> Interest {
@@ -108,7 +102,7 @@ impl<S> Filter<S> for MeasuredUnits {
                 .fields()
                 .field(nest_rs_core::__private::field::PARENT_SPAN_ID)
                 .is_some();
-        if self.measuring && operation {
+        if operation {
             Interest::sometimes()
         } else {
             Interest::never()
@@ -116,73 +110,80 @@ impl<S> Filter<S> for MeasuredUnits {
     }
 
     fn max_level_hint(&self) -> Option<LevelFilter> {
-        Some(if self.measuring {
-            LevelFilter::INFO
-        } else {
-            LevelFilter::OFF
-        })
+        Some(LevelFilter::INFO)
     }
 }
 
-/// A measured unit's span: when it opened, what it records in, and the
-/// attributes its duration is keyed by so far.
+/// A measured unit's span: when it opened, what it records in, and the value
+/// each declared attribute, then `error.type`, holds so far — one slot each, so
+/// every duration reaches the histogram keyed in one order.
 struct Timing {
     opened: Instant,
-    duration: &'static UnitDuration,
-    attributes: Vec<KeyValue>,
+    declared: &'static DurationHistogram,
+    keyed: Vec<Option<Value>>,
 }
 
 impl Timing {
-    /// The attribute `field` keys the duration as, if it keys it at all.
-    fn attribute(&self, field: &Field) -> Option<&'static MetricAttribute> {
-        self.duration
-            .attributes()
+    /// The slot `field` keys the duration in, and the attribute it was
+    /// declared as — none for `error.type`; `None` for a field keying nothing.
+    fn slot(&self, field: &Field) -> Option<(usize, Option<&'static MetricAttribute>)> {
+        let declared = self.declared.attributes();
+        match declared
             .iter()
-            .find(|attribute| attribute.field() == field.name())
-    }
-
-    /// Key the duration by `field` as `value`, over what it said before.
-    fn key(&mut self, field: &Field, value: Value) {
-        let keyed = KeyValue::new(field.name(), value);
-        match self
-            .attributes
-            .iter_mut()
-            .find(|attribute| attribute.key.as_str() == field.name())
+            .position(|attribute| attribute.field() == field.name())
         {
-            Some(attribute) => *attribute = keyed,
-            None => self.attributes.push(keyed),
+            Some(at) => Some((at, declared.get(at))),
+            None => (field.name() == ERROR_TYPE).then_some((declared.len(), None)),
         }
     }
 
-    /// Key the duration by a value no string carries: as it is where the span
-    /// bounds it, through its known set as written otherwise.
-    fn scalar(&mut self, field: &Field, value: Value) {
-        let Some(attribute) = self.attribute(field) else {
+    /// Key the duration by `field` as the text `value`, read through its known
+    /// set where it has one.
+    fn text(&mut self, field: &Field, value: &str) {
+        let Some((at, attribute)) = self.slot(field) else {
             return;
         };
-        if attribute.is_bounded() {
-            self.key(field, value);
-        } else {
-            self.record_str(field, &value.as_str());
+        let keyed = match attribute.and_then(|attribute| attribute.known_value(value)) {
+            Some(known) => StringValue::from(known),
+            None => StringValue::from(value.to_owned()),
+        };
+        self.keyed[at] = Some(Value::String(keyed));
+    }
+
+    /// Key the duration by `field` as a value no string carries: as it is
+    /// where the field is bounded, through its known set as written otherwise.
+    fn scalar(&mut self, field: &Field, value: Value) {
+        let Some((at, attribute)) = self.slot(field) else {
+            return;
+        };
+        match attribute {
+            Some(attribute) if !attribute.is_bounded() => self.text(field, &value.as_str()),
+            _ => self.keyed[at] = Some(value),
         }
+    }
+
+    /// The attributes the duration is keyed by, in their declared order.
+    fn into_attributes(self) -> Vec<KeyValue> {
+        let keys = self
+            .declared
+            .attributes()
+            .iter()
+            .map(MetricAttribute::field)
+            .chain([ERROR_TYPE]);
+        keys.zip(self.keyed)
+            .filter_map(|(key, value)| Some(KeyValue::new(key, value?)))
+            .collect()
     }
 }
 
 impl Visit for Timing {
     fn record_str(&mut self, field: &Field, value: &str) {
-        let Some(attribute) = self.attribute(field) else {
-            return;
-        };
-        let value = match attribute.known_value(value) {
-            Some(known) => StringValue::from(known),
-            None => StringValue::from(value.to_owned()),
-        };
-        self.key(field, Value::String(value));
+        self.text(field, value);
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        if self.attribute(field).is_some() {
-            self.record_str(field, &format!("{value:?}"));
+        if self.slot(field).is_some() {
+            self.text(field, &format!("{value:?}"));
         }
     }
 
@@ -213,24 +214,17 @@ mod tests {
     use opentelemetry_sdk::metrics::data::{
         AggregatedMetrics, Metric, MetricData, ResourceMetrics,
     };
-    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader};
     use tracing_subscriber::layer::SubscriberExt as _;
 
     use super::*;
-    use crate::durations::{REQUEST_BOUNDARIES, SCOPE, SECONDS};
-
-    /// One data point of the probe's duration: its attributes, sorted, and
-    /// how many units it counts.
-    type Point = (Vec<(String, String)>, u64);
+    use crate::durations::{SCOPE, SECONDS};
+    use crate::testing::{metered, points};
 
     /// Every export of what `work` recorded through the layer.
     fn recorded(work: impl FnOnce()) -> Vec<ResourceMetrics> {
-        let exporter = InMemoryMetricExporter::default();
-        let provider = SdkMeterProvider::builder()
-            .with_reader(PeriodicReader::builder(exporter.clone()).build())
-            .build();
+        let (provider, exporter) = metered();
         let subscriber = tracing_subscriber::registry()
-            .with(UnitDurations::new(&provider).with_filter(MeasuredUnits::when(true)));
+            .with(UnitDurations::new(&provider).with_filter(MeasuredUnits));
         tracing::subscriber::with_default(subscriber, work);
         provider.force_flush().expect("the provider flushes");
         exporter
@@ -250,24 +244,6 @@ mod tests {
                     .map(move |metric| (scope.scope().name(), metric))
             })
             .find(|(_, metric)| metric.name() == TIMED_DURATION.name())
-    }
-
-    /// The data points of a duration, as [`Point`]s.
-    fn points(metric: &Metric) -> Vec<Point> {
-        let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
-            panic!("a duration is an f64 histogram: {metric:?}");
-        };
-        histogram
-            .data_points()
-            .map(|point| {
-                let mut attributes: Vec<_> = point
-                    .attributes()
-                    .map(|kv| (kv.key.to_string(), kv.value.to_string()))
-                    .collect();
-                attributes.sort();
-                (attributes, point.count())
-            })
-            .collect()
     }
 
     fn attributes(set: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -291,7 +267,7 @@ mod tests {
         assert_eq!(metric.unit(), SECONDS);
         assert_eq!(metric.description(), TIMED_DURATION.description());
         assert_eq!(
-            points(metric),
+            points(&exported, TIMED_DURATION.name()),
             vec![(
                 attributes(&[(STEP, "fetch"), (VERB, "read"), (CODE, "503")]),
                 1
@@ -305,7 +281,7 @@ mod tests {
             .data_points()
             .flat_map(|point| point.bounds().collect::<Vec<_>>())
             .collect();
-        assert_eq!(bounds, REQUEST_BOUNDARIES.to_vec());
+        assert_eq!(bounds, TIMED_DURATION.boundaries().to_vec());
     }
 
     #[test]
@@ -317,10 +293,8 @@ mod tests {
                 "anything-a-caller-sends",
             ));
         });
-        let (_, metric) = timed(&exported).expect("the unit's duration was recorded");
-
         assert_eq!(
-            points(metric),
+            points(&exported, TIMED_DURATION.name()),
             vec![(attributes(&[(STEP, "fetch"), (VERB, OTHER)]), 1)],
         );
     }
@@ -336,10 +310,8 @@ mod tests {
                 ));
             }
         });
-        let (_, metric) = timed(&exported).expect("the units' duration was recorded");
-
         assert_eq!(
-            points(metric),
+            points(&exported, TIMED_DURATION.name()),
             vec![(attributes(&[(STEP, "fetch"), (VERB, "write")]), 2)],
         );
     }

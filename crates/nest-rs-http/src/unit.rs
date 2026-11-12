@@ -21,7 +21,8 @@
 //! assert_eq!(nest_rs_http::unit::REQUEST.name(), "http.request");
 //! ```
 
-use nest_rs_core::operation_log::{MetricAttribute, Unit, UnitDuration};
+use nest_rs_core::duration_histogram::{DurationHistogram, MetricAttribute, REQUEST_BOUNDARIES};
+use nest_rs_core::operation_log::Unit;
 
 /// One HTTP request, filed once the response body has been written.
 pub const REQUEST: Unit = nest_rs_core::unit!(
@@ -33,15 +34,15 @@ pub const REQUEST: Unit = nest_rs_core::unit!(
 
 /// The HTTP conventions' server duration, keyed by what the span says in the
 /// server's words: the known method, the route template, never the path.
-const REQUEST_DURATION: UnitDuration = UnitDuration::new(
+const REQUEST_DURATION: DurationHistogram = DurationHistogram::new(
     "http.server.request.duration",
     "Duration of HTTP server requests.",
+    REQUEST_BOUNDARIES,
     &[
         MetricAttribute::bounded("http.request.method"),
-        MetricAttribute::bounded("url.scheme"),
+        MetricAttribute::known("url.scheme", &["http", "https"]),
         MetricAttribute::bounded("http.route"),
         MetricAttribute::bounded("http.response.status_code"),
-        MetricAttribute::bounded("error.type"),
     ],
 );
 

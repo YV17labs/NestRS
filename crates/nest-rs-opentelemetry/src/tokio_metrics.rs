@@ -7,10 +7,42 @@
 //! `tokio.` and the runtime's own word for each thing.
 
 use opentelemetry::metrics::Meter;
-use tokio::runtime::Handle;
+use tokio::runtime::{Handle, RuntimeMetrics};
+
+use crate::durations::SECONDS;
 
 /// Registers the runtime's instruments.
 pub(crate) struct TokioMetrics;
+
+/// One of the runtime's counts: its name, unit and description, and its read.
+type Count = (
+    &'static str,
+    &'static str,
+    &'static str,
+    fn(&RuntimeMetrics) -> usize,
+);
+
+/// The runtime's counts, each read off its metrics.
+const COUNTS: [Count; 3] = [
+    (
+        "tokio.worker.count",
+        "{worker}",
+        "The runtime's worker threads.",
+        RuntimeMetrics::num_workers,
+    ),
+    (
+        "tokio.task.count",
+        "{task}",
+        "The tasks alive on the runtime.",
+        RuntimeMetrics::num_alive_tasks,
+    ),
+    (
+        "tokio.global_queue.length",
+        "{task}",
+        "The tasks waiting in the queue every worker takes from.",
+        RuntimeMetrics::global_queue_depth,
+    ),
+];
 
 impl TokioMetrics {
     /// Register on `meter` the instruments of the runtime `init` runs on; none
@@ -20,30 +52,18 @@ impl TokioMetrics {
             return;
         };
         let runtime = handle.metrics();
-        let workers = runtime.clone();
-        meter
-            .i64_observable_up_down_counter("tokio.worker.count")
-            .with_unit("{worker}")
-            .with_description("The runtime's worker threads.")
-            .with_callback(move |observer| observer.observe(count(workers.num_workers()), &[]))
-            .build();
-        let tasks = runtime.clone();
-        meter
-            .i64_observable_up_down_counter("tokio.task.count")
-            .with_unit("{task}")
-            .with_description("The tasks alive on the runtime.")
-            .with_callback(move |observer| observer.observe(count(tasks.num_alive_tasks()), &[]))
-            .build();
-        let queue = runtime.clone();
-        meter
-            .i64_observable_up_down_counter("tokio.global_queue.length")
-            .with_unit("{task}")
-            .with_description("The tasks waiting in the queue every worker takes from.")
-            .with_callback(move |observer| observer.observe(count(queue.global_queue_depth()), &[]))
-            .build();
+        for (name, unit, description, read) in COUNTS {
+            let runtime = runtime.clone();
+            meter
+                .i64_observable_up_down_counter(name)
+                .with_unit(unit)
+                .with_description(description)
+                .with_callback(move |observer| observer.observe(count(read(&runtime)), &[]))
+                .build();
+        }
         meter
             .f64_observable_counter("tokio.worker.busy_time")
-            .with_unit("s")
+            .with_unit(SECONDS)
             .with_description("The time the runtime's workers spent running tasks.")
             .with_callback(move |observer| {
                 let busy: f64 = (0..runtime.num_workers())

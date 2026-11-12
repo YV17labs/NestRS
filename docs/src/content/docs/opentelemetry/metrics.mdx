@@ -36,8 +36,9 @@ ready-made HTTP, messaging and MCP dashboards light up with nothing written:
 
 One histogram is the rate, the errors and the latency at once: a backend counts
 its points per second, splits them on `http.response.status_code` or
-`error.type`, and reads its percentiles off the buckets, the
-`[0.005, 0.01, … 10]` seconds the HTTP and messaging conventions advise.
+`error.type`, and reads its percentiles off the buckets each convention advises:
+`[0.005, 0.01, … 10]` seconds for HTTP and messaging, up to 300 for an MCP
+operation, a tool call running long.
 
 - **Every unit is counted.** The durations come from the unit's span, under a
   filter of their own: a console filtered to `RUST_LOG=warn` and a sampler

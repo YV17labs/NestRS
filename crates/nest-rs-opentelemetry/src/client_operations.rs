@@ -12,13 +12,13 @@ use nest_rs_core::client_operation::{ClientOperation, ClientValue};
 use opentelemetry::trace::{
     Span as _, SpanKind, Status, TraceContextExt as _, Tracer as _, TracerProvider as _,
 };
-use opentelemetry::{InstrumentationScope, KeyValue, StringValue, Value};
+use opentelemetry::{KeyValue, StringValue, Value};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::trace::{SdkTracerProvider, Tracer};
 use opentelemetry_semantic_conventions::attribute::ERROR_TYPE;
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
-use crate::durations::{Durations, SCOPE};
+use crate::durations::{Durations, framework_scope};
 
 /// What records each client operation: spans where the traces export, the
 /// duration where the metrics do.
@@ -37,13 +37,7 @@ pub(crate) fn install(traces: Option<&SdkTracerProvider>, metrics: Option<&SdkMe
         return;
     }
     let recording = ClientOperations {
-        tracer: traces.map(|provider| {
-            provider.tracer_with_scope(
-                InstrumentationScope::builder(SCOPE)
-                    .with_version(env!("CARGO_PKG_VERSION"))
-                    .build(),
-            )
-        }),
+        tracer: traces.map(|provider| provider.tracer_with_scope(framework_scope())),
         durations: metrics.map(Durations::new),
     };
     if RECORDING.set(recording).is_ok() {
@@ -59,44 +53,59 @@ fn record(operation: &ClientOperation<'_>) {
 
 impl ClientOperations {
     fn record(&self, operation: &ClientOperation<'_>) {
+        let (attributes, keyed) = attributes(operation);
         if let Some(durations) = &self.durations {
-            let keys = operation.duration().keys();
-            let mut keyed: Vec<KeyValue> = operation
-                .attributes()
-                .iter()
-                .filter(|(key, _)| keys.contains(key))
-                .map(|(key, value)| KeyValue::new(*key, value_of(*value)))
-                .collect();
-            if let Some(error_type) = operation.error_type() {
-                keyed.push(KeyValue::new(ERROR_TYPE, error_type.to_owned()));
-            }
-            durations
-                .histogram(
-                    operation.duration().name(),
-                    operation.duration().description(),
-                )
-                .record(operation.elapsed().as_secs_f64(), &keyed);
+            durations.record(
+                operation.duration(),
+                operation.elapsed().as_secs_f64(),
+                &attributes[..keyed],
+            );
         }
         if let Some(tracer) = &self.tracer {
-            span(tracer, operation);
+            span(tracer, operation, attributes);
         }
     }
 }
 
-/// The operation's client span, under the unit's span that sent it — none
-/// where no traced unit did.
-fn span(tracer: &Tracer, operation: &ClientOperation<'_>) {
-    let parent = tracing::Span::current().context();
-    if !parent.span().span_context().is_valid() {
-        return;
+/// The operation's attributes in one list, those its duration is keyed by and
+/// `error.type` first, read as the duration declares them; and how many key it.
+fn attributes(operation: &ClientOperation<'_>) -> (Vec<KeyValue>, usize) {
+    let declared = operation.duration().attributes();
+    let held = operation.attributes();
+    let mut attributes = Vec::with_capacity(held.len() + 1);
+    for (key, value) in held {
+        if let Some(attribute) = declared.iter().find(|attribute| attribute.field() == *key) {
+            let value = match value {
+                ClientValue::Text(text) => attribute
+                    .known_value(text)
+                    .map_or_else(|| value_of(*value), Value::from),
+                _ => value_of(*value),
+            };
+            attributes.push(KeyValue::new(*key, value));
+        }
     }
-    let mut attributes: Vec<KeyValue> = operation
-        .attributes()
-        .iter()
-        .map(|(key, value)| KeyValue::new(*key, value_of(*value)))
-        .collect();
     if let Some(error_type) = operation.error_type() {
         attributes.push(KeyValue::new(ERROR_TYPE, error_type.to_owned()));
+    }
+    let keyed = attributes.len();
+    attributes.extend(
+        held.iter()
+            .filter(|(key, _)| declared.iter().all(|attribute| attribute.field() != *key))
+            .map(|(key, value)| KeyValue::new(*key, value_of(*value))),
+    );
+    (attributes, keyed)
+}
+
+/// The operation's client span, under the unit's span that sent it — none
+/// where no unit did, or where its trace is not sampled.
+fn span(tracer: &Tracer, operation: &ClientOperation<'_>, attributes: Vec<KeyValue>) {
+    if nest_rs_core::current_trace_id().is_none() {
+        return;
+    }
+    let parent = tracing::Span::current().context();
+    let parent_span = parent.span().span_context().clone();
+    if !parent_span.is_valid() || !parent_span.is_sampled() {
+        return;
     }
     let builder = tracer
         .span_builder(operation.name().to_owned())
@@ -130,20 +139,17 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use nest_rs_core::Correlation;
-    use nest_rs_core::client_operation::ClientDuration;
+    use nest_rs_core::client_operation::{
+        DB_CLIENT_OPERATION_DURATION, DB_OPERATION_NAME, DB_QUERY_SUMMARY, DB_SYSTEM_NAME,
+        SERVER_PORT,
+    };
     use opentelemetry::trace::SpanKind;
-    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
-    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader};
+    use opentelemetry_sdk::metrics::data::ResourceMetrics;
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SpanData};
     use tracing_subscriber::layer::SubscriberExt as _;
 
     use super::*;
-
-    const STATEMENT: ClientDuration = ClientDuration::new(
-        "db.client.operation.duration",
-        "Duration of database client operations.",
-        &["db.system.name", "db.operation.name"],
-    );
+    use crate::testing::{Point, metered};
 
     /// What one recorder exported: its spans, and its metrics.
     struct Exported {
@@ -151,18 +157,15 @@ mod tests {
         metrics: Vec<ResourceMetrics>,
     }
 
-    /// Record what `work` sends, as a unit's span opened by the framework does
-    /// and a recorder seeded on both signals would.
+    /// Record what `work` sends, as a recorder seeded on both signals would,
+    /// under a subscriber exporting the framework's spans.
     fn exported(work: impl FnOnce(&ClientOperations)) -> Exported {
         let spans = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()
             .with_id_generator(crate::id_generator::AdoptFrameworkIds::default())
             .with_simple_exporter(spans.clone())
             .build();
-        let metrics = InMemoryMetricExporter::default();
-        let meter_provider = SdkMeterProvider::builder()
-            .with_reader(PeriodicReader::builder(metrics.clone()).build())
-            .build();
+        let (meter_provider, metrics) = metered();
         let recording = ClientOperations {
             tracer: Some(tracer_provider.tracer("operations")),
             durations: Some(Durations::new(&meter_provider)),
@@ -180,51 +183,41 @@ mod tests {
         }
     }
 
-    fn select(recording: &ClientOperations, failed: bool) {
-        let attributes = [
-            ("db.system.name", ClientValue::Text("postgresql")),
-            ("db.operation.name", ClientValue::Text("SELECT")),
-            ("db.query.summary", ClientValue::Text("SELECT posts")),
-            ("server.port", ClientValue::Integer(5432)),
-        ];
-        let operation = ClientOperation::new(
-            &STATEMENT,
-            "SELECT posts",
-            SystemTime::now() - Duration::from_millis(4),
-            Duration::from_millis(4),
-            &attributes,
-        );
-        recording.record(&if failed {
-            operation.failed("_OTHER")
-        } else {
-            operation
-        });
+    /// Run `send` inside a unit of work, its span entered, as an edge runs a
+    /// handler.
+    fn in_unit(send: impl FnOnce()) {
+        let correlation = Correlation::minted(None);
+        let unit = nestrs_unit_probe::open(&correlation);
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime")
+            .block_on(nest_rs_core::with_request_scope(None, correlation, async {
+                unit.in_scope(send);
+            }));
     }
 
-    /// The duration's points, each as its sorted attributes and its count.
-    fn points(metrics: &[ResourceMetrics]) -> Vec<(Vec<(String, String)>, u64)> {
-        metrics
-            .iter()
-            .flat_map(ResourceMetrics::scope_metrics)
-            .flat_map(|scope| scope.metrics())
-            .filter(|metric| metric.name() == STATEMENT.name())
-            .flat_map(|metric| {
-                let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
-                    panic!("a duration is an f64 histogram: {metric:?}");
-                };
-                histogram
-                    .data_points()
-                    .map(|point| {
-                        let mut attributes: Vec<_> = point
-                            .attributes()
-                            .map(|kv| (kv.key.to_string(), kv.value.to_string()))
-                            .collect();
-                        attributes.sort();
-                        (attributes, point.count())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect()
+    fn select(recording: &ClientOperations, failure: Option<&str>) {
+        let attributes = [
+            (DB_SYSTEM_NAME, ClientValue::Text("postgresql")),
+            (DB_OPERATION_NAME, ClientValue::Text("SELECT")),
+            (DB_QUERY_SUMMARY, ClientValue::Text("SELECT posts")),
+            (SERVER_PORT, ClientValue::Integer(5432)),
+            ("an.attribute.no.duration.keys", ClientValue::Text("kept")),
+        ];
+        recording.record(
+            &ClientOperation::new(
+                &DB_CLIENT_OPERATION_DURATION,
+                "SELECT posts",
+                SystemTime::now() - Duration::from_millis(4),
+                Duration::from_millis(4),
+                &attributes,
+            )
+            .failed(failure),
+        );
+    }
+
+    fn points(exported: &Exported) -> Vec<Point> {
+        crate::testing::points(&exported.metrics, DB_CLIENT_OPERATION_DURATION.name())
     }
 
     fn attribute(span: &SpanData, key: &str) -> Option<String> {
@@ -234,12 +227,15 @@ mod tests {
             .map(|kv| kv.value.to_string())
     }
 
+    fn pairs(set: &[(&str, &str)]) -> Vec<(String, String)> {
+        set.iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
     #[test]
     fn an_operation_inside_a_unit_is_its_client_span_and_its_duration() {
-        let exported = exported(|recording| {
-            let unit = nestrs_unit_probe::open(&Correlation::minted(None));
-            unit.in_scope(|| select(recording, false));
-        });
+        let exported = exported(|recording| in_unit(|| select(recording, None)));
 
         let unit = exported
             .spans
@@ -265,40 +261,38 @@ mod tests {
             Duration::from_millis(4),
         );
         assert_eq!(
-            attribute(operation, "db.query.summary").as_deref(),
-            Some("SELECT posts"),
+            attribute(operation, "an.attribute.no.duration.keys").as_deref(),
+            Some("kept"),
             "the span carries every attribute",
         );
-        assert_eq!(attribute(operation, "server.port").as_deref(), Some("5432"));
         assert_eq!(attribute(operation, ERROR_TYPE), None);
 
         assert_eq!(
-            points(&exported.metrics),
+            points(&exported),
             vec![(
-                vec![
-                    ("db.operation.name".to_owned(), "SELECT".to_owned()),
-                    ("db.system.name".to_owned(), "postgresql".to_owned()),
-                ],
+                pairs(&[
+                    (DB_OPERATION_NAME, "SELECT"),
+                    (DB_QUERY_SUMMARY, "SELECT posts"),
+                    (DB_SYSTEM_NAME, "postgresql"),
+                    (SERVER_PORT, "5432"),
+                ]),
                 1
             )],
-            "the duration is keyed by its keys alone",
+            "the duration is keyed by its declared attributes alone",
         );
     }
 
     #[test]
     fn an_operation_outside_every_unit_records_its_duration_and_no_span() {
-        let exported = exported(|recording| select(recording, false));
+        let exported = exported(|recording| select(recording, None));
 
         assert!(exported.spans.is_empty(), "{:?}", exported.spans);
-        assert_eq!(points(&exported.metrics).len(), 1);
+        assert_eq!(points(&exported).len(), 1);
     }
 
     #[test]
     fn a_failed_operation_says_its_class_on_its_span_and_its_duration() {
-        let exported = exported(|recording| {
-            let unit = nestrs_unit_probe::open(&Correlation::minted(None));
-            unit.in_scope(|| select(recording, true));
-        });
+        let exported = exported(|recording| in_unit(|| select(recording, Some("_OTHER"))));
 
         let operation = exported
             .spans
@@ -307,27 +301,25 @@ mod tests {
             .expect("the operation's span");
         assert_eq!(attribute(operation, ERROR_TYPE).as_deref(), Some("_OTHER"));
         assert!(matches!(operation.status, Status::Error { .. }));
-        assert!(points(&exported.metrics).iter().all(|(attributes, _)| {
+        assert!(points(&exported).iter().all(|(attributes, _)| {
             attributes.contains(&(ERROR_TYPE.to_owned(), "_OTHER".to_owned()))
-        }),);
+        }));
     }
 
     #[test]
     fn an_operation_announced_to_its_peer_is_the_span_the_peer_was_told_of() {
         let announced = Correlation::minted(None).child();
         let exported = exported(|recording| {
-            let unit = nestrs_unit_probe::open(&Correlation::minted(None));
-            unit.in_scope(|| {
-                let attributes = [("http.request.method", ClientValue::Text("GET"))];
+            in_unit(|| {
                 recording.record(
                     &ClientOperation::new(
-                        &STATEMENT,
+                        &DB_CLIENT_OPERATION_DURATION,
                         "GET",
                         SystemTime::now(),
                         Duration::from_millis(1),
-                        &attributes,
+                        &[],
                     )
-                    .announced_as(&announced),
+                    .announced_as(Some(&announced)),
                 );
             });
         });

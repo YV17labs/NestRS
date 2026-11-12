@@ -14,6 +14,8 @@ use opentelemetry_semantic_conventions::metric::{
     PROCESS_CPU_TIME, PROCESS_UNIX_FILE_DESCRIPTOR_COUNT, PROCESS_UPTIME,
 };
 
+use crate::durations::SECONDS;
+
 /// Registers the process's instruments.
 pub(crate) struct ProcessMetrics;
 
@@ -24,7 +26,7 @@ impl ProcessMetrics {
         let reported = Once::new();
         meter
             .f64_observable_counter(PROCESS_CPU_TIME)
-            .with_unit("s")
+            .with_unit(SECONDS)
             .with_description("Total CPU seconds broken down by different CPU modes")
             .with_callback(move |observer| match cpu_time() {
                 Ok((user, system)) => {
@@ -36,7 +38,7 @@ impl ProcessMetrics {
             .build();
         meter
             .f64_observable_gauge(PROCESS_UPTIME)
-            .with_unit("s")
+            .with_unit(SECONDS)
             .with_description("The time the process has been running.")
             .with_callback(move |observer| observer.observe(started.elapsed().as_secs_f64(), &[]))
             .build();

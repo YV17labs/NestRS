@@ -1,7 +1,8 @@
 //! The canonical name of the unit of work this edge opens — declared by the
 //! port, whose [`QueueWorker`](crate::QueueWorker) opens it on every backend.
 
-use nest_rs_core::operation_log::{MetricAttribute, Unit, UnitDuration};
+use nest_rs_core::duration_histogram::{DurationHistogram, MetricAttribute, REQUEST_BOUNDARIES};
+use nest_rs_core::operation_log::Unit;
 
 /// One queue job attempt.
 pub const JOB: Unit = nest_rs_core::unit!(
@@ -13,14 +14,14 @@ pub const JOB: Unit = nest_rs_core::unit!(
 
 /// The messaging conventions' processing duration, keyed by the backend and
 /// the queue a processor declares.
-const JOB_DURATION: UnitDuration = UnitDuration::new(
+const JOB_DURATION: DurationHistogram = DurationHistogram::new(
     "messaging.process.duration",
     "Duration of processing operation.",
+    REQUEST_BOUNDARIES,
     &[
         MetricAttribute::bounded("messaging.system"),
         MetricAttribute::bounded("messaging.operation.name"),
         MetricAttribute::bounded("messaging.destination.name"),
-        MetricAttribute::bounded("error.type"),
     ],
 );
 

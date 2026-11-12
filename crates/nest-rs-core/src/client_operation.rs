@@ -11,48 +11,39 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use crate::Correlation;
+use crate::duration_histogram::{DurationHistogram, MetricAttribute};
 
-/// The histogram a kind of client operation records its duration in, named as
-/// its telemetry conventions name it, and the attributes that key it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ClientDuration {
-    name: &'static str,
-    description: &'static str,
-    keys: &'static [&'static str],
-}
+/// The database conventions' client duration, which every database driver
+/// records its operations in.
+pub const DB_CLIENT_OPERATION_DURATION: DurationHistogram = DurationHistogram::new(
+    "db.client.operation.duration",
+    "Duration of database client operations.",
+    &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0],
+    &[
+        MetricAttribute::bounded(DB_SYSTEM_NAME),
+        MetricAttribute::bounded(DB_NAMESPACE),
+        MetricAttribute::bounded(DB_OPERATION_NAME),
+        MetricAttribute::bounded(DB_COLLECTION_NAME),
+        MetricAttribute::bounded(DB_QUERY_SUMMARY),
+        MetricAttribute::bounded(SERVER_ADDRESS),
+        MetricAttribute::bounded(SERVER_PORT),
+    ],
+);
 
-impl ClientDuration {
-    /// The histogram `name`, described by `description`, keyed by the
-    /// attributes named `keys`.
-    pub const fn new(
-        name: &'static str,
-        description: &'static str,
-        keys: &'static [&'static str],
-    ) -> Self {
-        Self {
-            name,
-            description,
-            keys,
-        }
-    }
-
-    /// The instrument's name, as the conventions spell it
-    /// (`db.client.operation.duration`).
-    pub const fn name(&self) -> &'static str {
-        self.name
-    }
-
-    /// What the instrument measures, as the conventions describe it.
-    pub const fn description(&self) -> &'static str {
-        self.description
-    }
-
-    /// The attributes a recorded duration is keyed by; `error.type` keys every
-    /// failed one besides.
-    pub const fn keys(&self) -> &'static [&'static str] {
-        self.keys
-    }
-}
+/// The database system, as the conventions name it (`postgresql`, `redis`).
+pub const DB_SYSTEM_NAME: &str = "db.system.name";
+/// The database the operation ran in.
+pub const DB_NAMESPACE: &str = "db.namespace";
+/// What the operation did (`SELECT`, `GET`).
+pub const DB_OPERATION_NAME: &str = "db.operation.name";
+/// The table or collection it did it to.
+pub const DB_COLLECTION_NAME: &str = "db.collection.name";
+/// The operation and its target together (`SELECT posts`).
+pub const DB_QUERY_SUMMARY: &str = "db.query.summary";
+/// The server the operation was sent to.
+pub const SERVER_ADDRESS: &str = "server.address";
+/// The port it was sent to.
+pub const SERVER_PORT: &str = "server.port";
 
 /// A value one of an operation's attributes holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,7 +59,7 @@ pub enum ClientValue<'a> {
 /// long it took, the attributes its conventions name, and how it failed.
 #[derive(Clone, Copy, Debug)]
 pub struct ClientOperation<'a> {
-    duration: &'static ClientDuration,
+    duration: &'static DurationHistogram,
     name: &'a str,
     started: SystemTime,
     elapsed: Duration,
@@ -81,7 +72,7 @@ impl<'a> ClientOperation<'a> {
     /// The operation `name`, recorded in `duration`, started at `started` and
     /// answered `elapsed` later, carrying `attributes`.
     pub const fn new(
-        duration: &'static ClientDuration,
+        duration: &'static DurationHistogram,
         name: &'a str,
         started: SystemTime,
         elapsed: Duration,
@@ -98,27 +89,24 @@ impl<'a> ClientOperation<'a> {
         }
     }
 
-    /// The same operation, announced to its peer as `correlation` — the
-    /// `traceparent` it carried naming its span as the parent — so its span
-    /// takes that span's id.
-    pub const fn announced_as(self, correlation: &'a Correlation) -> Self {
+    /// The same operation, failed with the class `failure` names — a status
+    /// code its protocol answered, or `_OTHER` — if it failed.
+    pub const fn failed(self, failure: Option<&'a str>) -> Self {
         Self {
-            announced: Some(correlation),
+            error_type: failure,
             ..self
         }
     }
 
-    /// The same operation, failed with the class `error_type` — a status code
-    /// its protocol answered, or `_OTHER`.
-    pub const fn failed(self, error_type: &'a str) -> Self {
-        Self {
-            error_type: Some(error_type),
-            ..self
-        }
+    /// The same operation, announced to its peer as `announced` — the
+    /// `traceparent` it carried naming its span as the parent — so its span
+    /// takes that span's id.
+    pub const fn announced_as(self, announced: Option<&'a Correlation>) -> Self {
+        Self { announced, ..self }
     }
 
     /// The histogram it records in.
-    pub const fn duration(&self) -> &'static ClientDuration {
+    pub const fn duration(&self) -> &'static DurationHistogram {
         self.duration
     }
 
@@ -192,18 +180,12 @@ pub(crate) mod __private {
 mod tests {
     use super::*;
 
-    const STATEMENT: ClientDuration = ClientDuration::new(
-        "db.client.operation.duration",
-        "Duration of database client operations.",
-        &["db.system.name"],
-    );
-
     #[test]
     fn an_operation_is_failed_by_its_class_and_keeps_the_rest() {
         let started = SystemTime::now();
-        let attributes = [("db.system.name", ClientValue::Text("postgresql"))];
+        let attributes = [(DB_SYSTEM_NAME, ClientValue::Text("postgresql"))];
         let operation = ClientOperation::new(
-            &STATEMENT,
+            &DB_CLIENT_OPERATION_DURATION,
             "SELECT posts",
             started,
             Duration::from_millis(3),
@@ -211,19 +193,20 @@ mod tests {
         );
         assert_eq!(operation.error_type(), None);
 
-        let failed = operation.failed("_OTHER");
+        assert_eq!(operation.failed(None).error_type(), None);
+        let failed = operation.failed(Some("_OTHER"));
         assert_eq!(failed.error_type(), Some("_OTHER"));
         assert_eq!(failed.name(), "SELECT posts");
         assert_eq!(failed.started(), started);
         assert_eq!(failed.elapsed(), Duration::from_millis(3));
         assert_eq!(failed.attributes(), &attributes);
-        assert_eq!(failed.duration(), &STATEMENT);
+        assert_eq!(failed.duration(), &DB_CLIENT_OPERATION_DURATION);
         assert!(failed.announced().is_none());
 
         let announced = Correlation::minted(None).child();
         assert_eq!(
             failed
-                .announced_as(&announced)
+                .announced_as(Some(&announced))
                 .announced()
                 .map(Correlation::span_id),
             Some(announced.span_id()),

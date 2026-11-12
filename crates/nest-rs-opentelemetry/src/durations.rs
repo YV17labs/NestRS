@@ -1,14 +1,13 @@
 //! The duration histograms the framework records itself — a unit's, a client
 //! operation's — each made once, under the framework's instrumentation scope,
-//! into the bucket boundaries its conventions advise.
+//! into the bucket boundaries its declaration carries.
 
-use std::collections::HashMap;
-use std::sync::{PoisonError, RwLock};
-
-use opentelemetry::InstrumentationScope;
+use nest_rs_core::duration_histogram::DurationHistogram;
 use opentelemetry::metrics::{Histogram, Meter, MeterProvider as _};
+use opentelemetry::{InstrumentationScope, KeyValue};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
-use opentelemetry_semantic_conventions::metric::DB_CLIENT_OPERATION_DURATION;
+
+use crate::metrics::Made;
 
 /// The instrumentation scope the framework's own instruments are recorded
 /// under: the crate an app installs.
@@ -17,20 +16,10 @@ pub(crate) const SCOPE: &str = "nest-rs";
 /// The unit a duration is in, as the conventions write it.
 pub(crate) const SECONDS: &str = "s";
 
-/// The bucket boundaries, in seconds, the HTTP and messaging conventions
-/// advise for a duration; the MCP conventions advise none.
-pub(crate) const REQUEST_BOUNDARIES: [f64; 14] = [
-    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
-];
-
-/// The bucket boundaries, in seconds, the database conventions advise.
-pub(crate) const DATABASE_BOUNDARIES: [f64; 9] =
-    [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0];
-
 /// The framework's duration histograms, by name.
 pub(crate) struct Durations {
     meter: Meter,
-    histograms: RwLock<HashMap<&'static str, Histogram<f64>>>,
+    histograms: Made<Histogram<f64>>,
 }
 
 impl Durations {
@@ -38,71 +27,41 @@ impl Durations {
     pub(crate) fn new(provider: &SdkMeterProvider) -> Self {
         Self {
             meter: framework_meter(provider),
-            histograms: RwLock::new(HashMap::new()),
+            histograms: Made::new(),
         }
     }
 
-    /// The histogram `name`, described by `description`, made the first time
-    /// a duration records in it.
-    pub(crate) fn histogram(
+    /// Record `seconds` in the histogram `declared` names, keyed by
+    /// `attributes`, making it the first time a duration records in it.
+    pub(crate) fn record(
         &self,
-        name: &'static str,
-        description: &'static str,
-    ) -> Histogram<f64> {
-        if let Some(made) = self
-            .histograms
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(name)
-        {
-            return made.clone();
-        }
-        self.histograms
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(name)
-            .or_insert_with(|| {
+        declared: &DurationHistogram,
+        seconds: f64,
+        attributes: &[KeyValue],
+    ) {
+        self.histograms.with(
+            declared.name(),
+            || {
                 self.meter
-                    .f64_histogram(name)
+                    .f64_histogram(declared.name())
                     .with_unit(SECONDS)
-                    .with_description(description)
-                    .with_boundaries(boundaries(name).to_vec())
+                    .with_description(declared.description())
+                    .with_boundaries(declared.boundaries().to_vec())
                     .build()
-            })
-            .clone()
-    }
-}
-
-/// The meter the framework's own instruments are made on, under its scope.
-pub(crate) fn framework_meter(provider: &SdkMeterProvider) -> Meter {
-    provider.meter_with_scope(
-        InstrumentationScope::builder(SCOPE)
-            .with_version(env!("CARGO_PKG_VERSION"))
-            .build(),
-    )
-}
-
-/// The boundaries the conventions naming `name` advise.
-fn boundaries(name: &str) -> &'static [f64] {
-    if name == DB_CLIENT_OPERATION_DURATION {
-        &DATABASE_BOUNDARIES
-    } else {
-        &REQUEST_BOUNDARIES
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use opentelemetry_semantic_conventions::metric::HTTP_SERVER_REQUEST_DURATION;
-
-    use super::*;
-
-    #[test]
-    fn a_statement_reads_the_database_conventions_buckets_and_a_request_the_http_ones() {
-        assert_eq!(
-            boundaries(DB_CLIENT_OPERATION_DURATION),
-            DATABASE_BOUNDARIES
+            },
+            |histogram| histogram.record(seconds, attributes),
         );
-        assert_eq!(boundaries(HTTP_SERVER_REQUEST_DURATION), REQUEST_BOUNDARIES);
     }
+}
+
+/// The scope the framework's own instruments and spans are made under.
+pub(crate) fn framework_scope() -> InstrumentationScope {
+    InstrumentationScope::builder(SCOPE)
+        .with_version(env!("CARGO_PKG_VERSION"))
+        .build()
+}
+
+/// The meter the framework's own instruments are made on.
+pub(crate) fn framework_meter(provider: &SdkMeterProvider) -> Meter {
+    provider.meter_with_scope(framework_scope())
 }

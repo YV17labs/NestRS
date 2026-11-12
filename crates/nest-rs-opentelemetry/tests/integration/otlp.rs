@@ -44,6 +44,14 @@ pub(crate) struct Received {
 }
 
 impl Received {
+    /// Whether the body holds `name`: an OTLP/protobuf export writes a
+    /// metric's name as its bytes.
+    pub(crate) fn holds(&self, name: &str) -> bool {
+        self.body
+            .windows(name.len())
+            .any(|window| window == name.as_bytes())
+    }
+
     /// The value of the header `name` (lowercase), if the export carried it.
     pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.headers
@@ -175,6 +183,15 @@ impl Collector {
     pub(crate) fn received(&self) -> Vec<Received> {
         self.exports.lock().expect("the exports").clone()
     }
+}
+
+/// Every export of metrics `collector` read.
+pub(crate) fn metric_exports(collector: &Collector) -> Vec<Received> {
+    collector
+        .received()
+        .into_iter()
+        .filter(|export| export.path == "/v1/metrics")
+        .collect()
 }
 
 /// A file `name` holding `contents` in `scratch`, which the test holds: the

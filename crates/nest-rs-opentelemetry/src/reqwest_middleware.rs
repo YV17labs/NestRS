@@ -8,39 +8,34 @@ use ::reqwest_middleware::{Error, Middleware, Next, Result};
 use http::header::HeaderName;
 use http::{Extensions, HeaderValue};
 use nest_rs_core::Correlation;
-use nest_rs_core::client_operation::{self, ClientDuration, ClientOperation, ClientValue};
-use nest_rs_core::operation_log::OTHER;
+use nest_rs_core::client_operation::{self, ClientOperation, ClientValue};
+use nest_rs_core::duration_histogram::{DurationHistogram, MetricAttribute, REQUEST_BOUNDARIES};
+use nest_rs_core::operation_log::{OTHER, known_verb};
+use opentelemetry_semantic_conventions::attribute::{
+    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_SCHEME,
+};
+use opentelemetry_semantic_conventions::metric::HTTP_CLIENT_REQUEST_DURATION;
 use reqwest::{Request, Response};
 
 /// The HTTP conventions' client duration, keyed by the method, the server and
 /// the status it answered.
-const REQUEST: ClientDuration = ClientDuration::new(
-    "http.client.request.duration",
+const REQUEST: DurationHistogram = DurationHistogram::new(
+    HTTP_CLIENT_REQUEST_DURATION,
     "Duration of HTTP client requests.",
+    REQUEST_BOUNDARIES,
     &[
-        HTTP_REQUEST_METHOD,
-        SERVER_ADDRESS,
-        SERVER_PORT,
-        HTTP_RESPONSE_STATUS_CODE,
+        MetricAttribute::bounded(HTTP_REQUEST_METHOD),
+        MetricAttribute::bounded(SERVER_ADDRESS),
+        MetricAttribute::bounded(SERVER_PORT),
+        MetricAttribute::bounded(HTTP_RESPONSE_STATUS_CODE),
     ],
 );
-
-const HTTP_REQUEST_METHOD: &str = "http.request.method";
-const HTTP_RESPONSE_STATUS_CODE: &str = "http.response.status_code";
-const SERVER_ADDRESS: &str = "server.address";
-const SERVER_PORT: &str = "server.port";
-const URL_SCHEME: &str = "url.scheme";
 
 /// The W3C header naming the trace and the span that sent the request.
 const TRACEPARENT: HeaderName = HeaderName::from_static("traceparent");
 
 /// The W3C header carrying the trace's vendor state, forwarded verbatim.
 const TRACESTATE: HeaderName = HeaderName::from_static("tracestate");
-
-/// The methods the HTTP conventions know; any other reads `_OTHER`.
-const KNOWN_METHODS: [&str; 9] = [
-    "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE",
-];
 
 /// The span name the conventions give a request whose method they do not know.
 const UNKNOWN_METHOD_SPAN: &str = "HTTP";
@@ -135,10 +130,7 @@ impl Sent {
         let method = req.method().as_str();
         let url = req.url();
         Self {
-            method: KNOWN_METHODS
-                .into_iter()
-                .find(|known| *known == method)
-                .unwrap_or(OTHER),
+            method: known_verb(method).unwrap_or(OTHER),
             scheme: if url.scheme() == "https" {
                 "https"
             } else {
@@ -180,10 +172,6 @@ impl Sent {
         } else {
             self.method
         };
-        let mut operation = ClientOperation::new(&REQUEST, name, started, elapsed, &attributes);
-        if let Some(announced) = announced {
-            operation = operation.announced_as(announced);
-        }
         let failure = match (answer, status.as_ref()) {
             (Ok(_), Some(status)) if status.is_client_error() || status.is_server_error() => {
                 Some(status.as_str())
@@ -192,9 +180,9 @@ impl Sent {
             (Err(Error::Reqwest(error)), _) if error.is_timeout() => Some(TIMEOUT),
             (Err(_), _) => Some(OTHER),
         };
-        match failure {
-            Some(failure) => operation.failed(failure).record(),
-            None => operation.record(),
-        }
+        ClientOperation::new(&REQUEST, name, started, elapsed, &attributes)
+            .announced_as(announced)
+            .failed(failure)
+            .record();
     }
 }

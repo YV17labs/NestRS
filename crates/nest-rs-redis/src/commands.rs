@@ -4,30 +4,15 @@
 
 use std::time::{Instant, SystemTime};
 
-use nest_rs_core::client_operation::{self, ClientDuration, ClientOperation, ClientValue};
+use nest_rs_core::client_operation::{
+    self, ClientOperation, ClientValue, DB_CLIENT_OPERATION_DURATION, DB_NAMESPACE,
+    DB_OPERATION_NAME, DB_SYSTEM_NAME, SERVER_ADDRESS, SERVER_PORT,
+};
 use nest_rs_core::operation_log::OTHER;
 use redis::{Arg, Cmd, Pipeline, RedisError, Value};
 
-/// The database conventions' client duration, keyed by the command, the
-/// database it ran on and the server it was sent to.
-const COMMAND: ClientDuration = ClientDuration::new(
-    "db.client.operation.duration",
-    "Duration of database client operations.",
-    &[
-        DB_SYSTEM_NAME,
-        DB_NAMESPACE,
-        DB_OPERATION_NAME,
-        SERVER_ADDRESS,
-        SERVER_PORT,
-    ],
-);
-
-const DB_SYSTEM_NAME: &str = "db.system.name";
-const DB_NAMESPACE: &str = "db.namespace";
-const DB_OPERATION_NAME: &str = "db.operation.name";
+/// The database conventions' size of a batch, which no duration is keyed by.
 const DB_OPERATION_BATCH_SIZE: &str = "db.operation.batch.size";
-const SERVER_ADDRESS: &str = "server.address";
-const SERVER_PORT: &str = "server.port";
 
 /// The conventions' name for the database this driver speaks to.
 const REDIS: &str = "redis";
@@ -144,12 +129,15 @@ impl Timing {
             attributes.push((SERVER_ADDRESS, ClientValue::Text(address)));
             attributes.push((SERVER_PORT, ClientValue::Integer(i64::from(port))));
         }
-        let recorded =
-            ClientOperation::new(&COMMAND, &operation, self.started, elapsed, &attributes);
-        match failure {
-            None => recorded.record(),
-            Some(failure) => recorded.failed(failure).record(),
-        }
+        ClientOperation::new(
+            &DB_CLIENT_OPERATION_DURATION,
+            &operation,
+            self.started,
+            elapsed,
+            &attributes,
+        )
+        .failed(failure)
+        .record();
     }
 }
 

@@ -121,6 +121,7 @@ mod denial_document;
 mod discoverable;
 mod discovery;
 mod dispatch;
+pub mod duration_histogram;
 mod edge;
 mod env_flag;
 mod env_prefix;

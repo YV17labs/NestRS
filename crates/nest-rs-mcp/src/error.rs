@@ -535,11 +535,7 @@ where
 /// does not declare, in words quoting the name a client sent.
 pub(crate) fn refuses_prompt(error: &McpError, name: &str) -> bool {
     error.code == ErrorCode::INVALID_PARAMS
-        && error
-            .message
-            .strip_prefix("prompt '")
-            .and_then(|rest| rest.strip_suffix("' not found"))
-            == Some(name)
+        && error.message.strip_circumfix("prompt '", "' not found") == Some(name)
 }
 
 /// The key under which rmcp's refusal of a prompt lists the prompts its host

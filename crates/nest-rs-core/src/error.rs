@@ -1060,10 +1060,7 @@ impl DecodeError {
             ("missing field `", "missing"),
             ("duplicate field `", "duplicate"),
         ] {
-            let named = self
-                .sentence
-                .strip_prefix(opening)
-                .and_then(|rest| rest.strip_suffix('`'));
+            let named = self.sentence.strip_circumfix(opening, '`');
             let declared =
                 named.and_then(|name| fields?.iter().copied().find(|field| *field == name));
             if let Some(field) = declared {

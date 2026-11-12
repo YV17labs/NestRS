@@ -261,17 +261,12 @@ fn publish(values: &HashMap<String, String>) {
 /// Double-quoted: expand `\n \t \r \\ \"` so a PEM key fits on one line.
 /// Single-quoted: literal. Unquoted: as-is.
 fn parse_value(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let quoted = bytes.len() >= 2
-        && (bytes[0] == b'"' || bytes[0] == b'\'')
-        && bytes[bytes.len() - 1] == bytes[0];
-    if !quoted {
-        return value.to_owned();
-    }
-    let inner = &value[1..value.len() - 1];
-    if bytes[0] == b'\'' {
+    if let Some(inner) = value.strip_circumfix('\'', '\'') {
         return inner.to_owned();
     }
+    let Some(inner) = value.strip_circumfix('"', '"') else {
+        return value.to_owned();
+    };
     let mut out = String::with_capacity(inner.len());
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {

@@ -35,10 +35,7 @@ pub fn endpoint_shown(url: &str) -> String {
 /// in any case, or a loopback address, an IPv6 literal with or without its
 /// brackets.
 pub fn is_loopback(host: &str) -> bool {
-    let host = host
-        .strip_prefix('[')
-        .and_then(|literal| literal.strip_suffix(']'))
-        .unwrap_or(host);
+    let host = host.strip_circumfix('[', ']').unwrap_or(host);
     host.eq_ignore_ascii_case("localhost")
         || host
             .parse::<std::net::IpAddr>()

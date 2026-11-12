@@ -150,8 +150,7 @@ fn parser_said(message: &str) -> bool {
     PARSER_SAID.contains(&message)
         || ["operation ", "fragment "].iter().any(|opening| {
             message
-                .strip_prefix(opening)
-                .and_then(|rest| rest.strip_suffix(" is defined twice"))
+                .strip_circumfix(opening, " is defined twice")
                 .is_some_and(is_name)
         })
 }

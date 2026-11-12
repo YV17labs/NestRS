@@ -17,13 +17,13 @@ use crate::{init_under, refused_under};
 
 /// The authority the collector's certificate chains to; the system's store
 /// does not hold it.
-static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
+pub(crate) static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
 
 static CERTIFICATE: LazyLock<TestCertificate> = LazyLock::new(|| AUTHORITY.server(&["127.0.0.1"]));
 
 /// What a collector does with each export it reads.
 #[derive(Clone)]
-enum Behaviour {
+pub(crate) enum Behaviour {
     /// Writes this raw HTTP/1.1 answer, then closes.
     Answer(String),
     /// Holds the connection and never answers.
@@ -45,7 +45,7 @@ pub(crate) struct Received {
 
 impl Received {
     /// The value of the header `name` (lowercase), if the export carried it.
-    fn header(&self, name: &str) -> Option<&str> {
+    pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
             .find(|(header, _)| header == name)
@@ -81,7 +81,7 @@ impl Collector {
 
     /// A collector doing `behaviour` with every export, requiring a client
     /// certificate `clients` issued when it names an authority.
-    fn serving_to(behaviour: Behaviour, clients: Option<&TestAuthority>) -> Self {
+    pub(crate) fn serving_to(behaviour: Behaviour, clients: Option<&TestAuthority>) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
         listener.set_nonblocking(true).expect("non-blocking");
         let addr = listener.local_addr().expect("its address");
@@ -155,7 +155,7 @@ impl Collector {
         Self { addr, exports }
     }
 
-    fn endpoint(&self) -> String {
+    pub(crate) fn endpoint(&self) -> String {
         format!("https://127.0.0.1:{}", self.addr.port())
     }
 

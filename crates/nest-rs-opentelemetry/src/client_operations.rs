@@ -98,12 +98,19 @@ fn span(tracer: &Tracer, operation: &ClientOperation<'_>) {
     if let Some(error_type) = operation.error_type() {
         attributes.push(KeyValue::new(ERROR_TYPE, error_type.to_owned()));
     }
-    let mut span = tracer
+    let builder = tracer
         .span_builder(operation.name().to_owned())
         .with_kind(SpanKind::Client)
         .with_start_time(operation.started())
-        .with_attributes(attributes)
-        .start_with_context(tracer, &parent);
+        .with_attributes(attributes);
+    // The id generator adopts the ids published while the span starts: the
+    // span the peer was told is its parent is this one.
+    let mut span = match operation.announced() {
+        Some(announced) => nest_rs_core::__private::with_pending_ids(announced, || {
+            builder.start_with_context(tracer, &parent)
+        }),
+        None => builder.start_with_context(tracer, &parent),
+    };
     if operation.error_type().is_some() {
         span.set_status(Status::error(""));
     }
@@ -149,6 +156,7 @@ mod tests {
     fn exported(work: impl FnOnce(&ClientOperations)) -> Exported {
         let spans = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()
+            .with_id_generator(crate::id_generator::AdoptFrameworkIds::default())
             .with_simple_exporter(spans.clone())
             .build();
         let metrics = InMemoryMetricExporter::default();
@@ -302,5 +310,36 @@ mod tests {
         assert!(points(&exported.metrics).iter().all(|(attributes, _)| {
             attributes.contains(&(ERROR_TYPE.to_owned(), "_OTHER".to_owned()))
         }),);
+    }
+
+    #[test]
+    fn an_operation_announced_to_its_peer_is_the_span_the_peer_was_told_of() {
+        let announced = Correlation::minted(None).child();
+        let exported = exported(|recording| {
+            let unit = nestrs_unit_probe::open(&Correlation::minted(None));
+            unit.in_scope(|| {
+                let attributes = [("http.request.method", ClientValue::Text("GET"))];
+                recording.record(
+                    &ClientOperation::new(
+                        &STATEMENT,
+                        "GET",
+                        SystemTime::now(),
+                        Duration::from_millis(1),
+                        &attributes,
+                    )
+                    .announced_as(&announced),
+                );
+            });
+        });
+
+        let operation = exported
+            .spans
+            .iter()
+            .find(|span| span.span_kind == SpanKind::Client)
+            .expect("the operation's span");
+        assert_eq!(
+            operation.span_context.span_id().to_string(),
+            announced.span_id().to_hex(),
+        );
     }
 }

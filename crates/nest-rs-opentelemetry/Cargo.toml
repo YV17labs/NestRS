@@ -30,6 +30,9 @@ otlp = [
     "dep:tracing-opentelemetry",
     "dep:uuid",
     "dep:reqwest",
+    "dep:reqwest-middleware",
+    "dep:async-trait",
+    "dep:http",
     "nest-rs-config/reqwest",
 ]
 
@@ -62,6 +65,10 @@ uuid = { workspace = true, optional = true }
 # and its verification depend on no other crate's features: `blocking` is the
 # client the SDK's HTTP exporters take, `rustls` (the workspace's) the TLS.
 reqwest = { workspace = true, features = ["blocking"], optional = true }
+# `ReqwestMiddleware`, which carries the unit's trace onto an app's own client.
+reqwest-middleware = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
 
 [dev-dependencies]
 # `TestAuthority` issues the certificate the collector double presents over TLS.

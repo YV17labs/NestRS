@@ -203,6 +203,22 @@ untimed, so a savepoint is not seen. A blocking Redis read
 (`XREADGROUP … BLOCK`) is timed for as long as it waited: read its
 `db.operation.name` apart.
 
+## An app's own HTTP client
+
+`ReqwestMiddleware`, added to the reqwest client an app builds
+([Calling another service](/fundamentals/correlation/#calling-another-service)),
+records each request it sends as the HTTP conventions' client operation: a
+`client` span named for its method (`GET`, `HTTP` for a method the conventions do
+not know) and a point in `http.client.request.duration`, keyed by
+`http.request.method`, `server.address`, `server.port` and
+`http.response.status_code`; a `4xx` or `5xx` records its status as `error.type`,
+a request that never answered `timeout` or `_OTHER`. The `traceparent` it sends
+names that span, so the service it called hangs under it.
+
+**Neither the path nor the query is recorded**, where the conventions ask for
+`url.full`: a webhook's secret sits in its path, a signed URL's in its query, and
+a span is kept by a backend no one audits for them.
+
 ## Going further
 
 - [Logs](/opentelemetry/logs/) — the structured fields on the span.

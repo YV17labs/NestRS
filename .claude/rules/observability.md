@@ -30,8 +30,8 @@ a queue job, a scheduled tick — and each names the span that caused it. It is
 minted by whoever accepts the work, or continued from what carried it. A
 primitive cannot be optional, so it depends on no crate an app may decline, no
 collector and no authentication. It is read through `current_trace_id()` and
-`current_span_id()` at every edge; `current_traceparent()` is what an app injects
-into its own outbound client. There is no separate request id:
+`current_span_id()` at every edge; an app's own reqwest client carries it through
+`ReqwestMiddleware`, and any other client sends `current_traceparent()`. There is no separate request id:
 `X-Request-Id` is upstream data, recorded as a captured header behind a trusted
 peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
 

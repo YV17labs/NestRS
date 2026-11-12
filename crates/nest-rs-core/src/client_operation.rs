@@ -10,6 +10,8 @@
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
+use crate::Correlation;
+
 /// The histogram a kind of client operation records its duration in, named as
 /// its telemetry conventions name it, and the attributes that key it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +74,7 @@ pub struct ClientOperation<'a> {
     elapsed: Duration,
     attributes: &'a [(&'static str, ClientValue<'a>)],
     error_type: Option<&'a str>,
+    announced: Option<&'a Correlation>,
 }
 
 impl<'a> ClientOperation<'a> {
@@ -91,6 +94,17 @@ impl<'a> ClientOperation<'a> {
             elapsed,
             attributes,
             error_type: None,
+            announced: None,
+        }
+    }
+
+    /// The same operation, announced to its peer as `correlation` — the
+    /// `traceparent` it carried naming its span as the parent — so its span
+    /// takes that span's id.
+    pub const fn announced_as(self, correlation: &'a Correlation) -> Self {
+        Self {
+            announced: Some(correlation),
+            ..self
         }
     }
 
@@ -131,6 +145,11 @@ impl<'a> ClientOperation<'a> {
     /// How it failed, if it did.
     pub const fn error_type(&self) -> Option<&'a str> {
         self.error_type
+    }
+
+    /// What it was announced to its peer as, if it was.
+    pub const fn announced(&self) -> Option<&'a Correlation> {
+        self.announced
     }
 
     /// Hand it to the recorder the observability stack seeded; nothing
@@ -199,5 +218,15 @@ mod tests {
         assert_eq!(failed.elapsed(), Duration::from_millis(3));
         assert_eq!(failed.attributes(), &attributes);
         assert_eq!(failed.duration(), &STATEMENT);
+        assert!(failed.announced().is_none());
+
+        let announced = Correlation::minted(None).child();
+        assert_eq!(
+            failed
+                .announced_as(&announced)
+                .announced()
+                .map(Correlation::span_id),
+            Some(announced.span_id()),
+        );
     }
 }

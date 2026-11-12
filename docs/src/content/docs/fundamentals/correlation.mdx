@@ -134,24 +134,33 @@ push the job makes carries on unread.
 ## Calling another service
 
 The framework ships no general outbound HTTP client, by decision — wrapping one
-costs you every option it has and buys a module. So you inject your own, and
-propagating the trace is one line in it:
+costs you every option it has and buys a module. So you inject your own reqwest
+client, and add the trace to it once, where you build it:
 
-```rust title="crates/features/src/media/client.rs"
-let mut request = self.http.get(url);
-if let Some(traceparent) = nest_rs::core::current_traceparent() {
-    request = request.header("traceparent", traceparent.to_string());
-}
-// Forwarding `tracestate` untouched is a MUST, including when you understand
-// none of it: a vendor's sampling or routing rides in there, and dropping it
-// breaks them through you.
-if let Some(state) = nest_rs::core::current_tracestate().and_then(|s| s.as_str().map(str::to_owned)) {
-    request = request.header("tracestate", state);
-}
+```bash frame="terminal"
+cargo add reqwest reqwest-middleware
 ```
 
+```rust title="crates/features/src/media/client.rs"
+use nest_rs::opentelemetry::ReqwestMiddleware;
+
+let http = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+    .with(ReqwestMiddleware::new())
+    .build();
+```
+
+Every request it sends inside a unit of work carries `traceparent`, naming a span
+of the request's own under the unit, and the unit's `tracestate` untouched —
+forwarding it is a MUST, a vendor's sampling or routing rides in there. `baggage`
+never leaves: what a job carries is for your own services, not the ones you call.
 The service you call continues your trace, and its spans appear under the request
-that caused them.
+that caused them; once telemetry exports, the request is a `client` span and a
+point in `http.client.request.duration`, by its method, its server and its status
+([Traces](/opentelemetry/traces/#an-apps-own-http-client)).
+
+A client that is not reqwest reads the same context itself:
+`nest_rs::core::current_traceparent()` and `current_tracestate()` are the headers
+to send.
 
 ## Limits
 

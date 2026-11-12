@@ -49,7 +49,8 @@ until it stabilises.
 | tracing-subscriber | **Private**: no public error carries one of its errors, since `nest_rs::core::logging::LogSettings` reads the console's settings into nestrs's own, and no tier-1 type implements one of its traits: the kernel's console writer and formats sit behind core's `__private`, and a binary with no `App` installs the kernel's console through `nest_rs::core::logging::install_console`. The filter syntax `RUST_LOG` takes is its `EnvFilter`'s, so a major that changes what parses is taken only with that syntax kept, or in a nestrs major. |
 | rustls, outside `nest-rs-testing` | **Private**: the process's rustls `CryptoProvider`, which `nest-rs-config` hands to its sibling crates, is reached through its `__private` alone. |
 | croner, jiff, jiff-tzdb | **Private**. The cron grammar and the zone names they read are `#[cron]`'s grammar, so a major of either that changes what parses is taken only with that grammar kept, or in a nestrs major. |
-| reqwest, oauth2, hyper, h2, sqlx, tokio-tungstenite, and every other dependency | **Private** already: no public signature names them. The record says so, so that it stays true. |
+| reqwest 0.13, reqwest-middleware 0.5 | **Public** since 2026-11-12: `nest_rs::opentelemetry::ReqwestMiddleware` implements reqwest-middleware's `Middleware`, around the reqwest client an app builds and calls in reqwest's own words. Elsewhere the framework's reqwest clients stay private to the crate whose protocol needs them. |
+| oauth2, hyper, h2, sqlx, tokio-tungstenite, and every other dependency | **Private** already: no public signature names them. The record says so, so that it stays true. |
 
 Each wrap above lands before 7.0 is published, and the change that lands it
 rewrites its row's "until" clause.

@@ -409,10 +409,7 @@ impl Report {
 
 /// `path` as a reader standing at `base` names it: relative when under it.
 pub(crate) fn rel(path: &Path, base: &Path) -> String {
-    path.strip_prefix(base)
-        .unwrap_or(path)
-        .display()
-        .to_string()
+    path.trim_prefix(base).display().to_string()
 }
 
 /// Run `rustfmt` over the given files, best-effort: a missing or failing

@@ -105,7 +105,7 @@ pub fn singular(pascal: &str) -> String {
     if lower.ends_with("ss") {
         return pascal.to_owned();
     }
-    pascal.strip_suffix('s').unwrap_or(pascal).to_owned()
+    pascal.trim_suffix('s').to_owned()
 }
 
 #[cfg(test)]

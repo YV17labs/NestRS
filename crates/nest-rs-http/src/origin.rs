@@ -448,7 +448,7 @@ fn is_special(scheme: &str) -> bool {
 /// *ends in a number checker*): its last label, one trailing `.` aside, is
 /// decimal digits or an IPv4 number.
 fn ends_in_a_number(host: &str) -> bool {
-    let host = host.strip_suffix('.').unwrap_or(host);
+    let host = host.trim_suffix('.');
     let last = host.rsplit_once('.').map_or(host, |(_, last)| last);
     (!last.is_empty() && last.bytes().all(|b| b.is_ascii_digit())) || ipv4_number(last).is_some()
 }
@@ -457,7 +457,7 @@ fn ends_in_a_number(host: &str) -> bool {
 /// one trailing `.` aside, each but the last a byte and the last filling the
 /// bytes left; `None` when it is no IPv4 address.
 fn ipv4(host: &str) -> Option<Ipv4Addr> {
-    let host = host.strip_suffix('.').unwrap_or(host);
+    let host = host.trim_suffix('.');
     let numbers = host
         .split('.')
         .map(ipv4_number)

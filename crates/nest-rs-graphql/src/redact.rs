@@ -180,7 +180,7 @@ fn rule_list(list: &str) -> bool {
     let Some((head, last)) = list.rsplit_once(" or ") else {
         return is_name(list);
     };
-    let head = head.strip_suffix(',').unwrap_or(head);
+    let head = head.trim_suffix(',');
     is_name(last) && head.split(", ").all(is_name)
 }
 

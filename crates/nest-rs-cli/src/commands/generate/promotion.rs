@@ -288,7 +288,7 @@ fn in_use_line(source: &str, at: usize) -> bool {
 fn inline_module(source: &str) -> Option<usize> {
     source.lines().enumerate().find_map(|(at, line)| {
         let rest = line.trim_start();
-        let rest = rest.strip_prefix("pub ").unwrap_or(rest);
+        let rest = rest.trim_prefix("pub ");
         let name = rest.strip_prefix("mod ")?;
         let name = name.trim_end();
         (!name.ends_with(';')).then_some(at + 1)

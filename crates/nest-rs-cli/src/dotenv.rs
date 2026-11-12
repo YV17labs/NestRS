@@ -6,7 +6,7 @@
 pub(crate) fn assignments(contents: &str) -> impl Iterator<Item = (&str, &str)> {
     contents.lines().filter_map(|line| {
         let line = line.trim();
-        let line = line.strip_prefix("export ").unwrap_or(line);
+        let line = line.trim_prefix("export ");
         if line.starts_with('#') {
             return None;
         }

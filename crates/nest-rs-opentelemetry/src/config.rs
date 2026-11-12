@@ -351,10 +351,8 @@ pub(crate) fn say_retired_variables() {
 /// The specification's variable that reads what `variable`, under the retired
 /// namespace, set — its whole family where 6.x had no such key.
 fn read_as(variable: &str) -> &'static str {
-    let key = variable
-        .strip_prefix(&nest_rs_config::var_name("opentelemetry", ""))
-        .unwrap_or(variable);
-    match key.strip_suffix("_FILE").unwrap_or(key) {
+    let key = variable.trim_prefix(&nest_rs_config::var_name("opentelemetry", ""));
+    match key.trim_suffix("_FILE") {
         "SERVICE_NAME" => "OTEL_SERVICE_NAME",
         "SERVICE_VERSION" | "SERVICE_ENVIRONMENT" | "SERVICE_INSTANCE_ID" => {
             "OTEL_RESOURCE_ATTRIBUTES"

@@ -71,10 +71,10 @@ impl StaticFilesEndpoint {
     /// The path below the mount, without the `/` that joins them; an empty
     /// segment stays, and is refused as one.
     fn below_mount<'a>(&self, path: &'a str) -> &'a str {
-        let rest = path.strip_prefix(self.path.as_str()).unwrap_or(path);
+        let rest = path.trim_prefix(self.path.as_str());
         match self.path.as_str() {
             "/" => rest,
-            _ => rest.strip_prefix('/').unwrap_or(rest),
+            _ => rest.trim_prefix('/'),
         }
     }
 

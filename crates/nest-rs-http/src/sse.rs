@@ -411,7 +411,7 @@ mod tests {
                 continue;
             }
             let (name, value) = line.split_once(':').unwrap_or((line, ""));
-            let value = value.strip_prefix(' ').unwrap_or(value);
+            let value = value.trim_prefix(' ');
             match name {
                 "data" => {
                     data.push_str(value);

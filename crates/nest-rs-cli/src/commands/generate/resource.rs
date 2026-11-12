@@ -265,12 +265,7 @@ fn print_next_steps(
         println!("{lead}{line}");
     }
     if let (Some(test), Wiring::Wired { root, .. }) = (round_trip, wiring) {
-        let file = test
-            .test
-            .strip_prefix(root)
-            .unwrap_or(&test.test)
-            .display()
-            .to_string();
+        let file = test.test.trim_prefix(root).display().to_string();
         println!(
             "     Its round trip is `{file}` in that app: `nestrs run test e2e` passes it once"
         );

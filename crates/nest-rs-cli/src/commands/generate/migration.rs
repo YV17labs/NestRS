@@ -274,7 +274,7 @@ pub(crate) struct Repeated {
 /// other name, `create_index_on_posts` included.
 fn created_table(name: &str) -> Option<String> {
     let rest = name.strip_prefix("create_")?;
-    let rest = rest.strip_suffix("_table").unwrap_or(rest);
+    let rest = rest.trim_suffix("_table");
     let subject = crate::naming::migration_subject(name);
     (subject.snake == rest).then(|| subject.table())
 }
@@ -318,7 +318,7 @@ pub(crate) fn queue_migration(
     if let Some((taken, table)) = repeated(&mods, names) {
         let path = ws.migrations_root().join(format!("{taken}.rs"));
         return Err(refuse(Repeated {
-            path: path.strip_prefix(&ws.root).unwrap_or(&path).to_path_buf(),
+            path: path.trim_prefix(&ws.root).to_path_buf(),
             table,
         }));
     }

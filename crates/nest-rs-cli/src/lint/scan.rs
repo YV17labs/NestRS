@@ -118,7 +118,7 @@ fn inspect(path: &Path, root: &Path, out: &mut Scan) {
     let file = match syn::parse_file(&source) {
         Ok(file) => file,
         Err(refused) => {
-            let relative = path.strip_prefix(root).unwrap_or(path).to_path_buf();
+            let relative = path.trim_prefix(root).to_path_buf();
             out.unparsable.push((relative, refused));
             return;
         }
@@ -167,7 +167,7 @@ fn inspect(path: &Path, root: &Path, out: &mut Scan) {
     }
 
     out.findings.push(Finding {
-        path: path.strip_prefix(root).unwrap_or(path).to_path_buf(),
+        path: path.trim_prefix(root).to_path_buf(),
         declared,
     });
 }

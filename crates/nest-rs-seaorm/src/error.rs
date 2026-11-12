@@ -149,10 +149,8 @@ impl fmt::Display for SaidFailure<ValidationErrors> {
 impl fmt::Display for SaidFailure<OpaqueCause> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let sentence = nest_rs_core::error_message(UnderTheConstant::ref_cast(&self.0));
-        let below = sentence
-            .strip_prefix(nest_rs_core::OPAQUE_CLIENT_MESSAGE)
-            .unwrap_or(&sentence);
-        f.write_str(below.strip_prefix(": ").unwrap_or(below))
+        let below = sentence.trim_prefix(nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+        f.write_str(below.trim_prefix(": "))
     }
 }
 

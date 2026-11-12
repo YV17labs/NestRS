@@ -31,7 +31,7 @@ pub(crate) fn nestrs(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> String 
         args.join(" "),
         String::from_utf8_lossy(&output.stderr),
     );
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    String::from_utf8_lossy_owned(output.stdout)
 }
 
 /// Point the generated `nest-rs` requirement at this working tree.
@@ -96,7 +96,7 @@ pub(crate) fn cargo_check(workspace: &Path) -> Result<(), String> {
     if output.status.success() {
         return Ok(());
     }
-    Err(String::from_utf8_lossy(&output.stderr).into_owned())
+    Err(String::from_utf8_lossy_owned(output.stderr))
 }
 
 /// Every column type `g resource`'s grammar reads, once, the last one

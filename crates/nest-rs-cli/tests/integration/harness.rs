@@ -66,7 +66,7 @@ pub(crate) fn run_ok(dir: &Path, args: &[&str]) -> String {
         "args {args:?} stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    String::from_utf8_lossy_owned(output.stdout)
 }
 
 /// Run `nestrs <args...>` with cwd at `dir`, asserting failure, and hand back
@@ -82,7 +82,7 @@ pub(crate) fn run_err(dir: &Path, args: &[&str]) -> String {
         "args {args:?} succeeded: {}",
         String::from_utf8_lossy(&output.stdout)
     );
-    String::from_utf8_lossy(&output.stderr).into_owned()
+    String::from_utf8_lossy_owned(output.stderr)
 }
 
 /// Move a `g resource` port's service into `services/articles.rs`, renamed

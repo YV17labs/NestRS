@@ -41,7 +41,7 @@ async fn production_boot_refuses(
         .expect("a boot missing what it must name stops")
         .expect("the auth binary's refusal is read");
     assert!(!ran.status.success(), "{directory}: the boot succeeded");
-    String::from_utf8_lossy(&ran.stderr).into_owned()
+    String::from_utf8_lossy_owned(ran.stderr)
 }
 
 async fn assert_it_names_its_own_or_is_refused(directory: &str) {

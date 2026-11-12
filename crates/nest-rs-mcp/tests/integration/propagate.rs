@@ -1811,7 +1811,7 @@ async fn answer_to(stream: &mut tokio::net::TcpStream, id: u64) -> serde_json::V
     found.unwrap_or_else(|_| {
         panic!(
             "no answer to {id}: {:?}",
-            String::from_utf8_lossy(&read).into_owned()
+            String::from_utf8_lossy_owned(read)
         )
     })
 }

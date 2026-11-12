@@ -329,7 +329,7 @@ pub(crate) async fn read_to_end(stream: &mut TcpStream) -> String {
         Ok(Err(error)) => panic!("the socket failed rather than ending: {error}"),
         Err(_) => panic!("the server never closed the connection"),
     }
-    String::from_utf8_lossy(&rest).into_owned()
+    String::from_utf8_lossy_owned(rest)
 }
 
 /// An `#[sse]` stream is ended cleanly at the signal, and its line files it

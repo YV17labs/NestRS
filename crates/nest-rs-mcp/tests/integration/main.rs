@@ -357,7 +357,7 @@ pub(crate) async fn exchange(port: u16, request: &str) -> (TcpStream, String) {
         assert!(read > 0, "the connection ended inside the head");
         head.push(byte[0]);
     }
-    (stream, String::from_utf8_lossy(&head).into_owned())
+    (stream, String::from_utf8_lossy_owned(head))
 }
 
 fn session_header(session: Option<&str>) -> String {
@@ -434,7 +434,7 @@ pub(crate) async fn read_to_end(stream: &mut TcpStream) -> String {
         Ok(Err(error)) => panic!("the socket failed rather than ending: {error}"),
         Err(_) => panic!("the server never closed the connection"),
     }
-    String::from_utf8_lossy(&rest).into_owned()
+    String::from_utf8_lossy_owned(rest)
 }
 
 /// Where [`WritingTools`] is served.

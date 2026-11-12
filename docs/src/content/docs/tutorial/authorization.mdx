@@ -176,9 +176,8 @@ pub struct UsersHttpModule;
 ```
 
 `AuthzModule` carries the `AuthzGuard` provider. Forgetting the import is
-caught at boot by the access graph —
-the binary fails to start with a `module access violation` naming the guard and the
-module to import, rather
+caught at boot by the access graph — the binary fails to start with a
+`module access violation` naming the guard and the module to import, rather
 than running silently unprotected.
 
 The app root — `api`, not `blog` — lists the adapter, and nothing it brings:
@@ -186,26 +185,6 @@ The app root — `api`, not `blog` — lists the adapter, and nothing it brings:
 `AuthzModule`, where the access graph checks each import. It lists no guard
 either: each controller binds its own, as `blog`'s do, so a feature stays covered
 in every app that imports it.
-
-```rust title="apps/api/src/module.rs (from the demo, abridged)"
-use nest_rs::core::{GlobalInterceptors, module};
-// …
-use nest_rs::seaorm::SeaOrmDatabaseModule;
-// …
-use features::users::{UsersGraphqlModule, UsersHttpModule};
-
-#[module(
-    imports = [
-        // …
-        SeaOrmDatabaseModule,
-        // …
-        UsersHttpModule,
-        // …
-    ],
-    // …
-)]
-pub struct ApiModule;
-```
 
 ## What changed at runtime
 
@@ -237,15 +216,8 @@ didn't install; that's a wiring bug.
 
 **Every row judged where it is built.** `User::from(&row)` judges the whole
 row against the caller's ability as it builds the wire type, so a column
-outside the caller's `.fields([...])` grant is no value in it. A plain
-user's listing returns:
-
-```json
-[{ "id": "018f…", "org_id": null, "name": "Bob", "email": null, "created_at": null, "updated_at": null }]
-```
-
-— the email never reaches the wire row, so no handler can forget to
-redact it.
+outside the caller's `.fields([...])` grant reads `null` in it: the email never
+reaches the wire row, so no handler can forget to redact it.
 
 ## See it for yourself
 
@@ -258,20 +230,11 @@ HTTP/1.1 403 Forbidden
 
 $ curl -s -H 'Authorization: Bearer <plain-user-token>' \
     http://localhost:3002/users
-[{"id":"018f…","name":"Bob"}]
+[{"id":"018f…","org_id":null,"name":"Bob","email":null,"created_at":null,"updated_at":null}]
 ```
 
-The email is gone, the cross-tenant load is refused, and the handler
+The email reads `null`, the cross-tenant load is refused, and the handler
 never had to know.
-
-## What the reference feature has
-
-- A `UsersController` guarded by `AuthnGuard` + `AuthzGuard` — every
-  route requires a valid JWT and a matching ability.
-- An `AuthzAbility` policy that scopes reads to the caller's org and
-  withholds the email column from plain users.
-- A by-id route that loads through the service — `403` on a denied
-  row, `404` on a missing one, both without manual checks.
 
 ## Going further
 

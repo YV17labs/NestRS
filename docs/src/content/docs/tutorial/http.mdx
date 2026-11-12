@@ -5,26 +5,19 @@ sidebar:
   order: 5
 ---
 
-You read the service that owns the entity, the controller that declares the
-CRUD routes and the HTTP module that ties them together — all three written by
-`nestrs g resource` — and grant the policy in front of them its first rule.
-By the end of this page, `blog` imports everything the five routes need; the
-next page, [Persist through Postgres](/tutorial/database/), gives them the
-table they read, and the first `curl` returns a post.
+You read the service, the controller and the HTTP module `nestrs g resource`
+wrote, and grant the policy in front of them its first rule. By the end of this
+page, `blog` imports everything the five CRUD routes need but the table
+[Persist through Postgres](/tutorial/database/) gives them.
 
 ## The service
 
 A service is the entity's single DB gateway. Every read and write goes
 through `Repo<Posts>`; controllers, resolvers, gateways never touch
-SeaORM directly. The HTTP layer in this section drives a service that
-implements `CrudService` — that trait is what the `#[crud(...)]` macro
-on the controller expands against.
-
-The service crate here is
-[**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) —
-it provides `CrudService`, `Repo`, `ServiceError`, and the SeaORM
-integration. SeaORM stays the source of truth for the column types and
-the active-model semantics.
+SeaORM directly. The controller's `#[crud(...)]` expands against the service's
+`CrudService`, which
+[**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm)
+provides beside `Repo` and `ServiceError`.
 
 ```rust title="crates/features/src/posts/service.rs"
 use nest_rs::core::injectable;
@@ -53,20 +46,15 @@ impl Updatable for PostsService {
 impl Deletable for PostsService {}
 ```
 
-`#[injectable]` marks the struct as a provider — the container builds
-it once and shares it as `Arc<PostsService>`. `CrudService` carries the
-**read** half — it names the entity, and every resource implements it.
-Writes are **opt-in traits**: `Creatable` (`type Create`), `Updatable`
-(`type Update`), and `Deletable` — a resource implements each only when
-it genuinely offers that operation. A read-only projection implements
-`CrudService` alone and declares no write trait. No custom methods yet:
-the read half plus these three write impls give a bare CRUD feature its
-full surface.
+`#[injectable]` marks the struct as a provider — the container builds it once
+and shares it as `Arc<PostsService>`. `CrudService` carries the **read** half:
+it names the entity, and every resource implements it. Writes are **opt-in
+traits** — `Creatable` (`type Create`), `Updatable` (`type Update`) and
+`Deletable` — each implemented only for an operation the resource offers, so a
+read-only projection implements `CrudService` alone.
 
-Every `Repo::<Posts>` call runs on the ambient executor — the pool on safe
-routes, the transaction on mutating routes. You don't pass it in; the
-data layer installs it before the handler runs
-([Persist through Postgres](/tutorial/database/) makes that concrete).
+Every `Repo::<Posts>` call runs on the ambient executor the data layer installs
+before the handler runs: you never pass a connection in.
 
 The port module registers it:
 
@@ -82,14 +70,13 @@ pub struct PostsModule;
 ## The controller
 
 A controller is a struct with `#[controller(path = ...)]` and a
-`#[crud(service = PostsService)]` impl block naming the service the
-struct injects. The macro generates every CRUD verb — `list`, `get`, `create`,
-`update`, `delete` — and reads every type they name off that service: the
-entity off `CrudService`, the bodies off `Creatable` and `Updatable`, and
-the answer off the entity's `#[expose(name = "Post")]`. Each verb reads its
-trait, so a resource missing one — a `create` with no `Creatable` impl — is
-a build break, not a silent no-op; `ops = [list, get]` lists the verbs a
-read-only resource has. You don't write handler bodies unless you need
+`#[crud(service = PostsService)]` impl block naming the service it injects. The
+macro generates every CRUD verb — `list`, `get`, `create`, `update`, `delete` —
+and reads each type they name off that service: the entity off `CrudService`,
+the bodies off `Creatable` and `Updatable`, the answer off the entity's
+`#[expose(name = "Post")]`. A verb whose trait is missing — a `create` with no
+`Creatable` impl — is a build break, not a silent no-op; `ops = [list, get]`
+lists the verbs a read-only resource has. You write a handler body only for
 domain logic the trait doesn't cover.
 
 ```rust title="crates/features/src/posts/http/controller.rs"
@@ -121,25 +108,18 @@ impl PostsController {}
 From this line on, no row crosses the data layer without someone to answer for
 it. `Repo` ANDs the caller's ambient [`Ability`](/security/authorization/) into
 every read and every by-id write; nothing but `AuthzGuard` installs one, so a
-request with no ability reads **nothing** rather than everything. That is the framework's central claim doing its work: row-level filtering
-you never write a `WHERE` for. The price is that it starts now rather than
-later — there is no "skip auth for now" switch: even a public read runs under
-an ability, the one your `AbilityFactory`'s `define_visitor` grants an
-anonymous caller.
+request with no ability reads **nothing** rather than everything: row-level
+filtering you never write a `WHERE` for. There is no "skip auth for now"
+switch: even a public read runs under an ability, the one your
+`AbilityFactory`'s `define_visitor` grants an anonymous caller.
 
-`AuthnGuard` and `AuthzGuard` are **your** types, not framework ones: the
-framework is generic over the principal and the policy, so each workspace writes
-them once — and `nestrs g resource` wrote them on the last page, since its
-controller names them. `crates/features/src/authn/` holds the `Claims` a token
-carries and `AuthnGuard`; `authz/` holds `AuthzGuard` and the policy. The run
-also drew two random `<PREFIX>_AUTHN__SECRET`s — yours into the git-ignored
-`.env.local`, the test suites' into `.env.test` — and wrote
-`POST /auth/dev-token`, the route the next page gets its bearer token from,
-behind the framework's `DevelopmentOnlyGuard`, which refuses the boot anywhere
-but development and test, so the file holds only the handler building your
-`Claims`. The committed `.env`, which every environment reads, holds no
-secret: a deployment sets its own. On its own, `nestrs g auth` writes the same
-adapter.
+`AuthnGuard` and `AuthzGuard` are **your** types: the framework is generic over
+the principal and the policy, so `nestrs g resource` wrote them on the last
+page — `crates/features/src/authn/` holds the `Claims` a token carries and
+`AuthnGuard`, `authz/` holds `AuthzGuard` and the policy. It also drew two
+random `<PREFIX>_AUTHN__SECRET`s, yours into the git-ignored `.env.local` and
+the test suites' into `.env.test`; the committed `.env`, which every
+environment reads, holds no secret: a deployment sets its own.
 
 The policy starts empty, so `Post` needs a rule. Rename `define`'s `_ab` to
 `ab` and grant it, as the generator's next steps printed:
@@ -182,16 +162,14 @@ impl AbilityFactory for AuthzAbility {
 ```
 
 `Manage` is every action on `Post`, unconditionally — the smallest rule that
-lets the tutorial move. [Secure your posts](/tutorial/security/)
-narrows it down to what a given caller may actually touch.
+lets the tutorial move, which [Secure your posts](/tutorial/security/) narrows.
 
 ## The HTTP module
 
 The feature's HTTP adapter is a separate module. It imports the port
-(`PostsModule`) and `AuthzModule`, which is what makes the ability guard
-reachable — omit it and the access graph fails the boot by name. The controller
-brings `HttpModule`, the server it is served on, so an app importing the adapter
-serves it.
+(`PostsModule`) and `AuthzModule`, which makes the ability guard reachable —
+omit it and the access graph fails the boot by name. The controller brings
+`HttpModule`, the server it is served on.
 
 ```rust title="crates/features/src/posts/http/module.rs"
 use nest_rs::core::module;
@@ -243,21 +221,19 @@ pub struct BlogModule;
 
 Each line is an edge `blog` serves or a backend its root chooses:
 
-- `BlogHttpModule` is the scaffold's greeting on `/`. Drop the import and
-  delete `crates/features/src/blog/` whenever you want — it exists so page 1
-  had something to prove.
+- `BlogHttpModule` is the scaffold's greeting on `/`, there so page 1 had
+  something to prove: drop it with `crates/features/src/blog/` whenever you want.
 - `PostsHttpModule` serves the five CRUD routes. It imports `AuthzModule`, and
   `AuthzModule` imports `AuthnModule`, so the root lists the edge and nothing
   it brings: the access graph checks each import where it is used.
 - `SeaOrmDatabaseModule` is the data layer every route `#[crud]` generates
   runs on — [the next page](/tutorial/database/) reads it.
 - `AuthnHttpModule` serves `POST /auth/dev-token`, the development token the
-  next page's `curl`s carry. It refuses to boot outside development and test:
-  delete it with `crates/features/src/authn/http/` the day you write the real
-  login.
+  next page's `curl`s carry, behind the framework's `DevelopmentOnlyGuard`,
+  which refuses the boot outside development and test: delete it with
+  `crates/features/src/authn/http/` the day you write the real login.
 
-No manifest line moves: `apps/blog/Cargo.toml` has depended on `features`
-since `nestrs new`.
+No manifest line moves: `apps/blog/Cargo.toml` depends on `features` already.
 
 ## What you have now
 

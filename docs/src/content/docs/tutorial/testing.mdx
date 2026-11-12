@@ -53,15 +53,12 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 ```
 
-`testing` is what brings `TestApp` in, and `nestrs new` already put it on the
-app's `nest-rs` dev-dependency: it stays out of the workspace's `nest-rs`, so no
-release binary carries the harness. Its throwaway database rides the `seaorm`
-feature the workspace's `nest-rs` has carried since `nestrs new`, and the key it
-signs its bearers with the `authn` one the auth adapter added. `migrations` is the
+`testing` brings `TestApp` in on the app's dev-dependency alone, so no release
+binary carries the harness; its throwaway database rides the workspace's
+`seaorm` feature, and its signing key the `authn` one. `migrations` is the
 workspace's migrator, `serde_json` writes the request bodies, and `uuid` the
-subject a token names. The suite asks nothing of telemetry: `main`'s
-`OpenTelemetry::init()` is the app's whole wiring, and a suite never runs
-`main`, so it logs through the console the boot installs and exports nothing.
+subject a token names. A suite never runs `main`, so it exports no telemetry:
+it logs through the console the boot installs.
 
 ## The boot harness
 
@@ -230,20 +227,12 @@ filter for the e2e suite.
            PASS [   0.7s] blog::e2e posts::create_without_a_token_returns_401
    ```
 
-3. Run the rest of the workspace too — the integration suites don't need a
-   database.
-
-   ```bash frame="terminal"
-   $ nestrs run test integration
-   ```
-
 </Steps>
 
-`nestrs run test integration` and `nestrs run test e2e` are the two recipes you
-reach for day to day; `nestrs run test unit` runs the `#[cfg(test)]` modules,
-`nestrs run test doc` the `///` examples, `nestrs run test cov` adds coverage,
-and bare `nestrs run test` runs every kind. None of them use `#[ignore]` — gating is the nextest binary filter
-on `tests/e2e/main.rs`.
+`nestrs run test e2e` and `nestrs run test integration`, whose suites need no
+database, are the two recipes you reach for day to day; `nestrs run test unit`
+runs the `#[cfg(test)]` modules, `nestrs run test doc` the `///` examples,
+`nestrs run test cov` adds coverage, and bare `nestrs run test` runs every kind.
 
 ## What you have now
 
@@ -252,19 +241,6 @@ on `tests/e2e/main.rs`.
 - A happy path, a validation failure and an unauthenticated call — enough to
   catch a wiring regression in any of the previous pages.
 - A `nestrs run test e2e` recipe running them green.
-
-## Where you are now
-
-You've built `posts` end to end: an entity declared once, a service
-that gates every DB call, an HTTP controller mounted in `blog`, a
-transactional Postgres, an e2e suite that locks the shape down. The
-feature lives in `crates/features/src/posts/`; `nestrs g resource` writes the
-next one the same way.
-
-When you need GraphQL, org scoping, and the full negative-path matrix, open
-[`api`](/publish/) and
-[`crates/features/src/users/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/users)
-— same port-and-adapter layout, more layers on top.
 
 ## Going further
 

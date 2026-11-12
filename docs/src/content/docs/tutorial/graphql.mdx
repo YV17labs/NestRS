@@ -21,14 +21,11 @@ field auto-resolves through a dataloader without an N+1.
 
 ## The resolver
 
-A resolver is a struct decorated with `#[resolver]`, with operations
-on the impl block. The reference feature wires both halves:
-
-The crate driving this page is
-[**`nest-rs-graphql`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-graphql),
-which builds on top of [async-graphql](https://async-graphql.github.io/async-graphql/).
-Schema discovery, dataloader registration, and the endpoint's guards come
-from the framework crate; the schema model itself is async-graphql's.
+A resolver is a struct decorated with `#[resolver]`, with operations on the
+impl block.
+[**`nest-rs-graphql`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-graphql)
+brings schema discovery, dataloader registration and the endpoint's guards;
+the schema model itself is [async-graphql](https://async-graphql.github.io/async-graphql/)'s.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs (from the demo)"
 use std::sync::Arc;
@@ -70,9 +67,8 @@ cannot forget to think about access — the build breaks before an
 ungated operation can ship.
 </Aside>
 
-Symmetry with the HTTP controller is intentional — the service is the
-same, the inputs are the same, the policy is the same, and so is the
-posture attribute, and so is the principal's parameter:
+Symmetry with the HTTP controller is intentional — the same service, inputs,
+policy, posture attribute and principal's parameter:
 
 | HTTP | GraphQL | Job |
 |------|---------|-----|
@@ -80,17 +76,12 @@ posture attribute, and so is the principal's parameter:
 | `#[authorize(Read, bind = UsersService)]` attribute, an `Authorized<Read, UserEntity>` parameter | the same attribute and parameter, the `id` argument synthesised | Load the row through the service, refuse it on a denied ability |
 | `Ambient<Claims>` parameter | `Ambient<Claims>` parameter, no argument of the schema | Read the principal the endpoint's guards attached |
 
-The resolver's `#[use_guards(AuthzGuard)]` is not the controller's line, though
-the access graph checks it the same way. It names `AuthzGuard` alone because
-`/graphql` authenticates at its request, before any field runs:
-`AuthzGraphqlModule`, imported below, declares
-`EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` for it, and what
-those attach is ambient for every field the request carries. `AuthnGuard`
-reads a bearer token off an HTTP request and declares no GraphQL check of its
-own (`GuardFor<HttpView>` alone), so binding it on a resolver is a compile
-error, never a second authentication. `AuthzGuard` declares both: on a
-field it builds nothing, and refuses one no ability reached — a request that
-did not authenticate.
+The resolver names `AuthzGuard` alone because `/graphql` authenticates at its
+request, before any field runs: `AuthzGraphqlModule`, imported below, declares
+`EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` for it. `AuthnGuard`
+reads a bearer token off an HTTP request (`GuardFor<HttpView>` alone), so
+binding it on a resolver is a compile error; on a field, `AuthzGuard` refuses
+one no ability reached — a request that did not authenticate.
 
 ## The GraphQL module
 
@@ -116,41 +107,15 @@ use crate::users::UsersModule;
 pub struct UsersGraphqlModule;
 ```
 
-```rust title="crates/features/src/users/graphql/mod.rs (from the demo)"
-mod module;
-mod resolver;
-
-pub use module::UsersGraphqlModule;
-```
-
-The folder exports the module alone, as the HTTP adapter's does. And the
-feature root declares it beside the others:
-
-```rust title="crates/features/src/users/mod.rs (from the demo, abridged)" {4, 9}
-// …
-mod service;
-
-pub mod graphql;
-pub mod http;
-// …
-pub use service::{SocialIdentity, UsersService};
-
-pub use graphql::UsersGraphqlModule;
-pub use http::UsersHttpModule;
-// …
-```
+The folder's `mod.rs` exports the module alone, as the HTTP adapter's does,
+and `users/mod.rs` re-exports it beside `UsersHttpModule`.
 
 ## Wire the adapter
 
-The app root imports the feature's GraphQL adapter, whose resolver brings the
-endpoint with it: `GraphqlModule` mounts once however many resolvers bring it.
-
-```rust title="apps/api/src/module.rs (from the demo, abridged)"
-        UsersGraphqlModule,
-```
-
-`UsersGraphqlModule` imports `AuthzGraphqlModule`, which declares the guards
-`/graphql`'s request runs, so the root lists the adapter alone.
+The app root imports `UsersGraphqlModule`, whose resolver brings the endpoint
+with it: `GraphqlModule` mounts once however many resolvers bring it. The
+adapter imports `AuthzGraphqlModule`, which declares the guards `/graphql`'s
+request runs, so the root lists the adapter alone.
 
 `GraphqlModule` mounts `POST /graphql` on the HTTP transport it imports.
 `GET /graphql` serves the playground, and introspection answers, **under a
@@ -173,12 +138,9 @@ $ curl -s -H "Authorization: Bearer $TOKEN" \
 ```
 
 The ambient ability runs on the query — a plain user gets the same
-filter as the HTTP `GET /users`. The response side differs by one
-GraphQL rule: `email` is `String!` in the schema, and a non-null field
-cannot be nulled, so a caller whose grant excludes it is refused
-(`FORBIDDEN`, naming the field) rather than served a row without it.
-Asking for `{ users { id name } }` works. Same policy, two transports,
-each answering in its own shape.
+filter as the HTTP `GET /users`, and the same masking: the entity declares
+`email` `nullable`, so it is `String` in the schema and reads `null` for a
+caller whose grant withholds it, refusing nothing. Same policy, two transports.
 
 ## Relations resolve themselves
 
@@ -225,12 +187,10 @@ an out-of-scope org never surfaces — the row-level filter applies to
 each batched query the loader issues.
 
 <Aside type="caution">
-Add the `OrgsModule` import to `UsersGraphqlModule` when the
-`belongs_to` is present — the auto-emitted `User.org` resolver reads
-`OrgsServiceById`, a loader of `OrgsService`, which the app must reach.
-Without it the app does not boot: the schema build names the field, the
-entity declaring it and the module to import, before any query could
-select it.
+Import `OrgsModule` into `UsersGraphqlModule` with the `belongs_to`: the
+`User.org` resolver reads `OrgsServiceById`, a loader of `OrgsService`. Without
+it the schema build refuses the boot, naming the field, the entity declaring it
+and the module to import.
 </Aside>
 
 ## Emit the SDL
@@ -281,15 +241,6 @@ $ curl -s -H "Authorization: Bearer $TOKEN" \
     http://localhost:3001/graphql
 {"data":{"posts":[{"id":"019f…","title":"Hello"}]}}
 ```
-
-## What the reference feature has
-
-- A `UsersResolver` mirroring the HTTP controller's operations, going
-  through the same service and the same policy.
-- A `UsersGraphqlModule` mounted in the app — `POST /graphql` answers
-  `{ users { id name } }` with the ambient ability filter applied.
-- An auto-resolved `User.org` field that batches through a dataloader
-  and respects the row-level scope.
 
 ## Going further
 

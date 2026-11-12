@@ -188,11 +188,9 @@ Two patterns cover this entity; a third shows up when you copy
 | `#[expose(input(create))]` | Field appears in `Post` and only in `CreatePost` — common for fields that can be set but not edited |
 | *(no `#[expose]`)* | Field is hidden from `Post` and from every input — `deleted_at` here; the ability's rules still read it, since each row is judged on its whole `Model` |
 
-Leaving a field unexposed matters once a feature carries server-side
-columns — password hashes, tenant ids set from a JWT. Because exposure
-is opt-in, those columns stay off the wire by default;
-[`api`](/publish/) is where unexposed columns and field grants become
-load-bearing.
+Exposure is opt-in, so a server-side column — a password hash, a tenant id set
+from a JWT — stays off the wire by default; [`api`](/publish/) is where
+unexposed columns and field grants become load-bearing.
 
 <Aside type="caution">
 A column a grant may hide from some callers is declared `#[expose(nullable)]`
@@ -250,4 +248,3 @@ compiles when you run it on [Test it end to end](/tutorial/testing/).
 
 - [See the security payoff](/tutorial/checkpoint/) — the next step: run the reference `api` and watch access control enforced before you grant your own.
 - [Entities](/database/entities/) — the reference page for `#[expose]` columns and inputs.
-- [CLI](/cli/generators/) — every generator, and how each finds the app it wires.

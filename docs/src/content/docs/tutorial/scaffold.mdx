@@ -58,9 +58,6 @@ From the workspace root:
 
 </Steps>
 
-Need the full CLI surface — layout detection, `--check`, generators?
-See the [CLI reference](/cli/).
-
 ## What the CLI created
 
 `nestrs new blog` does not ask you to hand-edit the root `Cargo.toml`
@@ -150,10 +147,10 @@ NESTRS_AUTHN__AUDIENCE=http://localhost:3001
 
 `nestrs new blog` picks the next free port: `3001` beside `hello`'s `3000`,
 and another if other apps already hold it. Its origin is also the issuer and
-the audience of the tokens `blog` mints and accepts once it authenticates, on
-[Secure the API](/tutorial/security/): every token names both, and the app
-does not start without them. The workspace's own `.env*`
-files are shared by every app; `apps/blog/.env` is read over them under the
+the audience of the tokens `blog` mints and accepts once its routes
+authenticate, from [Expose over HTTP](/tutorial/http/): every token names both,
+and the app does not start without them. The workspace's own `.env*` files are
+shared by every app; `apps/blog/.env` is read over them under the
 `development` and `test` profiles, so a value that is `blog`'s alone lives
 there ([an app's own files](/configuration/env-cascade/#an-apps-own-files)).
 
@@ -237,10 +234,6 @@ nextest rejects a filterset naming a binary the workspace does not have.
 That `200` is the checkpoint: the transport is mounted, the DI graph resolved,
 the access graph passed, and a controller reached your browser. Everything after
 this page replaces the greeting with real work.
-
-<Aside type="tip">
-`nestrs run dev blog` runs under `bacon` and restarts on every save.
-</Aside>
 
 ## What you have now
 

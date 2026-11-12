@@ -138,117 +138,10 @@ and what it would retry reads `down` until the store answers again. One listing 
 probe; see
 [Indicators](/health/indicators/#framework-shipped-indicators).
 
-## Presigned uploads
+## Uploads and downloads
 
-The canonical flow keeps bytes off the API. A handler injects `Storage`
-and returns a signed `PUT`; the client uploads straight to the object
-store; a later call reads the object's metadata to finalize.
-
-```rust title="crates/features/src/audio/service.rs"
-use std::sync::Arc;
-use std::time::Duration;
-
-use nest_rs::core::injectable;
-use nest_rs::storage::{ObjectMetadata, PresignedRequest, Result, SignedPut, Storage};
-use uuid::Uuid;
-
-#[injectable]
-pub struct AudioService {
-    #[inject]
-    storage: Arc<Storage>,
-}
-
-impl AudioService {
-    pub async fn request_upload(&self) -> Result<(Uuid, PresignedRequest)> {
-        let key = Uuid::now_v7();
-        let upload = self
-            .storage
-            .presign_put(
-                &key.to_string(),
-                &SignedPut::new("audio/mpeg"),
-                Duration::from_secs(900),
-            )
-            .await?;
-        Ok((key, upload))
-    }
-
-    pub async fn confirm_upload(&self, key: Uuid) -> Result<Option<ObjectMetadata>> {
-        self.storage.head(&key.to_string()).await
-    }
-}
-```
-
-The service mints the key, a UUID, and hands it back beside the request, so
-[a client names no path](/http/file-uploads/#mint-the-key-never-take-it).
-The `PresignedRequest` is everything the uploader needs: the `url`, its
-`method`, the `headers` to send verbatim, and `expires_at`. Hand the client
-all of it — the URL alone is not enough.
-
-`SignedPut::new(content_type)` folds the type into the signature, so the
-store refuses an upload that sends another `Content-Type`, or none, with a
-`403`: a client can no longer store `text/html` or `image/svg+xml` under a
-key your app later serves. The type is required — accepting any is
-`SignedPut::new("application/octet-stream")`, an opening in sight. A type no
-header carries as sent — a control character, a letter beyond ASCII, a blank
-or padded value — is refused at the call with `StorageError::Unsignable`,
-naming the argument and never the value. `expires` is SigV4's, one second to
-seven days, for `presign_get` too; anything else is refused the same way,
-rather than minting a URL the store would refuse when it is used.
-
-`head` reads back what was stored: `byte_size`, `content_type`, `etag` and
-`last_modified`, or `None` while the client has not uploaded.
-
-<Aside type="caution">
-A presigned `PUT` does not bound the upload's size. `object_store` refuses
-to sign `Content-Length`, so `SignedPut` has no length to bind: read
-`byte_size` back with `head` once the upload lands and delete what exceeds
-your bound. S3 caps a single `PUT` at 5 GiB.
-</Aside>
-
-The suite proves RustFS refuses a type other than the signed one; AWS S3
-checks every signed header, as SigV4 defines. A server speaking the S3 API
-that skipped signed headers would accept any type, so prove another server
-with the same request before relying on the binding.
-
-## Server-side read and write
-
-Workers that transform objects read and write bytes directly:
-
-```rust title="crates/features/src/audio/queue/processor.rs"
-let original = self.storage.get_bytes(&key).await?;   // -> bytes::Bytes
-let transcoded = transcode(&original)?;
-self.storage
-    .put_bytes(&format!("transcoded/{file}"), transcoded, "audio/mpeg")
-    .await?;
-```
-
-`presign_get` is the counterpart to `presign_put` for serving private
-originals: a short-lived signed `GET` URL the client fetches directly.
-
-### How long a call waits
-
-A call waits for the store's answer within `OPERATION_TIMEOUT_SECS`, every
-retry included, and past it fails with its own error, `the call did not end
-within 15s, every retry included — the budget
-<PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS sets` — under a handler, before the
-HTTP edge's 20-second timeout answers a bare `503` in its place. A call whose
-attempts keep failing stops retrying once half the budget is spent and fails on
-the store's own error. When the budget cuts a call after an attempt failed — a
-loaded machine held the last one back, or its dial was still waiting — the cut
-names that attempt below its own sentence: `… sets: could not connect:
-Connection refused (os error 111)`, or `… sets: the store answered 503 Service
-Unavailable`. One failure stays unnamed: S3 may answer a `put_stream`'s
-completion `200` with `InternalError` or `SlowDown` in its body, which
-object_store retries like a `503`, but a cut after it reads that `200` as an
-answer and names nothing below its sentence. An upload's body is part of its
-request: `put_bytes` moves within the budget, and `put_stream` ships 5 MiB
-parts that each do. A
-download's body is a transfer, never cut for its size nor for its reader's
-pauses: one that sends nothing for `READ_TIMEOUT_SECS` while it is read is cut
-and resumed from the byte it stopped at, provided the object is still the
-version it started on, and fails naming the variable when the resumed body
-sends nothing within it. Each resume is a `warn` on `nest_rs::storage` naming
-the key and what stopped the body.
+A presigned URL keeps an upload's bytes off your API, and a worker reads and
+writes objects itself, within a bound: [Uploads and downloads](/storage/transfers/).
 
 ## API
 
@@ -364,6 +257,8 @@ boot says at `warn` once it opens the store, naming the endpoint.
 
 ## Going further
 
+- [Uploads and downloads](/storage/transfers/) — presigned `PUT` and `GET`,
+  server-side reads and writes, and how long a call waits.
 - [Queue](/queue/) — background workers that read and transform stored objects.
 - [Database](/database/) — persist the record a presigned upload finalizes.
 - [Configuration](/configuration/) — the dual-path rule behind `StorageConfig`.

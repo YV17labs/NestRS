@@ -1,0 +1,245 @@
+---
+title: The operation log
+description: "One line per unit of work on nest_rs::operation — what each edge's line names, a panic said once without its value, and the HTTP access log."
+sidebar:
+  order: 3.1
+---
+
+The ids relate lines to each other; they do not say what the work **was**. That
+is a separate line, one per unit of work, on the shared target `nest_rs::operation`
+— and every edge files one, not just HTTP, as the kernel does for each
+lifecycle hook:
+
+| Unit | Canonical name | Names |
+|---|---|---|
+| HTTP request | `http.request` | `verb`, `path` (the route template), `status`, `bytes` |
+| WS message | `ws.message` | `path`, the gateway's, and `event` (`_OTHER` for one no handler serves), `conn_id` |
+| WS socket open | `ws.connect` | `path`, the gateway's, `conn_id` |
+| WS socket close | `ws.disconnect` | `path`, the gateway's, `conn_id` |
+| Scheduled tick | `schedule.tick` | `host`, `method`, `replicas`, and the `occurrence` a job firing once claimed |
+| Queue job | `queue.job` | `queue`, `host`, `method`, `job_id`, `backend_id`, `attempt` |
+| MCP operation | `mcp.operation` | `mcp_method`, the JSON-RPC method (`_OTHER` for a custom one), `path`, the endpoint's, and `tool`, `prompt` or `resource` as the host declares it (`_OTHER` for any other) |
+| GraphQL operation | `graphql.operation` | `kind` |
+| GraphQL root field | `graphql.field` | `host`, `method`, `kind`, `field` |
+| GraphQL subscription | `graphql.subscription` | `path`, the one its upgrade matched: the connection is the unit |
+| Event dispatch | `events.dispatch` | `event`, `host`, `method` |
+| Lifecycle hook | `lifecycle.hook` | `phase`, `host`, `method`, `origin` |
+
+These are the words the unit's [`mounted` line](/http/controllers/) and a guard's
+denial say, so a filter written on one reads the others, and `method` is the Rust
+method wherever a line carries it. `http.request`, `ws.message` and `mcp.operation`
+carry no `host` or `method`: the edge files each around the dispatch, and it joins its
+`mounted` line through its coordinates, `verb` and `path`, `event`, or `tool`, `prompt`
+or `resource`. A request, a field or an operation's other names
+keep their protocol's word on the span: `http.request.method`, `mcp.method.name`,
+`graphql.operation.type`.
+
+A GraphQL document files one `graphql.operation` line per query or mutation
+it runs — `error` when its response carries an error — and one `graphql.field`
+line per root field it resolves, its `kind` `query` or `mutation`, an `#[entity]`
+and a subgraph's `_service` and `_entities` being `query`; the federation fields'
+`host` is `FederationExtension`. A mutation resolves
+none after a root field whose `null` reached `data`, and none at all when it
+selects one key twice with different arguments, so those file no line; one
+selecting a root field twice alike resolves it once, one line
+([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
+The operation's name is the document's, which
+the client writes, so it rides the operation's span as `graphql.operation.name`
+and never the line; the root fields' lines say what ran, by the names your
+schema declares. A GraphQL `#[field_resolver]` files no line and
+opens no span of its own: it runs once per row its parent returns, so a line
+per call would let one document fill the log. Its guards still run on every call, and its failure
+reaches the client as a field error.
+
+**The name is `<edge>.<unit>`, and it is the same string the operation's span
+carries.** It is declared once, by the crate that owns the edge, as
+`<crate>::unit::<UNIT>` — `nest_rs_http::unit::REQUEST`,
+`nest_rs_ws::unit::MESSAGE`, `nest_rs_queue::unit::JOB`, and so on. A lifecycle
+hook is the kernel's own unit, `lifecycle.hook`, declared by `nest-rs-core` as
+`nest_rs_core::unit::HOOK` on `nest_rs::lifecycle`: no edge dispatches it. It is
+then read three times: by the span, by the log record's event name (what an
+OTLP exporter reports as `event.name`), and by the message a console prints. The *grammar* is
+`nest_rs_core::operation_log`'s and the closed list of edges is
+`nest_rs_core::Edge`; the names are not, for the same reason a span target is
+not — a unit name says who did the work, and only the crate it names declares
+it: `unit!` refuses any other.
+The test harness holds the one other root no edge dispatches, `testing.<unit>`
+on `nest_rs::testing`, declared by `nest-rs-testing`: `testing.unit` is the
+unit a suite runs a service's body in
+([`app.unit`](/testing/e2e/#a-service-in-a-unit)).
+
+A package's units follow the same rule under its own name: `nestrs-kafka`
+declares `nestrs_kafka.message`, opens its span with the framework's
+`operation_span!` on its own target, and files its line on
+`nest_rs::operation` beside every edge's — so `nest_rs::operation=off` silences
+it too. The edge words, the kernel's `lifecycle` and the harness's `testing`
+stay the framework's, and
+the [naming rule](/semver/#naming-a-package) roots everything else a package
+names at its crate. There used to be
+two vocabularies for these units — the spans said `http.request` while
+the lines said `request served` — so an operator learned the set twice and a
+query could pick the wrong one.
+
+Every one carries `duration_ms`, and every one carries `outcome` (`ok` /
+`error` / `panic` / `cancelled`) but an HTTP request its handler answered to
+the end: that one has `status` instead, which says how it ended more precisely
+than four words could. A request whose handler unwound, or whose body was
+stopped or unwound, carries `outcome` beside its `status`.
+`cancelled` is a unit stopped before it settled — its caller gave up on it, the
+server ended it at the shutdown signal because it had no end of its own, or the
+shutdown window closed on it — and `panic` one that unwound. Neither comes with
+a handler's return, so every edge builds both, and every edge files them:
+
+| Edge | `cancelled` | `panic` |
+|---|---|---|
+| HTTP | a request dropped before it answered — cut by the window, or reset by its client (no `status`); a stream ended at the signal, or a body cut at the window (with its `status` and `bytes`) | a handler that unwound — answered an opaque `500` (`status=500`), its connection kept (`a handler panicked; answered 500`); a body that unwound as it was written — ended there, its `status` and the `bytes` written (`a response body panicked; it ended unfinished`) |
+| WebSocket | a message or a hook still running when the window closes | a handler (its client gets an error frame), a hook (`#[on_connect]` closes the socket `1011`) |
+| GraphQL | a root field whose request is dropped, or torn down by a sibling field that unwound; a socket the server ended | a root field (over HTTP, its request is answered `500`); a subscription (the socket closes `1011`) |
+| MCP | an operation its client cancelled or the window stopped; a `subscriptions/listen` at the signal | a tool or a notification — its client gets an internal error |
+| Queue | an attempt its worker stopped, a drain whose window closed included | an attempt whose handler unwound |
+| Events | a listener dropped with its emitter | a listener, contained; the next one runs |
+| Schedule | a tick still running at the scheduler's shutdown bound | a tick whose job unwound |
+| Kernel (lifecycle hooks) | a shutdown hook abandoned at the hooks' budget, an init hook a signal stopped | a hook that unwound — at init it aborts the boot, at shutdown the next hook runs |
+
+So one query answers "what did this deployment do", and "what failed" is
+`outcome != ok` or `status >= 400`.
+
+## A panic is said once, without its value
+
+`#[nest_rs::main]` installs a panic hook before your `main` runs, so Rust's
+default `thread '…' panicked at …` line never reaches stderr — with it went the
+payload, written raw: `.unwrap()` on a failed decode quotes the value it could
+not read. A unit that catches its own unwind files the `error` that says what
+panicked, beside its `outcome="panic"` line; the payload goes under `panic`,
+with serde's quoted values cut, and where it happened under `panic_location`
+(`file:line:col`).
+
+A panic no unit catches — a task your code spawned, a value a cancelled unit
+drops, `main` itself, or one your own code caught with `catch_unwind` inside a
+unit and never raised again — is one `error` on `nest_rs::app`, written by the
+hook:
+
+```text frame="terminal"
+ERROR nest_rs::app: panicked where no unit of work contains it thread="tokio-rt-worker" panic=called `Result::unwrap()` on an `Err` value: Error("invalid type: a string, expected u64", line: 1, column: 24) panic_location=src/billing/service.rs:42:61
+```
+
+It also carries `backtrace` when `RUST_BACKTRACE` asks for one. Before any
+subscriber exists — while the `.env` cascade loads, say — the hook writes one
+line to stderr instead, `nestrs: panicked at <file:line:col>: <message>`, with
+the same message, so no panic goes unsaid. It writes that line too for a
+panic raised inside the subscriber's own dispatch — a field whose `Display`
+panics as a layer records it: filing through the subscriber again there would
+wait on whatever the layer holds, so a layer of your own may lock while it
+records an event's fields.
+
+The unit's span says the same thing to a tracing backend: every span whose unit
+did not end `ok` carries OpenTelemetry's `error.type` — the same word as the
+line's `outcome` — and an `Error` status. Where a convention asks for a finer
+class, the span carries it instead: an HTTP request answered `5xx` its status
+code, an MCP tool call answered with its error in band `tool_error`, an MCP
+operation answered with a JSON-RPC error that code (`-32603`), also in
+`rpc.response.status_code`. A failure the convention reads as the caller's own
+fails nothing on the server's span. An HTTP `4xx` records its status alone, and
+a JSON-RPC code the MCP conventions name the caller's (`-32700`, `-32600`,
+`-32601`, `-32602`, `-32002`) its code alone. A WebSocket message, a GraphQL
+operation or root field and a graphql-ws socket the protocol refused have no such
+code, so a failure their caller earned records nothing: a `4xx` problem, a denial,
+a decode failure, an unknown event, a document validation refused, a `WsError` or
+an `async_graphql::Error` of your own. Their line still files `outcome="error"`,
+and a `5xx`, a panic, a stop or a deadline's cut records as above; a failure of the
+server's own answered in your own words names no status, so spell it with a `5xx`
+[`Problem`](/http/errors/). An exception filter's own reply on a WebSocket changes
+what the client reads, never who failed: a catch-all's frame leaves the server's
+failure recorded, and a caller's failure it acknowledges recording nothing. A
+failure an interceptor raised in place of the handler's is the one the filter
+answered, so its class is read: a `409` swapped for an error of the server's
+records, the reverse does not. A problem a filter answers names a status, which
+decides. The line and the span both read
+what the unit decided, so a unit whose work rolls back never says `ok`. A
+request dropped before it answered is still named `{method} {route}` for the
+route the router had matched, so a backend groups it with the answered ones.
+
+```text frame="terminal"
+INFO nest_rs::operation: http.request verb=GET path="/users" status=401 bytes=127 duration_ms=0.103 trace_id=01a015a9433c7c2393647b0a40e5b658 span_id=6c6f2ed837da7b3b
+INFO nest_rs::operation: schedule.tick host="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
+```
+
+**The target is the toggle.** `RUST_LOG=info,nest_rs::operation=off` silences the
+whole family at once, which is why no edge carries a config flag for it.
+`<PREFIX>_HTTP__ACCESS_LOG` predates the family and stays, as an app's pinned
+config rather than a deployment's filter — it is one edge's line, not the
+family's.
+
+**It was `nest_rs::access` through 5.1**, so a filter, runbook or dashboard
+still naming the old string matches nothing. That string also matched something
+it never meant to: `EnvFilter` compares a directive's target with `starts_with`
+on the raw string rather than by `::` segment, so `nest_rs::access=off` **also**
+silenced `nest_rs::access_graph` — the boot warning naming resolvers unreachable
+from the GraphQL schema. A deployment that quieted its access log lost that
+diagnostic with nothing on the console to say so. Neither old name survives:
+that warning is `nest_rs::graphql`'s now, filed by the crate that owns the
+resolver registry. `nest_rs::operation` prefixes no other target, and a test
+fails the day one prefixes another.
+
+## Following one operation across two processes
+
+A scheduled tick in the `api` binary enqueues a job; the `worker` binary picks it
+up a moment later. One `trace_id`, two `span_id`s — the job is a child of the
+tick, across a process boundary:
+
+```text frame="terminal"
+DEBUG features::audio: enqueued transcode job queue="audio" trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=24b6cae9a236614d
+ INFO nest_rs::operation: schedule.tick host="AudioTasks" method="enqueue_transcode" replicas="one" occurrence=1790450415000 outcome="ok" duration_ms=1.807 trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=24b6cae9a236614d
+DEBUG features::audio: transcoded file=01a0df29-35a4-7c4e-9a1b-3f0c2d6e8b14 derived_key="transcoded/01a0df29-35a4-7c4e-9a1b-3f0c2d6e8b14" trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=0cd80bc02ff04789
+ INFO nest_rs::operation: queue.job queue=audio host="AudioProcessor" method="transcode" job_id=01a0df29-3fec-7382-82f1-a2a474f32e73 backend_id="01M3FJJFZDWYGNMB9TN8Y4NDFG" attempt=1 outcome="ok" duration_ms=0.059 trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=0cd80bc02ff04789
+```
+
+The first two lines are the `api`'s, the last two the `worker`'s. Nothing was
+configured for that: the producer seals its trace context into the queue
+envelope, the consumer continues from it.
+
+## Access log
+
+**The access log belongs to `nest-rs-http`, not to this crate.** Method, route,
+status, duration, `trace_id`, `span_id` and `actor_id` are what the transport
+knows about a request it served — no collector, no exporter and no propagator is
+involved, so none is required. It emits one event per request on
+`nest_rs::operation`, at end-of-body, with byte-accurate `bytes`:
+
+```text frame="terminal"
+INFO nest_rs::operation: http.request verb=GET path="/users" status=401 bytes=127 duration_ms=0.09 trace_id=01a0112ce24e75509be691162cbbab1f span_id=3f2b91c40a7e5d16
+```
+
+`path` is the template the router matched — `/posts/{id}`, never
+`/posts/42` — so the line groups the way a dashboard does and never repeats a
+value the client chose. A request the router's fallback answers — the
+[static files](/http/static-files/), say — carries its mount's catch-all,
+`/{*path}` at the root. A request neither a route nor the fallback claims
+carries no `path` at all.
+
+The line carries the server's values only. `verb` is one of the methods
+OpenTelemetry's HTTP conventions know (`GET`, `POST`, `PATCH`, `QUERY` and the
+rest of RFC 9110's) or one a route registers, spelled exactly, and `_OTHER`
+for any other token a client sent. There is no `user_agent`: it is free text
+the client writes, and a log pipeline keeps whatever a line hands it. The request's span still records the
+user agent, as the conventions recommend — see
+[Traces](/opentelemetry/traces/#the-request-span) for that one stated exception.
+
+`actor_id` joins the line once an authn guard resolved a principal, and is
+absent above because nobody was authenticated — which is why that request is a
+`401`. `trace_id` and `span_id` are the transport's own W3C trace context and
+need no collector to exist. That is the shape of the whole relationship: the
+observability stack **enriches** what is exported and never owns what this line
+can say.
+
+Toggle it with `<PREFIX>_HTTP__ACCESS_LOG=false`. That silences the line only —
+the trace is still started, still reported as `traceresponse`, and still carried
+into the response body, because everything else is filed under it.
+
+## Going further
+
+- [Logs](/opentelemetry/logs/) — the ids every line carries, and the
+  console's format.
+- [Traces](/opentelemetry/traces/) — the spans the same ids name.
+- [Correlation](/fundamentals/correlation/) — the trace context underneath,
+  which waits on no crate.

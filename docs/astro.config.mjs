@@ -296,6 +296,7 @@ export default defineConfig({
           items: [
             { autogenerate: { directory: 'database' } },
             { label: 'File storage', slug: 'storage' },
+            { label: 'Uploads and downloads', slug: 'storage/transfers' },
           ],
         },
         {
@@ -328,6 +329,7 @@ export default defineConfig({
             { label: 'Writing an occurrence lock', slug: 'schedule/writing-a-lock' },
             { label: 'Events', slug: 'events' },
             { label: 'Event dispatch', slug: 'events/dispatch' },
+            { label: 'Event streams', slug: 'events/streams' },
           ],
         },
         { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },
@@ -338,6 +340,7 @@ export default defineConfig({
             { label: 'Server-Timing', slug: 'server-timing' },
             { autogenerate: { directory: 'health' } },
             { label: 'Rate limiting', slug: 'rate-limiting' },
+            { label: 'Rate-limit buckets', slug: 'rate-limiting/buckets' },
             { label: 'Writing a rate-limit store', slug: 'rate-limiting/writing-a-store' },
           ],
         },

@@ -39,7 +39,7 @@ commit, by the boundary that settled it. Each call is the unit of work
 `events.dispatch`: a **child** of whatever emitted the event, so its lines
 carry that request's `trace_id` and `actor_id` under a `span_id` of their own,
 and it files one
-[operation line](/opentelemetry/logs/#every-unit-of-work-files-one-line)
+[operation line](/opentelemetry/operation-log/)
 naming the event and the listener. See
 [Correlation](/fundamentals/correlation/).
 

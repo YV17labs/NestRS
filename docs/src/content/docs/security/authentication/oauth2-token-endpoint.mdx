@@ -179,7 +179,7 @@ Anything else is `invalid_target`: a resource it is not registered for, none
 among several, and two at once — a token naming two audiences is accepted by
 each, and so a deputy of each at the other. `sign_for` writes the resource
 into the token's `aud`, so only the server serving it accepts the token
-([JWT](/security/authentication/jwt/#signing-a-token)). Each refusal of
+([Signing a token](/security/authentication/jwt-signing/#a-token-for-another-app)). Each refusal of
 `scope_for` and `audience_for`, like the request's own
 `unsupported_grant_type`, files one `warn`, `token request refused` on
 `nest_rs::oauth::server`, its `reason` the wire code, the client its

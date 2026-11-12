@@ -97,7 +97,7 @@ You need a better-auth server reachable over `https`, and the API's
    issues them — to an MCP client, say. Its guide asks the API that receives
    access tokens to publish OAuth Protected Resource metadata, the RFC 9728
    document `OAuthResourceModule` serves; see
-   [Telling clients where the issuer is](/security/authentication/split-deployment/#telling-clients-where-the-issuer-is).
+   [Protected resource metadata](/security/authentication/protected-resource-metadata/).
    The provider signs with the same `/jwks` keys and puts the `resource` a
    client asked for in the token's `aud`, which the module requires:
    `RESOURCE` is the audience, so step 2's `AUDIENCE` goes. Its tokens carry an

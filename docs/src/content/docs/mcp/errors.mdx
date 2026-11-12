@@ -1,0 +1,154 @@
+---
+title: MCP errors
+description: What a failing MCP operation answers the model — its class, never its Display — and McpError's constructors for a code of your own.
+sidebar:
+  order: 4.5
+---
+
+## Failing without leaking
+
+A tool body talks to a **language model**, and it would repeat whatever an error's
+`Display` carries: a database failure names tables and constraints, and a driver's own
+error sometimes the row's values.
+So an operation returns its error and the edge says what the model reads. A
+[`ToProblem`](/http/errors/) error answers its class under `data`: a
+`ServiceError` its `NOT_FOUND`, its `FORBIDDEN`, or the `UNAVAILABLE` of a statement
+Postgres cancelled, which a client may retry:
+
+```rust title="crates/features/src/users/mcp/tool.rs (from the demo, abridged)"
+async fn list_people(&self) -> Result<Json<Vec<PersonDto>>, ServiceError> {
+    let rows = self.svc.list().await?;
+    // …
+}
+```
+
+A failure that says no problem, one the model has no business reading, goes through
+`opaque`, at the line where it happens:
+
+```rust title="crates/features/src/audio/mcp/tool.rs (from the demo, abridged)"
+Ok(match self.svc.presign_result(params.file).await.opaque()? {
+    // …
+})
+```
+
+The real error is handed to the edge, which files it at `error` on
+`nest_rs::mcp` once the operation ends, whatever it answered, a tool error
+reported in band included — `mcp operation failed`, naming the operation as its
+`mcp.operation` line does, by its mount's `path` and its `tool`, `prompt` or
+`resource` (at `warn`, `mcp operation unavailable`, behind a `503`), and nothing
+when a filter answers that failure as the caller's; the model gets the opaque
+answer, one JSON-RPC internal error whoever answered it —
+a constant `internal error`, and the class every edge names it by under
+`data`:
+
+```json
+{ "code": -32603, "message": "internal error", "data": { "code": "INTERNAL" } }
+```
+
+Returning the
+error itself does the same — an operation answering a `Result<T, E>` answers
+an `E` that says no problem opaquely, and files it — while keeping it typed for an
+[exception filter](/mcp/#layers-around-an-operation). A *deliberate* error is the
+opposite case — `McpError::invalid_params(...)` exists to be read, so return it
+directly and never route it through `opaque`.
+
+A tool that **panics** is answered the same way: rmcp runs it on a task of its
+own, so the panic is contained where the operation is dispatched, the client
+gets that opaque answer instead of waiting out its own timeout, the
+`mcp.operation` line files `outcome="panic"`, and the panic's text goes to
+`nest_rs::mcp` at `error` — never to the model.
+
+Every operation answered with a JSON-RPC error is a failed one: its unit of
+work rolls back, and its `mcp.operation` line files `outcome="error"`. Its span
+records the code as OpenTelemetry's
+[MCP conventions](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/mcp.md)
+ask. The code is always in `rpc.response.status_code` (`"-32603"`). When the
+server failed, it is also the span's `error.type`, with an `Error` status.
+A code the conventions read as the caller's own fails nothing on the server's
+span, as an HTTP `4xx` does not: `-32700` (Parse error), `-32600` (Invalid
+Request, a refusal included), `-32601` (Method not found), `-32602` (Invalid
+params, a tool or prompt no host declares) and `-32002` (Resource not found).
+
+What the client named is never handed back either. rmcp refuses a prompt no
+host declares, a method no host serves, a task its `TaskManager` does not hold
+and a request its transport turns away — an `MCP-Protocol-Version` it does not
+know, an `Mcp-Method` or `Mcp-Name` header the body contradicts — in sentences
+quoting the name, the id or the header. The endpoint answers each by kind:
+`prompt not found`, still listing the prompts under `available_prompts`;
+`unknown task`; JSON-RPC's own words for the error's code, such as `Method not
+found`, its id and code kept; or, for a refusal that is no JSON-RPC error, the
+status's problem document, under the class its status names. A refusal rmcp
+words without quoting the request — `Not Acceptable: Client must accept both
+application/json and text/event-stream`, `Not Found: Session not found`, the
+`_meta` keys the specification requires — keeps its sentence, as the `detail`
+or the message. A tool, prompt, task or method no host serves carries
+`{"code":"NOT_FOUND"}` in its `data`, beside what it lists: a protocol method
+rmcp refuses on a host's behalf, such as `resources/read` on a host serving no
+resources, keeps its `-32601` and rmcp's message naming the method. Two
+refusals carry no class: in a session negotiated before `2026-07-28`, rmcp
+answers `subscriptions/listen`, and a tasks method when no host offers tasks,
+inside the session's stream, before any host or the endpoint reads it.
+
+A body typed JSON that is no JSON-RPC message is input the server cannot
+accept, as MCP's Streamable HTTP transport says: it is answered `400` with a
+JSON-RPC error carrying no `id`, since none could be read — `-32700` (Parse
+error) for a body that is not JSON, `-32600` (Invalid Request) for JSON that is
+no message — under `{"code":"INVALID_ARGUMENT"}`, never what it held. A body
+typed otherwise is the `415` rmcp answers,
+`Unsupported Media Type: Content-Type must be application/json`, under
+`UNSUPPORTED_MEDIA_TYPE`.
+
+## Error handling
+
+`McpError` (re-exported as `nest_rs::mcp::McpError`, alias for rmcp's
+`ErrorData`) gives the model a structured failure with a JSON-RPC error code.
+Six constructors cover the common cases:
+
+| Constructor | When |
+|---|---|
+| `McpError::invalid_params(msg, data)` | The tool input was syntactically valid JSON but semantically wrong — range, missing required field, mutual exclusion |
+| `McpError::invalid_params("tool not found", Some(json!({ "code": "NOT_FOUND" })))` | The client called a tool this server doesn't declare: the specification's `-32602`, which the endpoint already answers for every `#[tools]` host, so only a hand-written `ServerHandler` writes it |
+| `McpError::invalid_request(msg, data)` | The whole request shape was off |
+| `McpError::parse_error(msg, data)` | The JSON itself couldn't be parsed |
+| `McpError::method_not_found::<MethodName>()` | The client called a protocol method this host doesn't serve — never an unknown tool, which is `-32602` above |
+| `McpError::resource_not_found(msg, data)` | An identified resource isn't there — written only by a hand-written `ServerHandler`: a `#[resource]` method answers `Ok(None)`, and the endpoint answers *Resource not found* for it |
+| `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
+
+A domain error implementing `ToProblem` is returned as it is, from an
+operation answering a `Result<T, E>`: it answers the problem's sentence,
+`invalid_request` for a `4xx` and `internal_error` for a `5xx`, its code under
+`data.code` — with `data.type` and `data.title` when it names a problem type
+of its own, and `data.errors` for a field map — or, when the error says none,
+the opaque answer `Opaque` gives,
+its chain filed at `error` — and an exception filter reads it as its type
+first:
+
+```rust title="crates/features/src/posts/mcp/tool.rs"
+async fn summarize(&self, Parameters(p): Parameters<PostParams>) -> Result<String, PostError> {
+    Ok(self.svc.find(p.id).await?.summary())
+}
+```
+
+Where the operation answers `McpError`, `problem_error` converts one at the
+call site the same way:
+
+```rust title="crates/features/src/posts/mcp/tool.rs"
+use nest_rs::mcp::{McpError, problem_error};
+
+let post = self.svc.find(id).await.map_err(|error| problem_error(&error))?;
+```
+
+Never `McpError::internal_error(e.to_string(), …)` over an error you did not
+build: the model reads whatever its `Display` says — a driver's SQL, an
+upstream URL — and may repeat it.
+
+The `data` field accepts any JSON value — attach structured diagnostics there
+when the model would benefit from them (e.g. the validator's per-field errors).
+Anything beyond these six codes is `McpError::new(ErrorCode(code), msg, data)`,
+with `ErrorCode` from `nest_rs::mcp::model`.
+
+## Going further
+
+- [MCP](/mcp/) — the operations these errors come from.
+- [Errors](/http/errors/) — `ToProblem`, the class every edge answers.
+- [MCP configuration](/mcp/configuration/) — the endpoint's own settings.

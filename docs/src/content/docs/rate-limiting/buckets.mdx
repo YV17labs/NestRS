@@ -1,0 +1,109 @@
+---
+title: Rate-limit buckets
+description: What a rate-limit bucket is keyed on, edge by edge — the unit and its caller — and who the client is behind a proxy you trust.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`ThrottlerGuard` checks **all four request-carrying edges**, and each keys
+its bucket on the unit that edge addresses joined with the caller it can
+see:
+
+| Edge | Bucket |
+|---|---|
+| HTTP | the matched route's template as registered (`/users/{id}`, one bucket for every id; a surface's too, `/files/{*path}` for every file) + the client's network: its address in IPv4, its `/64` in IPv6 |
+| GraphQL | the field name + the caller's actor — an operation carries no client address, but it runs inside the request's scope |
+| MCP | the tool's or prompt's name + the caller's actor — the same, carried across the task rmcp spawns for the operation; a tool and a prompt sharing a name share its budget |
+| WS | the event name + the connection — the peer that keyed the upgrade is gone by the time a message runs |
+
+That is not a nicety: `/graphql` and `/mcp` run their guards in band, and a
+WS message runs after the upgrade's chain returned, so **none of the three
+units is reachable from an HTTP-scope binding**. Bind the guard globally *as well*
+where those mounts are public, so the request carrying the document, the
+session or the upgrade is metered per address too.
+
+The actor is the principal the authentication guard resolved, so one caller
+spending the window exhausts their own bucket and nobody else's. An anonymous
+operation has none, and every anonymous caller then shares the field's or the
+operation's bucket; the guard reports that once per process, at `warn`, as
+`rate-limit keying degraded to a shared bucket`. The global binding is what
+meters that traffic per address.
+
+On an endpoint `McpAccess::Public` opens, no guard runs at the request, so no
+throttler meters its sessions: `<PREFIX>_MCP__LEGACY_SESSION_MODE=false` or a
+proxy's limit does.
+
+## What "per client" means
+
+The client key is the **direct peer IP** by default — every request
+coming from the same IP shares the same window. If the request arrives
+through a reverse proxy you have listed in
+`<PREFIX>_HTTP__TRUSTED_PROXIES`, the throttler reads the **rightmost** hop that
+is not itself a trusted proxy — from `Forwarded` (RFC 7239) and
+`X-Forwarded-For`, else `X-Real-IP` — and counts that as the client.
+
+**Rightmost, not leftmost** — and the difference is the whole defence. A proxy
+*appends* the address it received the request from to the right of the chain,
+so the genuine client is the last hop your infrastructure wrote. A caller can
+only *prepend*, and a prepended entry lands to the **left** of the genuine one:
+it can neither mint a fresh bucket by rotating a value nor drain a victim's by
+forging theirs. Keying on the leftmost hop is exactly the spoofable rule this
+avoids — if you reproduce this keying anywhere else, reproduce it in this
+direction.
+
+The rest of the rule:
+
+- A forwarding header from a peer that is **not** a listed proxy is
+  **ignored** — a direct client cannot bypass its own bucket by setting one.
+- A chain over several field lines is one list, in order: a proxy may add its
+  own line after the caller's (RFC 7239 §4), and that line stays the rightmost.
+  `X-Real-IP` names one hop, so its last line is the one read.
+- A header is read whole or not at all, and the headers agree or none is
+  believed. A hop that is no address, bytes no text holds or a quote no quote
+  closes make the header unreadable, a node the proxy withheld (`unknown`) where
+  the client stands names nobody, and two headers naming different clients —
+  `X-Real-IP` beside a chain among them — are both refused: each way the request
+  counts against the proxy's own bucket, whatever the other headers say, so no
+  hop a caller wrote becomes its key. Behind a proxy writing `X-Real-IP` alone, a
+  caller rotating its own `X-Forwarded-For` mints no bucket.
+- An entry of `TRUSTED_PROXIES` that is no address or CIDR range, a `/0`, or a
+  range with address bits set past its prefix (`10.0.0.1/8`), **aborts the boot**
+  naming the variable and the entry's place in the list, never its value — never
+  a silent skip — and so do ranges holding between them every address of a family
+  a caller connects from (`0.0.0.0/1,128.0.0.0/1`, or
+  `0.0.0.0/1,128.0.0.0/2,192.0.0.0/3`, short only of multicast and reserved
+  space), a `/0` in all but name.
+- A request with no peer addr (synthetic, in-process) is counted
+  against a literal `"global"` bucket.
+
+**The bucket is the client's network, not its exact address.** An IPv4 client
+counts under its address (`/32`). An IPv6 client counts under its `/64`, the
+link its host's addresses share (RFC 4291 §2.5.4): a host chooses the other 64
+bits itself and rotates them (RFC 8981), so keyed on the address it would get a
+fresh bucket with each one. An IPv4 client that a dual-stack listener reports as
+`::ffff:203.0.113.7` counts as `203.0.113.7`. The cost is that every host on one
+IPv6 link shares a bucket, the way every host behind one IPv4 NAT already does.
+
+The list is `<PREFIX>_HTTP__TRUSTED_PROXIES`, on the transport, not on the
+throttler: which proxies a deployment believes decides who *every* request is
+attributed to — the [`ClientIp`](/http/extractors/) extractor's answer as much
+as the rate-limit bucket's. One list, so the extractor and the bucket can never
+attribute a request to different callers. No log line names that caller: the
+refusal's line — `guard denied the request` on `nest_rs::throttler`, `reason =
+"limit_exceeded"` — carries the route template the route declares and the
+wait, never the path a client sent, and a client's address is personal data a
+line does not hold.
+
+<Aside type="caution">
+Trust the proxy header **only** when the request arrived through a
+proxy you control. Production behind an ingress: list its addresses, or the
+range its pods move within. Direct exposure: leave `TRUSTED_PROXIES` empty.
+</Aside>
+
+## Going further
+
+- [Rate limiting](/rate-limiting/) — the guard, its limit and its stores.
+- [HTTP configuration](/http/configuration/) — `TRUSTED_PROXIES`, which every
+  request's client is read through.
+- [Extractors](/http/extractors/) — `ClientIp`, the same client a handler
+  reads.

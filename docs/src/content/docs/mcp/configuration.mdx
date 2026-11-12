@@ -251,56 +251,8 @@ the server's own included, when it serves the page — and the CORS layer's
 `403` files its one `warn` on `nest_rs::http`. One knob, and it covers the
 WebSocket and GraphQL sockets too — see [CORS](/http/cors/#cors).
 
-## Error handling
-
-`McpError` (re-exported as `nest_rs::mcp::McpError`, alias for rmcp's
-`ErrorData`) gives the model a structured failure with a JSON-RPC error code.
-Six constructors cover the common cases:
-
-| Constructor | When |
-|---|---|
-| `McpError::invalid_params(msg, data)` | The tool input was syntactically valid JSON but semantically wrong — range, missing required field, mutual exclusion |
-| `McpError::invalid_params("tool not found", Some(json!({ "code": "NOT_FOUND" })))` | The client called a tool this server doesn't declare: the specification's `-32602`, which the endpoint already answers for every `#[tools]` host, so only a hand-written `ServerHandler` writes it |
-| `McpError::invalid_request(msg, data)` | The whole request shape was off |
-| `McpError::parse_error(msg, data)` | The JSON itself couldn't be parsed |
-| `McpError::method_not_found::<MethodName>()` | The client called a protocol method this host doesn't serve — never an unknown tool, which is `-32602` above |
-| `McpError::resource_not_found(msg, data)` | An identified resource isn't there — written only by a hand-written `ServerHandler`: a `#[resource]` method answers `Ok(None)`, and the endpoint answers *Resource not found* for it |
-| `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
-
-A domain error implementing `ToProblem` is returned as it is, from an
-operation answering a `Result<T, E>`: it answers the problem's sentence,
-`invalid_request` for a `4xx` and `internal_error` for a `5xx`, its code under
-`data.code` — with `data.type` and `data.title` when it names a problem type
-of its own, and `data.errors` for a field map — or, when the error says none,
-the opaque answer `Opaque` gives,
-its chain filed at `error` — and an exception filter reads it as its type
-first:
-
-```rust title="crates/features/src/posts/mcp/tool.rs"
-async fn summarize(&self, Parameters(p): Parameters<PostParams>) -> Result<String, PostError> {
-    Ok(self.svc.find(p.id).await?.summary())
-}
-```
-
-Where the operation answers `McpError`, `problem_error` converts one at the
-call site the same way:
-
-```rust title="crates/features/src/posts/mcp/tool.rs"
-use nest_rs::mcp::{McpError, problem_error};
-
-let post = self.svc.find(id).await.map_err(|error| problem_error(&error))?;
-```
-
-Never `McpError::internal_error(e.to_string(), …)` over an error you did not
-build: the model reads whatever its `Display` says — a driver's SQL, an
-upstream URL — and may repeat it.
-
-The `data` field accepts any JSON value — attach structured diagnostics there
-when the model would benefit from them (e.g. the validator's per-field errors).
-Anything beyond these six codes is `McpError::new(ErrorCode(code), msg, data)`,
-with `ErrorCode` from `nest_rs::mcp::model`.
-
 ## Going further
 
 - [MCP](/mcp/) — the server these options configure.
+- [MCP errors](/mcp/errors/) — how a failing operation talks to a model.
 - [Configuration](/configuration/) — the dual-path rule every module follows.

@@ -104,7 +104,7 @@ once the mutation's transaction has committed, never for one that rolled back.
 Forgetting the bus is a boot error naming it, not a silent subscription.
 
 The stream reaches this process, and a reader far behind loses the oldest events:
-[Read events as a stream](/events/#read-events-as-a-stream) has what it promises.
+[Event streams](/events/streams/) has what it promises.
 A source of your own — a broker's consumer, a channel — is any
 `impl Stream<Item = T>`, gated and judged the same way.
 

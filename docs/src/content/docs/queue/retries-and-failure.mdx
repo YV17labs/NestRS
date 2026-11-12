@@ -44,7 +44,7 @@ That event is the panic's one record: under `#[nest_rs::main]` the process
 hook stays quiet for a panic the attempt contains, so no raw
 `thread … panicked at …` line reaches stderr, and the event names where the
 handler panicked under `panic_location`
-([a panic is said once](/opentelemetry/logs/#a-panic-is-said-once-without-its-value)).
+([a panic is said once](/opentelemetry/operation-log/#a-panic-is-said-once-without-its-value)).
 
 ## The retry shape
 
@@ -236,7 +236,7 @@ so you don't have to think about them separately:
   the whole body, side effects included, so spending the budget on a
   failure that repeats identically costs several times over and
   dead-letters anyway. See
-  [Repo and executor](/database/repo-and-executor/#workers--same-repo-one-transaction-per-attempt).
+  [Job transactions](/database/job-transactions/).
 
 ## Limits
 

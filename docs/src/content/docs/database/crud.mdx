@@ -261,10 +261,7 @@ split this framework is built around.
   when the database refuses.
 - [Entity inputs](/database/inputs/) — the bodies a create and an update
   take, and the tenant a create fills from the grant.
-
 - [OpenAPI](/openapi/) — every generated route ships with an `#[api]`
   summary, the right `tags`, and the response schema of the `#[expose]`d entity,
   so the document at `GET /api-json`
   composes automatically.
-- [GraphQL](/graphql/) — the `#[crud]` twin on a resolver; relations and
-  field resolvers backed by dataloaders.

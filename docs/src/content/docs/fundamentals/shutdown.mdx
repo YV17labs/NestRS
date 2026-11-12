@@ -71,7 +71,7 @@ installed, and the console's second under `#[nest_rs::main]`.
 **The last step is `#[nest_rs::main]`'s**, which is why every `main` is
 written with it rather than `#[tokio::main]`. Before it builds anything it
 installs the
-[panic hook](/opentelemetry/logs/#a-panic-is-said-once-without-its-value) and
+[panic hook](/opentelemetry/operation-log/#a-panic-is-said-once-without-its-value) and
 publishes the [`.env` cascade](/configuration/env-cascade/#when-the-load-happens)
 while the process has one thread. It builds the same runtime `#[tokio::main]`
 does — tokio's multi-threaded one, sized by `TOKIO_WORKER_THREADS` — and tears

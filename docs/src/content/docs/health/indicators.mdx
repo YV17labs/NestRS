@@ -5,8 +5,6 @@ sidebar:
   order: 2
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 An indicator is one check a probe runs: a method on an `#[injectable]`
 provider, tagged with `#[liveness]`, `#[readiness]`, or `#[startup]`
 inside an `#[indicators]` impl block. It returns
@@ -237,74 +235,10 @@ Both registries answer the same probes and pass one name check at boot: two
 indicators claiming a key on one probe fail it naming the method's module and
 the type of the module that attached the entry.
 
-## What `#[indicators]` does
-
-The orchestrator decorator walks the impl block, finds each method
-tagged with exactly one probe attribute, strips the attribute, and
-submits one `HealthIndicator` entry per method to the link-time
-inventory the boot reads once, beside the entries modules attach. The
-method stays on the impl block unchanged — still a regular method you can
-call from anywhere.
-
-- **`#[injectable]`** makes the indicator an ordinary DI provider —
-  same `#[inject]` shape as any other service.
-- **`#[indicators]`** on the impl block orchestrates the per-method
-  attributes; it takes no arguments.
-- **`#[liveness]` / `#[readiness]` / `#[startup]`** route the method
-  to its probe. Exactly one per method — the macro rejects two at
-  compile time.
-- Methods take `&self` and return `anyhow::Result<()>` (or any
-  `Result<(), E: Into<anyhow::Error>>`); an `async fn` is awaited, a
-  plain `fn` is called. A method with no return is treated as
-  infallible — always `up`.
-
-Multiple decorated methods on the same impl block share the
-provider's `#[inject]` dependencies — pool an upstream check and a
-migration check on one `AppHealth` rather than writing a struct per
-check:
-
-```rust title="crates/features/src/app_health/indicator.rs"
-#[injectable]
-pub struct AppHealth {
-    #[inject]
-    db: Arc<DatabaseConnection>,
-    #[inject]
-    upstream: Arc<UpstreamClient>,
-}
-
-#[indicators]
-impl AppHealth {
-    #[readiness]
-    async fn upstream(&self) -> anyhow::Result<()> {
-        self.upstream.ping().await
-    }
-
-    #[startup]
-    async fn migrations(&self) -> anyhow::Result<()> {
-        migration::Migrator::status(&self.db).await?;
-        Ok(())
-    }
-}
-```
-
-A check of a resource the framework opens is already attached by the module
-that opens it (above): write no second ping of the pool or of Valkey.
-
-A worker app or an MCP app that imports the feature's data layer
-without its `HealthModule` ships no probe surface for that feature —
-the access graph keeps the indicator out of the running binary. Apps
-opt into health the same way they opt into HTTP or GraphQL.
-
-<Aside type="note">
-A `Discoverable` impl is **not** emitted by `#[indicators]` — the
-provider's `#[injectable]` owns it. Inventory is the same seam
-`#[hooks]`, `#[scheduled]`, and `#[processor]` use.
-</Aside>
-
 ## Going further
 
-- [Discovery](/health/discovery/) — how module-gating decides which
-  indicators fire.
+- [Discovery](/health/discovery/) — what `#[indicators]` registers, and how
+  module-gating decides which indicators fire.
 - [Database / Health](/database/health/) — the pool's indicator end
   to end.
 - [Providers](/fundamentals/providers/) — `#[injectable]`, the access

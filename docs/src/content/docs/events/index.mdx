@@ -19,7 +19,7 @@ on that type and runs them in registration order — **once the emitter's
 transaction has committed** when it emits inside one, and never for a write
 that rolled back. What stays open, a GraphQL subscription among them, reads
 the same events at the same commit through
-[`bus.stream()`](#read-events-as-a-stream). There is no broker, no retries — for
+[`bus.stream()`](/events/streams/). There is no broker, no retries — for
 cross-process or durable work, push a job on the [Queue](/queue/) instead.
 
 ## Install
@@ -181,46 +181,8 @@ no database — `emit` returns once every listener has run. Emitting an event
 with no subscriber is a no-op (not an error), so adding a listener later does
 not require touching the emitter.
 
-## Read events as a stream
-
-A listener reacts and is done. What stays open — a GraphQL subscription, a
-server-sent stream — reads the same events through `bus.stream::<E>()`, with
-no hub, no listener and nothing to import beyond the bus. `posts` answers its
-subscription that way:
-
-```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo, abridged)"
-#[subscription]
-#[authorize(Read, PostEntity)]
-async fn post_published(&self) -> impl Stream<Item = Post> {
-    self.bus
-        .stream::<PostPublishedEvent>()
-        .map(|event| event.post)
-}
-```
-
-`Stream` and the `StreamExt` that `.map` comes from are `futures-util`'s, a
-[library NestRS holds public](/semver/#third-party-libraries):
-`nest_rs::http::futures_util` beside the `graphql` feature, or
-`cargo add futures-util` for `events` alone.
-
-The stream reads an event when a listener would run: once the emitter's
-transaction has committed, and never for one that rolled back. It reads it ahead
-of the listeners, so a slow one holds nothing back, and it opens no unit of work:
-what you do with an item runs in whatever polls the stream. Three limits come
-with it:
-
-- **It starts when it opens.** An event committed before is not read. One
-  emitted before and committing after is read only when another reader of its
-  type was open at the emit, so nothing should rest on it.
-- **It reaches this process.** A reader on another replica reads nothing, so a
-  deployment of several replicas that must tell every reader needs a backend of
-  its own — the bus has no broker.
-- **A slow reader loses events.** A reader more than 64 events behind the newest
-  of its type loses the oldest, and one `warn` on `nest_rs::events` says how
-  many. A live feed goes on; work that must see every event is a
-  [queue](/queue/) job.
-
-The stream ends with the app, once it read what it was sent.
+A GraphQL subscription or a server-sent stream reads the same events as a
+stream: [Event streams](/events/streams/).
 
 ## Wire it in
 
@@ -289,8 +251,6 @@ app's own code. Same property as queue processors and scheduled jobs.
   `#[on_event]`.
 - `crates/features/src/posts/event.rs` + `service.rs` — the producer:
   payload at the port, emitted from the service.
-- `crates/features/src/posts/graphql/resolver.rs` — a subscription reading the
-  event as a stream.
 - `crates/nest-rs-events/tests/integration/bus.rs` — listener hosts driven end
   to end.
 

@@ -142,7 +142,7 @@ method outside the known set — `http.request.method_original` are the client's
 to write. The conventions require or recommend them and the span goes to your
 own collector, so it keeps them: a stated exception to the rule that no line
 and no reply quotes a client's value, which the
-[access line](/opentelemetry/logs/#access-log) follows. A header the span
+[access line](/opentelemetry/operation-log/#access-log) follows. A header the span
 records beyond that set is one that parsed under its grammar: a `traceparent`
 the transport did not continue is recorded as the four hex fields it parsed
 to, and an `X-Request-Id` from a trusted proxy only in the shape a proxy mints

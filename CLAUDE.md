@@ -66,8 +66,6 @@ lists.
 - `bench/` — the standalone HTTP benchmark, nestrs against other frameworks on
   one contract. `docs/` — nestrs.dev.
   `changelog/` — one file per minor line, indexed by `CHANGELOG.md`.
-- `TODO.md` — what remains open, how each gap was established, and how to
-  pick it up: read it before starting work.
 
 ```bash
 just lint   # fmt, workflows, clippy, each capability alone, dependency policy

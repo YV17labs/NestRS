@@ -3197,10 +3197,11 @@ mod tests {
         );
     }
 
-    /// Pins the limit `TODO.md` §5 keeps: copies in one shape naming different fields,
-    /// under a condition on an interface and one on an object no value of it is, answer
-    /// each value its own field, where §5.3.2 refuses the document, its name rule
-    /// reading the copies' parent types where this one reads the copies a value meets.
+    /// Pins the limit `graphql-transactions.md` keeps (2026-11-12): copies in one shape
+    /// naming different fields, under a condition on an interface and one on an object no
+    /// value of it is, answer each value its own field, where §5.3.2 refuses the document,
+    /// its name rule reading the copies' parent types where this one reads the copies a
+    /// value meets.
     #[test]
     fn copies_no_value_meets_both_of_stand_whatever_fields_they_name() {
         assert_eq!(

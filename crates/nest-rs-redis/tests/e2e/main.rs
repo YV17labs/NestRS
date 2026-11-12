@@ -237,18 +237,37 @@ async fn connect() -> RedisConnection {
         .expect("connect to the dev container Redis")
 }
 
+/// What `call` answers, asked again while it is refused, for a call whose
+/// refusal says nothing of the test's subject: on the suite's [`BUDGET`] a
+/// runner stalled past it refuses a dial, a boot or a push with the behaviour
+/// right, and through a failover a call is refused until the topology names its
+/// new primary. A call asked again may have run already — a push whose answer
+/// a stall lost files its job again — so what follows one is asserted at least
+/// once.
+async fn until_answered<T, E: std::fmt::Display, F: Future<Output = Result<T, E>>>(
+    what: &str,
+    mut call: impl FnMut() -> F,
+) -> T {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match call().await {
+            Ok(answer) => return answer,
+            Err(_) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(refused) => panic!("{what}: still refused after 20s: {refused:#}"),
+        }
+    }
+}
+
 /// The connection `config` opens, for a test whose subject is what its budget
 /// bounds once open: the boot's proof shares that budget, and a loaded machine
 /// can spend a short one on the dial alone, which says nothing of the subject.
 async fn connected(config: &RedisConfig) -> RedisConnection {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        match RedisConnection::connect(config).await {
-            Ok(conn) => return conn,
-            Err(_) if Instant::now() < deadline => {}
-            Err(refused) => panic!("the dev container Redis was not reached: {refused}"),
-        }
-    }
+    until_answered("the dev container Redis", || {
+        RedisConnection::connect(config)
+    })
+    .await
 }
 
 /// [`connect`], on database `db`.
@@ -1055,7 +1074,7 @@ struct Replica {
 /// [`LEASE_LAPSED`] and draining within [`WINDOW`]. The app is leaked: the
 /// transport borrows the container it owns, the way a process would hold it.
 async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
-    replica_of::<M>(brisk(HeadlessApp::builder())).await
+    replica_of::<M>(|| brisk(HeadlessApp::builder())).await
 }
 
 /// [`replica`], reaching Redis as `redis` says whatever the environment says:
@@ -1063,7 +1082,7 @@ async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
 /// the hermetic-test hatch, for a suite that needs a database or a user of its
 /// own while `<PREFIX>_REDIS__URL` points every other one at the shared database.
 async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
-    replica_of::<M>(brisk(HeadlessApp::builder().provide(redis))).await
+    replica_of::<M>(|| brisk(HeadlessApp::builder().provide(redis.clone()))).await
 }
 
 /// [`replica_on`] on the queue's default lease and the connection's default
@@ -1074,14 +1093,14 @@ async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Re
 /// (`RedisKit`'s `idle`); one waiting a lease out holds [`LEASE_RENEWED`], and a
 /// test counting no run stays on [`LEASE_LAPSED`].
 async fn patient_replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
-    replica_of::<M>(
+    replica_of::<M>(|| {
         HeadlessApp::builder()
-            .provide(at_default_budget(redis))
+            .provide(at_default_budget(redis.clone()))
             .provide(RedisQueueConfig::default())
             .provide(QueueConfig {
                 shutdown_timeout: WINDOW,
-            }),
-    )
+            })
+    })
     .await
 }
 
@@ -1090,20 +1109,25 @@ async fn patient_replica<M: nest_rs_core::Module + 'static>() -> Replica {
     patient_replica_on::<M>(redis_config()).await
 }
 
-/// The worker app `M` booted from `builder` as it stands, its worker started.
+/// The worker app `M` booted from what `builder` makes, its worker started, and
+/// booted again while either is refused ([`until_answered`]): the boot's proof
+/// and the worker's preparation hold the app's budget, which a stalled runner
+/// can spend on a dial alone.
 async fn replica_of<M: nest_rs_core::Module + 'static>(
-    builder: nest_rs_testing::TestAppBuilder,
+    builder: impl Fn() -> nest_rs_testing::TestAppBuilder,
 ) -> Replica {
-    let (app, producer) = booted::<M>(builder).await;
+    let builder = &builder;
+    let (app, producer, worker) = until_answered("the worker app's boot", || async move {
+        let (app, producer) = booted::<M>(builder()).await?;
+        let worker = app.spawn_transport(QueueWorker::new()).await?;
+        anyhow::Ok((app, producer, worker))
+    })
+    .await;
     let shared = RedisConnection::clone(
         &app.container()
             .get::<RedisConnection>()
             .expect("RedisModule opens the app's connection"),
     );
-    let worker = app
-        .spawn_transport(QueueWorker::new())
-        .await
-        .expect("the queue worker transport starts");
     Box::leak(Box::new(app));
     Replica {
         worker,
@@ -1116,19 +1140,15 @@ async fn replica_of<M: nest_rs_core::Module + 'static>(
 /// binds.
 async fn booted<M: nest_rs_core::Module + 'static>(
     builder: nest_rs_testing::TestAppBuilder,
-) -> (HeadlessApp, Jobs) {
-    let app = builder
-        .module::<M>()
-        .build_headless()
-        .await
-        .expect("the worker app boots against the dev container Redis");
-    app.init().await.expect("init phases");
+) -> anyhow::Result<(HeadlessApp, Jobs)> {
+    let app = builder.module::<M>().build_headless().await?;
+    app.init().await?;
     let producer = Jobs::clone(
         &app.container()
             .get::<Jobs>()
             .expect("RedisQueueModule binds the jobs handle"),
     );
-    (app, producer)
+    Ok((app, producer))
 }
 
 /// A replica whose transport can die without a shutdown: aborting `serve`
@@ -1159,7 +1179,8 @@ async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
                 shutdown_timeout: WINDOW,
             }),
     )
-    .await;
+    .await
+    .expect("the worker app boots against the dev container Redis");
     let mut worker = QueueWorker::new();
     worker
         .configure(app.container())
@@ -1382,14 +1403,22 @@ impl FailoverProcessor {
 )]
 struct FailoverModule;
 
-/// Push `run`'s job once the producer answers again: through a failover, a
-/// push fails until the topology names its new primary.
-async fn push_through_a_failover(producer: &Jobs, run: u64) {
-    wait_for(Duration::from_secs(20), || async {
-        producer
-            .push(FailoverQueue, FailoverCommand { run })
-            .await
-            .is_ok()
+/// The replica a failover test runs, on the suite's [`BUDGET`] rather than a
+/// counting test's default: its subject is the app leaving the frozen primary,
+/// which a call cut at the budget does within [`FROZEN_FOR`]. On the default
+/// budget a call sent there would wait the freeze out, and a write land on the
+/// old primary as it wakes, before its demotion discards it. Its boot is asked
+/// again while refused ([`until_answered`]), as the pushes beside the failover
+/// are.
+async fn failover_replica() -> Replica {
+    replica_on::<FailoverModule>(redis_config()).await
+}
+
+/// Push `run`'s job, asked again while the producer refuses it
+/// ([`until_answered`]).
+async fn push_until_answered(producer: &Jobs, run: u64) {
+    until_answered("a push", || {
+        producer.push(FailoverQueue, FailoverCommand { run })
     })
     .await;
 }

@@ -101,30 +101,17 @@ document says of it; what it keeps on purpose is §5's.
 ## 3. Known gaps by area
 
 **Weak proofs and flaky tests**
-- A test of the Redis suite's own counting no run on its one-second lease —
-  the two failovers and the queue page's confinement
-  (`queue::layout::the_queue_pages_rules_are_exact_for_a_producer_and_a_worker`)
-  — may fail under a stall past about two thirds of it, or past the 500 ms
-  budget its apps hold a push to, the behaviour right; none was driven under
-  stalls. The KEDA rule's test holds no lease and pushes nothing. Correlation,
-  trim and the entry deleted while delivered did not reproduce it: ten runs
-  each under 1.5 s stalls from the test's boot, every one green. Close: each
-  driven under a nextest target runner that starts the test as its child and
-  stops it by its own PID from its first instant, and one seen red moved to
-  the suite's three-second lease, or its producer to the default budget. *read*
-- The queue kit's two renewal cases on Redis,
-  `a_long_attempt_keeps_its_lease_and_runs_once` and
-  `a_lease_lost_under_a_live_worker_cuts_its_attempt_and_the_holder_decides`
-  (`KitLease::Brief`, the suite's three-second `LEASE_RENEWED`), fail under a
-  runner stalled past two seconds, two thirds of the lease, the behaviour
-  right: the worker wakes past its lease and cuts its own attempt, whatever
-  the backend. Seen in process, the kit over the in-memory backend on real
-  time with the same lease: 2.5 s stalls failed 5 of 10 case runs, 1.5 s
-  stalls none. How long a hosted runner stalls under the suite's load is not
-  measured. Close: both driven on Redis past two seconds, the longest stall
-  measured under CI's load shape (four CPUs, `just test`), and the lease kept
-  when that stall is well under two seconds, or lengthened with the long
-  attempt's hold cut to one lease and a reclaim look. *seen* (in process)
+- The Redis suite holds under a runner stalled up to 500 ms, the budget its
+  apps hold a call to, and up to two seconds where a test waits a lease out,
+  two thirds of the three-second `LEASE_RENEWED`; past either, a test fails
+  with the behaviour right (the stalls driven on Valkey, and what each failed,
+  in `.claude/decisions/one-server-per-backend.md`, 2026-11-11). The longest
+  stall seen under CI's load shape — `just test` beside a thread sleeping a
+  millisecond in a loop, both pinned to four CPUs in the dev container — was
+  165 ms in 340 s; the services ran on the container's other CPUs, and the
+  hypervisor steal a hosted VM may add was not there to see. Close: the same
+  thread beside `just test` on a hosted runner, which follows the push (the
+  owner's). *seen*
 - A `HELLO` sent as its connection's driver ends is neither answered nor
   dropped (B-200), and no test strands one on a real connection: the window
   lies inside `redis` 1.8's send, between `Sender::reserve` granting a permit

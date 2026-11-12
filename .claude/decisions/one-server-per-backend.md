@@ -243,3 +243,32 @@ on real time with Redis's three-second lease failed 5 of 10 case runs under
 2.5 s stalls and none under 1.5 s stalls, each stall driven by a nextest target
 runner that starts the test as its child and stops it by its own PID from its
 first instant.
+
+**2026-11-11, the stalls driven on Redis, and the one a CI runner shows:** the
+same runner drove each test on the dev container's Valkey. The kit's two
+renewal cases failed 14 of 20 case runs under 2.5 s stalls and none of 20 under
+1.5 s; the lost settle's earlier spelling, which waited for the give-up, failed
+2 of 10 under 3.5 s stalls, and one waiting for the stream to empty on the
+default budget none of the 11 runs a stall reached (14 stalls in 20 runs). The
+queue page's confinement, on the one-second lease and the suite's 500 ms
+budget, stayed green through 48 stalls of 1.5 s in ten runs: not reproduced, it
+stays there. The failovers failed 7 of 40 runs under 1.5 s stalls and none of
+11 bare, never on a count or a lapse: a boot or a push past the suite's budget,
+and Sentinel refusing the forced failover, `INPROG` (their own failover begun,
+past their two-second `down-after-milliseconds`) or `NOGOODSLAVE` (no replica
+they would promote yet). Moving a failover's app to the default budget was
+refused: its subject is the app leaving the frozen primary, which a call cut at
+the suite's budget does within the freeze, where one on ten seconds would wait
+the freeze out and write to the old primary as it wakes, before its demotion
+discards the write. So the app keeps the budget, a boot or a push beside the
+failover is asked again while refused, its job counted at least once, and the
+forced failover is asked again each second until one is taken or another
+primary is named. The delayed push and the cancel closing Sentinel's failover
+keep one ask: none of the 24 stalled runs reaching them failed there. The
+renewed lease stays three seconds: `just test` and a probe sleeping a
+millisecond in a loop, both pinned to four CPUs as GitHub's hosted Linux runner
+gives a public repository, saw a longest stall of 165 ms in 340 s, six past
+20 ms and none past 250 ms — under a tenth of the two seconds the lease
+tolerates, and under the 500 ms budget. The services ran on the container's
+other CPUs, and a hosted VM's hypervisor steal is not measured there; the same
+probe on a hosted runner is what closes it.

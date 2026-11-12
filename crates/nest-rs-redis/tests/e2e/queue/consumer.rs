@@ -1477,14 +1477,14 @@ mod standalone {
         crate::forget(queue).await;
         let run = crate::this_run();
         let proxy = crate::MutingProxy::start().await;
-        let replica = crate::replica_of::<GatedModule>(
+        let replica = crate::replica_of::<GatedModule>(|| {
             HeadlessApp::builder()
                 .provide(crate::through(proxy.url()))
                 .provide(RedisQueueConfig::default())
                 .provide(nest_rs_queue::QueueConfig {
                     shutdown_timeout: crate::WINDOW,
-                }),
-        )
+                })
+        })
         .await;
         crate::producer_on(crate::at_default_budget(crate::redis_config()))
             .await

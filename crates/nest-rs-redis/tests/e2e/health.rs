@@ -50,11 +50,15 @@ async fn the_default_instance_answers_the_readiness_and_startup_probes_as_redis(
 struct ProbedWithinTheBudget;
 
 /// An app reading its readiness off the suite's Valkey within the suite's budget,
-/// so a `failover` test reads it down while the node it froze still sleeps.
+/// so a `failover` test reads it down while the node it froze still sleeps —
+/// booted again while refused ([`crate::until_answered`]), since its boot's proof
+/// holds that budget too.
 pub(crate) async fn probing() -> TestApp {
-    TestApp::for_module::<ProbedWithinTheBudget>()
-        .await
-        .unwrap_or_else(|refused| panic!("boots: {refused:#}"))
+    crate::until_answered(
+        "the readiness app's boot",
+        TestApp::for_module::<ProbedWithinTheBudget>,
+    )
+    .await
 }
 
 /// While a node of the instance is frozen, its readiness answers `503` naming

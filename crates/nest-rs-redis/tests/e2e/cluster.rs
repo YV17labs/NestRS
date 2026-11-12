@@ -425,7 +425,7 @@ mod failover {
 
     use nest_rs_queue::Queue;
 
-    use crate::{FAILOVER, FailoverCommand, FailoverModule, FailoverQueue};
+    use crate::{FAILOVER, FailoverQueue};
 
     /// The primary serving a running queue's slot freezes, the Cluster promotes
     /// its replica, and the app — its worker and its producer — sends the
@@ -435,15 +435,11 @@ mod failover {
     /// liveness never waits on it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_queue_runs_on_across_a_failover_of_its_node() {
-        let replica = crate::replica_on::<FailoverModule>(crate::redis_config()).await;
+        let replica = crate::failover_replica().await;
         let probed = crate::health::probing().await;
         let run = crate::this_run();
         for offset in 0..5 {
-            replica
-                .producer
-                .push(FailoverQueue, FailoverCommand { run: run + offset })
-                .await
-                .expect("a push before the failover");
+            crate::push_until_answered(&replica.producer, run + offset).await;
         }
         crate::wait_until(Duration::from_secs(10), || {
             (0..5).all(|offset| FAILOVER.finished(run + offset) > 0)
@@ -464,7 +460,7 @@ mod failover {
         crate::health::assert_ready_again(&probed).await;
 
         for offset in 5..10 {
-            crate::push_through_a_failover(&replica.producer, run + offset).await;
+            crate::push_until_answered(&replica.producer, run + offset).await;
         }
         crate::wait_until(Duration::from_secs(60), || {
             (0..10).all(|offset| FAILOVER.finished(run + offset) > 0)

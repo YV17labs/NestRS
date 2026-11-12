@@ -61,11 +61,51 @@ async fn a_service_the_sentinels_do_not_know_fails_the_boot_naming_it() {
 /// Failovers move the primary every other test runs on, so they run one at a
 /// time, once every other test of the run is done.
 mod failover {
-    use std::time::Duration;
+    use std::cell::Cell;
+    use std::time::{Duration, Instant};
 
     use nest_rs_queue::{PushOptions, Queue};
 
-    use crate::{FAILOVER, FailoverCommand, FailoverModule, FailoverQueue};
+    use crate::{FAILOVER, FailoverCommand, FailoverQueue};
+
+    /// Fail the primary `before` over and answer the one the sentinels name
+    /// then. Forced, the failover skips the sentinels' election, which three
+    /// sentinels sharing one timing split often enough to stall a test; the
+    /// primary stays frozen through it, as a crashed one would. A runner
+    /// stalled past `down-after-milliseconds` meets the sentinels' own failover
+    /// begun (`INPROG`), or no replica they would promote yet (`NOGOODSLAVE`),
+    /// so the failover is asked again each second until one is taken or another
+    /// primary is named.
+    async fn failed_over_from(before: &str) -> String {
+        let taken = Cell::new(false);
+        let asked = Cell::new(None::<Instant>);
+        crate::wait_for(Duration::from_secs(30), || async {
+            if crate::sentinel_primary().await != before {
+                return true;
+            }
+            if taken.get()
+                || asked
+                    .get()
+                    .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
+            {
+                return false;
+            }
+            asked.set(Some(Instant::now()));
+            let forced: redis::RedisResult<()> = redis::cmd("SENTINEL")
+                .arg("FAILOVER")
+                .arg(crate::service_name())
+                .query_async(&mut crate::node(&crate::named_hosts()[0]).await)
+                .await;
+            match forced {
+                Ok(()) => taken.set(true),
+                Err(refused) if matches!(refused.code(), Some("INPROG" | "NOGOODSLAVE")) => {}
+                Err(refused) => panic!("the sentinels fail the primary over: {refused}"),
+            }
+            false
+        })
+        .await;
+        crate::sentinel_primary().await
+    }
 
     /// The primary freezes, the sentinels promote its replica, and the app —
     /// its worker and its producer — follows the primary they name then:
@@ -76,15 +116,11 @@ mod failover {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_queue_runs_on_across_a_failover() {
         let logs = nest_rs_testing::LogCapture::install_global();
-        let replica = crate::replica_on::<FailoverModule>(crate::redis_config()).await;
+        let replica = crate::failover_replica().await;
         let probed = crate::health::probing().await;
         let run = crate::this_run();
         for offset in 0..5 {
-            replica
-                .producer
-                .push(FailoverQueue, FailoverCommand { run: run + offset })
-                .await
-                .expect("a push before the failover");
+            crate::push_until_answered(&replica.producer, run + offset).await;
         }
         crate::wait_until(Duration::from_secs(10), || {
             (0..5).all(|offset| FAILOVER.finished(run + offset) > 0)
@@ -94,24 +130,11 @@ mod failover {
         let before = crate::sentinel_primary().await;
         let frozen = crate::freeze(&before).await;
         crate::health::assert_down_naming_redis_and_alive(&probed).await;
-        // Forced, the failover skips the sentinels' election, which three
-        // sentinels sharing one timing split often enough to stall a test; the
-        // primary stays frozen through it, as a crashed one would.
-        let _: () = redis::cmd("SENTINEL")
-            .arg("FAILOVER")
-            .arg(crate::service_name())
-            .query_async(&mut crate::node(&crate::named_hosts()[0]).await)
-            .await
-            .expect("the sentinels fail the primary over");
-        crate::wait_for(Duration::from_secs(30), || async {
-            crate::sentinel_primary().await != before
-        })
-        .await;
-        let after = crate::sentinel_primary().await;
+        let after = failed_over_from(&before).await;
         crate::health::assert_ready_again(&probed).await;
 
         for offset in 5..10 {
-            crate::push_through_a_failover(&replica.producer, run + offset).await;
+            crate::push_until_answered(&replica.producer, run + offset).await;
         }
         crate::wait_until(Duration::from_secs(60), || {
             (0..10).all(|offset| FAILOVER.finished(run + offset) > 0)

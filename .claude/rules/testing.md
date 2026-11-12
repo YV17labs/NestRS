@@ -188,7 +188,12 @@ one Postgres, one Redis and one store. Isolation is declared, never hoped for.
   `KitLease::Brief`. A connection of the suite's
   own opens and is answered within the framework's default budget
   (`suite_connection`, `at_default_budget`), wide of a stall; one telling a
-  frozen node apart keeps `redis`'s, or bounds its probe itself.
+  frozen node apart keeps `redis`'s, or bounds its probe itself. A failover's
+  app keeps the suite's budget, its subject — a call to the frozen primary is
+  cut within the freeze, where the default budget would wait it out and write
+  to the old primary as it wakes — and asks a boot or a push beside the
+  failover again while refused (`until_answered`), counting its job at least
+  once.
   An administration command reaches every node it concerns — `CLIENT KILL` ids
   and `ACL` users are per server — never one the client picks.
 

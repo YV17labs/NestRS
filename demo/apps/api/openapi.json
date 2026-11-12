@@ -364,6 +364,7 @@
       "User": {
         "properties": {
           "created_at": {
+            "description": "Field-level authorization applies: reads `null` where the caller's ability withholds it.",
             "format": "date-time",
             "type": [
               "string",
@@ -371,6 +372,7 @@
             ]
           },
           "email": {
+            "description": "Field-level authorization applies: reads `null` where the caller's ability withholds it.",
             "type": [
               "string",
               "null"
@@ -384,6 +386,7 @@
             "type": "string"
           },
           "org_id": {
+            "description": "Field-level authorization applies: reads `null` where the caller's ability withholds it.",
             "format": "uuid",
             "type": [
               "string",
@@ -391,6 +394,7 @@
             ]
           },
           "updated_at": {
+            "description": "Field-level authorization applies: reads `null` where the caller's ability withholds it.",
             "format": "date-time",
             "type": [
               "string",
@@ -1518,7 +1522,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it.",
+            "description": "OK",
             "headers": {
               "Link": {
                 "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
@@ -1642,7 +1646,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it."
+            "description": "OK"
           },
           "400": {
             "content": {
@@ -1788,7 +1792,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it.",
+            "description": "OK",
             "headers": {
               "Link": {
                 "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
@@ -1909,7 +1913,7 @@
                 }
               }
             },
-            "description": "Created — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it.",
+            "description": "Created",
             "headers": {
               "Location": {
                 "description": "URI of the resource that was just created.",
@@ -2191,7 +2195,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it."
+            "description": "OK"
           },
           "400": {
             "content": {
@@ -2325,7 +2329,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it."
+            "description": "OK"
           },
           "400": {
             "content": {
@@ -2501,7 +2505,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it.",
+            "description": "OK",
             "headers": {
               "Link": {
                 "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
@@ -2623,7 +2627,7 @@
                 }
               }
             },
-            "description": "Created — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it.",
+            "description": "Created",
             "headers": {
               "Location": {
                 "description": "URI of the resource that was just created.",
@@ -2905,7 +2909,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it."
+            "description": "OK"
           },
           "400": {
             "content": {
@@ -3039,7 +3043,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it."
+            "description": "OK"
           },
           "400": {
             "content": {
@@ -3196,7 +3200,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it."
+            "description": "OK"
           },
           "400": {
             "content": {
@@ -3342,7 +3346,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it.",
+            "description": "OK",
             "headers": {
               "Link": {
                 "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
@@ -3464,7 +3468,7 @@
                 }
               }
             },
-            "description": "Created — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it.",
+            "description": "Created",
             "headers": {
               "Location": {
                 "description": "URI of the resource that was just created.",
@@ -3747,7 +3751,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it."
+            "description": "OK"
           },
           "400": {
             "content": {
@@ -3881,7 +3885,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: a nullable property reads `null` where the caller's ability withholds it."
+            "description": "OK"
           },
           "400": {
             "content": {

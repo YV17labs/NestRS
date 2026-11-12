@@ -312,3 +312,10 @@ property reads `null` where the caller's grants withhold it.
 The flag the entry above kept as `masked` reads the same posture under the word for what it
 records, `names_an_entity` (`unmasked-reply-withholds-the-ability.md`, this date): the route's
 posture names an entity, a subject a table holds.
+
+## 2026-11-12 — a route's document says nothing of field-level authorization
+
+The `200`'s sentence the 2026-11-08 entry kept on an entity's posture is gone: what a grant may
+withhold is the row's to say, on each such property of its schema, whatever the posture names
+(`mask-provenance.md`, this date). `names_an_entity` keeps one reader in the document, the
+`403` an entity's posture can answer.

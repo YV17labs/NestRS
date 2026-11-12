@@ -45,8 +45,9 @@ mod relations;
 /// resolves on GraphQL, for that caller alone. A grant may withhold only a
 /// column its wire type answers `null`: an `Option` column, or one
 /// `#[expose(nullable)]` declares, whose wire field is an `Option` and whose
-/// schema is nullable on every edge, its key always written. A grant on `Read`
-/// withholding any other is refused when the ability builds.
+/// schema is nullable on every edge, its key always written and its description
+/// saying a grant may withhold it — a `belongs_to` field's too, on GraphQL. A grant
+/// on `Read` withholding any other is refused when the ability builds.
 ///
 /// Generates `User`, `CreateUser`, `UpdateUser`, `From<&Model> for User`.
 ///

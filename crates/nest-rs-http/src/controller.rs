@@ -245,9 +245,9 @@ impl HttpRouteMeta {
     }
 
     /// The route's posture names an entity, a subject a table holds
-    /// (`Authorize<_, _>` on one), so it reads under the caller's ability, and a
-    /// nullable property of [`response`](Self::response) reads `null` where that
-    /// ability withholds it; a posture on a `#[subject]` reads `false`.
+    /// (`Authorize<_, _>` on one); a posture on a `#[subject]` reads `false`. What a
+    /// grant may withhold of a row it answers is no route's to say: the row's own
+    /// schema says it on each such property, whatever the posture names.
     pub fn names_an_entity(&self) -> bool {
         self.parts.names_an_entity
     }

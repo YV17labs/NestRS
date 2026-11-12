@@ -91,3 +91,14 @@ pub fn nullable_schema<T: schemars::JsonSchema>(
     }
     schema
 }
+
+/// The doc `#[expose]` writes on each wire property a grant may withhold, which
+/// rustdoc, `schemars` (OpenAPI's components, an MCP tool's output schema) and
+/// async-graphql (the SDL) each read as its description.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __withholdable_doc {
+    () => {
+        "Field-level authorization applies: reads `null` where the caller's ability withholds it."
+    };
+}

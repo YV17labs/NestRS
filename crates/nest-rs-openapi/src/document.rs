@@ -554,16 +554,7 @@ fn operation_object(
     let has_body = status.is_none_or(|status| status != 204 && !is_redirect(status));
     let schema = has_body.then_some(route.response()).flatten();
     let succeeded = status.map_or(COMPUTED_STATUS_DESCRIPTION, reason_phrase);
-    ok.insert(
-        "description".into(),
-        json!(match (route.names_an_entity(), schema.is_some()) {
-            (true, true) => format!(
-                "{succeeded} — field-level authorization applies: a nullable property reads \
-                 `null` where the caller's ability withholds it.",
-            ),
-            _ => succeeded.to_owned(),
-        }),
-    );
+    ok.insert("description".into(), json!(succeeded));
     let media = route.response_content_type().unwrap_or(JSON_MEDIA_TYPE);
     match (schema, route.response_content_type()) {
         (Some(schema_fn), _) => {
@@ -1828,8 +1819,10 @@ mod tests {
         assert!(op["responses"]["200"]["content"]["application/json"]["schema"].is_object());
     }
 
+    /// What a grant may withhold is the row's schema's to say, on each property, so
+    /// a route's success reads as any other's whatever its posture names.
     #[test]
-    fn a_route_naming_an_entity_publishes_its_schema_and_flags_the_field_set() {
+    fn a_route_naming_an_entity_describes_its_success_by_its_status_alone() {
         let mut g = generator();
         let mut r = route("list_users", "/users");
         r.response = Some(schema_for_dummy);
@@ -1839,26 +1832,7 @@ mod tests {
             op["responses"]["200"]["content"]["application/json"]["schema"].is_object(),
             "the shape is published: {op}",
         );
-        let description = op["responses"]["200"]["description"]
-            .as_str()
-            .expect("a description");
-        assert!(description.starts_with("OK"), "{description}");
-        assert!(
-            description.contains("ability"),
-            "and it says the fields depend on the caller: {description}",
-        );
-    }
-
-    #[test]
-    fn a_bodyless_route_naming_an_entity_keeps_the_plain_description() {
-        let mut g = generator();
-        let mut r = route("delete_user", "/users/{id}");
-        r.response = Some(schema_for_dummy);
-        r.names_an_entity = true;
-        r.success_status = Some(204);
-        let op = operation(&r, "/users/{id}", &mut g, &[], None);
-        assert_eq!(op["responses"]["204"]["description"], "No Content");
-        assert!(op["responses"]["204"].get("content").is_none());
+        assert_eq!(op["responses"]["200"]["description"], "OK", "{op}");
     }
 
     #[test]

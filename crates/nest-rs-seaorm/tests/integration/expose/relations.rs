@@ -141,6 +141,73 @@ fn a_child_of_a_relation_answers_the_wire_type_its_own_expose_names() {
     );
 }
 
+/// A `belongs_to` reads `null` where the caller's ability withholds its key or its
+/// row, so its field says so in the SDL as a column a grant may withhold does; a
+/// `has_many` answers a page, never `null`, and its field says nothing.
+#[tokio::test]
+async fn a_belongs_to_says_the_caller_s_ability_may_withhold_it_and_a_has_many_does_not() {
+    use nest_rs_graphql::async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
+
+    struct Query;
+
+    #[Object]
+    impl Query {
+        async fn ticket(&self) -> Option<tickets::Ticket> {
+            None
+        }
+    }
+
+    let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
+    let introspected = schema
+        .execute(
+            r#"{
+                ticket: __type(name: "Ticket") { fields { name description } }
+                person: __type(name: "Person") { fields { name description } }
+            }"#,
+        )
+        .await
+        .into_result()
+        .expect("introspection answers");
+    let introspected = introspected.data.into_json().expect("the answer is JSON");
+    let described = |object: &str| -> Vec<(&str, Option<&str>)> {
+        let mut fields: Vec<_> = introspected[object]["fields"]
+            .as_array()
+            .expect("the object's fields")
+            .iter()
+            .map(|field| {
+                let name = field["name"].as_str().expect("a field's name");
+                (name, field["description"].as_str())
+            })
+            .collect();
+        fields.sort_unstable();
+        fields
+    };
+
+    let withholdable = Some(nest_rs_seaorm::__withholdable_doc!());
+    assert_eq!(
+        described("ticket"),
+        [
+            ("assignee", withholdable),
+            ("assigneeId", None),
+            ("id", None),
+            ("reporter", withholdable),
+            ("reporterId", None),
+            ("title", None),
+        ],
+        "{introspected}",
+    );
+    assert_eq!(
+        described("person"),
+        [
+            ("assigned", None),
+            ("id", None),
+            ("name", None),
+            ("reported", None)
+        ],
+        "{introspected}",
+    );
+}
+
 pub(super) mod notes {
     use super::*;
 

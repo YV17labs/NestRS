@@ -324,7 +324,8 @@ a subscription's push. A column its grants withhold is no value in the row — a
 a body puts the row in ships it; a grant on `Read` or `Manage` withholding any
 other column is a `MalformedRuleError` at `build()` naming it, and every edge's
 schema says exactly what a reply can hold (the key required, nullable where a grant
-may withhold it). A job holding no ability is system work and reads every exposed
+may withhold it and described so — on the row's schema, never a route's, so it holds
+whatever the posture). A job holding no ability is system work and reads every exposed
 column, a row that answers inside a job and on a push to other connections alone;
 anywhere else with no ability the row answers no one. A reply reads
 `Read`'s grants whatever its posture's action: a write's `.fields` names writable

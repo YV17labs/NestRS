@@ -141,10 +141,10 @@ use crate::{ActionMarker, Subject};
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 /// The class gate a posture declares, run with the route's guards. Nothing
-/// reshapes the reply: each wire row it carries was judged where it was built. An
-/// entity's posture documents its reply's nullable properties as a grant's to
-/// withhold, and an `#[sse]` route refuses it; a subject no table holds arms no
-/// `capture`.
+/// reshapes the reply: each wire row it carries was judged where it was built, and
+/// its type's schema says which properties a grant may withhold. An entity's
+/// posture is recorded as naming one, which an `#[sse]` route refuses; a subject no
+/// table holds arms no `capture`.
 impl<A, S> RouteResponseShaper for Authorize<A, S>
 where
     A: ActionMarker,

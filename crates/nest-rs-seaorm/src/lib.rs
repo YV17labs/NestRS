@@ -257,8 +257,8 @@ pub mod __private {
 ///
 /// A grant on `Read` may withhold only a column the wire type answers `null`:
 /// an `Option` column, or one `#[expose(nullable)]` declares, whose field is an
-/// `Option` and whose schema is nullable on every edge. The primary key names its
-/// row and takes no `nullable`.
+/// `Option` and whose schema is nullable on every edge, its description saying a
+/// grant may withhold it. The primary key names its row and takes no `nullable`.
 ///
 /// Add the `graphql` flag, with this crate's `graphql` feature, and the DTO is
 /// also a GraphQL object, its `#[expose]`d relations resolved through

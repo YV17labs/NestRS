@@ -23,6 +23,13 @@ use crate::attr::{
     is_datetime_tz, is_uuid,
 };
 
+/// The doc of a wire field a grant may withhold, which rustdoc, `schemars` and
+/// async-graphql each read as its description: the sentence is written once, in
+/// `nest-rs-seaorm`, so every edge's schema says the same.
+pub(crate) fn withholdable_doc() -> TokenStream2 {
+    quote! { #[doc = ::nest_rs_seaorm::__withholdable_doc!()] }
+}
+
 /// The format a `String` wire field keeps from its column's type.
 fn wire_format(field: &ResourceField) -> Option<&'static str> {
     if is_uuid(&field.ty) {
@@ -118,7 +125,9 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
                 let (schema_fn, body) = nullable_schema_fn(field, &base, format);
                 let schema_with = format!("{output}::{schema_fn}");
                 schema_fns.push(body);
+                let doc = withholdable_doc();
                 decls.push(quote! {
+                    #doc
                     #complexity
                     #guard
                     #[schemars(schema_with = #schema_with)]
@@ -129,7 +138,8 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
                 });
             }
             (false, Some(column)) => {
-                decls.push(quote! { #complexity #guard pub #name: #base });
+                let doc = withholdable_doc();
+                decls.push(quote! { #doc #complexity #guard pub #name: #base });
                 inits.push(quote! {
                     #name: if __judgement.permits(Column::#column) {
                         #value

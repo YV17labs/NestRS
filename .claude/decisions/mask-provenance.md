@@ -630,3 +630,35 @@ reads nothing.
   as long as the stream; the operation holds no other root field once §5.2.3.1 is held.
 - **Keeping async-graphql's `null` for a refused `Json`**: a caller would hear success with
   a default in place of the refusal (`CLAUDE.md`, no swallowed error).
+
+## 2026-11-12 — a property a grant may withhold says so on every edge's schema
+
+The owner's word of 2026-11-11 (carry out every line `TODO.md` lists). A route's `200` said
+"field-level authorization applies: a nullable property reads `null` where the caller's
+ability withholds it" only where its posture named an entity (`names_an_entity`), while each
+wire row is judged for its caller whatever the posture (2026-11-08): under
+`#[authorize(Read, Browsing)]` and `#[authorize(Read, article::Entity)]`, two routes answering
+`Json(rows())` replied the same judged rows, `published` and `body` `null`, and only the second
+documented it (seen, `nest-rs-openapi`'s `judged_rows`). GraphQL's SDL and an MCP tool's output
+schema said it on no posture.
+
+**Decided: the sentence is the row's, on each property a grant may withhold.** `#[expose]`
+writes it as the doc of each wire field an `Option` column or `#[expose(nullable)]` makes
+withholdable, and of each `belongs_to` field resolver, which reads `null` for a key or a row
+the caller may not read; a `has_many` answers a page, never `null`, and says nothing. The doc
+names `nest-rs-seaorm`'s `__withholdable_doc!`, the sentence's one place, and is what rustdoc,
+`schemars` (OpenAPI's components, rmcp's output schema) and async-graphql (the SDL) each read as
+the description. So it holds on every route and every shape carrying the row — a list, a page,
+a DTO holding it — whatever the posture names, and the route's own sentence goes: a `200` reads
+its status alone. `HttpRouteMeta::names_an_entity()` stays, the document's `403` reading it.
+
+**Refused:**
+
+- **Keying the route's sentence on the reply carrying a row**: a route cannot tell which of a
+  DTO's properties are a row's, and GraphQL and MCP would still say nothing.
+- **`#[schemars(description = …)]` beside a GraphQL description**: async-graphql's
+  `SimpleObject` reads a field's description off its doc alone, so the sentence would be
+  written twice.
+- **A literal the macro writes**: a test asserting it would copy it (`testing.md`, the shared
+  constant), where an exported macro is one place the expansion and the suites read.
+- **The sentence on the object's description**: it would not say which property.

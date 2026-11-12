@@ -439,7 +439,7 @@ async fn a_public_route_naming_the_capability_admits_a_grant_and_refuses_any_oth
 }
 
 /// A route's record says its posture names no entity: a capability's is no
-/// table's, so its document says no property reads `null` by a grant.
+/// table's.
 #[tokio::test]
 async fn a_route_naming_the_capability_records_that_it_names_no_entity() {
     let app = app().await;

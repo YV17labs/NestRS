@@ -3122,6 +3122,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-seaorm",
  "nest-rs-testing",
  "nest-rs-throttler",
  "schemars",

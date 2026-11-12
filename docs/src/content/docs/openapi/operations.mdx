@@ -158,12 +158,13 @@ the framework can answer that status too, so a generated client types both.
 
 ## Ability-shaped responses
 
-A route declaring `#[authorize(Action, Entity)]` on an entity answers wire rows judged
-per caller, and the published schema says exactly what any of them can hold: every key
-required, a column a grant may withhold nullable. The response description says so,
-since a nullable property reads `null` for a caller whose grant withholds it. A
-`#[subject]`'s posture names no row type, so its route documents a plain
-response.
+Every wire row a route answers is judged for its caller, whatever its posture names,
+and the published schema says exactly what any of them can hold: every key required,
+a column a grant may withhold nullable, its description saying so — *Field-level
+authorization applies: reads `null` where the caller's ability withholds it.* The
+sentence sits on the row's own schema, so every route answering the row carries it,
+inside a list, a page or a DTO, and so do GraphQL's SDL and an MCP tool's output
+schema; the response keeps its status's description.
 
 ## Tags
 

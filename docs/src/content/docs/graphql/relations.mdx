@@ -89,6 +89,9 @@ The schema you get:
 type User {
     id: String!
     name: String!
+    """
+    Field-level authorization applies: reads `null` where the caller's ability withholds it.
+    """
     org: Org             # belongs_to side — PK loader on OrgsService
     orgId: String!
 }

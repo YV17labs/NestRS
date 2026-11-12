@@ -166,9 +166,8 @@ pub fn route_guard_stage(
     if declared.stream && declared.names_an_entity {
         anyhow::bail!(
             "{label} is an `#[sse]` route a parameter's type arms a response shaper on: a shaper \
-             reconciles a body, and an event stream is none, so it would go out as written while \
-             the document says field-level authorization applies to it — take that parameter off \
-             the stream"
+             reconciles a body, and an event stream is none, so it would go out as written, its \
+             shaper skipped — take that parameter off the stream"
         );
     }
     let host = resolve_scoped(container, &declared.host, LayerSite::Host, &label)

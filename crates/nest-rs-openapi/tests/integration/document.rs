@@ -1819,3 +1819,167 @@ mod answers {
         assert!(answers.get("403").is_none(), "{answers}");
     }
 }
+
+/// What a route answering an `#[expose]`d entity's judged rows documents, whatever
+/// its posture names: the row's own schema says which properties a grant may
+/// withhold, and every route answering it references that schema.
+mod judged_rows {
+    use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy};
+    use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, Read, subject};
+    use nest_rs_core::{AmbientValue, async_trait, injectable, module};
+    use nest_rs_http::{Json, Request, controller, routes};
+    use nest_rs_testing::TestApp;
+    use serde_json::{Value, json};
+
+    use super::{document, openapi};
+
+    mod article {
+        use nest_rs_seaorm::{expose, sea_orm};
+        use sea_orm::entity::prelude::*;
+
+        #[expose(name = "Article")]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "articles")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            #[expose]
+            pub id: i32,
+            #[expose]
+            pub title: String,
+            #[expose(nullable)]
+            pub published: bool,
+            #[expose]
+            pub body: Option<String>,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    use article::Article;
+
+    /// A capability no table holds.
+    #[subject]
+    struct Browsing;
+
+    #[derive(Clone)]
+    struct Reader;
+
+    impl AmbientValue for Reader {}
+
+    impl PrincipalIdentity for Reader {
+        fn actor_id(&self) -> Option<String> {
+            Some("reader".into())
+        }
+    }
+
+    /// Identifies every request as [`Reader`].
+    #[injectable]
+    #[derive(Default)]
+    struct Everyone;
+
+    #[async_trait]
+    impl Strategy for Everyone {
+        type Principal = Reader;
+
+        async fn authenticate(&self, _req: &mut Request) -> Result<Reader, AuthError> {
+            Ok(Reader)
+        }
+    }
+
+    /// Browsing, and each article's id and title alone.
+    #[injectable]
+    #[derive(Default)]
+    struct Rules;
+
+    impl AbilityFactory for Rules {
+        type Actor = Reader;
+
+        fn define(&self, _reader: &Reader, ability: &mut AbilityBuilder) {
+            ability.can(Action::Read, Browsing);
+            ability
+                .can(Action::Read, article::Entity)
+                .fields([article::Column::Id, article::Column::Title]);
+        }
+    }
+
+    type Authn = AuthnGuard<Everyone>;
+    type Authz = AbilityGuard<Rules>;
+
+    /// The rows a read answers, each judged as it is built.
+    fn rows() -> Vec<Article> {
+        [1, 2]
+            .into_iter()
+            .map(|id| {
+                Article::from(&article::Model {
+                    id,
+                    title: format!("article {id}"),
+                    published: true,
+                    body: Some(format!("body {id}")),
+                })
+            })
+            .collect()
+    }
+
+    #[controller(path = "/articles")]
+    #[use_guards(Authn, Authz)]
+    struct ArticlesController;
+
+    #[routes]
+    impl ArticlesController {
+        #[get("/browsing")]
+        #[authorize(Read, Browsing)]
+        async fn browsing(&self) -> Json<Vec<Article>> {
+            Json(rows())
+        }
+
+        #[get("/")]
+        #[authorize(Read, article::Entity)]
+        async fn list(&self) -> Json<Vec<Article>> {
+            Json(rows())
+        }
+    }
+
+    #[module(
+        imports = [openapi()],
+        providers = [Everyone, Authn, Rules, Authz, ArticlesController],
+    )]
+    struct ArticlesApp;
+
+    /// Two routes reply the same judged rows, one under a `#[subject]`'s posture and
+    /// one under the entity's, so their documents say the same: each `200` reads its
+    /// status alone and references the row, whose properties a grant may withhold
+    /// say so, and no other property does.
+    #[tokio::test]
+    async fn a_route_naming_a_subject_documents_its_rows_as_one_naming_the_entity_does() {
+        let app = TestApp::for_module::<ArticlesApp>().await.expect("boots");
+        let judged = json!([
+            { "id": 1, "title": "article 1", "published": null, "body": null },
+            { "id": 2, "title": "article 2", "published": null, "body": null },
+        ]);
+        let routes = ["/articles/browsing", "/articles"];
+        for path in routes {
+            app.http().get(path).send().await.assert_json(&judged).await;
+        }
+
+        let doc = document(&app, "/api-json").await;
+        for path in routes {
+            let succeeded = &doc["paths"][path]["get"]["responses"]["200"];
+            assert_eq!(succeeded["description"], "OK", "{path}: {succeeded}");
+            assert_eq!(
+                succeeded["content"]["application/json"]["schema"]["items"]["$ref"],
+                "#/components/schemas/Article",
+                "{path}: {succeeded}",
+            );
+        }
+        let row = &doc["components"]["schemas"]["Article"]["properties"];
+        let described = |key: &str| row[key].get("description").and_then(Value::as_str);
+        let withholdable = Some(nest_rs_seaorm::__withholdable_doc!());
+        assert_eq!(described("published"), withholdable, "{row}");
+        assert_eq!(described("body"), withholdable, "{row}");
+        assert_eq!(described("id"), None, "{row}");
+        assert_eq!(described("title"), None, "{row}");
+    }
+}

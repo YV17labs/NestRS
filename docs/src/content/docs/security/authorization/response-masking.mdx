@@ -72,9 +72,11 @@ ab.can(Action::Read, user::Entity)
 
 A member then reads `{"id": "…", "org_id": null, "name": "Ada", "email": null, …}`
 on HTTP and WebSocket, `email: null` on GraphQL and in MCP's structured content.
-The schema says so on every edge: the field is nullable, its key still required,
-since a reply always writes it — OpenAPI's and MCP's `required` and GraphQL's `!`
-stay true. A column you do not declare is never withheld: a grant on `Read` or
+The schema says so on every edge: the field is nullable, its description says the
+caller's ability may withhold it, and its key is still required, since a reply always
+writes it — OpenAPI's and MCP's `required` and GraphQL's `!` stay true. A
+`belongs_to` field says the same on GraphQL, where it reads `null` for a key or a row
+the caller may not read. A column you do not declare is never withheld: a grant on `Read` or
 `Manage` leaving one out fails when the ability builds, naming the column and the
 key:
 

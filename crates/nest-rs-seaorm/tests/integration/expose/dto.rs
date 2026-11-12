@@ -111,6 +111,34 @@ mod release {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+/// A docket whose judge, filing date and note a grant may withhold, on every edge.
+#[cfg(feature = "graphql")]
+mod docket {
+    use super::*;
+
+    #[expose(name = "Docket", graphql)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "dockets")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[expose]
+        pub title: String,
+        #[expose(nullable)]
+        pub judge: String,
+        #[expose(nullable)]
+        pub filed_at: DateTimeWithTimeZone,
+        #[expose]
+        pub note: Option<String>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 /// `f` run under an ability `build` grants.
 async fn under<T>(build: impl FnOnce(&mut AbilityBuilder), f: impl FnOnce() -> T) -> T {
     let mut ab = AbilityBuilder::new();
@@ -246,6 +274,81 @@ fn the_schema_says_which_columns_a_grant_may_withhold() {
         ["closed_at", "headline", "id", "owner_id", "type"],
         "a nullable key is always written, an `Option` column's may be read absent: {json}",
     );
+}
+
+/// What each property of a JSON Schema object says it is, sorted by key.
+#[cfg(feature = "graphql")]
+fn descriptions(schema: &serde_json::Value) -> Vec<(String, Option<String>)> {
+    let mut said: Vec<_> = schema["properties"]
+        .as_object()
+        .expect("an object's properties")
+        .iter()
+        .map(|(key, property)| {
+            let description = property["description"].as_str().map(str::to_owned);
+            (key.clone(), description)
+        })
+        .collect();
+    said.sort();
+    said
+}
+
+/// Each property a grant may withhold says so in every schema an edge publishes —
+/// the JSON Schema OpenAPI's components and an MCP tool's output schema are, and
+/// the GraphQL SDL — whatever answers the row, and no other property says it.
+#[cfg(feature = "graphql")]
+#[tokio::test]
+async fn each_column_a_grant_may_withhold_says_so_in_every_edge_s_schema() {
+    use nest_rs_graphql::async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
+
+    struct Query;
+
+    #[Object]
+    impl Query {
+        async fn docket(&self) -> Option<docket::Docket> {
+            None
+        }
+    }
+
+    let withholdable = || Some(nest_rs_seaorm::__withholdable_doc!().to_owned());
+    let said_of = |filed_at: &str| {
+        let mut said = vec![
+            ("id".to_owned(), None),
+            ("title".to_owned(), None),
+            ("judge".to_owned(), withholdable()),
+            (filed_at.to_owned(), withholdable()),
+            ("note".to_owned(), withholdable()),
+        ];
+        said.sort();
+        said
+    };
+    let wire = said_of("filed_at");
+
+    let json_schema = nest_rs_seaorm::__private::schemars::schema_for!(docket::Docket);
+    let json_schema = serde_json::to_value(&json_schema).expect("the schema serializes");
+    assert_eq!(descriptions(&json_schema), wire, "{json_schema}");
+
+    let output = nest_rs_mcp::rmcp::handler::server::tool::schema_for_output::<docket::Docket>();
+    let output = serde_json::Value::Object((*output).clone());
+    assert_eq!(descriptions(&output), wire, "MCP: {output}");
+
+    let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
+    let introspected = schema
+        .execute(r#"{ __type(name: "Docket") { fields { name description } } }"#)
+        .await
+        .into_result()
+        .expect("introspection answers");
+    let introspected = introspected.data.into_json().expect("the answer is JSON");
+    let mut fields: Vec<(String, Option<String>)> = introspected["__type"]["fields"]
+        .as_array()
+        .expect("the object's fields")
+        .iter()
+        .map(|field| {
+            let name = field["name"].as_str().expect("a field's name").to_owned();
+            (name, field["description"].as_str().map(str::to_owned))
+        })
+        .collect();
+    fields.sort();
+    assert_eq!(fields, said_of("filedAt"), "GraphQL: {introspected}");
 }
 
 /// A raw identifier serializes without its `r#`, so its key does too.

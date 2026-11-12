@@ -175,3 +175,9 @@ in-band edges spell.
 A capability's route answering an entity's rows is judged as every other, but its document
 states no field a grant withholds: the sentence keys on this flag. Written in `TODO.md`, with
 what closing it takes.
+
+## 2026-11-12 — a capability's route documents its rows as an entity's does
+
+The gap the 2026-11-11 entry wrote in `TODO.md` is closed: no route's document keys a sentence
+on `names_an_entity`, and each property a grant may withhold says so on its row's schema, which
+every route answering the row references (`mask-provenance.md`, this date).

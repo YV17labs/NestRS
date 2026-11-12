@@ -537,7 +537,7 @@ lists what the boot, a log or the wire shows when one is missed.
    |---|---|
    | `HttpVerb::Get`, `HttpVerb::Post`, … | `Method::GET`, `Method::POST`, … (`nest_rs::http::Method`) |
    | `route.verb`, `route.path`, `route.handler`, any field of an `HttpRouteMeta` | the accessor of the same name: `route.method()`, `route.path()`, `route.handler()` |
-   | `route.masked` on an `HttpRouteMeta` | `route.names_an_entity()`: the route's posture names an entity, a subject a table holds, so it reads under the caller's ability and its document says a nullable property reads `null` where a grant withholds it |
+   | `route.masked` on an `HttpRouteMeta` | `route.names_an_entity()`: the route's posture names an entity, a subject a table holds. Which properties a grant may withhold is no route's to say: every route answers judged rows, and each `#[expose]`d type's schema says it on the property, its description reading *Field-level authorization applies: reads `null` where the caller's ability withholds it* |
    | `meta.routes`, `meta.path`, `meta.controller`, `meta.token`, `meta.versions` on an `HttpControllerMeta` | `meta.routes()`, `meta.path()`, `meta.controller()`, `meta.token()`, `meta.versions()` |
    | an `HttpRouteMeta { … }` or `HttpControllerMeta::new(…)` built by hand | none: a `#[controller]` struct and a `#[routes]` block record each route |
    | `route.throttled` on an `HttpRouteMeta` | none: a guard declares the `429` it answers in `Guard::denial_statuses`, and the route's OpenAPI document lists it |

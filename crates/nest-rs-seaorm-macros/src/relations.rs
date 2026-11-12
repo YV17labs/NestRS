@@ -18,6 +18,7 @@ use crate::attr::{
     RelationKind, ResourceField, ResourceModel, complexity_attr, graphql_root, graphql_root_str,
     is_uuid,
 };
+use crate::dto::withholdable_doc;
 
 /// Default complexity expression for an auto-emitted `HasMany` field resolver.
 ///
@@ -465,7 +466,8 @@ fn relation_registration(
 
 /// One BelongsTo field resolver: load the parent's FK column via the target
 /// entity's PK loader, returning its wire DTO, judged where the loader built it. A
-/// key the caller's grant withholds is no link to follow: the field reads `null`.
+/// key the caller's grant withholds is no link to follow, and a row its grants
+/// refuse is no row the loader reads: the field reads `null`, and says so.
 fn emit_belongs_to_method(
     model: &ResourceModel,
     field: &ResourceField,
@@ -490,7 +492,9 @@ fn emit_belongs_to_method(
         quote! { let __key = #parsed; }
     };
 
+    let doc = withholdable_doc();
     Ok(quote! {
+        #doc
         #complexity
         async fn #name(
             &self,

@@ -41,6 +41,8 @@ pub struct Model {
         validate(length(min = 1), custom(function = "not_a_placeholder"))
     )]
     pub body: String,
+    #[expose(nullable)]
+    pub pinned: bool,
     #[expose]
     pub created_at: DateTimeWithTimeZone,
     #[expose]

@@ -377,9 +377,8 @@ mod tests {
             let image = service["image"]
                 .as_str()
                 .unwrap_or_else(|| panic!("{name} names its image"));
-            let release = image.rsplit_once(':').map(|(_, tag)| tag);
             assert!(
-                release.is_some_and(|tag| tag
+                image.rsplit_once(':').is_some_and(|(_, tag)| tag
                     .split('.')
                     .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))),
                 "{name} runs {image}, which names no release"

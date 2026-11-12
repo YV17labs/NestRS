@@ -26,9 +26,7 @@ pub(crate) fn config(url: String) -> RedisConfig {
 
 /// What Redis answered, which the refusal carries as its source.
 pub(crate) fn answer(error: &RedisError) -> String {
-    std::error::Error::source(error)
-        .map(ToString::to_string)
-        .unwrap_or_default()
+    std::error::Error::source(error).map_or_default(ToString::to_string)
 }
 
 /// Connect as `config` says, to a server that will not select database

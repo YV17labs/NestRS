@@ -353,8 +353,7 @@ async fn a_layer_a_listener_binds_that_no_module_provides_fails_the_boot_naming_
         .build()
         .await
         .err()
-        .map(|error| format!("{error:#}"))
-        .unwrap_or_default();
+        .map_or_default(|error| format!("{error:#}"));
     for part in ["CatalogListeners", "Reading"] {
         assert!(
             refused.contains(part),

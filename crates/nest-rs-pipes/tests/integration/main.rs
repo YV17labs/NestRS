@@ -19,10 +19,7 @@ const SECRET: &str = "sk_live_51HsecretTOKEN";
 /// What an edge forwards of a refusal: its message, and the details it renders
 /// as `errors`.
 fn carried(refusal: &PipeError) -> String {
-    let details = refusal
-        .details()
-        .map(ToString::to_string)
-        .unwrap_or_default();
+    let details = refusal.details().map_or_default(ToString::to_string);
     format!("{} {details}", refusal.message())
 }
 

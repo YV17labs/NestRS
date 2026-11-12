@@ -699,8 +699,7 @@ fn expand_object_params(
         let required: Vec<&str> = object
             .get("required")
             .and_then(Value::as_array)
-            .map(|r| r.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
+            .map_or_default(|r| r.iter().filter_map(Value::as_str).collect());
         if let Some(props) = object.get("properties").and_then(Value::as_object) {
             for (name, prop_schema) in props {
                 out.push(json!({

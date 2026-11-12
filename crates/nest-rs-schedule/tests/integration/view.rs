@@ -334,8 +334,7 @@ async fn a_layer_a_tick_binds_that_nothing_provides_fails_the_configure_naming_b
         .configure(&container)
         .await
         .err()
-        .map(|error| format!("{error:#}"))
-        .unwrap_or_default();
+        .map_or_default(|error| format!("{error:#}"));
     for part in ["Reading", "ViewedTasks::warm"] {
         assert!(
             refused.contains(part),

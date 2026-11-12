@@ -293,8 +293,7 @@ pub fn take_path_list(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Ve
             let mut letters = word.chars();
             letters
                 .next()
-                .map(|first| first.to_uppercase().chain(letters).collect::<String>())
-                .unwrap_or_default()
+                .map_or_default(|first| first.to_uppercase().chain(letters).collect::<String>())
         })
         .collect();
     let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {

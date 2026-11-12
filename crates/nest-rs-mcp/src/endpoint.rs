@@ -106,8 +106,7 @@ impl McpMount {
     pub(crate) fn from_container(container: &Container) -> Self {
         let mut config = container
             .get::<McpConfig>()
-            .map(|cfg| (*cfg).clone())
-            .unwrap_or_default();
+            .map_or_default(|cfg| (*cfg).clone());
         // An emptied list is an opening the deployment wrote: never closed here.
         if let Some(host) = container.get::<CanonicalHost>()
             && !config.allowed_hosts.is_empty()

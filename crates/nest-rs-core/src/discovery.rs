@@ -22,7 +22,7 @@ impl<'a> Discovery<'a> {
     pub fn meta<M: Any + Send + Sync>(&self) -> Vec<Discovered<M>> {
         self.container
             .metadata_entries(TypeId::of::<M>())
-            .map(|entries| {
+            .map_or_default(|entries| {
                 entries
                     .iter()
                     .filter_map(|entry| {
@@ -38,7 +38,6 @@ impl<'a> Discovery<'a> {
                     })
                     .collect()
             })
-            .unwrap_or_default()
     }
 }
 

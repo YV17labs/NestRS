@@ -549,8 +549,7 @@ mod tests {
                 let mut attrs: Vec<Attribute> = vec![parse_quote!(#[use_filters(L)])];
                 let refused = take_layers(pair, scope, &mut attrs)
                     .err()
-                    .map(|err| err.to_string())
-                    .unwrap_or_default();
+                    .map_or_default(|err| err.to_string());
                 assert!(refused.contains("#[use_exception_filters]"), "{refused}");
             }
         }
@@ -581,8 +580,7 @@ mod tests {
         ];
         let refused = take_layers(&crate::pair::HTTP, LayerScope::Method, &mut attrs)
             .err()
-            .map(|err| err.to_string())
-            .unwrap_or_default();
+            .map_or_default(|err| err.to_string());
         assert!(refused.contains("`#[force_guards]` alone"), "{refused}");
     }
 
@@ -591,8 +589,7 @@ mod tests {
         let mut attrs: Vec<Attribute> = vec![parse_quote!(#[use_pipes(P)])];
         let refused = take_layers(&crate::pair::GRAPHQL, LayerScope::Method, &mut attrs)
             .err()
-            .map(|err| err.to_string())
-            .unwrap_or_default();
+            .map_or_default(|err| err.to_string());
         assert!(refused.contains("folded once per request"), "{refused}");
 
         for pair in ALL {
@@ -628,15 +625,13 @@ mod tests {
         let attrs: Vec<Attribute> = vec![parse_quote!(#[use_interceptors(I)])];
         let moved = reject_on_operations(&crate::pair::HTTP, &attrs)
             .err()
-            .map(|err| err.to_string())
-            .unwrap_or_default();
+            .map_or_default(|err| err.to_string());
         assert!(moved.contains("beside `#[controller]`"), "{moved}");
 
         let attrs: Vec<Attribute> = vec![parse_quote!(#[use_pipes(P)])];
         let refused = reject_on_operations(&crate::pair::MCP, &attrs)
             .err()
-            .map(|err| err.to_string())
-            .unwrap_or_default();
+            .map_or_default(|err| err.to_string());
         assert!(refused.contains("inside `Parameters<…>`"), "{refused}");
         assert!(refused.contains("on a `#[tools]` block"), "{refused}");
     }
@@ -650,8 +645,7 @@ mod tests {
         for (pair, attr) in cases {
             let refused = reject_on_operations(pair, &[attr])
                 .err()
-                .map(|err| err.to_string())
-                .unwrap_or_default();
+                .map_or_default(|err| err.to_string());
             let block = format!("is not taken on a `{}` block", pair.operations());
             assert!(refused.contains(&block), "{refused}");
             assert!(!refused.contains(pair.host()), "{refused}");

@@ -232,7 +232,7 @@ impl SocialRegistry {
     /// The registered provider keys, sorted. Empty only on a container no boot
     /// wired (built by hand).
     pub fn keys(&self) -> Vec<&'static str> {
-        self.resolved.get().map(sorted_keys).unwrap_or_default()
+        self.resolved.get().map_or_default(sorted_keys)
     }
 }
 

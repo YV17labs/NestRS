@@ -107,7 +107,7 @@ pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let authz = guarded.filter(|b| {
         !b.written_by_g_auth && (scaffolded_auth || auth::exists(&ws)) && !b.exists(&ws)
     });
-    let decls = authz.map(auth::AuthzAdapter::decls).unwrap_or_default();
+    let decls = authz.map_or_default(auth::AuthzAdapter::decls);
     if let Some(authz) = authz {
         authz.queue(&mut s, &ws);
     }

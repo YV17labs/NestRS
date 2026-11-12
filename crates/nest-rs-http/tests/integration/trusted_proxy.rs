@@ -47,8 +47,7 @@ fn as_the_macro_builds_it(text: &str) -> Result<TrustedProxy, String> {
         Ok(said) => *said,
         Err(payload) => payload
             .downcast_ref::<&str>()
-            .map(|said| (*said).to_owned())
-            .unwrap_or_default(),
+            .map_or_default(|said| (*said).to_owned()),
     })
 }
 

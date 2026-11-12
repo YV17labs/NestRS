@@ -626,9 +626,7 @@ async fn cancellation_declared_and_not_implemented_is_named_a_driver_defect() {
             matches!(error, QueueError::Backend(_)),
             "a driver defect, not a refusal: {error}"
         );
-        let cause = std::error::Error::source(&error)
-            .map(ToString::to_string)
-            .unwrap_or_default();
+        let cause = std::error::Error::source(&error).map_or_default(ToString::to_string);
         assert!(
             cause.contains("declares job cancellation") && cause.contains(method),
             "{cause}"

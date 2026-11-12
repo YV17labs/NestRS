@@ -384,8 +384,7 @@ fn possible<'r>(registry: &'r Registry, ty: &'r str) -> Vec<&'r str> {
         Some(MetaType::Object { .. }) => vec![ty],
         Some(abstract_type) => abstract_type
             .possible_types()
-            .map(|possible| possible.iter().map(String::as_str).collect())
-            .unwrap_or_default(),
+            .map_or_default(|possible| possible.iter().map(String::as_str).collect()),
         None => Vec::new(),
     }
 }

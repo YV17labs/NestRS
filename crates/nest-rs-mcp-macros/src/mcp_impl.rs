@@ -106,8 +106,7 @@ impl Role {
         Self::ALL
             .iter()
             .find(|(role, _, _)| *role == self)
-            .map(|(_, _, bracketed)| *bracketed)
-            .unwrap_or_default()
+            .map_or_default(|(_, _, bracketed)| *bracketed)
     }
 
     /// The `McpOperationKind` variant this role reports to a guard.

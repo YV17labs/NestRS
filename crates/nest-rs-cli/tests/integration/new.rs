@@ -626,12 +626,11 @@ fn the_test_harness_reaches_the_test_suites_alone() {
         entry
             .get("features")
             .and_then(toml_edit::Item::as_array)
-            .map(|list| {
+            .map_or_default(|list| {
                 list.iter()
                     .filter_map(|f| f.as_str().map(str::to_owned))
                     .collect()
             })
-            .unwrap_or_default()
     };
 
     let workspace = manifest("Cargo.toml");

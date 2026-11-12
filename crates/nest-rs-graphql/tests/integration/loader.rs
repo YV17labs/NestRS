@@ -82,9 +82,7 @@ struct TraceShelf;
 #[dataloader]
 impl TraceShelf {
     async fn traces(&self, keys: &[i32]) -> HashMap<i32, String> {
-        let seen = nest_rs_core::current_trace_id()
-            .map(|trace| trace.to_hex())
-            .unwrap_or_default();
+        let seen = nest_rs_core::current_trace_id().map_or_default(|trace| trace.to_hex());
         keys.iter().map(|key| (*key, seen.clone())).collect()
     }
 

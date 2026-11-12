@@ -58,8 +58,7 @@ fn continued(req: &Request, origin: ClientOrigin) -> Option<Correlation> {
         .headers()
         .get(TRACESTATE_HEADER)
         .and_then(|value| value.to_str().ok())
-        .map(TraceState::adopt)
-        .unwrap_or_default();
+        .map_or_default(TraceState::adopt);
     Some(Correlation::continued(parent, tracestate, None))
 }
 

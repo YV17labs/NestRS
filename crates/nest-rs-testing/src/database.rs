@@ -231,8 +231,7 @@ fn created_nanos(name: &str) -> Option<u128> {
 fn now_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default()
+        .map_or_default(|d| d.as_nanos())
 }
 
 fn unique_name() -> String {

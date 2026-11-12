@@ -2328,7 +2328,7 @@ mod tests {
             .build(DatabaseBackend::Postgres)
             .to_string();
         sql.split_once(" WHERE ")
-            .map_or(String::new(), |(_, scope)| scope.to_owned())
+            .map_or_default(|(_, scope)| scope.to_owned())
     }
 
     fn in_org_id(

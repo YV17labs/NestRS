@@ -511,8 +511,7 @@ fn receiver_as_written(receiver: &syn::Receiver) -> String {
             "&{}{}self",
             lifetime
                 .as_ref()
-                .map(|lifetime| format!("{lifetime} "))
-                .unwrap_or_default(),
+                .map_or_default(|lifetime| format!("{lifetime} ")),
             if mutability.is_some() { "mut " } else { "" },
         ),
         syn::ReceiverKind::Typed(_, ty) => format!(

@@ -276,8 +276,7 @@ pub(crate) fn newer_trace(value: &Value) -> Option<Correlation> {
     let state = map
         .get(TRACESTATE)
         .and_then(Value::as_str)
-        .map(TraceState::adopt)
-        .unwrap_or_default();
+        .map_or_default(TraceState::adopt);
     Some(Correlation::continued(parent, state, None))
 }
 
@@ -324,8 +323,7 @@ fn unusable_tracestate(value: &Value) -> bool {
     names_a_member
         && value
             .as_str()
-            .map(TraceState::adopt)
-            .unwrap_or_default()
+            .map_or_default(TraceState::adopt)
             .as_str()
             .is_none()
 }
@@ -604,8 +602,7 @@ pub(crate) fn open<'a>(value: &'a Value, queue: &str) -> Result<Opened<'a>, JobE
     let tracestate = map.get(TRACESTATE);
     let state = tracestate
         .and_then(Value::as_str)
-        .map(TraceState::adopt)
-        .unwrap_or_default();
+        .map_or_default(TraceState::adopt);
     let minted = map.get(TRACE_MINTED) == Some(&Value::Bool(true)) && parent.is_some();
     let actor = map.get(ACTOR_ID);
     let actor_id = actor.and_then(usable_actor);

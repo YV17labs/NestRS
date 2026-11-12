@@ -109,7 +109,7 @@ impl Capabilities {
 /// worded once so a boot error and a push error read alike. `site` names the
 /// `#[process]` method the key sits on when the refusal is the boot's.
 pub(crate) fn unsupported(capability: Capability, backend: &str, site: Option<&str>) -> String {
-    let on = site.map(|site| format!(" on `{site}`")).unwrap_or_default();
+    let on = site.map_or_default(|site| format!(" on `{site}`"));
     format!(
         "{}{on} needs {capability}, which the `{backend}` queue backend does not provide",
         capability.declared_by(),

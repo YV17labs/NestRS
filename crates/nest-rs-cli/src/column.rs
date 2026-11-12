@@ -642,11 +642,7 @@ fn read_field(field: &syn::Field) -> Field {
             reason = "reads sea-orm's own #[sea_orm] attribute, whose keys are sea-orm's"
         )]
         let parsed = attr.parse_nested_meta(|meta| {
-            let ident = meta
-                .path
-                .get_ident()
-                .map(ToString::to_string)
-                .unwrap_or_default();
+            let ident = meta.path.get_ident().map_or_default(ToString::to_string);
             let value = match meta.value() {
                 Ok(value) => Some(value.parse::<syn::Expr>()?),
                 Err(_) => None,
@@ -726,11 +722,10 @@ fn type_name(ty: &Type) -> String {
     path.path
         .segments
         .last()
-        .map(|last| match last.arguments {
+        .map_or_default(|last| match last.arguments {
             PathArguments::None => last.ident.to_string(),
             _ => format!("{}<…>", last.ident),
         })
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

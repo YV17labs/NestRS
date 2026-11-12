@@ -912,9 +912,7 @@ mod tests {
 
     /// What the operator's line says below `error`'s constant.
     fn beneath(error: &AuthError) -> String {
-        std::error::Error::source(error)
-            .map(nest_rs_core::error_message)
-            .unwrap_or_default()
+        std::error::Error::source(error).map_or_default(nest_rs_core::error_message)
     }
 
     fn jwt() -> JwtService {

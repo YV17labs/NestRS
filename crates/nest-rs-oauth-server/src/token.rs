@@ -480,8 +480,7 @@ mod tests {
 
         let served: Vec<&serde_json::Value> = grant_type["oneOf"]
             .as_array()
-            .map(|variants| variants.iter().map(|variant| &variant["const"]).collect())
-            .unwrap_or_default();
+            .map_or_default(|variants| variants.iter().map(|variant| &variant["const"]).collect());
         assert_eq!(served, ["client_credentials"], "{schema:#}");
         assert_eq!(schema["properties"]["scope"]["type"], "string");
     }

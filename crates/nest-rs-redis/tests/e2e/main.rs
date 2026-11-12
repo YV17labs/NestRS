@@ -1223,8 +1223,7 @@ fn brisk(builder: nest_rs_testing::TestAppBuilder) -> nest_rs_testing::TestAppBu
 fn this_run() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|since| since.as_nanos() as u64)
-        .unwrap_or_default()
+        .map_or_default(|since| since.as_nanos() as u64)
         ^ u64::from(std::process::id())
 }
 

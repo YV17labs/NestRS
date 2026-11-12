@@ -517,15 +517,12 @@ async fn copies_merged_per_type_name_one_field_for_every_type() {
     .await;
     assert_eq!(answer["data"], Value::Null, "{answer}");
     let said = |answer: &Value| -> Vec<Value> {
-        answer["errors"]
-            .as_array()
-            .map(|errors| {
-                errors
-                    .iter()
-                    .map(|error| error["message"].clone())
-                    .collect()
-            })
-            .unwrap_or_default()
+        answer["errors"].as_array().map_or_default(|errors| {
+            errors
+                .iter()
+                .map(|error| error["message"].clone())
+                .collect()
+        })
     };
     assert_eq!(said(&answer), said(&alone), "{answer}");
 }
@@ -626,15 +623,12 @@ async fn a_rewritten_document_says_what_validation_says_of_the_one_sent() {
     ] {
         let answer = query(&app, document).await;
         assert_eq!(answer["data"], Value::Null, "{document}: {answer}");
-        let said_back: Vec<&str> = answer["errors"]
-            .as_array()
-            .map(|errors| {
-                errors
-                    .iter()
-                    .filter_map(|error| error["message"].as_str())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let said_back: Vec<&str> = answer["errors"].as_array().map_or_default(|errors| {
+            errors
+                .iter()
+                .filter_map(|error| error["message"].as_str())
+                .collect()
+        });
         assert_eq!(said_back, [said], "{document}: {answer}");
     }
     let answer = query(
@@ -702,20 +696,17 @@ async fn a_fragment_validation_refuses_is_judged_as_sent() {
     ] {
         let answer = query(&app, document).await;
         assert_eq!(answer["data"], Value::Null, "{document}: {answer}");
-        let said_back: Vec<(&str, Value)> = answer["errors"]
-            .as_array()
-            .map(|errors| {
-                errors
-                    .iter()
-                    .map(|error| {
-                        (
-                            error["message"].as_str().unwrap_or_default(),
-                            error["locations"].clone(),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let said_back: Vec<(&str, Value)> = answer["errors"].as_array().map_or_default(|errors| {
+            errors
+                .iter()
+                .map(|error| {
+                    (
+                        error["message"].as_str().unwrap_or_default(),
+                        error["locations"].clone(),
+                    )
+                })
+                .collect()
+        });
         assert_eq!(said_back, said, "{document}: {answer}");
     }
 }

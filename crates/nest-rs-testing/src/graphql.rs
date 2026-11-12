@@ -130,8 +130,7 @@ impl GraphqlSocketBuilder {
         let config = self
             .container
             .get::<GraphqlConfig>()
-            .map(|config| (*config).clone())
-            .unwrap_or_default();
+            .map_or_default(|config| (*config).clone());
         let (data, carried) = upgraded(&self.container, self.attached, self.data);
         let executor = nest_rs_graphql::__private::compose_schema(self.container, &config)
             .expect("a test app's boot sealed its reachability set");

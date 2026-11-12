@@ -491,8 +491,7 @@ async fn a_layer_a_job_binds_from_a_module_its_host_does_not_import_fails_the_bo
         .build()
         .await
         .err()
-        .map(|error| format!("{error:#}"))
-        .unwrap_or_default();
+        .map_or_default(|error| format!("{error:#}"));
     for part in [
         "HostingModule",
         "HostedProcessor",
@@ -521,8 +520,7 @@ async fn a_layer_a_job_binds_that_nothing_provides_fails_the_configure_naming_bo
         .configure(&container)
         .await
         .err()
-        .map(|error| format!("{error:#}"))
-        .unwrap_or_default();
+        .map_or_default(|error| format!("{error:#}"));
     for part in ["Reading", "HostedProcessor::hosted"] {
         assert!(
             refused.contains(part),

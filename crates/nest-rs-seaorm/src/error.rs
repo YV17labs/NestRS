@@ -425,8 +425,7 @@ impl From<DbErr> for RepoError {
             DbErr::AccessDenied { .. } => {
                 return Self::Forbidden {
                     columns: refused_columns(&err)
-                        .map(|columns| columns.split(", ").map(str::to_owned).collect())
-                        .unwrap_or_default(),
+                        .map_or_default(|columns| columns.split(", ").map(str::to_owned).collect()),
                 };
             }
             _ => {}

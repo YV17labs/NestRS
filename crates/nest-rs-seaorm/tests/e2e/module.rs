@@ -263,7 +263,7 @@ fn with_database(url: &str, name: &str) -> String {
         .map_or((url, None), |(base, q)| (base, Some(q)));
     let (scheme, rest) = base.split_once("://").expect("a URL with a scheme");
     let host = rest.split_once('/').map_or(rest, |(host, _)| host);
-    let query = query.map(|q| format!("?{q}")).unwrap_or_default();
+    let query = query.map_or_default(|q| format!("?{q}"));
     format!("{scheme}://{host}/{name}{query}")
 }
 

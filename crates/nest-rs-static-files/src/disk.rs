@@ -156,8 +156,7 @@ fn read_only() -> std::fs::OpenOptions {
 fn asset(path: &Path, mut file: File, len: u64, modified: Option<SystemTime>) -> io::Result<Found> {
     let name = path
         .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_default();
+        .map_or_default(|name| name.to_string_lossy());
     let media_type = media_type(&name);
     let (body, len) = match usize::try_from(len) {
         Ok(small) if small <= CHUNK => {

@@ -97,19 +97,14 @@ impl Drop for Running {
 
 /// Every attempt at job `seq` of `run` on `queue`, in start order.
 pub(crate) fn attempts(queue: &'static str, run: u64, seq: u32) -> Vec<Attempt> {
-    probe()
-        .as_ref()
-        .map(|probe| {
-            probe
-                .attempts
-                .iter()
-                .filter(|attempt| {
-                    attempt.queue == queue && attempt.run == run && attempt.seq == seq
-                })
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default()
+    probe().as_ref().map_or_default(|probe| {
+        probe
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.queue == queue && attempt.run == run && attempt.seq == seq)
+            .cloned()
+            .collect()
+    })
 }
 
 /// The most attempts `queue` ran at once.

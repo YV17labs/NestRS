@@ -405,8 +405,7 @@ pub fn attached_pending(req: &Request) -> Pending {
 fn pending_in(extensions: &http::Extensions) -> Pending {
     extensions
         .get::<Attached>()
-        .map(|attached| attached.0.clone())
-        .unwrap_or_default()
+        .map_or_default(|attached| attached.0.clone())
 }
 
 /// The `T` one of `req`'s guard stages attached.

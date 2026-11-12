@@ -361,9 +361,7 @@ pub(crate) async fn exchange(port: u16, request: &str) -> (TcpStream, String) {
 }
 
 fn session_header(session: Option<&str>) -> String {
-    session
-        .map(|id| format!("mcp-session-id: {id}\r\n"))
-        .unwrap_or_default()
+    session.map_or_default(|id| format!("mcp-session-id: {id}\r\n"))
 }
 
 /// POST one JSON-RPC message to `path` over raw HTTP/1.1.

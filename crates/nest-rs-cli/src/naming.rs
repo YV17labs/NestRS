@@ -141,8 +141,7 @@ static RESERVED: LazyLock<BTreeMap<&'static str, &'static str>> = LazyLock::new(
         .split_once("## Reserved vocabulary")
         .and_then(|(_, rest)| rest.split_once("```"))
         .and_then(|(_, rest)| rest.split_once("```"))
-        .map(|(block, _)| block)
-        .unwrap_or_default();
+        .map_or_default(|(block, _)| block);
 
     let mut category = "";
     for line in block.lines().filter(|line| !line.trim().is_empty()) {

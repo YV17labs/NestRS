@@ -537,8 +537,7 @@ fn rewrite_path(req: &mut Request, path: &str) -> std::result::Result<(), Versio
         .path_and_query
         .as_ref()
         .and_then(|pq| pq.query())
-        .map(|q| format!("?{q}"))
-        .unwrap_or_default();
+        .map_or_default(|q| format!("?{q}"));
     parts.path_and_query = Some(
         PathAndQuery::try_from(format!("{path}{query}")).map_err(|_| VersionRefused::Unresolved)?,
     );

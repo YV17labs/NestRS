@@ -628,8 +628,7 @@ impl<B: KitBackend, C: Queue + CaseModule> Kit<B, C> {
             .expect("the backend purges the case's queue");
         let run = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|since| u64::try_from(since.as_nanos()).unwrap_or(u64::MAX))
-            .unwrap_or_default();
+            .map_or_default(|since| u64::try_from(since.as_nanos()).unwrap_or(u64::MAX));
         Self {
             backend,
             logs,

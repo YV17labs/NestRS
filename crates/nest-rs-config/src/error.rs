@@ -265,10 +265,7 @@ fn of_instance(instance: &str) -> String {
 /// Where inside a variable's value its decode failed, as the refusal says it
 /// after the variable: `` at `clients[0].secret` ``, or nothing.
 fn inside(report: &DecodeError) -> String {
-    report
-        .path()
-        .map(|path| format!(" at `{path}`"))
-        .unwrap_or_default()
+    report.path().map_or_default(|path| format!(" at `{path}`"))
 }
 
 /// `message` without the values a decoder quoted in it.

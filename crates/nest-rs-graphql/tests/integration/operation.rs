@@ -428,15 +428,12 @@ async fn a_return_is_fallible_by_its_type_never_by_its_name() {
     )
     .expect("a GraphQL response is JSON");
     assert_eq!(body["data"]["search"]["hits"], 3, "{body}");
-    let messages: Vec<&str> = body["errors"]
-        .as_array()
-        .map(|errors| {
-            errors
-                .iter()
-                .filter_map(|e| e["message"].as_str())
-                .collect()
-        })
-        .unwrap_or_default();
+    let messages: Vec<&str> = body["errors"].as_array().map_or_default(|errors| {
+        errors
+            .iter()
+            .filter_map(|e| e["message"].as_str())
+            .collect()
+    });
     assert!(
         messages.contains(&"no") && messages.contains(&"nothing by that name"),
         "both failures reach the client in their own words: {body}",

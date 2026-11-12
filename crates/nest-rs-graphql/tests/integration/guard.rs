@@ -86,10 +86,7 @@ impl GuardedResolver {
     #[query]
     #[public]
     async fn whoami(&self, ctx: &Context<'_>) -> Result<String> {
-        Ok(ctx
-            .data_opt::<Role>()
-            .map(|r| r.0.clone())
-            .unwrap_or_default())
+        Ok(ctx.data_opt::<Role>().map_or_default(|r| r.0.clone()))
     }
 }
 

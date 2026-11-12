@@ -370,8 +370,7 @@ fn build_reading(
     global::set_text_map_propagator(global_propagator());
     let service = resource
         .get(&Key::new(SERVICE_NAME))
-        .map(|name| name.to_string())
-        .unwrap_or_default();
+        .map_or_default(|name| name.to_string());
 
     let mut tracer_builder = tracer_provider(resource.clone(), sampler, span_limits);
     if let (Some(export), Some(client)) = (&traces, traces_client) {

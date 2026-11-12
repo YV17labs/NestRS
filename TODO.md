@@ -61,6 +61,24 @@ mutual TLS, are dev container environments of their own (`CLAUDE.md`, *Testing*)
   tests. Close: open the `postgres-mutual-tls` dev container environment, set
   `postgres := "mutual-tls"` in `test.just`, `just test e2e`. The owner's: the
   run's script was refused by the permission classifier on 2026-11-07.
+- **Valkey 9.1.3 never ran under Sentinel or Cluster**: both environments
+  extend the image `valkey.yml` pins, and `nest-rs-redis`'s suite last ran on
+  each on 9.1.2 (2026-11-12). 9.1.3 moves the Cluster's `nodes.conf` lock to a
+  file of its own and fixes an atomic slot migration across several databases,
+  which the Cluster suite's slot moves run. Close: each topology up beside the
+  dev container, `nest-rs-redis`'s e2e on its URL (`test.just`'s commented
+  line), as on 2026-11-12.
+- **Only `nest-rs-redis`'s and `nest-rs-storage`'s end-to-end suites ran on
+  Valkey 9.1.3 and RustFS 1.0.5** (2026-11-12, 101 tests on throwaway
+  containers of the two images, answering as the dev container's services).
+  The other suites reaching them ran on Valkey 9.1.2 and RustFS 1.0.1 alone:
+  `nest-rs-cli`'s, whose tutorial replay boots on Valkey and the `nestrs-test`
+  bucket, and the demo's (the api's, the assistant's, the worker's and the
+  features crate's: its queue, storage and health tests). The gate that merged
+  the move ran on the owner's dev container, which keeps its images until it is
+  reopened. Close: the first `just ci` and demo gate after the owner reopens
+  the dev container from these files, or CI's first run after the push, which
+  starts the same compose file. *seen*
 - **`async-graphql = "=7.2"`'s floor, 7.2.0, never built**: every lockfile
   holds 7.2.1. Close: a minimal-versions resolution.
 
@@ -114,10 +132,13 @@ SDL and an MCP tool's output schema, whatever the posture of the unit answering 
   write returned … NoSuchKey`), and S3 never answers a `PUT` so. Not
   reproduced on a throwaway 1.0.1: 12,800 such `PUT`s beside the suite's
   deletes, aborted uploads, bucket churn and refused requests, an empty bucket
-  and one of 4,000 objects, none. Close: the upstream report with those lines;
-  1.0.2's heal ("defer replacement retries until dangling grace expires") and
-  scanner fixes are candidates, and the dev container pins 1.0.1 where 1.0.4
-  is current, a move a reproduction proves first. *seen*
+  and one of 4,000 objects, none. The dev container runs 1.0.5 since
+  2026-11-12 (CI from its next run, the owner's dev container once reopened,
+  its `rustfs-data` volume carried over); 1.0.2's heal ("defer replacement
+  retries until dangling grace expires") and scanner fixes are the candidates,
+  and whether the `404` is gone is seen only over the dev container's runs.
+  Close: a month of its log on 1.0.5 holding no such line drops this one; a
+  line again goes upstream in a report with those lines. *seen*
 
 **HTTP and CORS**
 - No proxy binary has run against the forwarding-header reader: the shapes

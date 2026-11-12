@@ -28,3 +28,5 @@ the script changes in the commit that moves the image — or when the owner
 supports a second server.
 
 **2026-11-05.** One file names the image: `.devcontainer/compose/valkey.yml`, which every Valkey service of the dev container extends and CI starts through the `dev-services` action. `ci.yml` became `framework.yml`, and no workflow names an image.
+
+**2026-11-12.** Valkey 9.1.3, a security release, moved the pin, and RustFS moved beside it to 1.0.5 (Postgres stays at 18.6): each service of the dev container and CI runs its latest release. The scaffold's `compose.yml` names the release line its vendor publishes, `valkey/valkey:9.1` and `postgres:18`, which a fresh pull takes to the latest patch, and RustFS, which publishes no line tag, at the dev container's release; never `latest`, which crosses a major unasked. Held by `nest-rs-cli`'s unit test reading the template, which also holds its bucket service to the store's image. Sentinel and Cluster, which extend the same image, run on it by hand (`one-server-per-backend.md`).

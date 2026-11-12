@@ -361,6 +361,36 @@ mod tests {
         });
     }
 
+    /// Every service `compose.yml` runs is pinned to a release, never a moving
+    /// `latest`, and the bucket service runs the store's own image.
+    #[test]
+    fn compose_runs_each_service_on_a_release_and_the_buckets_on_the_store_s_image() {
+        let compose: yaml_serde::Value = yaml_serde::from_str(
+            &Renderer::new(&Names::parse("shop")).render(crate::templates::shared::COMPOSE),
+        )
+        .expect("compose.yml is YAML");
+        let services = compose["services"]
+            .as_mapping()
+            .expect("compose.yml declares its services");
+        for (name, service) in services {
+            let name = name.as_str().expect("a service's name");
+            let image = service["image"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{name} names its image"));
+            let release = image.rsplit_once(':').map(|(_, tag)| tag);
+            assert!(
+                release.is_some_and(|tag| tag
+                    .split('.')
+                    .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))),
+                "{name} runs {image}, which names no release"
+            );
+        }
+        assert_eq!(
+            services["storage-buckets"]["image"], services["storage"]["image"],
+            "the bucket service runs the store's image"
+        );
+    }
+
     /// Whichever layout renders it, the controller mounts `/` and declares its
     /// posture.
     #[test]

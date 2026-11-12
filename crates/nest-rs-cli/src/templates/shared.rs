@@ -150,7 +150,7 @@ services:
   # An S3 object store (RustFS). The storage client proves its bucket at boot,
   # so `storage-buckets` creates development's and the suites' once it answers.
   storage:
-    image: rustfs/rustfs:1.0.1
+    image: rustfs/rustfs:1.0.5
     environment:
       RUSTFS_VOLUMES: /data
       RUSTFS_ADDRESS: 0.0.0.0:9000
@@ -167,7 +167,7 @@ services:
       retries: 10
 
   storage-buckets:
-    image: rustfs/rustfs:1.0.1
+    image: rustfs/rustfs:1.0.5
     depends_on:
       storage:
         condition: service_healthy
